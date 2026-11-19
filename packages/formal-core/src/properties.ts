@@ -129,7 +129,7 @@ export function restrictToInputs(ir: PropertyIR, inputs: Record<string, string |
 }
 
 /** `expr` with every call to `from` replaced by a call to `to`. */
-function renameCalls(expr: Expr, from: string, to: string): Expr {
+export function renameCalls(expr: Expr, from: string, to: string): Expr {
   switch (expr.kind) {
     case 'unary':
       return { ...expr, arg: renameCalls(expr.arg, from, to) };

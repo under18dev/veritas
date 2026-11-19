@@ -626,6 +626,27 @@ describe('distinguishability and property detection', () => {
     await expect(
       proveProperty({ ...base, kind: 'property_detection', ir: conformance, mutantId: 'M-1' }),
     ).rejects.toThrow(/property_detection claim refused/);
+    // `A implies A` and swapped sides call both models but are not "property(original) implies property(mutant)".
+    const detection = detectionProperty(
+      conformance,
+      'discountAmount',
+      mutantOf(root, 'total > 2000', 'discountAmount__mutant'),
+    );
+    const body = detection.body as Extract<typeof detection.body, { kind: 'binary' }>;
+    const both = { kind: 'binary', op: 'and', left: body.left, right: body.right } as const;
+    for (const forged of [
+      { ...body, left: both, right: both },
+      { ...body, left: body.right, right: body.left },
+    ])
+      await expect(
+        proveProperty({
+          ...base,
+          bindings: [binding(root, 'discountAmount')],
+          kind: 'property_detection',
+          ir: { ...detection, body: forged },
+          mutantId: 'M-1',
+        }),
+      ).rejects.toThrow(/property_detection claim refused/);
     await expect(proveProperty({ ...base, kind: 'bounded_equivalence', ir: conformance })).rejects.toThrow(
       /mutant id is required/,
     );

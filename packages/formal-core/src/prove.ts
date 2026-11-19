@@ -21,6 +21,7 @@ import {
 } from '@under18dev/veritas-solver-z3';
 import { z } from 'zod';
 import { callModel, type IRValue, shapeArguments } from './interpret.js';
+import { renameCalls } from './properties.js';
 import { outOfBoundsProperty, shapeInput } from './shapes.js';
 
 /** Connects an IR function model to the real JavaScript export it models, so results can be replayed. */
@@ -290,12 +291,49 @@ function checkKind(options: ProveOptions): void {
       if (calls.size < 2) fail('the property must call both the original and the mutant model');
       if (kind === 'distinguishability' && ir.preconditions.length === 0)
         fail('the inputs to check must be restricted to the test inputs (restrictToInputs)');
-      if (kind === 'property_detection' && !(ir.body.kind === 'binary' && ir.body.op === 'implies'))
+      if (
+        kind === 'property_detection' &&
+        !isDetection(ir.body, new Set(options.bindings.map((b) => b.modelName)))
+      )
         fail('the property must be property(original) implies property(mutant) (detectionProperty)');
       break;
     default:
       fail('unknown claim kind');
   }
+}
+
+/** Calls in `e`. */
+function callsIn(e: Expr, out = new Set<string>()): Set<string> {
+  if (e.kind === 'call') {
+    out.add(e.fn);
+    for (const a of e.args) callsIn(a, out);
+  } else if (e.kind === 'unary') callsIn(e.arg, out);
+  else if (e.kind === 'binary') {
+    callsIn(e.left, out);
+    callsIn(e.right, out);
+  } else if (e.kind === 'ite') {
+    callsIn(e.cond, out);
+    callsIn(e.whenTrue, out);
+    callsIn(e.whenFalse, out);
+  }
+  return out;
+}
+
+/**
+ * `P(original) implies P(mutant)` exactly: the right side is the left side with every call to the original
+ * (a model bound to the JavaScript export) renamed to a model that is not bound and that the left side does
+ * not call. Anything else (`A implies A`, swapped or unrelated sides) is refused.
+ */
+function isDetection(body: Expr, bound: Set<string>): boolean {
+  if (body.kind !== 'binary' || body.op !== 'implies') return false;
+  const left = callsIn(body.left);
+  const right = callsIn(body.right);
+  for (const from of left)
+    for (const to of right) {
+      if (from === to || left.has(to) || !bound.has(from) || bound.has(to)) continue;
+      if (JSON.stringify(renameCalls(body.left, from, to)) === JSON.stringify(body.right)) return true;
+    }
+  return false;
 }
 
 /**
