@@ -1,0 +1,28 @@
+{
+  "name": "@veritas/mcp",
+  "version": "0.0.0",
+  "description": "MCP server exposing Veritas to agents",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "veritas-mcp": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@veritas/core": "workspace:*",
+    "@veritas/engine": "workspace:*",
+    "zod": "4.6.7"
+  }
+}
