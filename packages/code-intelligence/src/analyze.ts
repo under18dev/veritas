@@ -1,6 +1,12 @@
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
-import { type Location, sha256, symbolId, type VeritasConfig } from '@under18dev/veritas-core';
+import {
+  type Location,
+  resolveInsideRoot,
+  sha256,
+  symbolId,
+  type VeritasConfig,
+} from '@under18dev/veritas-core';
 import ts from 'typescript';
 import { type SelectedFile, selectFiles } from './files.js';
 import type { CodeIndex, Comparison, ComparisonOperator, FunctionInfo, NumericKind } from './schema.js';
@@ -196,9 +202,11 @@ function loadCompilerOptions(
 ): ts.CompilerOptions {
   const tsconfig = config.project.tsconfig;
   if (!tsconfig) return DEFAULT_OPTIONS;
-  const file = path.resolve(root, tsconfig);
-  const rel = path.relative(root, file);
-  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+  let file: string;
+  try {
+    // Rejects `..`, absolute paths and symlinks (or links in its parents) that leave the root.
+    file = resolveInsideRoot(root, tsconfig);
+  } catch {
     diagnostics.push({
       file: tsconfig,
       message: 'tsconfig outside the project root ignored; using defaults',
