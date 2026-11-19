@@ -7,6 +7,7 @@ import {
   FormalClaim,
   MeasurementSnapshot,
   Mutant,
+  MutantStatus,
   Property,
   Run,
   redactDeep,
@@ -182,14 +183,14 @@ function sections(input: ReportInput): string[] {
   const i = safe(input);
   const run = i.run;
   const props = (status: string[]) => i.properties.filter((p) => status.includes(p.status));
-  const mutationGroups = ['killed', 'survived', 'equivalent_proven', 'other'].map((group) => {
-    const members = i.mutants.filter((m) =>
-      group === 'other'
-        ? !['killed', 'survived', 'equivalent_proven'].includes(m.status)
-        : m.status === group,
-    );
-    return `${group} (${members.length}): ${members.map((m) => `${m.id} ${m.original} -> ${m.replacement}`).join('; ') || 'none'}`;
-  });
+  // Every status by name: undecided outcomes (timeout, pending, unknown ...) are never folded into the others.
+  const alwaysShown = new Set(['killed', 'survived', 'unknown', 'equivalent_proven']);
+  const mutationGroups = MutantStatus.options
+    .filter((status) => alwaysShown.has(status) || i.mutants.some((m) => m.status === status))
+    .map((status) => {
+      const members = i.mutants.filter((m) => m.status === status);
+      return `${status} (${members.length}): ${members.map((m) => `${m.id} ${m.original} -> ${m.replacement}`).join('; ') || 'none'}`;
+    });
   return [
     `1. Run metadata/environment/scope\nrun ${run.id}; command ${run.command} ${run.args.join(' ')}; profile ${run.profile ?? 'none'}; git commit ${i.meta.gitCommit ?? 'none (not a git repository)'}${run.scope.since ? `; changes since ${run.scope.since}` : ''}; Veritas ${i.meta.toolVersion}; schema ${i.meta.schemaVersion}; config hash ${i.meta.configHash}; source hash ${i.meta.sourceHash}; OS ${run.environment.os}; Node ${run.environment.node}; verdict ${run.verdict ?? 'none'}; exit code ${run.exitCode ?? 'none'}; scope ${run.scope.root} (${run.scope.paths.join(', ') || 'all'}); policy reasons ${run.policyReasons.join('; ') || 'none'}; replay with \`${run.replay}\``,
     `2. Collected evidence with provenance\n${

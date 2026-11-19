@@ -134,3 +134,27 @@ describe('text and markdown reports', () => {
     }
   });
 });
+
+describe('mutation outcomes', () => {
+  it('names every mutant status instead of folding undecided ones together', () => {
+    const input = fixture();
+    const base = input.mutants[0];
+    if (!base) throw new Error('fixture has no mutant');
+    input.mutants = [
+      base,
+      { ...base, id: 'mutant-timeout', status: 'timeout' },
+      { ...base, id: 'mutant-pending', status: 'pending' },
+    ];
+    const section =
+      renderText(input)
+        .split('\n\n')
+        .find((s) => s.startsWith('6. Mutation outcomes')) ?? '';
+    expect(section).toMatch(/^killed \(0\): none$/m);
+    expect(section).toMatch(/^survived \(1\): /m);
+    expect(section).toMatch(/^timeout \(1\): mutant-timeout /m);
+    expect(section).toMatch(/^pending \(1\): mutant-pending /m);
+    expect(section).toMatch(/^unknown \(0\): none$/m);
+    expect(section).toMatch(/^equivalent_proven \(0\): none$/m);
+    expect(section).not.toMatch(/^other/m);
+  });
+});
