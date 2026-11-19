@@ -201,6 +201,7 @@ export function buildRegistry(options: BuildOptions): Registry {
     }
     const stale = statement.flags.includes('stale');
     const instructionLike = statement.flags.includes('instruction_like');
+    const llmExtracted = statement.flags.includes('llm_extracted');
     const agreement = implementationAgreement(target.fn, target.param, relation.operator, relation.value);
     const citation = `${source?.locator ?? statement.sourceId}:${statement.range.start}`;
     const property: Property = {
@@ -242,10 +243,14 @@ export function buildRegistry(options: BuildOptions): Registry {
         freshness: stale ? 'stale' : 'current',
       },
       implementationAgreement: agreement,
-      experimental: instructionLike,
+      experimental: instructionLike || llmExtracted,
     };
     if (instructionLike)
       property.assumptions.push('source text contains instruction-like content; treated as data only');
+    if (llmExtracted)
+      property.assumptions.push(
+        'threshold read by an LLM from free text; not reproducible, review before accepting',
+      );
     properties.push(property);
     mapping.push({
       statementId: statement.id,
