@@ -460,6 +460,21 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
 
+  packages/solver-lean:
+    dependencies:
+      '@veritas/core':
+        specifier: workspace:*
+        version: link:../core
+      '@veritas/formal-core':
+        specifier: workspace:*
+        version: link:../formal-core
+      '@veritas/solver-z3':
+        specifier: workspace:*
+        version: link:../solver-z3
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+
   packages/solver-z3:
     dependencies:
       '@veritas/core':
