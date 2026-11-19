@@ -119,6 +119,7 @@ describe('discoverEvidence', () => {
       true,
     );
     expect(result.sources.every((s) => !s.summary.includes('ghp_'))).toBe(true);
+    expect(result.statements.every((s) => !s.quote.includes('ghp_'))).toBe(true);
     expect(result.skipped.some((s) => s.reason.includes('SSRF') || s.reason.includes('allowlist'))).toBe(
       true,
     );

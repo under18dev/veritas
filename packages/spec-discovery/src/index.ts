@@ -63,6 +63,8 @@ const thresholdPatterns: Array<{ re: RegExp; operator: '<' | '<=' | '>' | '>=' }
   { re: /(?:at most|up to|no more than|maximum of)\s*(\d[\d,]*)/i, operator: '<=' },
   { re: /(?:more than|over|above|greater than|exceeds|超|より大きい)\s*(\d[\d,]*)/i, operator: '>' },
   { re: /(?:less than|fewer than|below|under|未満)\s*(\d[\d,]*)/i, operator: '<' },
+  { re: /(\d[\d,]*)\s*(?:超|より大きい)/i, operator: '>' },
+  { re: /(\d[\d,]*)\s*未満/i, operator: '<' },
   { re: /(\d[\d,]*)\s*(?:or more|or above|at least|以上)/i, operator: '>=' },
   { re: /(\d[\d,]*)\s*(?:or less|at most|up to|以下)/i, operator: '<=' },
 ];
@@ -118,7 +120,13 @@ function extract(text: string, sourceId: string, stale: boolean): NormativeState
       relation = { kind: 'threshold', quantity, operator: pattern.operator, value, consequence: quote };
       break;
     }
-    if (relation.kind === 'free_text' && modality(raw) === 'descriptive' && flags.length === 0) continue;
+    if (
+      relation.kind === 'free_text' &&
+      modality(raw) === 'descriptive' &&
+      flags.length === 0 &&
+      !/\d/.test(raw)
+    )
+      continue;
     const start = match.index ?? 0;
     const range = lineRange(text, start, start + match[0].length);
     output.push({
@@ -152,11 +160,26 @@ function matchesInclude(file: string, root: string, patterns: string[]): boolean
   return patterns.some((pattern) => {
     const escaped = pattern
       .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*\*\//g, '(?:.*/)?')
       .replace(/\*\*/g, '.*')
       .replace(/\*/g, '[^/]*')
       .replace(/\{([^}]+)\}/g, '($1)');
     return new RegExp(`^${escaped}$`).test(rel);
   });
+}
+function exportedDocs(text: string): string {
+  const output = Array.from({ length: text.split('\n').length }, () => '');
+  for (const match of text.matchAll(
+    /\/\*\*[\s\S]*?\*\/\s*(?:export\s+)?(?:async\s+)?(?:function|class|const|let|var)\b/g,
+  )) {
+    const block = match[0];
+    if (!/\*\/\s*export\s+(?:async\s+)?(?:function|class|const|let|var)\b/.test(block)) continue;
+    const startLine = text.slice(0, match.index ?? 0).split('\n').length - 1;
+    for (const [offset, line] of block.split('\n').entries()) {
+      if (output[startLine + offset] !== undefined) output[startLine + offset] = line;
+    }
+  }
+  return output.join('\n');
 }
 function sourceFrom(input: SourceInput, capturedAt: string): EvidenceSource {
   const contentHash = sha256(input.text);
@@ -200,7 +223,11 @@ async function collectLocal(
     const docs = (rel.startsWith('docs/') && /\.md$/i.test(base)) || /^CHANGELOG|^RELEASE/i.test(base);
     const schema =
       /(?:\.openapi|\.schema)\.(?:json|ya?ml)$/i.test(base) || /^openapi\.(?:json|ya?ml)$/i.test(base);
-    const code = matchesInclude(file, root, config.analysis.include) && /\.[cm]?[jt]sx?$/.test(base);
+    const code =
+      matchesInclude(file, root, config.analysis.include) &&
+      !matchesInclude(file, root, config.analysis.exclude) &&
+      !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(base) &&
+      /\.[cm]?[jt]sx?$/.test(base);
     if (!readme && !docs && !schema && !code) continue;
     let text: string;
     try {
@@ -209,10 +236,12 @@ async function collectLocal(
       skipped.push({ source: rel, reason: 'read failed' });
       continue;
     }
+    const sourceText = code ? exportedDocs(text) : text;
+    if (code && !sourceText.trim()) continue;
     inputs.push({
       kind: schema ? 'standard' : code ? 'code' : readme ? 'readme' : 'docs',
       locator: rel,
-      text,
+      text: sourceText,
       revision,
       range: { start: 1, end: Math.max(1, text.split('\n').length) },
     });
@@ -251,7 +280,7 @@ async function collectLocal(
 }
 function schemaStatements(text: string, sourceId: string): NormativeStatement[] {
   const out: NormativeStatement[] = [];
-  const re = /["']?(minimum|maximum|exclusiveMinimum|exclusiveMaximum)["']?\s*:\s*(true|false|-?\d[\d,]*)/gi;
+  const re = /["']?(exclusiveMinimum|exclusiveMaximum|minimum|maximum)["']?\s*:\s*(true|false|-?\d[\d,]*)/gi;
   for (const match of text.matchAll(re)) {
     const key = match[1]?.toLowerCase();
     const value = match[2];
@@ -319,7 +348,7 @@ async function collectWeb(
   }
   const queue: Array<{ url: string; depth: number }> = [];
   for (const input of inputs)
-    for (const m of input.text.matchAll(/https?:\/\/[^\s)>'"`]+/g))
+    for (const m of input.text.matchAll(/\b(?:https?|ftp|file):\/\/[^\s)>'"`]+/gi))
       queue.push({ url: m[0].replace(/[.,;]+$/, ''), depth: 0 });
   const seen = new Set<string>();
   let requests = 0;

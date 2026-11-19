@@ -1,0 +1,64 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import { DiscoveryResult, discoverEvidence } from '../src/index.js';
+import { config, tempProject } from './helpers.js';
+
+function git(root: string, ...args: string[]) {
+  return execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+}
+
+describe('git history and reproducibility', () => {
+  it('collects subjects and bodies from the last commits in a git repository', async () => {
+    const root = tempProject('git');
+    git(root, 'init', '-q');
+    git(root, 'config', 'user.email', 'test@example.invalid');
+    git(root, 'config', 'user.name', 'test');
+    writeFileSync(`${root}/README.md`, 'The total must be at least 10.\n');
+    git(root, 'add', 'README.md');
+    git(root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Document boundary');
+    const result = await discoverEvidence({ root, config: config() });
+    expect(result.sources.some((source) => source.kind === 'git' && source.locator === 'git log')).toBe(true);
+    expect(result.sources.find((source) => source.kind === 'git')?.revision).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('reports a useful skip when the root is not a git repository', async () => {
+    const result = await discoverEvidence({ root: tempProject('not-git'), config: config() });
+    expect(result.skipped).toContainEqual({
+      source: 'git',
+      reason: 'not a git repository or git unavailable',
+    });
+  });
+
+  it('keeps IDs independent of the absolute project path', async () => {
+    const firstRoot = tempProject('same-a');
+    const secondRoot = tempProject('same-b');
+    mkdirSync(`${firstRoot}/docs`, { recursive: true });
+    mkdirSync(`${secondRoot}/docs`, { recursive: true });
+    writeFileSync(`${firstRoot}/README.md`, 'The total must be at least 10.\n');
+    writeFileSync(`${secondRoot}/README.md`, 'The total must be at least 10.\n');
+    writeFileSync(`${firstRoot}/docs/rule.md`, 'The limit should be less than 20.\n');
+    writeFileSync(`${secondRoot}/docs/rule.md`, 'The limit should be less than 20.\n');
+    const first = await discoverEvidence({
+      root: firstRoot,
+      config: config(),
+      now: () => new Date('2026-01-01T00:00:00Z'),
+    });
+    const second = await discoverEvidence({
+      root: secondRoot,
+      config: config(),
+      now: () => new Date('2026-01-01T00:00:00Z'),
+    });
+    expect(first.sources.map(({ id, ...source }) => source)).toEqual(
+      second.sources.map(({ id, ...source }) => source),
+    );
+    expect(first.statements.map(({ id, ...statement }) => statement)).toEqual(
+      second.statements.map(({ id, ...statement }) => statement),
+    );
+    expect(first.sources.map((source) => source.id)).toEqual(second.sources.map((source) => source.id));
+    expect(first.statements.map((statement) => statement.id)).toEqual(
+      second.statements.map((statement) => statement.id),
+    );
+    expect(DiscoveryResult.parse(first)).toEqual(first);
+  });
+});
