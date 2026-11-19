@@ -179,6 +179,50 @@ describe('registry from documentation and code', () => {
     }
   });
 
+  it('keeps a superseded document in the conflict but marks it stale and suggests the newer one', () => {
+    const discovery = (provenance: DiscoveryInput['provenance']): DiscoveryInput => ({
+      sources: [source('S-a', 'docs', 'docs/limits.md'), source('S-b', 'docs', 'docs/limits-v2.md')],
+      statements: [
+        threshold(
+          'ST-a',
+          'S-a',
+          3,
+          'A client may send at most 100 requests per minute.',
+          'requests',
+          '<=',
+          '100',
+          'a client may send',
+        ),
+        threshold(
+          'ST-b',
+          'S-b',
+          3,
+          'A client may send at most 150 requests per minute.',
+          'requests',
+          '<=',
+          '150',
+          'a client may send',
+        ),
+      ],
+      provenance,
+    });
+    const plain = registryFor('conflicting-docs', discovery([]));
+    expect(plain.registry.conflicts[0]?.preferredPropertyId).toBeNull();
+    const { registry } = registryFor(
+      'conflicting-docs',
+      discovery([{ from: 'S-b', to: 'S-a', relation: 'supersedes' }]),
+    );
+    const older = registry.properties.find((p) => p.statementIds.includes('ST-a'));
+    const newer = registry.properties.find((p) => p.statementIds.includes('ST-b'));
+    expect(older?.status).toBe('conflicted');
+    expect(newer?.status).toBe('conflicted');
+    expect(older?.confidence.freshness).toBe('stale');
+    expect(registry.conflicts[0]?.preferredPropertyId).toBe(newer?.id);
+    expect(registry.conflicts[0]?.rationale.join('\n')).toMatch(
+      /called outdated by docs\/limits-v2\.md; still counted/,
+    );
+  });
+
   it('does not count a verbatim copy as an independent, agreeing source', () => {
     const quote = 'A client may send at most 100 requests per minute.';
     const statement = (id: string, sourceId: string) =>

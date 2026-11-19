@@ -182,6 +182,11 @@ export function buildRegistry(options: BuildOptions): Registry {
   const derived = new Set(
     discovery.provenance.filter((p) => p.relation === 'derived_from').map((p) => p.from),
   );
+  // Sources another source calls outdated. That claim is itself untrusted data: it lowers the source's
+  // freshness and its rank as a suggestion, but never removes it from a conflict.
+  const supersededBy = new Map<string, string[]>();
+  for (const p of discovery.provenance.filter((e) => e.relation === 'supersedes'))
+    supersededBy.set(p.to, [...(supersededBy.get(p.to) ?? []), p.from]);
   const mapping: MappingNote[] = [];
   const bySymbolParam = new Map<
     string,
@@ -267,7 +272,7 @@ export function buildRegistry(options: BuildOptions): Registry {
             : derived.has(statement.sourceId)
               ? 'derived'
               : 'independent',
-        freshness: stale ? 'stale' : 'current',
+        freshness: stale || supersededBy.has(statement.sourceId) ? 'stale' : 'current',
       },
       implementationAgreement: agreement,
       experimental: instructionLike || llmExtracted,
@@ -325,7 +330,9 @@ export function buildRegistry(options: BuildOptions): Registry {
       const versions = live.map((g) => g.statement.version).filter((v): v is string => v !== undefined);
       const newest = versions.length ? versions.reduce((a, b) => (compareVersions(a, b) >= 0 ? a : b)) : null;
       const rankOf = (g: (typeof live)[number]) => {
-        const base = sourceRank(sources.get(g.statement.sourceId), g.statement);
+        const base =
+          sourceRank(sources.get(g.statement.sourceId), g.statement) -
+          (supersededBy.has(g.statement.sourceId) ? 2 : 0);
         const v = g.statement.version;
         if (!v || !newest || versions.length < 2) return base;
         return base + (compareVersions(v, newest) === 0 ? 2 : -2);
@@ -351,6 +358,12 @@ export function buildRegistry(options: BuildOptions): Registry {
           ...group
             .filter((g) => g.stale)
             .map((g) => `${g.property.citations[0]} is marked stale and was not counted`),
+          ...live
+            .filter((g) => supersededBy.has(g.statement.sourceId))
+            .map(
+              (g) =>
+                `${g.property.citations[0]} is called outdated by ${(supersededBy.get(g.statement.sourceId) ?? []).map((id) => sources.get(id)?.locator ?? id).join(', ')}; still counted until a human decides`,
+            ),
         ],
       });
     }
