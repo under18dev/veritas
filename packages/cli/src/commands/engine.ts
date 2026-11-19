@@ -66,7 +66,8 @@ export function discoverCommand(opts: Opts): Promise<ExitCode> {
   const sources = String(opts.sources ?? 'local');
   if (opts.offline && /github|web|all/.test(sources)) log('note: --offline overrides network sources');
   return stagesCommand(opts, 'discover', ['discover'], {
-    offline: Boolean(opts.offline) || !/github|web|all/.test(sources),
+    offline: Boolean(opts.offline),
+    localSourcesOnly: !/github|web|all/.test(sources),
   });
 }
 
