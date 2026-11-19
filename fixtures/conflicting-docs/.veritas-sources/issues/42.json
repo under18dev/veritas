@@ -1,0 +1,10 @@
+{
+  "number": 42,
+  "title": "Rate limit should allow more than 100 requests",
+  "state": "closed",
+  "html_url": "https://github.com/example/rate-limit/issues/42",
+  "created_at": "2026-03-02T10:00:00Z",
+  "user": { "login": "maintainer" },
+  "labels": [{ "name": "spec" }],
+  "body": "Decision: a client may send fewer than 120 requests per minute. The README is outdated."
+}

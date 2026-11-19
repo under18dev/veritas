@@ -1,2 +1,10 @@
 packages:
   - packages/*
+  - fixtures/*
+minimumReleaseAgeExclude:
+  - "@mizchi/mutator-core@0.4.5"
+  - "@mizchi/mutator-jest@0.4.5"
+  - "@mizchi/mutator-playwright@0.4.5"
+  - "@mizchi/mutator-typecheck@0.4.5"
+  - "@mizchi/mutator-vitest@0.4.5"
+  - "@mizchi/mutator@0.4.5"

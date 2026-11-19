@@ -1,0 +1,9 @@
+{
+  "name": "fixture-conflicting-docs",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@mizchi/mutator": "0.4.5",
+    "vitest": "5.1.1"
+  }
+}
