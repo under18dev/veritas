@@ -129,6 +129,10 @@ async function replay(
   return records;
 }
 
+function replayProblem(records: ReplayRecord[]): string {
+  return records.find((r) => r.note)?.note ?? 'no replayable input';
+}
+
 function collectLiterals(expr: Expr, out: Set<bigint>): void {
   if (expr.kind === 'int') out.add(BigInt(expr.value));
   else if (expr.kind === 'unary') collectLiterals(expr.arg, out);
@@ -226,6 +230,10 @@ export async function proveProperty(options: ProveOptions): Promise<ProveResult>
       semanticValidation = 'mismatch';
     } else if (checked.length > 0) {
       semanticValidation = 'confirmed';
+    } else if (options.bindings.length > 0) {
+      // A counterexample that could not be run in JavaScript is a model result only, not a finding.
+      status = 'unknown';
+      semanticGaps.push(`the counterexample could not be replayed in JavaScript (${replayProblem(replays)})`);
     }
   }
 
@@ -265,6 +273,10 @@ export async function proveProperty(options: ProveOptions): Promise<ProveResult>
         assumptions.push(
           `model and JavaScript agree on ${checked.length} boundary input(s) (sampled, not proven)`,
         );
+      } else if (options.bindings.length > 0) {
+        // Without any JavaScript comparison the model may not describe the code: do not report a proof.
+        status = 'unknown';
+        semanticGaps.push(`the model could not be compared with JavaScript (${replayProblem(replays)})`);
       }
     }
   }
