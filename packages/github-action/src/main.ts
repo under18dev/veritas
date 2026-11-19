@@ -1,5 +1,6 @@
 import { appendFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { detectProject, loadConfig, redact, runCommand, runDoctor } from '@under18dev/veritas-core';
 import { PROFILE_STAGES, type Profile, runVeritas } from '@under18dev/veritas-engine';
 import { planFromEvent, type RunPlan } from './event.js';
@@ -131,7 +132,7 @@ export async function main(): Promise<number> {
   }
   return decision.exitCode;
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname))
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
   main()
     .then((code) => {
       process.exitCode = code;
