@@ -11,6 +11,7 @@ import {
   type Mutant,
   newRunId,
   type PolicyDecision,
+  type PolicyEvidence,
   type Property,
   type Run,
   RunStore,
@@ -156,6 +157,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
   let mutants: Mutant[] = [];
   let mutationAvailable = false;
   let findings: Finding[] = [];
+  let policyEvidence: PolicyEvidence = {};
   const pbtResults: PbtResult[] = [];
   const seeds: Record<string, number> = {};
 
@@ -361,6 +363,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
           experimental: p.status !== 'accepted',
           store,
           signal,
+          allowNetworkWithoutIsolation: config.sandbox.allowNetworkWithoutIsolation,
         });
         pbtResults.push(result);
         messages.push(
@@ -438,6 +441,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
             p.status === 'accepted'
               ? []
               : [`property ${p.id} is ${p.status}, not accepted: experimental check`],
+          allowNetworkWithoutIsolation: config.sandbox.allowNetworkWithoutIsolation,
         });
         claims.push(claim);
         solverMs += claim.durationMs;
@@ -509,6 +513,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
           store,
           signal,
           mutantId: m.id,
+          allowNetworkWithoutIsolation: config.sandbox.allowNetworkWithoutIsolation,
         });
         claims.push(claim);
         solverMs += claim.durationMs;
@@ -551,6 +556,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         functions,
         mutationAvailable,
       });
+      policyEvidence = { mutants: linkedMutants, properties: spec.properties, assessments };
       findings = deriveFindings({
         properties: spec.properties,
         conflicts: spec.conflicts,
@@ -621,7 +627,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
 
   const results: StageResult[] = await runStages(stages, { root, config, store, signal, log });
   const capabilities: Capability[] = (await runDoctor(root, config)).capabilities;
-  const decision = evaluatePolicy(config.policy, findings, results, claims);
+  const decision = evaluatePolicy(config.policy, findings, results, claims, { mutants, ...policyEvidence });
   const usage = results.reduce(
     (acc, r) => ({
       llmTokens: acc.llmTokens + r.usage.llmTokens,

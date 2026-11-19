@@ -384,13 +384,12 @@ describe('runMutation on the discount fixture (real mutator)', () => {
       const root = copyDiscountFixture();
       const r = await runMutation({
         root,
-        config: config({ mode: 'diff', maxMutants: 5 }),
+        config: config({ mode: 'diff' }),
         reportDir: path.join(root, 'out'),
         scope: ['src/pricing.ts'],
       });
       expect(r.status).toBe('succeeded');
       expect(r.warnings.join('\n')).toMatch(/no --since ref/);
-      expect(r.warnings.join('\n')).toMatch(/maxMutants is not enforced/);
       expect(r.mutants.every((m) => m.location.file === 'src/pricing.ts')).toBe(true);
     },
     REAL_RUN_TIMEOUT,

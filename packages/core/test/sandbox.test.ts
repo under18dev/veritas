@@ -1,8 +1,14 @@
-import { existsSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { callInSandbox, sandboxBlocksNetwork } from '../src/index.js';
+import {
+  callInSandbox,
+  runCommand,
+  sandboxBlocksNetwork,
+  sandboxRefusal,
+  sandboxRuntime,
+} from '../src/index.js';
 
 function project(source: string): { root: string; file: string } {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-sandbox-')));
@@ -140,5 +146,58 @@ describe('sandboxed execution', () => {
       timeoutMs: 20_000,
     });
     expect(result.status).toBe('error');
+  });
+});
+
+describe('runCommand timeouts', () => {
+  it('kill the processes a command started, not only the command', async () => {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-tree-')));
+    const pidFile = path.join(dir, 'grandchild.pid');
+    const script = path.join(dir, 'parent.mjs');
+    writeFileSync(
+      script,
+      `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' });
+writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+setInterval(() => {}, 1000);
+`,
+    );
+    const result = await runCommand(process.execPath, [script], { cwd: dir, timeoutMs: 2_000 });
+    expect(result.timedOut).toBe(true);
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    const alive = () => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (let i = 0; i < 50 && alive(); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(alive()).toBe(false);
+  }, 30_000);
+});
+
+describe('sandbox runtime', () => {
+  const old = { node: '/old/node', version: '24.11.0' };
+
+  it('refuses to run project code on a Node.js that cannot block network access', () => {
+    const runtime = sandboxRuntime({ PATH: '' }, old);
+    expect(runtime).toEqual({ node: '/old/node', version: '24.11.0', networkIsolated: false });
+    expect(sandboxRefusal(runtime)).toMatch(/cannot block network access/);
+    expect(sandboxRefusal(runtime, true)).toBeNull();
+  });
+
+  it('uses a newer Node.js from VERITAS_SANDBOX_NODE when this one is too old', () => {
+    const runtime = sandboxRuntime({ PATH: '', VERITAS_SANDBOX_NODE: process.execPath }, old);
+    expect(runtime.node).toBe(process.execPath);
+    expect(runtime.networkIsolated).toBe(sandboxBlocksNetwork(process.versions.node));
+    expect(sandboxRefusal(runtime)).toBe(runtime.networkIsolated ? null : sandboxRefusal(runtime));
+  });
+
+  it('ignores a VERITAS_SANDBOX_NODE that does not run', () => {
+    const runtime = sandboxRuntime({ PATH: '', VERITAS_SANDBOX_NODE: '/no/such/node' }, old);
+    expect(runtime.networkIsolated).toBe(false);
   });
 });

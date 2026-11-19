@@ -59,7 +59,6 @@ export const VeritasConfig = z
         backend: z.literal('mizchi').default('mizchi'),
         mode: z.enum(['diff', 'full']).default('diff'),
         timeoutMs: z.number().int().positive().default(120_000),
-        maxMutants: z.number().int().positive().optional(),
       })
       .strict()
       .prefault({}),
@@ -87,6 +86,8 @@ export const VeritasConfig = z
         provider: z.enum(['none', 'claude', 'claude-code', 'openai', 'codex']).default('none'),
         model: z.string().optional(),
         maxTokensPerRun: z.number().int().nonnegative().default(200_000),
+        /** The codex CLI keeps a read-only shell that can read local files; it is only used with this set. */
+        allowCodexFileReads: z.boolean().default(false),
       })
       .strict()
       .prefault({}),
@@ -113,6 +114,13 @@ export const VeritasConfig = z
         inconclusiveBehavior: z.enum(['fail', 'warn', 'ignore']).default('warn'),
         maxNewSurvivors: z.number().int().nonnegative().optional(),
         minPropertyCoverage: z.number().min(0).max(1).optional(),
+      })
+      .strict()
+      .prefault({}),
+    sandbox: z
+      .object({
+        /** Run project code even where network access cannot be blocked (Node.js below 25 without a newer one). */
+        allowNetworkWithoutIsolation: z.boolean().default(false),
       })
       .strict()
       .prefault({}),

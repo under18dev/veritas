@@ -37,12 +37,12 @@ What works in the current build.
 
 ## Environments
 
-| Item        | Supported                                     |
-| ----------- | --------------------------------------------- |
-| Node.js     | 24 or later; sandbox network isolation on 25+ |
-| OS          | Linux, macOS, Windows (CI matrix)             |
-| Test runner | Vitest                                        |
-| Languages   | TypeScript, JavaScript (ESM)                  |
+| Item        | Supported                                                                                                                              |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Node.js     | 24 or later; project code runs only under Node.js 25+ (network blocked): the running Node.js, `VERITAS_SANDBOX_NODE` or `node` on PATH |
+| OS          | Linux, macOS, Windows (CI matrix)                                                                                                      |
+| Test runner | Vitest                                                                                                                                 |
+| Languages   | TypeScript, JavaScript (ESM)                                                                                                           |
 
 ## External tools and licenses
 

@@ -385,6 +385,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
             }),
           ),
           timeoutMs: Math.max(5_000, budget.solverTimeoutMs),
+          allowNetworkWithoutIsolation: config.sandbox.allowNetworkWithoutIsolation,
           ...(options.signal ? { signal: options.signal } : {}),
         })
       : null;

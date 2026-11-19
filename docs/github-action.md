@@ -1,6 +1,6 @@
 # GitHub Action
 
-The Veritas action runs the same offline engine used by the CLI. A recommended workflow is in `packages/github-action/examples/pull-request.yml`.
+The Veritas action runs the same offline engine used by the CLI. A recommended workflow is in `packages/github-action/examples/pull-request.yml`. The action itself runs on the `node24` runtime; set up Node.js 25+ in the job (the example uses 26) so property tests and counterexample replay run project code without network access. Without it they are not run and the results stay inconclusive.
 
 Inputs are `profile` (`quick`, `standard`, or `deep`), `working-directory`, `since`, `inconclusive` (`warn`, `fail`, or `ignore`), and `summary`. The pull request base SHA is used for `since` when it is not supplied. Outputs are `verdict`, `exit-code`, `run-id`, `confirmed-findings`, `report-path`, and `from-fork` (`true` for a pull request from a fork, also noted in the step summary).
 

@@ -58,6 +58,10 @@ describe('config', () => {
       expect(e.message).toContain('unknownKey');
     }
   });
+
+  it('rejects settings Veritas cannot enforce instead of ignoring them', () => {
+    expect(() => parseConfig({ mutation: { maxMutants: 5 } }, 'x.json')).toThrow(/maxMutants/);
+  });
 });
 
 describe('paths', () => {
@@ -268,6 +272,51 @@ describe('policy', () => {
     nextActions: [],
   });
   const policy = VeritasConfig.parse({}).policy;
+
+  it('enforces maxNewSurvivors and minPropertyCoverage, and never passes them unmeasured', () => {
+    const mutate = { ...stage('succeeded'), stage: 'mutate' as const };
+    const survivors = [{ status: 'survived' }, { status: 'killed' }, { status: 'survived' }] as never[];
+    const strict = { ...policy, maxNewSurvivors: 1 };
+    expect(evaluatePolicy(strict, [], [mutate], [], { mutants: survivors })).toMatchObject({
+      exitCode: ExitCode.PolicyFailure,
+      reasons: [expect.stringMatching(/2 surviving mutant\(s\), more than policy.maxNewSurvivors 1/)],
+    });
+    expect(
+      evaluatePolicy({ ...policy, maxNewSurvivors: 2 }, [], [mutate], [], { mutants: survivors }).verdict,
+    ).toBe('pass');
+    const unmeasured = evaluatePolicy(strict, [], [stage('succeeded')], [], {});
+    expect(unmeasured.verdict).toBe('pass_with_warnings');
+    expect(unmeasured.reasons.join(' ')).toMatch(/no mutation results/);
+    expect(
+      evaluatePolicy({ ...strict, inconclusiveBehavior: 'fail' }, [], [stage('succeeded')]).exitCode,
+    ).toBe(ExitCode.Inconclusive);
+
+    const properties = [
+      { id: 'P-1', status: 'accepted' },
+      { id: 'P-2', status: 'accepted' },
+      { id: 'P-3', status: 'proposed' },
+    ] as never[];
+    const assessments = [
+      { propertyIds: ['P-1'], outcome: 'meaningful_with_evidence' },
+      { propertyIds: ['P-2', 'P-3'], outcome: 'weak_or_incomplete' },
+    ] as never[];
+    const coverage = (min: number) =>
+      evaluatePolicy({ ...policy, minPropertyCoverage: min }, [], [stage('succeeded')], [], {
+        properties,
+        assessments,
+      });
+    expect(coverage(0.75)).toMatchObject({
+      exitCode: ExitCode.PolicyFailure,
+      reasons: [expect.stringMatching(/1 of 2 accepted properties have a meaningful test/)],
+    });
+    expect(coverage(0.5).verdict).toBe('pass');
+    expect(
+      evaluatePolicy({ ...policy, minPropertyCoverage: 0.5 }, [], [stage('succeeded')], [], {
+        properties: [],
+        assessments: [],
+      }).verdict,
+    ).toBe('pass_with_warnings');
+  });
 
   it('fails only on confirmed violations', () => {
     expect(evaluatePolicy(policy, [finding('confirmed')], [stage('succeeded')]).exitCode).toBe(

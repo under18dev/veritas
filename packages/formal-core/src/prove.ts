@@ -41,6 +41,8 @@ export interface ProveOptions {
   mutantId?: string;
   /** Extra assumptions recorded on the claim, e.g. which specification reading was formalized. */
   assumptions?: string[];
+  /** Replay project code even where network access cannot be blocked (sandbox.allowNetworkWithoutIsolation). */
+  allowNetworkWithoutIsolation?: boolean;
 }
 
 export interface ProveResult {
@@ -104,6 +106,7 @@ async function replay(
       calls: runnable.map((args) => args.map(encodeInput)),
       timeoutMs: Math.max(5_000, options.timeoutMs),
       signal: options.signal,
+      allowNetworkWithoutIsolation: options.allowNetworkWithoutIsolation ?? false,
     });
     runnable.forEach((args, i) => {
       const input = Object.fromEntries(model.params.map((p, j) => [p.name, args[j] as string | boolean]));

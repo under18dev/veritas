@@ -8,6 +8,8 @@ import {
   type RunStore,
   resolveInsideRoot,
   runCommand,
+  sandboxRefusal,
+  sandboxRuntime,
   stableId,
 } from '@under18dev/veritas-core';
 import { type Binding, differentialInputs } from '@under18dev/veritas-formal-core';
@@ -26,6 +28,8 @@ export interface RunPropertyTestOptions {
   experimental: boolean;
   store?: RunStore;
   signal?: AbortSignal;
+  /** Run project code even where network access cannot be blocked (sandbox.allowNetworkWithoutIsolation). */
+  allowNetworkWithoutIsolation?: boolean;
 }
 
 export interface ReplayOptions {
@@ -272,6 +276,9 @@ async function execute(
     return finish('error', { error: (error as Error).message });
   }
 
+  const sandbox = sandboxRuntime();
+  const refusal = sandboxRefusal(sandbox, options.allowNetworkWithoutIsolation);
+  if (refusal) return finish('error', { error: refusal });
   const nonce = randomBytes(16).toString('hex');
   const args = [
     '--permission',
@@ -283,7 +290,7 @@ async function execute(
     '--disable-warning=ExperimentalWarning',
     RUNNER,
   ];
-  const result = await runCommand(process.execPath, args, {
+  const result = await runCommand(sandbox.node, args, {
     cwd: root,
     timeoutMs: options.timeoutMs,
     input: JSON.stringify({

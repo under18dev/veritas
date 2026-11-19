@@ -2,8 +2,11 @@ import type { VeritasConfig } from './config/schema.js';
 import { ExitCode } from './exit-codes.js';
 import type { Finding } from './schema/finding.js';
 import type { FormalClaim } from './schema/formal.js';
+import type { Mutant } from './schema/mutation.js';
+import type { Property } from './schema/property.js';
 import type { StageResult } from './schema/run.js';
 import type { StageStatus, VerificationStatus } from './schema/status.js';
+import type { TestAssessment } from './schema/tests.js';
 
 /** `pass` is only possible when every stage succeeded and nothing is inconclusive. */
 export type PolicyVerdict = 'pass' | 'pass_with_warnings' | 'policy_failure' | 'tool_error' | 'inconclusive';
@@ -24,6 +27,57 @@ const INCONCLUSIVE_CLAIM: VerificationStatus[] = [
   'error',
 ];
 
+/** Results the optional thresholds (`maxNewSurvivors`, `minPropertyCoverage`) are measured on. */
+export interface PolicyEvidence {
+  mutants?: Mutant[];
+  properties?: Property[];
+  assessments?: TestAssessment[];
+}
+
+/**
+ * Optional CI thresholds. `maxNewSurvivors` counts surviving mutants in this run's scope (only the change with
+ * `--since`). `minPropertyCoverage` is the share of accepted properties with at least one test assessed
+ * `meaningful_with_evidence`. A threshold that cannot be measured is inconclusive, never passed.
+ */
+function checkThresholds(
+  policy: VeritasConfig['policy'],
+  stages: StageResult[],
+  evidence: PolicyEvidence,
+): { failures: string[]; undecided: string[] } {
+  const failures: string[] = [];
+  const undecided: string[] = [];
+  if (policy.maxNewSurvivors !== undefined) {
+    const mutate = stages.find((s) => s.stage === 'mutate');
+    if (!mutate || (mutate.status !== 'succeeded' && mutate.status !== 'partial')) {
+      undecided.push('policy.maxNewSurvivors: no mutation results in this run');
+    } else {
+      const survivors = (evidence.mutants ?? []).filter((m) => m.status === 'survived').length;
+      if (survivors > policy.maxNewSurvivors)
+        failures.push(
+          `${survivors} surviving mutant(s), more than policy.maxNewSurvivors ${policy.maxNewSurvivors}`,
+        );
+    }
+  }
+  if (policy.minPropertyCoverage !== undefined) {
+    const accepted = (evidence.properties ?? []).filter((p) => p.status === 'accepted');
+    if (accepted.length === 0 || evidence.assessments === undefined) {
+      undecided.push('policy.minPropertyCoverage: no accepted property or no test assessment in this run');
+    } else {
+      const covered = accepted.filter((p) =>
+        (evidence.assessments ?? []).some(
+          (a) => a.outcome === 'meaningful_with_evidence' && a.propertyIds.includes(p.id),
+        ),
+      ).length;
+      const share = covered / accepted.length;
+      if (share < policy.minPropertyCoverage)
+        failures.push(
+          `${covered} of ${accepted.length} accepted properties have a meaningful test, below policy.minPropertyCoverage ${policy.minPropertyCoverage}`,
+        );
+    }
+  }
+  return { failures, undecided };
+}
+
 /**
  * Map findings, claims and stage results to an exit code.
  * - Only confirmed findings can fail the policy; suspected findings never do.
@@ -36,6 +90,7 @@ export function evaluatePolicy(
   findings: Finding[],
   stages: StageResult[],
   claims: FormalClaim[] = [],
+  evidence: PolicyEvidence = {},
 ): PolicyDecision {
   const reasons: string[] = [];
   const confirmedViolations = findings.filter(
@@ -51,6 +106,21 @@ export function evaluatePolicy(
     ...claims.filter((c) => INCONCLUSIVE_CLAIM.includes(c.status)).map((c) => `claim ${c.id}=${c.status}`),
   ];
 
+  const thresholds = checkThresholds(policy, stages, evidence);
+  inconclusive.push(...thresholds.undecided);
+  if (thresholds.failures.length > 0) {
+    return {
+      exitCode: ExitCode.PolicyFailure,
+      verdict: 'policy_failure',
+      reasons: [
+        ...(confirmedViolations.length > 0 && policy.confirmedViolation === 'fail'
+          ? [`${confirmedViolations.length} confirmed specification violation(s)`]
+          : []),
+        ...thresholds.failures,
+        ...inconclusive,
+      ],
+    };
+  }
   if (confirmedViolations.length > 0 && policy.confirmedViolation === 'fail') {
     reasons.push(`${confirmedViolations.length} confirmed specification violation(s)`);
     return {

@@ -12,7 +12,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          # Node.js 25+ on PATH runs project code without network access.
+          node-version: 26
       - run: pnpm install --frozen-lockfile
       - uses: veritas/github-action@v1
         with:

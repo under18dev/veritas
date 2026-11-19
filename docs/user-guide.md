@@ -64,42 +64,44 @@ Only new test files are added, and only when mutation results improve in an isol
 
 `.veritas/config.json` is validated against `schemas/config.json`. Important settings:
 
-| Setting                                         | Default                      | Meaning                                                      |
-| ----------------------------------------------- | ---------------------------- | ------------------------------------------------------------ |
-| `sources.web.enabled`, `sources.github.enabled` | `false`                      | Network sources; the web also needs `allowDomains`           |
-| `formal.integerDomain`                          | `[-10000, 10000]`            | Bounds for formal checks                                     |
-| `formal.maxSolverMs`                            | `30000`                      | Solver time limit per query                                  |
-| `pbt.numRuns`, `pbt.seed`                       | `1000`, derived per property | Property-based testing                                       |
-| `llm.provider`                                  | `none`                       | LLM-assisted extraction; see [LLM providers](#llm-providers) |
-| `policy.confirmedViolation`                     | `fail`                       | Exit 1 on confirmed violations                               |
-| `policy.inconclusiveBehavior`                   | `warn`                       | `fail` turns inconclusive results into exit 4                |
+| Setting                                         | Default                      | Meaning                                                                                                                             |
+| ----------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `sources.web.enabled`, `sources.github.enabled` | `false`                      | Network sources; the web also needs `allowDomains`                                                                                  |
+| `formal.integerDomain`                          | `[-10000, 10000]`            | Bounds for formal checks                                                                                                            |
+| `formal.maxSolverMs`                            | `30000`                      | Solver time limit per query                                                                                                         |
+| `pbt.numRuns`, `pbt.seed`                       | `1000`, derived per property | Property-based testing                                                                                                              |
+| `llm.provider`                                  | `none`                       | LLM-assisted extraction; see [LLM providers](#llm-providers)                                                                        |
+| `policy.confirmedViolation`                     | `fail`                       | Exit 1 on confirmed violations                                                                                                      |
+| `policy.inconclusiveBehavior`                   | `warn`                       | `fail` turns inconclusive results into exit 4                                                                                       |
+| `policy.maxNewSurvivors`                        | unset                        | Exit 1 when more mutants survive in this run's scope (the change with `--since`); inconclusive without mutation results             |
+| `policy.minPropertyCoverage`                    | unset                        | Exit 1 when fewer accepted properties (share, 0–1) have a `meaningful_with_evidence` test; inconclusive without accepted properties |
 
 ## LLM providers
 
 An LLM is optional. It only reads free-text statements the rule-based extractor could not interpret; what it finds becomes experimental, proposed properties, never accepted ones. LLM requests are never made with `--offline`.
 
-| `llm.provider` | Uses                                                    | Needs                                    |
-| -------------- | ------------------------------------------------------- | ---------------------------------------- |
-| `claude-code`  | The Claude Code CLI with your own login (Pro/Max plans) | `claude` on PATH and `claude auth login` |
-| `codex`        | The Codex CLI with your own login (ChatGPT plans)       | `codex` on PATH and `codex login`        |
-| `claude`       | The Anthropic API                                       | `ANTHROPIC_API_KEY`                      |
-| `openai`       | The OpenAI API (Responses, `store: false`)              | `OPENAI_API_KEY`                         |
+| `llm.provider` | Uses                                                    | Needs                                                              |
+| -------------- | ------------------------------------------------------- | ------------------------------------------------------------------ |
+| `claude-code`  | The Claude Code CLI with your own login (Pro/Max plans) | `claude` on PATH and `claude auth login`                           |
+| `codex`        | The Codex CLI with your own login (ChatGPT plans)       | `codex` on PATH, `codex login` and `llm.allowCodexFileReads: true` |
+| `claude`       | The Anthropic API                                       | `ANTHROPIC_API_KEY`                                                |
+| `openai`       | The OpenAI API (Responses, `store: false`)              | `OPENAI_API_KEY`                                                   |
 
 `llm.model` picks the model (for the CLIs, any value their `--model` accepts). `veritas doctor` shows whether the provider is ready; it reads only the login state of a CLI, not account details. Veritas never handles CLI credentials, and does not pass API keys to the CLIs, so they always use their own login.
 
 The CLIs run with as little as possible (Claude Code: no tools, MCP servers or settings; Codex: read-only sandbox, ephemeral session, no user config, browser, apps or web search) in an empty temporary directory, so they see only the quoted text Veritas sends. Usage counts toward your plan's limits.
 
-Codex keeps a read-only shell that Veritas cannot switch off; anything a model returns is kept only when it comes from the quoted statement. On Windows, `.exe` installs and npm/pnpm `.cmd` shims are supported (the shim's Node.js script is run directly, without a shell).
+Codex keeps a read-only shell that Veritas cannot switch off, so the model could read local files; Veritas therefore uses `codex` only with `llm.allowCodexFileReads: true`, and anything a model returns is kept only when it comes from the quoted statement. On Windows, `.exe` installs and npm/pnpm `.cmd` shims are supported (the shim's Node.js script is run directly, without a shell).
 
 ## Troubleshooting
 
-| Symptom                       | Cause and fix                                                                                                                  |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `VITEST_NOT_FOUND`            | Install Vitest in the project (`pnpm add -D vitest`)                                                                           |
-| `mutate` disabled in `doctor` | Install `@mizchi/mutator` in the project or install the project's dependencies                                                 |
-| Mutation stage `failed`       | The project's own tests fail; fix the baseline first                                                                           |
-| `semantic_mismatch`           | The integer model and JavaScript disagree (e.g. overflow beyond safe integers); narrow `formal.integerDomain` or rely on tests |
-| `unsupported` claims          | The function uses constructs outside the formal subset (see the support matrix)                                                |
-| Lean `unavailable`            | Install Lean with elan; `doctor` also looks in `~/.elan/bin`                                                                   |
-| `IMPROVE_APPLY_IN_CI`         | Applying improvements is refused in CI by design                                                                               |
-| Sandbox `degraded`            | Node.js below 25 cannot block network access from executed project code                                                        |
+| Symptom                       | Cause and fix                                                                                                                                                                      |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VITEST_NOT_FOUND`            | Install Vitest in the project (`pnpm add -D vitest`)                                                                                                                               |
+| `mutate` disabled in `doctor` | Install `@mizchi/mutator` in the project or install the project's dependencies                                                                                                     |
+| Mutation stage `failed`       | The project's own tests fail; fix the baseline first                                                                                                                               |
+| `semantic_mismatch`           | The integer model and JavaScript disagree (e.g. overflow beyond safe integers); narrow `formal.integerDomain` or rely on tests                                                     |
+| `unsupported` claims          | The function uses constructs outside the formal subset (see the support matrix)                                                                                                    |
+| Lean `unavailable`            | Install Lean with elan; `doctor` also looks in `~/.elan/bin`                                                                                                                       |
+| `IMPROVE_APPLY_IN_CI`         | Applying improvements is refused in CI by design                                                                                                                                   |
+| Sandbox `unavailable`         | Node.js below 25 cannot block network access from project code; install Node.js 25+ or point `VERITAS_SANDBOX_NODE` at one (`sandbox.allowNetworkWithoutIsolation` runs it anyway) |

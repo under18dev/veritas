@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { VeritasConfig } from '../config/schema.js';
 import { runCommand } from '../process.js';
-import { sandboxBlocksNetwork } from '../sandbox.js';
+import { sandboxRuntime } from '../sandbox.js';
 import type { Capability, CapabilityName } from '../schema/run.js';
 import { detectProject, resolvePackageVersion } from './detect.js';
 import { llmAvailability } from './llm.js';
@@ -16,7 +16,7 @@ export const FEATURES: Record<string, { required: CapabilityName[]; optional: Ca
   analyze: { required: ['node', 'typescript'], optional: ['llm'] },
   mutate: { required: ['node', 'vitest', 'mutator'], optional: ['git'] },
   'test generate': { required: ['node', 'fast_check', 'vitest'], optional: ['llm'] },
-  'prove (z3)': { required: ['node', 'z3'], optional: [] },
+  'prove (z3)': { required: ['node', 'z3'], optional: ['sandbox'] },
   'prove (lean)': { required: ['node', 'lean'], optional: [] },
   improve: { required: ['node', 'vitest', 'sandbox'], optional: ['mutator', 'z3', 'llm'] },
   report: { required: ['node'], optional: [] },
@@ -171,7 +171,9 @@ export async function runDoctor(
     lean,
   );
 
-  const llm = await llmAvailability(config?.llm.provider ?? 'none', env, root);
+  const llm = await llmAvailability(config?.llm.provider ?? 'none', env, root, {
+    allowCodexFileReads: config?.llm.allowCodexFileReads ?? false,
+  });
   add('llm', llm.state, llm.detail);
 
   const networkWanted = Boolean(config?.sources.web.enabled || config?.sources.github.enabled);
@@ -190,15 +192,19 @@ export async function runDoctor(
   } catch {
     sandboxOk = false;
   }
-  const netIsolated = sandboxBlocksNetwork();
+  const runtime = sandboxRuntime(env);
+  const allowed = config?.sandbox.allowNetworkWithoutIsolation ?? false;
+  const via = runtime.node === process.execPath ? '' : ` (Node.js ${runtime.version} at ${runtime.node})`;
   add(
     'sandbox',
-    !sandboxOk ? 'unavailable' : netIsolated ? 'available' : 'degraded',
+    !sandboxOk ? 'unavailable' : runtime.networkIsolated ? 'available' : allowed ? 'degraded' : 'unavailable',
     !sandboxOk
       ? 'cannot create temporary workspaces'
-      : netIsolated
-        ? 'permission-model sandbox: no writes, child processes or network'
-        : 'permission-model sandbox without network isolation (requires Node.js 25+)',
+      : runtime.networkIsolated
+        ? `permission-model sandbox: no writes, child processes or network${via}`
+        : allowed
+          ? `permission-model sandbox WITHOUT network isolation (Node.js ${runtime.version}; allowed by sandbox.allowNetworkWithoutIsolation)`
+          : `project code is not run: Node.js ${runtime.version} cannot block network access; use Node.js 25+ or set VERITAS_SANDBOX_NODE`,
   );
 
   const stateOf = new Map(caps.map((c) => [c.name, c.state]));

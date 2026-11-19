@@ -170,11 +170,6 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   if (options.config.mutation.mode === 'diff' && options.since === undefined) {
     warnings.push('mutation.mode is "diff" but no --since ref was given: all mutants in scope were run');
   }
-  if (options.config.mutation.maxMutants !== undefined) {
-    warnings.push(
-      'mutation.maxMutants is not enforced: mutator has no mutant cap (bounded by --time-budget instead)',
-    );
-  }
 
   mkdirSync(reportDir, { recursive: true });
   const command = [process.execPath, detection.binPath, ...args];

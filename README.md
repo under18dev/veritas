@@ -24,7 +24,7 @@ F-99e71509e3c4  [suspected low] test "pricing works" does not check project beha
 
 ## Requirements
 
-- Node.js 24 or later (network isolation of the execution sandbox needs Node.js 25+)
+- Node.js 24 or later. Property tests and counterexample replay run project code only under Node.js 25+, which can block its network access (26 LTS recommended); see the [support matrix](docs/support-matrix.md)
 - A TypeScript/JavaScript project tested with Vitest
 - Optional: [Lean 4](https://lean-lang.org/) for kernel-checked proofs
 
