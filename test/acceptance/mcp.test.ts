@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import {
   EvidenceSource,
   Finding,
@@ -26,6 +26,12 @@ async function connect(root: string, extraArgs: string[] = []): Promise<Client> 
       command: process.execPath,
       args: [BIN, '--root', root, ...extraArgs],
       stderr: 'ignore',
+      env: {
+        ...getDefaultEnvironment(),
+        ...(process.env.VERITAS_SANDBOX_NODE
+          ? { VERITAS_SANDBOX_NODE: process.env.VERITAS_SANDBOX_NODE }
+          : {}),
+      },
     }),
   );
   clients.push(client);

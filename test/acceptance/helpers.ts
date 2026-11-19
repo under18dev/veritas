@@ -70,7 +70,13 @@ export function runCli(args: string[], cwd: string, env: NodeJS.ProcessEnv = {})
   const result = spawnSync(process.execPath, [CLI, ...args], {
     cwd,
     encoding: 'utf8',
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env },
+    env: {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      // CI's Node 24 job names a newer Node.js for sandboxed project code, as the GitHub Action does.
+      ...(process.env.VERITAS_SANDBOX_NODE ? { VERITAS_SANDBOX_NODE: process.env.VERITAS_SANDBOX_NODE } : {}),
+      ...env,
+    },
     timeout: 120_000,
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
