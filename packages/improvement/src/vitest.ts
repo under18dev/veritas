@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { redact, runCommand } from '@veritas/core';
 
@@ -22,6 +22,14 @@ interface JsonReport {
     message?: string;
     assertionResults?: { fullName?: string; title?: string; status?: string; failureMessages?: string[] }[];
   }[];
+}
+
+function longPath(p: string): string {
+  try {
+    return realpathSync.native(path.resolve(p));
+  } catch {
+    return path.resolve(p);
+  }
 }
 
 function short(text: string, max = 300): string {
@@ -62,9 +70,12 @@ export async function runVitest(
   }
   const tests = new Map<string, TestStatus>();
   const failures: string[] = [];
+  // Compare real long paths: on Windows the temp directory may be an 8.3 short name (RUNNER~1) while Vitest
+  // reports the long form, which would make every relative path wrong.
+  const base = longPath(cwd);
   for (const file of report.testResults ?? []) {
     const rel = path
-      .relative(cwd, file.name ?? '')
+      .relative(base, longPath(file.name ?? ''))
       .split(path.sep)
       .join('/');
     const assertions = file.assertionResults ?? [];
