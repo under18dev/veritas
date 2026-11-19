@@ -5,10 +5,52 @@
   "cpus": 10,
   "results": [
     {
+      "fixture": "small-app",
+      "profile": "quick",
+      "exitCode": 0,
+      "wallMs": 1231,
+      "functions": 10,
+      "tests": 30,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 0,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "small-app",
+      "profile": "standard",
+      "exitCode": 0,
+      "wallMs": 2852,
+      "functions": 10,
+      "tests": 30,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 80,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "small-app",
+      "profile": "deep",
+      "exitCode": 0,
+      "wallMs": 4688,
+      "functions": 10,
+      "tests": 30,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 817,
+        "mutants": 80,
+        "testRuns": 5039
+      }
+    },
+    {
       "fixture": "discount-boundary",
       "profile": "quick",
       "exitCode": 0,
-      "wallMs": 1433,
+      "wallMs": 1072,
       "functions": 2,
       "tests": 5,
       "usage": {
@@ -22,7 +64,7 @@
       "fixture": "discount-boundary",
       "profile": "standard",
       "exitCode": 0,
-      "wallMs": 1742,
+      "wallMs": 1673,
       "functions": 2,
       "tests": 5,
       "usage": {
@@ -36,21 +78,21 @@
       "fixture": "discount-boundary",
       "profile": "deep",
       "exitCode": 0,
-      "wallMs": 2403,
+      "wallMs": 2417,
       "functions": 2,
       "tests": 5,
       "usage": {
         "llmTokens": 0,
-        "solverMs": 402,
+        "solverMs": 381,
         "mutants": 17,
-        "testRuns": 1017
+        "testRuns": 1008
       }
     },
     {
       "fixture": "agent-loop",
       "profile": "quick",
       "exitCode": 0,
-      "wallMs": 1056,
+      "wallMs": 1003,
       "functions": 1,
       "tests": 2,
       "usage": {
@@ -64,7 +106,7 @@
       "fixture": "agent-loop",
       "profile": "standard",
       "exitCode": 0,
-      "wallMs": 1625,
+      "wallMs": 1716,
       "functions": 1,
       "tests": 2,
       "usage": {
@@ -78,12 +120,12 @@
       "fixture": "agent-loop",
       "profile": "deep",
       "exitCode": 0,
-      "wallMs": 2007,
+      "wallMs": 1948,
       "functions": 1,
       "tests": 2,
       "usage": {
         "llmTokens": 0,
-        "solverMs": 249,
+        "solverMs": 248,
         "mutants": 7,
         "testRuns": 1000
       }
@@ -92,7 +134,7 @@
       "fixture": "conflicting-docs",
       "profile": "quick",
       "exitCode": 0,
-      "wallMs": 991,
+      "wallMs": 1267,
       "functions": 1,
       "tests": 2,
       "usage": {
@@ -106,7 +148,7 @@
       "fixture": "conflicting-docs",
       "profile": "standard",
       "exitCode": 0,
-      "wallMs": 1548,
+      "wallMs": 1633,
       "functions": 1,
       "tests": 2,
       "usage": {
@@ -120,21 +162,21 @@
       "fixture": "conflicting-docs",
       "profile": "deep",
       "exitCode": 0,
-      "wallMs": 2320,
+      "wallMs": 2371,
       "functions": 1,
       "tests": 2,
       "usage": {
         "llmTokens": 0,
-        "solverMs": 373,
+        "solverMs": 377,
         "mutants": 7,
-        "testRuns": 1007
+        "testRuns": 1010
       }
     },
     {
       "fixture": "equivalent-mutants",
       "profile": "quick",
       "exitCode": 0,
-      "wallMs": 1121,
+      "wallMs": 1010,
       "functions": 2,
       "tests": 3,
       "usage": {
@@ -148,7 +190,7 @@
       "fixture": "equivalent-mutants",
       "profile": "standard",
       "exitCode": 0,
-      "wallMs": 1515,
+      "wallMs": 1634,
       "functions": 2,
       "tests": 3,
       "usage": {
@@ -162,12 +204,12 @@
       "fixture": "equivalent-mutants",
       "profile": "deep",
       "exitCode": 0,
-      "wallMs": 2042,
+      "wallMs": 2053,
       "functions": 2,
       "tests": 3,
       "usage": {
         "llmTokens": 0,
-        "solverMs": 137,
+        "solverMs": 140,
         "mutants": 13,
         "testRuns": 0
       }
@@ -176,7 +218,7 @@
       "fixture": "no-spec",
       "profile": "quick",
       "exitCode": 0,
-      "wallMs": 1162,
+      "wallMs": 1205,
       "functions": 1,
       "tests": 1,
       "usage": {
@@ -190,7 +232,7 @@
       "fixture": "no-spec",
       "profile": "standard",
       "exitCode": 0,
-      "wallMs": 1535,
+      "wallMs": 1773,
       "functions": 1,
       "tests": 1,
       "usage": {
@@ -204,12 +246,12 @@
       "fixture": "no-spec",
       "profile": "deep",
       "exitCode": 0,
-      "wallMs": 2119,
+      "wallMs": 2411,
       "functions": 1,
       "tests": 1,
       "usage": {
         "llmTokens": 0,
-        "solverMs": 262,
+        "solverMs": 289,
         "mutants": 9,
         "testRuns": 0
       }

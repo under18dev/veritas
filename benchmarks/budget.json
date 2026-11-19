@@ -1,0 +1,8 @@
+{
+  "adr": "docs/adr/0009-performance-budget.md",
+  "maxWallMs": {
+    "quick": 60000,
+    "standard": 120000,
+    "deep": 300000
+  }
+}

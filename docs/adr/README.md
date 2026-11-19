@@ -10,5 +10,6 @@
 | [0006](0006-mutation-backend.md)      | Mutation backend                              | Accepted |
 | [0007](0007-llm-adapters.md)          | LLM adapters                                  | Accepted |
 | [0008](0008-package-name.md)          | npm package name                              | Accepted |
+| [0009](0009-performance-budget.md)    | Performance budget                            | Accepted |
 
 New ADRs use the next number and the sections Context, Decision, Consequences.

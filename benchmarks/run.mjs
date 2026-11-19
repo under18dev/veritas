@@ -1,6 +1,7 @@
 // Measures wall-clock time and usage counters of `veritas run` per profile on each fixture.
-// Usage: node benchmarks/run.mjs [profile ...]   (default: quick standard deep)
-// Writes benchmarks/results/<date>.json. Numbers are measurements on this machine, not guarantees.
+// Usage: node benchmarks/run.mjs [--check] [profile ...]   (default: quick standard deep)
+// Writes benchmarks/results/<date>-<platform>.json. With --check, exits 1 when a run fails or exceeds the budget in
+// benchmarks/budget.json (ADR 0009); without it, numbers are recorded only.
 import { spawnSync } from 'node:child_process';
 import {
   cpSync,
@@ -18,8 +19,19 @@ import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(repo, 'packages/cli/dist/bin.js');
-const fixtures = ['discount-boundary', 'agent-loop', 'conflicting-docs', 'equivalent-mutants', 'no-spec'];
-const profiles = process.argv.slice(2).length ? process.argv.slice(2) : ['quick', 'standard', 'deep'];
+const fixtures = [
+  'small-app',
+  'discount-boundary',
+  'agent-loop',
+  'conflicting-docs',
+  'equivalent-mutants',
+  'no-spec',
+];
+const args = process.argv.slice(2);
+const check = args.includes('--check');
+const named = args.filter((a) => a !== '--check');
+const profiles = named.length ? named : ['quick', 'standard', 'deep'];
+const budget = JSON.parse(readFileSync(path.join(repo, 'benchmarks/budget.json'), 'utf8'));
 
 function link(from, to) {
   mkdirSync(to, { recursive: true });
@@ -83,3 +95,17 @@ writeFileSync(
   `${JSON.stringify({ node: process.versions.node, platform: process.platform, arch: process.arch, cpus: cpus().length, results }, null, 2)}\n`,
 );
 console.log(`wrote ${path.relative(repo, file)}`);
+
+if (check) {
+  // Exit codes 0, 1 and 4 are verdicts; 2, 3 or a crash mean the run itself failed.
+  const problems = [];
+  for (const r of results) {
+    if (![0, 1, 4].includes(r.exitCode)) problems.push(`${r.fixture} ${r.profile}: exit code ${r.exitCode}`);
+    const limit = budget.maxWallMs[r.profile];
+    if (limit !== undefined && r.wallMs > limit)
+      problems.push(`${r.fixture} ${r.profile}: ${r.wallMs} ms exceeds the budget of ${limit} ms`);
+  }
+  for (const p of problems) console.error(p);
+  if (problems.length) process.exit(1);
+  console.log('within budget');
+}

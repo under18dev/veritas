@@ -51,6 +51,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:acceptance
+      - name: Performance budget
+        run: node benchmarks/run.mjs --check
       - name: clean install from packed tarballs
         run: node scripts/clean-install-check.mjs
       - name: schemas are up to date
