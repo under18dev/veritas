@@ -15,6 +15,7 @@
     "test": "vitest run --project unit",
     "test:acceptance": "pnpm build && vitest run --project acceptance",
     "schemas": "pnpm build && node scripts/export-schemas.mjs",
+    "licenses:check": "node scripts/check-licenses.mjs",
     "clean": "tsc -b --clean"
   },
   "devDependencies": {
