@@ -1,6 +1,14 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { type Mutant, redact, runCommand, type VeritasConfig } from '@veritas/core';
+import {
+  type Mutant,
+  redact,
+  redactDeep,
+  resolveInsideRoot,
+  runCommand,
+  type VeritasConfig,
+  VeritasError,
+} from '@veritas/core';
 import { detectMutator, PINNED_MUTATOR_VERSION, summarize } from './detect.js';
 import { importMutationReport } from './import.js';
 import { countMutants, emptyCounts, type MutationRunResult, type MutationRunStatus } from './schema.js';
@@ -68,6 +76,30 @@ export function buildMutatorArgs(options: RunMutationOptions): string[] {
   return args;
 }
 
+/**
+ * Resolve `reportDir` and require it to be strictly inside `root` (symlinks included).
+ * Throws VeritasError `REPORT_DIR_OUTSIDE_ROOT` otherwise.
+ */
+function confineReportDir(root: string, reportDir: string): string {
+  const relative = path.relative(path.resolve(root), path.resolve(reportDir));
+  let resolved: string | null = null;
+  if (relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+    try {
+      resolved = resolveInsideRoot(root, relative);
+    } catch {
+      resolved = null;
+    }
+  }
+  if (resolved === null) {
+    throw new VeritasError(
+      'user',
+      'REPORT_DIR_OUTSIDE_ROOT',
+      `reportDir must be a directory inside the project root: ${reportDir}`,
+    );
+  }
+  return resolved;
+}
+
 /** Run mutator on the project and normalize its report. Every non-success outcome is reported as such. */
 export async function runMutation(options: RunMutationOptions): Promise<MutationRunResult> {
   const started = Date.now();
@@ -93,9 +125,11 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   if (!path.isAbsolute(options.reportDir)) {
     return result('error', { detail: `reportDir must be an absolute path: ${options.reportDir}` });
   }
+  // Checked before anything is created or spawned: mutator writes wherever --report-dir points.
+  const reportDir = confineReportDir(options.root, options.reportDir);
   let args: string[];
   try {
-    args = buildMutatorArgs(options);
+    args = buildMutatorArgs({ ...options, reportDir });
   } catch (error) {
     return result('error', { detail: (error as Error).message });
   }
@@ -142,14 +176,14 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     );
   }
 
-  mkdirSync(options.reportDir, { recursive: true });
+  mkdirSync(reportDir, { recursive: true });
   const command = [process.execPath, detection.binPath, ...args];
   const run = await runCommand(process.execPath, [detection.binPath, ...args], {
     cwd: options.root,
     timeoutMs: options.config.mutation.timeoutMs,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
-  const reportPath = path.join(options.reportDir, 'mutation.json');
+  const reportPath = path.join(reportDir, 'mutation.json');
   const rawReportPath = existsSync(reportPath) ? reportPath : null;
   const common = { backend, command, exitCode: run.exitCode, durationMs: run.durationMs, rawReportPath };
 
@@ -166,13 +200,13 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   if (run.exitCode === EXIT_BASELINE_FAILED) {
     return result('failed', {
       ...common,
-      detail: `tests fail without mutants (baseline, exit 4): ${summarize(run.stderr)}`,
+      detail: `tests fail without mutants (baseline, exit 4): ${summarize(redact(run.stderr))}`,
     });
   }
   if (run.exitCode !== 0 && run.exitCode !== EXIT_GATE_FAILED) {
     return result('error', {
       ...common,
-      detail: `mutator exited with ${run.exitCode ?? `signal ${run.signal}`}: ${summarize(run.stderr)}`,
+      detail: `mutator exited with ${run.exitCode ?? `signal ${run.signal}`}: ${summarize(redact(run.stderr))}`,
     });
   }
   if (run.exitCode === EXIT_GATE_FAILED) {
@@ -181,9 +215,9 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
 
   let agentReport: unknown = null;
   try {
-    agentReport = JSON.parse(run.stdout);
+    agentReport = redactDeep(JSON.parse(run.stdout) as unknown);
   } catch {
-    warnings.push(`the agent report on stdout is not JSON: ${summarize(run.stdout, 3, 300)}`);
+    warnings.push(`the agent report on stdout is not JSON: ${summarize(redact(run.stdout), 3, 300)}`);
   }
   const agent = agentReport as {
     gaps?: { key?: unknown; childProcess?: unknown }[];

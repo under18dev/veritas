@@ -8,6 +8,7 @@ import {
   MutationRunResult,
   PINNED_MUTATOR_VERSION,
   runMutation,
+  shellQuote,
   timeBudgetSeconds,
 } from '../src/index.js';
 import { config, copyDiscountFixture, tempDir } from './helpers.js';
@@ -27,7 +28,7 @@ describe('buildMutatorArgs', () => {
   it('passes root, both reporters, the report dir and the time budget', () => {
     expect(buildMutatorArgs(base)).toEqual([
       '--root',
-      '/p',
+      path.resolve('/p'),
       '--reporter',
       'json',
       '--reporter',
@@ -280,7 +281,9 @@ describe('runMutation on the discount fixture (real mutator)', () => {
       expect([...(boundary?.coveredBy ?? [])].sort()).toEqual(
         [weak('gives a discount on large orders'), weak('gives no discount on small orders')].sort(),
       );
-      expect(boundary?.reproduction).toBe(`mutator --root ${root} --only ${boundary?.backendKey}`);
+      expect(boundary?.reproduction).toBe(
+        `mutator --root ${shellQuote(root)} --only ${boundary?.backendKey}`,
+      );
 
       const shippingBoundary = r.mutants.filter(
         (m) => m.location.range?.start === 11 && /total (>|<) 5000/.test(m.replacement),

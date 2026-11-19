@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs';
 import {
   Mutant,
   type MutantStatus,
+  redact,
   resolveInsideRoot,
   stableId,
   toPosixRelative,
@@ -63,7 +64,7 @@ export const CHILD_PROCESS_MARKER = 'possibly reached in a child process';
  */
 export function mutatorTestRef(name: string): { file: string; suitePath: string[]; name: string } {
   const hash = name.indexOf('#');
-  const file = hash < 0 ? '' : name.slice(0, hash);
+  const file = hash < 0 ? '' : name.slice(0, hash).replaceAll('\\', '/');
   const full = (hash < 0 ? name : name.slice(hash + 1)).replace(/^\[[^\]]*\] /, '');
   const parts = full.split(' > ');
   const testName = parts.pop() ?? '';
@@ -104,7 +105,8 @@ export function importMutationReport(json: unknown, options: ImportOptions): Mut
   const testRef = (id: string): string => {
     if (options.source === 'mutator') return mutatorTestId(id);
     const raw = testNames.get(id) ?? id;
-    return raw.length <= 200 ? raw : stableId('TR', raw);
+    // Raw refs are exposed as-is, so redact them; long ones are hashed (the hash reveals nothing).
+    return raw.length <= 200 ? redact(raw) : stableId('TR', raw);
   };
 
   const mutants: Mutant[] = [];
@@ -129,17 +131,18 @@ export function importMutationReport(json: unknown, options: ImportOptions): Mut
               end: Math.max(m.location.start.line, m.location.end.line),
             },
           },
-          operator: m.mutatorName,
-          original: entry.source === undefined ? '' : sliceSource(entry.source, m.location),
-          replacement: m.replacement ?? '',
+          // Every string taken from the report is untrusted and may carry secrets from the source.
+          operator: redact(m.mutatorName),
+          original: entry.source === undefined ? '' : redact(sliceSource(entry.source, m.location)),
+          replacement: redact(m.replacement ?? ''),
           status,
-          ...(statusReason === undefined ? {} : { statusReason }),
+          ...(statusReason === undefined ? {} : { statusReason: redact(statusReason) }),
           killedBy: unique((m.killedBy ?? []).map(testRef)),
           coveredBy: unique((m.coveredBy ?? []).map(testRef)),
           propertyIds: [],
           relevance: 'unknown',
           ...(m.duration === undefined ? {} : { durationMs: m.duration }),
-          reproduction: reproductionFor(options.source, realRoot, file, m.id, m.location),
+          reproduction: redact(reproductionFor(options.source, realRoot, file, m.id, m.location)),
         }),
       );
     }
@@ -184,7 +187,10 @@ function sliceSource(
   return source.slice(start, end);
 }
 
-/** POSIX-shell quoting for display of reproduction commands. */
+/**
+ * POSIX-shell quoting for display of reproduction commands. The rule is the same on every OS:
+ * anything outside `[A-Za-z0-9_./:=@%+-]` (backslashes, spaces, quotes...) is single-quoted.
+ */
 export function shellQuote(arg: string): string {
   return /^[A-Za-z0-9_./:=@%+-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`;
 }

@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { Mutant, stableId } from '@veritas/core';
 import { describe, expect, it } from 'vitest';
-import { importMutationReport, mutatorTestId, mutatorTestRef } from '../src/index.js';
+import { importMutationReport, mutatorTestId, mutatorTestRef, shellQuote } from '../src/index.js';
 import { tempDir } from './helpers.js';
 
 const SOURCE =
@@ -132,7 +132,7 @@ describe('importMutationReport: mutant fields', () => {
       replacement: 'a >= 10',
       relevance: 'unknown',
       propertyIds: [],
-      reproduction: `mutator --root ${root} --only e5rgni1gq2`,
+      reproduction: `mutator --root ${shellQuote(root)} --only e5rgni1gq2`,
     });
     expect(m?.killedBy).toEqual([
       stableId('T', { file: 'test/f.test.ts', suitePath: ['suite'], name: 'case' }),
@@ -171,7 +171,8 @@ describe('importMutationReport: mutant fields', () => {
     const spaced = path.join(tempDir('import'), 'my project');
     mkdirSync(spaced);
     const [m] = importMutationReport(report([mutant('k1', 'Killed')]), { root: spaced, source: 'mutator' });
-    expect(m?.reproduction).toBe(`mutator --root '${spaced}' --only k1`);
+    expect(m?.reproduction).toBe(`mutator --root ${shellQuote(spaced)} --only k1`);
+    expect(m?.reproduction).toContain(`'${spaced}'`);
   });
 });
 
