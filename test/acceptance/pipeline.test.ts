@@ -392,6 +392,24 @@ describe('existing mutation reports', () => {
     expect(mutation.mutants.map((m) => [m.status, m.relevance])).toEqual([['survived', 'spec_relevant']]);
   });
 
+  it('never treats an empty report, or pending mutants with --since, as complete mutation evidence', () => {
+    const dir = setup('discount-boundary');
+    writeFileSync(path.join(dir, 'empty.json'), JSON.stringify({ schemaVersion: '2.0', files: {} }));
+    const empty = json<RunJson>(runCli(['mutate', '--import', 'empty.json', '--json'], dir));
+    const emptyStage = empty.stages.find((s) => s.stage === 'mutate');
+    expect(emptyStage?.status).toBe('partial');
+    expect(emptyStage?.messages.join('\n')).toMatch(/contains no mutant/);
+    expect(empty.status).not.toBe('pass');
+    const pending = structuredClone(strykerReport);
+    const first = pending.files['src/pricing.ts'].mutants[0] as { status: string };
+    first.status = 'Pending';
+    writeFileSync(path.join(dir, 'pending.json'), JSON.stringify(pending));
+    const since = json<RunJson>(
+      runCli(['mutate', '--import', 'pending.json', '--since', 'HEAD', '--json'], dir),
+    );
+    expect(since.stages.find((s) => s.stage === 'mutate')?.status).toBe('partial');
+  });
+
   it('refuses reports outside the project, invalid reports and --import with --kill-matrix', () => {
     const dir = setup('discount-boundary');
     writeFileSync(path.join(dir, 'bad.json'), JSON.stringify({ schemaVersion: '1', files: {} }));

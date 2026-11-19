@@ -14,6 +14,7 @@ describe('mutationStageStatus', () => {
     ).toEqual({
       status: 'succeeded',
       undecided: 0,
+      empty: false,
     });
   });
 
@@ -24,6 +25,7 @@ describe('mutationStageStatus', () => {
     expect(mutationStageStatus({ status: 'succeeded', mutants: [mutant('unknown')] })).toEqual({
       status: 'partial',
       undecided: 1,
+      empty: false,
     });
   });
 
@@ -44,6 +46,17 @@ describe('mutationStageStatus', () => {
         { status: 'succeeded', mutants: [...mutants, mutant('unknown')] },
         { incremental: true },
       ),
-    ).toEqual({ status: 'partial', undecided: 1 });
+    ).toEqual({ status: 'partial', undecided: 1, empty: false });
+  });
+
+  it('is partial when a complete run has no mutant at all, except in an incremental run', () => {
+    expect(mutationStageStatus({ status: 'succeeded', mutants: [] })).toEqual({
+      status: 'partial',
+      undecided: 0,
+      empty: true,
+    });
+    expect(mutationStageStatus({ status: 'succeeded', mutants: [] }, { incremental: true }).status).toBe(
+      'succeeded',
+    );
   });
 });

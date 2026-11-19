@@ -390,8 +390,9 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       if (imported) {
         const result = imported;
         mutants = result.mutants;
-        mutationAvailable = true;
-        const { status, undecided } = mutationStageStatus(result, { incremental: Boolean(options.since) });
+        // A report says nothing about which mutants a --since change covers, so pending ones stay undecided.
+        const { status, undecided, empty } = mutationStageStatus(result, { incremental: false });
+        mutationAvailable = !empty;
         return {
           status,
           output: result,
@@ -399,6 +400,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
           messages: [
             `counts: ${JSON.stringify(Object.fromEntries(Object.entries(result.counts).filter(([, n]) => n > 0)))}`,
             ...result.warnings,
+            ...(empty ? ['the report contains no mutant; mutation results are partial'] : []),
             ...(undecided > 0
               ? [`${undecided} mutant(s) not decided (pending or unknown); mutation results are partial`]
               : []),
@@ -430,10 +432,12 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         cache.set('mutation', cacheKey, result);
       if (cached) result.rawReportPath = null;
       mutants = result.mutants;
-      mutationAvailable = result.status === 'succeeded';
       // The mutator writes its own report files; index them so they carry the run metadata and a hash.
       const external = cached ? [] : store.recordExternal('mutation');
-      const { status, undecided } = mutationStageStatus(result, { incremental: Boolean(options.since) });
+      const { status, undecided, empty } = mutationStageStatus(result, {
+        incremental: Boolean(options.since),
+      });
+      mutationAvailable = result.status === 'succeeded' && !empty;
       return {
         status,
         output: result,
@@ -447,6 +451,9 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
           ...result.warnings,
           ...(undecided > 0
             ? [`${undecided} mutant(s) not decided (pending or unknown); mutation results are partial`]
+            : []),
+          ...(empty && result.status === 'succeeded'
+            ? ['no mutant was generated; mutation results are partial']
             : []),
         ],
       };
@@ -859,15 +866,17 @@ export function mutationCacheKey(
 /**
  * Stage status for a mutation run. Mutants whose backend status was not recognized (`unknown`) leave the stage
  * `partial`, and so do mutants that were not run (`pending`) unless the run was incremental (`--since`), where
- * mutants outside the change are left out on purpose. A `partial` stage means the run cannot report `pass`.
+ * mutants outside the change are left out on purpose. A complete run without a single mutant is `partial` too:
+ * it is no evidence about the tests. A `partial` stage means the run cannot report `pass`.
  */
 export function mutationStageStatus(
   result: { status: StageResult['status'] | 'unsupported'; mutants: Mutant[] },
   options: { incremental?: boolean } = {},
-): { status: StageResult['status']; undecided: number } {
+): { status: StageResult['status']; undecided: number; empty: boolean } {
   const undecided = result.mutants.filter(
     (m) => m.status === 'unknown' || (m.status === 'pending' && !options.incremental),
   ).length;
-  if (result.status !== 'succeeded') return { status: result.status, undecided };
-  return { status: undecided > 0 ? 'partial' : 'succeeded', undecided };
+  const empty = result.mutants.length === 0 && !options.incremental;
+  if (result.status !== 'succeeded') return { status: result.status, undecided, empty };
+  return { status: undecided > 0 || empty ? 'partial' : 'succeeded', undecided, empty };
 }
