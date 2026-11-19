@@ -11,6 +11,15 @@ export const TestCase = z.object({
   modifiers: z.array(z.enum(['skip', 'only', 'todo', 'concurrent', 'each'])),
   assertionCount: z.number().int().nonnegative(),
   calledSymbols: z.array(z.string()),
+  /** Calls to project symbols with their literal arguments (null when not a literal), used for boundary coverage. */
+  targetCalls: z.array(
+    z.object({
+      symbol: z.string(),
+      args: z.array(z.string().nullable()),
+      asserted: z.boolean(),
+      location: Location,
+    }),
+  ),
   usesMocks: z.boolean(),
   usesSnapshots: z.boolean(),
   nondeterminism: z.array(z.string()),
