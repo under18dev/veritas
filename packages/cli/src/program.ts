@@ -14,25 +14,11 @@ import {
   specCommand,
   testGenerateCommand,
 } from './commands/engine.js';
+import { improveCommand } from './commands/improve.js';
 import { initCommand } from './commands/init.js';
-import { emitJson, type GlobalOptions, log, reportError } from './output.js';
+import { type GlobalOptions, reportError } from './output.js';
 
 type Handler = (opts: GlobalOptions & Record<string, unknown>, args: string[]) => Promise<ExitCode>;
-
-/** Commands that are part of the public surface but not implemented in this build. They fail loudly, never fake success. */
-function notImplemented(name: string): Handler {
-  return async (opts) => {
-    const body = {
-      status: 'unsupported',
-      command: name,
-      message: `\`veritas ${name}\` is not implemented in this build`,
-    };
-    opts.json
-      ? emitJson({ ...body, exitCode: ExitCode.ToolError })
-      : log(`error[NOT_IMPLEMENTED]: ${body.message}`);
-    return ExitCode.ToolError;
-  };
-}
 
 export function buildProgram(setExit: (code: ExitCode) => void): Command {
   const program = new Command('veritas')
@@ -141,8 +127,19 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
     (o) => proveCommand(o),
   );
   wire(
-    program.command('improve').option('--dry-run').option('--apply').option('--max-iterations <n>'),
-    notImplemented('improve'),
+    program
+      .command('improve')
+      .description(
+        'plan test-only improvements (dry run, the default) or apply an approved plan in an isolated copy; ' +
+          'exit 0 plan ready/improved, 4 no safe improvement or spec decision needed, 1 blocked, 2 bad token or CI, 3 tool error',
+      )
+      .option('--dry-run', 'plan and print the plan and its approval token; never writes project files')
+      .option('--apply', 'apply an approved plan (needs --plan and --approve; refused in CI)')
+      .option('--plan <id>', 'plan id printed by the dry run')
+      .option('--approve <token>', 'approval token printed by the dry run')
+      .option('--run <run-id>', 'plan from this run instead of the latest one')
+      .option('--max-iterations <n>', 'maximum apply attempts for the plan (1-20)'),
+    (o) => improveCommand(o),
   );
   wire(
     program

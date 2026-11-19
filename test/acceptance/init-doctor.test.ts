@@ -85,11 +85,11 @@ describe('init and doctor', () => {
 });
 
 describe('exit codes and output contract', () => {
-  it('keeps stdout pure JSON and reports unimplemented commands as tool errors, never success', () => {
+  it('keeps stdout pure JSON and reports a command that cannot run as an error, never success', () => {
     const dir = copyFixture('discount-boundary');
     const result = runCli(['improve', '--json'], dir);
-    expect(result.status).toBe(3);
-    expect(json(result).status).toBe('unsupported');
+    expect(result.status).toBe(2);
+    expect(json(result)).toMatchObject({ status: 'error', code: 'CONFIG_MISSING' });
   });
 
   it('rejects unknown options as user errors', () => {
