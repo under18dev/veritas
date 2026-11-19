@@ -68,6 +68,10 @@ describe('CodexProvider', () => {
     expect(call.args[0]).toBe('exec');
     expect(call.args[call.args.indexOf('--sandbox') + 1]).toBe('read-only');
     expect(call.args).toContain('--ephemeral');
+    expect(call.args).toEqual(expect.arrayContaining(['--ignore-user-config', '--ignore-rules']));
+    for (const feature of ['browser_use', 'in_app_browser', 'apps'])
+      expect(call.args[call.args.indexOf(feature) - 1]).toBe('--disable');
+    expect(call.args[call.args.indexOf('web_search=disabled') - 1]).toBe('-c');
     expect(call.args).toContain('--skip-git-repo-check');
     expect(call.args.at(-1)).toBe('-');
     expect(JSON.parse(call.schema)).toMatchObject({ type: 'object', required: ['operator', 'value'] });

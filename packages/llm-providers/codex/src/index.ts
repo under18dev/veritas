@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { LLM_CLI_ENV_ALLOWLIST, runCommand } from '@under18dev/veritas-core';
+import { LLM_CLI_ENV_ALLOWLIST, resolveCommand, runCommand } from '@under18dev/veritas-core';
 import {
   jsonSchemaOf,
   type LlmProvider,
@@ -26,8 +26,10 @@ export interface CodexOptions {
  * Runs the locally installed Codex CLI (`codex exec`), so requests use the user's own `codex login`
  * (for example a ChatGPT plan). Veritas never reads or stores those credentials.
  *
- * The CLI runs in an empty temporary directory with the read-only sandbox, ephemeral sessions and no git
- * repository: it only sees the prompt, and documents in the prompt are quoted untrusted data.
+ * The CLI runs in an empty temporary directory with the read-only sandbox (no writes, no network for commands),
+ * an ephemeral session, without the user's config, rules, MCP servers, browser, apps or web search. Codex has
+ * no switch to remove its read-only shell, so it could still read files; the engine therefore keeps only
+ * model output grounded in the quoted statement (see llm-extract), and nothing else reaches artifacts.
  */
 export class CodexProvider implements LlmProvider {
   readonly name = 'codex';
@@ -63,6 +65,17 @@ export class CodexProvider implements LlmProvider {
         '--ephemeral',
         '--sandbox',
         'read-only',
+        // No user config (MCP servers, profiles), exec rules, browser, apps or web search: only the prompt goes in.
+        '--ignore-user-config',
+        '--ignore-rules',
+        '--disable',
+        'browser_use',
+        '--disable',
+        'in_app_browser',
+        '--disable',
+        'apps',
+        '-c',
+        'web_search=disabled',
         '--cd',
         work,
         '--output-schema',
@@ -73,7 +86,16 @@ export class CodexProvider implements LlmProvider {
         ...(this.explicitModel ? ['--model', this.explicitModel] : []),
         '-',
       ];
-      const run = await runCommand(this.command, [...this.commandArgs, ...args], {
+      const resolved = resolveCommand(this.command);
+      if (!resolved)
+        return {
+          ...base,
+          status: 'unavailable',
+          data: null,
+          usage: empty,
+          error: `${this.command} is not installed, or is a batch file that cannot be run without a shell`,
+        };
+      const run = await runCommand(resolved.command, [...resolved.prefix, ...this.commandArgs, ...args], {
         cwd: work,
         timeoutMs: this.timeoutMs,
         envAllowlist: LLM_CLI_ENV_ALLOWLIST,
