@@ -1,0 +1,74 @@
+import { VeritasConfig } from '@veritas/core';
+import { describe, expect, it } from 'vitest';
+import { inventoryTests } from '../src/index.js';
+import { tempProject } from './helpers.js';
+
+describe('tautology, mocks, and imports', () => {
+  it('flags literal and local-constant tautologies but not a project call assertion', () => {
+    const root = tempProject({
+      'src/value.ts': 'export function fn(value: number): number { return value; }\n',
+      'test/tautology.test.ts': `
+        import { expect, test } from 'vitest';
+        import { fn } from '../src/value.js';
+        const CONST = 1;
+        test('number', () => expect(1).toBe(1));
+        test('string', () => expect('a').toEqual('a'));
+        test('const', () => expect(CONST).toBe(CONST));
+        test('project', () => expect(fn(1)).toBe(1));
+      `,
+    });
+    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+    const byName = (name: string) => {
+      const test = inventory.tests.find((candidate) => candidate.name === name);
+      if (!test) throw new Error(`missing test: ${name}`);
+      return test;
+    };
+
+    expect(byName('number').suspicions).toContain('tautological_assertion');
+    expect(byName('string').suspicions).toContain('tautological_assertion');
+    expect(byName('const').suspicions).toContain('tautological_assertion');
+    expect(byName('project').suspicions).not.toContain('tautological_assertion');
+  });
+
+  it('flags module mocks and spyOn mockReturnValue for the tested symbol', () => {
+    const root = tempProject({
+      'src/value.ts': 'export function fn(value: number): number { return value; }\n',
+      'test/mocks.test.ts': `
+        import { expect, test, vi } from 'vitest';
+        import * as mod from '../src/value.js';
+        vi.mock('../src/value.js');
+        vi.spyOn(mod, 'fn').mockReturnValue(2);
+        test('mocked', () => expect(mod.fn(1)).toBe(2));
+      `,
+    });
+    const testCase = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests.at(0);
+    if (!testCase) throw new Error('missing mocked test');
+
+    expect(testCase.usesMocks).toBe(true);
+    expect(testCase.suspicions).toContain('unconditional_mock');
+  });
+
+  it('resolves js imports, export-star, default, and namespace imports', () => {
+    const root = tempProject({
+      'src/named.ts': 'export function named(value: number): number { return value; }\n',
+      'src/default.ts': 'export default function fallback(value: number): number { return value; }\n',
+      'src/reexport.ts': "export * from './named.js';\n",
+      'test/imports.test.ts': `
+        import { expect, test } from 'vitest';
+        import { named } from '../src/reexport.js';
+        import fallback from '../src/default.js';
+        import * as namespace from '../src/named.js';
+        test('named', () => expect(named(1)).toBe(1));
+        test('default', () => expect(fallback(1)).toBe(1));
+        test('namespace', () => expect(namespace.named(1)).toBe(1));
+      `,
+    });
+    const tests = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests;
+
+    expect(tests.map((test) => test.calledSymbols)).toEqual([
+      ['src/named.ts#named'],
+      ['src/default.ts#default'],
+      ['src/named.ts#named'],
+    ]);
+  });
+});

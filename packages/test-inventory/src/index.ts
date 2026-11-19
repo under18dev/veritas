@@ -68,7 +68,7 @@ export function inventoryTests(options: {
         message: ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'),
       });
     }
-    visitTests(source, [], file, sourceFiles, projectSet, checker, root, tests);
+    visitTests(source, [], [], file, sourceFiles, projectSet, checker, root, tests);
   }
 
   const edges: TestPropertyEdgeType[] = [];
@@ -104,6 +104,7 @@ export function inventoryTests(options: {
 function visitTests(
   source: ts.SourceFile,
   suitePath: string[],
+  inheritedModifiers: TestCaseType['modifiers'],
   file: string,
   sourceFiles: Map<string, ts.SourceFile>,
   projectSet: Set<string>,
@@ -111,26 +112,38 @@ function visitTests(
   root: string,
   output: TestCaseType[],
 ): void {
-  const walk = (node: ts.Node, currentSuite: string[]) => {
+  const walk = (node: ts.Node, currentSuite: string[], currentModifiers: TestCaseType['modifiers']) => {
     if (ts.isCallExpression(node)) {
-      const describe = registration(node, 'describe');
+      const describe = describeRegistration(node);
       if (describe) {
         const name = literalString(node.arguments[0]);
         const callback = node.arguments.at(-1);
         if (name !== undefined && callback && isFunction(callback)) {
-          ts.forEachChild(callback, (child) => walk(child, [...currentSuite, name]));
+          const childModifiers = [...new Set([...currentModifiers, ...describe.modifiers])];
+          ts.forEachChild(callback, (child) => walk(child, [...currentSuite, name], childModifiers));
           return;
         }
       }
       const info = testRegistration(node);
       if (info) {
-        output.push(analyzeTest(node, info, currentSuite, file, sourceFiles, projectSet, checker, root));
+        output.push(
+          analyzeTest(
+            node,
+            { ...info, modifiers: [...new Set([...currentModifiers, ...info.modifiers])] },
+            currentSuite,
+            file,
+            sourceFiles,
+            projectSet,
+            checker,
+            root,
+          ),
+        );
         return;
       }
     }
-    ts.forEachChild(node, (child) => walk(child, currentSuite));
+    ts.forEachChild(node, (child) => walk(child, currentSuite, currentModifiers));
   };
-  walk(source, suitePath);
+  walk(source, suitePath, inheritedModifiers);
 }
 
 type Registration = { name?: string; callback?: ts.Expression; modifiers: TestCaseType['modifiers'] };
@@ -157,10 +170,30 @@ function testRegistration(node: ts.CallExpression): Registration | undefined {
   return undefined;
 }
 
+function describeRegistration(node: ts.CallExpression): Registration | undefined {
+  const direct = registration(node, 'describe');
+  if (direct && Array.isArray(direct)) {
+    return { name: literalString(node.arguments[0]), callback: node.arguments.at(-1), modifiers: direct };
+  }
+  if (!ts.isCallExpression(node.expression)) return undefined;
+  const chain = propertyChain(node.expression.expression);
+  const root = rootIdentifier(node.expression.expression);
+  if (!root || root !== 'describe' || !chain.includes('each')) return undefined;
+  const eachModifiers = chain.filter((name): name is TestCaseType['modifiers'][number] =>
+    modifiers.has(name),
+  );
+  if (!eachModifiers.includes('each')) eachModifiers.push('each');
+  return {
+    name: literalString(node.arguments[0]),
+    callback: node.arguments.at(-1),
+    modifiers: eachModifiers,
+  };
+}
+
 function registration(
   node: ts.CallExpression,
   kind: 'it' | 'test' | 'describe',
-): TestCaseType['modifiers'] | true | undefined {
+): TestCaseType['modifiers'] | undefined {
   const chain: string[] = [];
   let expression: ts.Expression = node.expression;
   while (ts.isPropertyAccessExpression(expression)) {
@@ -169,7 +202,7 @@ function registration(
   }
   if (!ts.isIdentifier(expression) || expression.text !== kind) return undefined;
   const found = chain.filter((name): name is TestCaseType['modifiers'][number] => modifiers.has(name));
-  return kind === 'describe' ? true : found;
+  return found;
 }
 
 function analyzeTest(
@@ -305,15 +338,21 @@ function callsHelperWithAssertion(body: ts.Node | undefined, source: ts.SourceFi
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) names.add(node.expression.text);
   let found = false;
   const visit = (node: ts.Node) => {
-    if (
-      ts.isFunctionDeclaration(node) &&
-      node.name &&
-      names.has(node.name.text) &&
-      descendants(node).some(
+    if (ts.isFunctionDeclaration(node) && node.name && names.has(node.name.text)) {
+      found ||= descendants(node).some(
         (child) => ts.isCallExpression(child) && (isExpectCall(child) || isAssertCall(child)),
-      )
-    )
-      found = true;
+      );
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      names.has(node.name.text) &&
+      node.initializer
+    ) {
+      found ||= descendants(node.initializer).some(
+        (child) => ts.isCallExpression(child) && (isExpectCall(child) || isAssertCall(child)),
+      );
+    }
     ts.forEachChild(node, visit);
   };
   ts.forEachChild(source, visit);
