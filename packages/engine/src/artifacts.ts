@@ -1,6 +1,7 @@
 import { CodeIndex } from '@veritas/code-intelligence';
 import { Finding, FormalClaim, Mutant, Property, Run, TestAssessment } from '@veritas/core';
 import { MutationRunResult } from '@veritas/mutation-adapter';
+import { PbtResult } from '@veritas/property-testing';
 import { DiscoveryResult } from '@veritas/spec-discovery';
 import { TestInventory } from '@veritas/test-inventory';
 import { z } from 'zod';
@@ -48,6 +49,7 @@ export const ARTIFACTS = {
     schema: MutationRunResult.omit({ mutants: true }).extend({ mutants: z.array(Mutant) }),
   },
   claims: { file: 'claims.json', schema: z.array(FormalClaim) },
+  pbt: { file: 'pbt.json', schema: z.array(PbtResult) },
   assessments: { file: 'assessments.json', schema: z.array(TestAssessment) },
   findings: { file: 'findings.json', schema: z.array(Finding) },
 } as const;

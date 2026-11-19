@@ -19,14 +19,16 @@ import {
   type Stage,
   type StageName,
   type StageResult,
+  stableId,
 } from '@veritas/core';
 import { applyMutation, equivalenceProperty, proveProperty, translateFunction } from '@veritas/formal-core';
 import { runMutation } from '@veritas/mutation-adapter';
 import { applyApprovals, buildRegistry, formalizeProperty, loadApprovals } from '@veritas/property-engine';
+import { type PbtResult, runPropertyTest } from '@veritas/property-testing';
 import { type DiscoveryResult, discoverEvidence } from '@veritas/spec-discovery';
 import { inventoryTests, type TestInventory } from '@veritas/test-inventory';
 import { ARTIFACTS } from './artifacts.js';
-import { latestRunWith, openProject, readArtifact } from './project.js';
+import { defaultSeed, latestRunWith, openProject, readArtifact } from './project.js';
 
 export type Profile = 'quick' | 'standard' | 'deep';
 
@@ -59,7 +61,7 @@ export interface RunSummary {
 export const PROFILE_STAGES: Record<Profile, StageName[]> = {
   quick: ['index', 'discover', 'spec', 'map', 'assess', 'report'],
   standard: ['index', 'discover', 'spec', 'map', 'mutate', 'assess', 'report'],
-  deep: ['index', 'discover', 'spec', 'map', 'mutate', 'prove', 'assess', 'report'],
+  deep: ['index', 'discover', 'spec', 'map', 'mutate', 'pbt', 'prove', 'assess', 'report'],
 };
 
 interface SpecOutput {
@@ -98,6 +100,8 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
   let mutants: Mutant[] = [];
   let mutationAvailable = false;
   let findings: Finding[] = [];
+  const pbtResults: PbtResult[] = [];
+  const seeds: Record<string, number> = {};
 
   const stages: Stage[] = [];
   const add = (stage: Stage) => wanted.has(stage.name) && stages.push(stage);
@@ -242,6 +246,58 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       };
     },
   });
+  const eligible = (spec: SpecOutput) =>
+    spec.properties.filter(
+      (p) =>
+        spec.formalized.has(p.id) &&
+        (options.propertyIds ? options.propertyIds.includes(p.id) : true) &&
+        (p.status === 'accepted' ||
+          (options.includeProposed &&
+            (p.status === 'proposed' || p.status === 'reviewed' || p.status === 'conflicted'))),
+    );
+  add({
+    name: 'pbt',
+    dependsOn: ['spec'],
+    run: async (ctx) => {
+      const spec = ctx.outputs.get('spec') as SpecOutput;
+      const messages: string[] = [];
+      for (const p of eligible(spec)) {
+        const f = spec.formalized.get(p.id);
+        if (!f) continue;
+        // A fixed default seed per property keeps runs reproducible; config.pbt.seed overrides it.
+        const seed = config.pbt.seed ?? defaultSeed(p.id);
+        seeds[`pbt:${p.id}`] = seed;
+        const result = await runPropertyTest({
+          root,
+          propertyId: p.id,
+          ir: f.ir,
+          bindings: [
+            { modelName: f.exportName, modulePath: path.join(root, f.file), exportName: f.exportName },
+          ],
+          seed,
+          numRuns: config.pbt.numRuns,
+          timeoutMs: Math.max(30_000, config.formal.maxSolverMs),
+          experimental: p.status !== 'accepted',
+          store,
+          signal,
+        });
+        pbtResults.push(result);
+        messages.push(
+          `${p.id}: ${result.status}${result.counterexample ? ` ${JSON.stringify(result.counterexample)} (seed ${seed})` : ''}`,
+        );
+      }
+      store.write(ARTIFACTS.pbt.file, ARTIFACTS.pbt.schema, pbtResults);
+      const bad = pbtResults.filter(
+        (r) => r.status === 'error' || r.status === 'timeout' || r.status === 'cancelled',
+      );
+      return {
+        status: bad.length ? 'partial' : 'succeeded',
+        artifacts: [ARTIFACTS.pbt.file],
+        usage: { testRuns: pbtResults.reduce((n, r) => n + (r.runsExecuted ?? 0), 0) },
+        messages: messages.length ? messages : ['no property eligible for property-based testing'],
+      };
+    },
+  });
   add({
     name: 'prove',
     dependsOn: ['spec'],
@@ -249,15 +305,8 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       const spec = ctx.outputs.get('spec') as SpecOutput;
       const messages: string[] = [];
       let solverMs = 0;
-      const eligible = spec.properties.filter(
-        (p) =>
-          spec.formalized.has(p.id) &&
-          (options.propertyIds ? options.propertyIds.includes(p.id) : true) &&
-          (p.status === 'accepted' ||
-            (options.includeProposed &&
-              (p.status === 'proposed' || p.status === 'reviewed' || p.status === 'conflicted'))),
-      );
-      for (const p of eligible) {
+      const toProve = eligible(spec);
+      for (const p of toProve) {
         const f = spec.formalized.get(p.id);
         if (!f) continue;
         const { claim } = await proveProperty({
@@ -282,7 +331,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
           `${p.id}: ${claim.status}${claim.counterexample ? ` ${JSON.stringify(claim.counterexample)}` : ''}`,
         );
       }
-      const skipped = spec.properties.filter((p) => spec.formalized.has(p.id) && !eligible.includes(p));
+      const skipped = spec.properties.filter((p) => spec.formalized.has(p.id) && !toProve.includes(p));
       if (skipped.length)
         messages.push(
           `${skipped.length} formalized propert(y/ies) not verified: not accepted (use --include-proposed)`,
@@ -386,6 +435,33 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         assessments,
         functions,
       });
+      for (const r of pbtResults.filter((r) => r.status === 'counterexample')) {
+        const p = spec.properties.find((x) => x.id === r.propertyId);
+        findings.push({
+          id: stableId('F', { kind: 'counterexample', pbt: r.id }),
+          kind: 'counterexample',
+          title: `property-based test found ${JSON.stringify(r.counterexample)} violating "${p?.formalExpression ?? r.propertyId}"`,
+          severity: 'high',
+          certainty: p?.status === 'accepted' ? 'confirmed' : 'suspected',
+          locations: [],
+          propertyIds: [r.propertyId],
+          sourceIds: p?.sourceIds ?? [],
+          testIds: [],
+          mutantIds: [],
+          claimIds: [],
+          explanation: [
+            `fast-check seed ${r.seed}, shrunk after ${r.shrinks} step(s): ${r.failure?.reason ?? 'property failed'}`,
+            `replay: ${r.replayCommand}`,
+            ...(p?.status === 'accepted'
+              ? []
+              : [`property is ${p?.status ?? 'unknown'}; experimental check`]),
+          ],
+          nextActions: [
+            'add the counterexample as a regression test once the intended behaviour is confirmed',
+          ],
+        });
+      }
+      findings.sort((a, b) => a.id.localeCompare(b.id));
       const artifacts = [
         store.write(ARTIFACTS.testMap.file, ARTIFACTS.testMap.schema, { ...inventory, edges }),
         store.write(ARTIFACTS.assessments.file, ARTIFACTS.assessments.schema, assessments),
@@ -451,7 +527,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
     stages: results,
     capabilities,
     environment: { os: process.platform, arch: process.arch, node: process.versions.node },
-    seeds: {},
+    seeds,
     usage,
     replay: `veritas replay ${runId}`,
     partial: results.some((r) => r.status !== 'succeeded'),

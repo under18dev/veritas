@@ -7,6 +7,7 @@ import {
   RUNS_DIR,
   readEnvelope,
   resolveInsideRoot,
+  stableId,
   type VeritasConfig,
   VeritasError,
 } from '@veritas/core';
@@ -66,4 +67,9 @@ export function readLatest<N extends ArtifactName>(
     );
   }
   return { runId, ...readArtifact(root, runId, name) };
+}
+
+/** Deterministic default seed for a property: a signed 32-bit integer derived from its id. */
+export function defaultSeed(propertyId: string): number {
+  return Number.parseInt(stableId('S', propertyId).slice(2, 10), 16) | 0;
 }
