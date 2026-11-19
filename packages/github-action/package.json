@@ -1,0 +1,27 @@
+{
+  "name": "@veritas/github-action",
+  "version": "0.0.0",
+  "private": true,
+  "description": "GitHub Action running Veritas on pull requests",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "action.yml"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@veritas/core": "workspace:*",
+    "@veritas/engine": "workspace:*",
+    "yaml": "2.8.3",
+    "zod": "4.6.7"
+  }
+}
