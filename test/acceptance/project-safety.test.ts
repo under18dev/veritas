@@ -1,14 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import {
-  cpSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { PROFILE_STAGES, runVeritas } from '@under18dev/veritas-engine';
 import { describe, expect, it } from 'vitest';
@@ -33,7 +24,7 @@ function setup(name: string): string {
 function snapshot(dir: string, rel = ''): Map<string, Buffer> {
   const out = new Map<string, Buffer>();
   for (const entry of readdirSync(path.join(dir, rel))) {
-    const file = path.join(rel, entry);
+    const file = rel ? `${rel}/${entry}` : entry;
     if (['.git', 'node_modules', '.veritas', '.mutator'].includes(file)) continue;
     if (statSync(path.join(dir, file)).isDirectory()) for (const [k, v] of snapshot(dir, file)) out.set(k, v);
     else out.set(file, readFileSync(path.join(dir, file)));
@@ -110,10 +101,12 @@ describe('tool errors', () => {
 
 describe('Node API', () => {
   it('gives the same findings as the CLI for the same project and options', async () => {
+    // Evidence ids include the git revision of each source; fixture commits have fixed dates, so they match.
     const cliDir = setup('discount-boundary');
-    // Evidence ids include the git revision of each source, so the second copy clones the same commit.
-    const apiDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-discount-boundary-api-')));
-    cpSync(cliDir, apiDir, { recursive: true, verbatimSymlinks: true });
+    const apiDir = setup('discount-boundary');
+    expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: apiDir, encoding: 'utf8' })).toBe(
+      execFileSync('git', ['rev-parse', 'HEAD'], { cwd: cliDir, encoding: 'utf8' }),
+    );
     const cli = json<RunJson>(runCli(['run', '--profile', 'deep', '--include-proposed', '--json'], cliDir));
     const api = await runVeritas({
       root: apiDir,

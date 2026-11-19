@@ -19,10 +19,27 @@ export function copyFixture(name: string, options: { git?: boolean; linkDeps?: b
   if (options.linkDeps && existsSync(path.join(source, 'node_modules')))
     linkPackages(path.join(source, 'node_modules'), path.join(dir, 'node_modules'));
   if (options.git) {
-    const git = (...args: string[]) => spawnSync('git', args, { cwd: dir, stdio: 'ignore' });
+    // Fixed dates make the commit identical for every copy of a fixture, so ids derived from it match.
+    const date = '2026-01-01T00:00:00Z';
+    const git = (...args: string[]) =>
+      spawnSync('git', args, {
+        cwd: dir,
+        stdio: 'ignore',
+        env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+      });
     git('init', '-q');
     git('-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'add', '-A');
-    git('-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'commit', '-qm', 'fixture');
+    git(
+      '-c',
+      'user.email=fixture@example.invalid',
+      '-c',
+      'user.name=fixture',
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '-qm',
+      'fixture',
+    );
   }
   return dir;
 }

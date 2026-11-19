@@ -1,7 +1,7 @@
 // Checks that every installed dependency uses a license compatible with distributing Veritas under Apache-2.0,
 // and that every publishable package declares Apache-2.0 and ships the root LICENSE file. Run via `pnpm licenses:check`.
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { workspacePackages } from './workspace-packages.mjs';

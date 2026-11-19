@@ -2,15 +2,7 @@
 // the documented quick start there: init, doctor, a deep run on the discount example, report and explain.
 // Exits non-zero if any step fails or the expected boundary finding is missing.
 import { execFileSync, spawnSync } from 'node:child_process';
-import {
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
