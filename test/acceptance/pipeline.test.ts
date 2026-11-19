@@ -325,6 +325,29 @@ describe('discount-boundary end to end', () => {
   });
 });
 
+describe('changes since a git ref', () => {
+  it('marks properties of changed code with the change and refuses refs that look like options', () => {
+    const dir = setup('discount-boundary');
+    const file = path.join(dir, 'src/pricing.ts');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('total > 1000', 'total > 999'));
+    const result = runCli(['analyze', '--since', 'HEAD', '--json'], dir);
+    expect([0, 4], result.stderr).toContain(result.status);
+    const runId = json<RunJson>(result).runId;
+    const properties = JSON.parse(
+      readFileSync(path.join(dir, '.veritas/runs', runId, 'properties.json'), 'utf8'),
+    ).data.properties as { formalExpression?: string; assumptions: string[]; targetSymbols: string[] }[];
+    const moved = properties.find((p) => p.formalExpression === 'total > 999');
+    expect(moved?.assumptions).toContain(
+      'this comparison changed since HEAD; check whether the boundary moved on purpose',
+    );
+    const untouched = properties.filter((p) => p.targetSymbols.includes('src/pricing.ts#shippingFee'));
+    for (const p of untouched) expect(p.assumptions.join(' ')).not.toMatch(/changed since/);
+    const refused = runCli(['analyze', '--since', '--output=x', '--json'], dir);
+    expect(refused.status).toBe(2);
+    expect(json(refused)).toMatchObject({ code: 'SINCE_INVALID' });
+  });
+});
+
 describe('existing mutation reports', () => {
   const strykerReport = {
     schemaVersion: '2.0',

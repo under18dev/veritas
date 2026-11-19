@@ -19,6 +19,8 @@ import {
   CodeIndex,
   type FunctionInfo,
   inferBehaviorCandidates,
+  markChangedCandidates,
+  parseChangedLines,
 } from '../src/index.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -758,5 +760,58 @@ export function shipping(weight: number): number {
     expect(boundary?.basis).toContain('usage');
     expect(boundary?.description).toContain('checkout also compares against 1000 before calling it');
     expect(of('shipping').find((c) => c.boundary?.value === '20')?.basis).not.toContain('usage');
+  });
+});
+
+describe('candidates from the git diff', () => {
+  it('parses -U0 hunks into new-side line ranges, deletions included', () => {
+    const diff = [
+      'diff --git a/src/a.ts b/src/a.ts',
+      '--- a/src/a.ts',
+      '+++ b/src/a.ts',
+      '@@ -3 +3 @@ export function f',
+      '@@ -10,2 +10,0 @@',
+      '@@ -20,0 +18,3 @@',
+      '--- a/src/gone.ts',
+      '+++ /dev/null',
+      '@@ -1,4 +0,0 @@',
+    ].join('\n');
+    expect(parseChangedLines(diff)).toEqual({
+      'src/a.ts': [
+        { start: 3, end: 3 },
+        { start: 10, end: 10 },
+        { start: 18, end: 20 },
+      ],
+    });
+  });
+
+  it('marks candidates of changed functions, and says when the boundary comparison itself changed', () => {
+    const root = project({
+      'src/fees.ts': `export function fee(total: number): number {
+  return total > 999 ? 0 : 50;
+}
+export function tax(total: number): number {
+  return total >= 10 ? 1 : 0;
+}
+`,
+    });
+    const index = analyze(root);
+    const marked = markChangedCandidates(
+      inferBehaviorCandidates(index),
+      index,
+      { 'src/fees.ts': [{ start: 2, end: 2 }] },
+      'origin/main',
+    );
+    const fee = marked.find((c) => c.symbol === 'src/fees.ts#fee' && c.boundary?.value === '999');
+    expect(fee?.basis).toContain('git_diff');
+    expect(fee?.notes).toContain(
+      'this comparison changed since origin/main; check whether the boundary moved on purpose',
+    );
+    const feeOther = marked.find((c) => c.symbol === 'src/fees.ts#fee' && !c.boundary);
+    expect(feeOther?.notes).toContain(
+      'fee changed since origin/main; check whether its behaviour changed on purpose',
+    );
+    for (const c of marked.filter((c) => c.symbol === 'src/fees.ts#tax'))
+      expect(c.basis).not.toContain('git_diff');
   });
 });

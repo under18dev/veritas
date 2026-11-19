@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { assessTests, deriveFindings, linkMutants, linkTests } from '@under18dev/veritas-assessment';
-import { analyzeCode, type CodeIndex, inferBehaviorCandidates } from '@under18dev/veritas-code-intelligence';
+import {
+  analyzeCode,
+  type CodeIndex,
+  inferBehaviorCandidates,
+  markChangedCandidates,
+  parseChangedLines,
+} from '@under18dev/veritas-code-intelligence';
 import {
   type Capability,
   type ContentCache,
@@ -165,6 +171,16 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         'command-line options',
       )
     : config;
+  // A ref is passed to git as an argument: refuse anything that could be read as an option.
+  if (
+    options.since !== undefined &&
+    (options.since === '' || options.since.startsWith('-') || /[\s\0]/.test(options.since))
+  )
+    throw new VeritasError(
+      'user',
+      'SINCE_INVALID',
+      `invalid git ref for --since: ${JSON.stringify(options.since)}`,
+    );
   // An imported mutation report is read before any stage runs, so a bad path or report is a user error.
   const imported = options.mutationReport
     ? importMutationResult({ root, reportFile: options.mutationReport })
@@ -212,13 +228,33 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
     name: 'index',
     dependsOn: [],
     run: async () => {
-      const candidates = inferBehaviorCandidates(code0);
+      const inferred = inferBehaviorCandidates(code0);
+      // With --since, candidates in functions changed since that ref carry the change as evidence.
+      const diff =
+        options.since && code0.files.length
+          ? gitOutput(root, [
+              'diff',
+              '-U0',
+              '--no-color',
+              '--no-ext-diff',
+              options.since,
+              '--',
+              ...code0.files.map((f) => f.path),
+            ])
+          : null;
+      const candidates =
+        options.since && diff !== null
+          ? markChangedCandidates(inferred, code0, parseChangedLines(diff), options.since)
+          : inferred;
       return {
         status: 'succeeded',
         output: { code: code0, candidates },
         artifacts: [store.write(ARTIFACTS.codeIndex.file, ARTIFACTS.codeIndex.schema, code0)],
         messages: [
           `${code0.functions.length} function(s) in ${code0.files.length} file(s); ${candidates.length} inferred candidate(s)`,
+          ...(options.since && diff === null
+            ? [`git diff against ${options.since} unavailable; changes not marked`]
+            : []),
         ],
       };
     },

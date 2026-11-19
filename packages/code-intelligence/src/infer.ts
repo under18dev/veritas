@@ -276,3 +276,68 @@ const span = (l: { range?: { start: number; end: number } }) => (l.range ? l.ran
 const stripParens = (s: string) => s.replace(/^\(+|\)+$/g, '').trim();
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Changed line ranges per file (new-side line numbers, from `git diff -U0`). */
+export type ChangedLines = Record<string, { start: number; end: number }[]>;
+
+/**
+ * Mark candidates of functions changed since `ref` with `git_diff` evidence: a change in behaviour there may be
+ * intended or a regression, and only a human can tell. A boundary whose comparison line itself changed says so.
+ */
+export function markChangedCandidates(
+  candidates: BehaviorCandidate[],
+  index: CodeIndex,
+  changed: ChangedLines,
+  ref: string,
+): BehaviorCandidate[] {
+  const touches = (file: string, start: number, end: number) =>
+    (changed[file] ?? []).some((r) => r.start <= end && r.end >= start);
+  return candidates.map((c) => {
+    const fn = index.functions.find((f) => f.symbol === c.symbol);
+    const range = fn?.location.range;
+    if (!fn || !range || !touches(fn.file, range.start, range.end)) return c;
+    const comparisonChanged =
+      c.boundary !== undefined &&
+      fn.comparisons.some(
+        (cmp) =>
+          cmp.param === c.boundary?.param &&
+          cmp.literal === c.boundary?.value &&
+          touches(fn.file, cmp.location.range?.start ?? 0, cmp.location.range?.end ?? 0),
+      );
+    return {
+      ...c,
+      basis: c.basis.includes('git_diff') ? c.basis : [...c.basis, 'git_diff'],
+      notes: [
+        ...c.notes,
+        comparisonChanged
+          ? `this comparison changed since ${ref}; check whether the boundary moved on purpose`
+          : `${fn.name} changed since ${ref}; check whether its behaviour changed on purpose`,
+      ],
+    };
+  });
+}
+
+/** Parse `git diff -U0` output into changed new-side line ranges per file (deletions mark the line they follow). */
+export function parseChangedLines(diff: string): ChangedLines {
+  const out: ChangedLines = {};
+  let file: string | null = null;
+  for (const line of diff.split('\n')) {
+    const header = /^\+\+\+ (?:b\/(.*)|\/dev\/null)$/.exec(line);
+    if (header) {
+      file = header[1] ?? null;
+      continue;
+    }
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (hunk && file) {
+      const start = Number(hunk[1]);
+      const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
+      const ranges = out[file] ?? [];
+      out[file] = ranges;
+      ranges.push({
+        start: Math.max(1, start),
+        end: Math.max(1, start + Math.max(count, 1) - 1),
+      });
+    }
+  }
+  return out;
+}

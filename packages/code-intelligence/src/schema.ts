@@ -62,7 +62,7 @@ export const CodeIndex = z.object({
 });
 export type CodeIndex = z.infer<typeof CodeIndex>;
 
-export const CandidateBasis = z.enum(['name', 'type', 'comment', 'implementation', 'usage']);
+export const CandidateBasis = z.enum(['name', 'type', 'comment', 'implementation', 'usage', 'git_diff']);
 export type CandidateBasis = z.infer<typeof CandidateBasis>;
 
 export const BehaviorCandidate = z.object({
