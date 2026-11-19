@@ -7,7 +7,7 @@
 | `proven_within_model`  | The solver found no counterexample for the stated property, within the stated model, domain bounds and assumptions | The implementation is correct; the specification is correct |
 | `counterexample_found` | The solver produced an assignment violating the property, and re-running it in JavaScript gave the same verdict    | A confirmed bug in the specification's intent               |
 | `semantic_mismatch`    | The solver's counterexample does not reproduce in JavaScript; the model and the code disagree                      | Either a bug or a proof                                     |
-| `unknown`, `timeout`   | The solver gave no answer                                                                                          | Success                                                     |
+| `unknown`, `timeout`   | The solver gave no answer, or the model could not be compared with the JavaScript code                             | Success                                                     |
 | `unsupported`          | The code or property is outside the supported subset                                                               | Success                                                     |
 | `error`                | The tool failed                                                                                                    | Success                                                     |
 
@@ -33,6 +33,8 @@ The model uses mathematical integers. JavaScript uses IEEE-754 doubles. They agr
 - `survived`: tests ran the mutant and none failed. This is a test gap candidate, not a bug.
 - `suspected_equivalent`: no difference observed; equivalence not shown.
 - `equivalent_proven`: no input in the stated bounded domain distinguishes it (a `bounded_equivalence` claim); the bounds are part of the result.
+- `timeout`: the test run did not finish under the mutant (usually a mutated loop). Counted as detected, as in other mutation tools, but never credited to a specific test as a kill.
+- `pending`, `unknown`: the mutant was not run, or the backend reported a status Veritas does not recognize. Any such mutant makes the mutation stage `partial`, so the run cannot `pass`.
 
 ## Specifications
 

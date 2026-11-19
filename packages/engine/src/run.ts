@@ -313,12 +313,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       });
       mutants = result.mutants;
       mutationAvailable = result.status === 'succeeded';
-      const status =
-        result.status === 'succeeded'
-          ? 'succeeded'
-          : result.status === 'unsupported'
-            ? 'unsupported'
-            : result.status;
+      const { status, undecided } = mutationStageStatus(result);
       return {
         status,
         output: result,
@@ -327,6 +322,9 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
           `mutator ${result.backend.version ?? 'unknown'}: ${result.status}${result.detail ? ` (${result.detail})` : ''}`,
           `counts: ${JSON.stringify(Object.fromEntries(Object.entries(result.counts).filter(([, n]) => n > 0)))}`,
           ...result.warnings,
+          ...(undecided > 0
+            ? [`${undecided} mutant(s) not decided (pending or unknown); mutation results are partial`]
+            : []),
         ],
       };
     },
@@ -667,4 +665,20 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
   }
   log(`run ${runId}: ${decision.verdict}`);
   return { runId, dir: store.dir, run, findings, decision };
+}
+
+/**
+ * Stage status for a mutation run. Mutants that were not run (`pending`) or whose backend status was not
+ * recognized (`unknown`) leave the stage `partial`: the run can then not report `pass`.
+ */
+export function mutationStageStatus(result: {
+  status: StageResult['status'] | 'unsupported';
+  mutants: Mutant[];
+}): {
+  status: StageResult['status'];
+  undecided: number;
+} {
+  const undecided = result.mutants.filter((m) => m.status === 'pending' || m.status === 'unknown').length;
+  if (result.status !== 'succeeded') return { status: result.status, undecided };
+  return { status: undecided > 0 ? 'partial' : 'succeeded', undecided };
 }
