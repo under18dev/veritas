@@ -253,7 +253,11 @@ async function execute(
   let tools: Toolchain;
   try {
     root = realpathSync(options.root);
-    bindings = options.bindings.map((b) => ({ ...b, modulePath: resolveInsideRoot(root, b.modulePath) }));
+    // Real paths: the permission model compares real locations (e.g. /var vs /private/var on macOS).
+    bindings = options.bindings.map((b) => ({
+      ...b,
+      modulePath: realpathSync(resolveInsideRoot(root, b.modulePath)),
+    }));
     tools = locateToolchain();
   } catch (error) {
     return finish('error', { error: (error as Error).message });
