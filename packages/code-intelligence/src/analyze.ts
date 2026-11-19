@@ -381,8 +381,12 @@ function symbolNameOf(ctx: Context, target: FunctionTarget): { name: string; exp
 function calleeSymbol(ctx: Context, decl: ts.Declaration): string | null {
   const file = ctx.projectPath(decl.getSourceFile());
   if (file === null) return null;
-  if (ts.isFunctionDeclaration(decl) && decl.name)
-    return symbolId(file, ctx.publicName(decl, decl.name.text).name);
+  if (ts.isFunctionDeclaration(decl))
+    return symbolId(file, decl.name ? ctx.publicName(decl, decl.name.text).name : 'default');
+  if (ts.isExportAssignment(decl)) {
+    const expr = skipParens(decl.expression);
+    return ts.isArrowFunction(expr) || ts.isFunctionExpression(expr) ? symbolId(file, 'default') : null;
+  }
   if (ts.isVariableDeclaration(decl) && ts.isIdentifier(decl.name)) {
     return symbolId(file, ctx.publicName(decl, decl.name.text).name);
   }
@@ -444,14 +448,25 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
   };
   const text = (n: ts.Node) => n.getText(sf).replace(/\s+/g, ' ');
 
-  if (info.async) unsupported(node, 'async function');
+  /**
+   * Unsupported constructs that change control flow or evaluation semantics (async, generators,
+   * accessors, `this`, dynamic code...) make purity undecidable here, so they also mark the
+   * function `unknown`. Purely numeric notes (float literals, division, NaN, bigint, coercion,
+   * `Math.*`) stay listed in `unsupported`/`numericKinds` but do not affect purity: they are
+   * deterministic and side-effect free; they only fall outside the integer model.
+   */
+  const undecidable = (at: ts.Node, reason: string) => {
+    unsupported(at, reason);
+    result.unknown.push(reason);
+  };
+  if (info.async) undecidable(node, 'async function');
   if (
     (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isMethodDeclaration(node)) &&
     node.asteriskToken
   ) {
-    unsupported(node, 'generator function');
+    undecidable(node, 'generator function');
   }
-  if (target.accessor) unsupported(node, `${target.accessor === 'get' ? 'getter' : 'setter'} accessor`);
+  if (target.accessor) undecidable(node, `${target.accessor === 'get' ? 'getter' : 'setter'} accessor`);
 
   const isOwnParam = (expr: ts.Expression): string | null => {
     const e = skipParens(expr);
@@ -555,9 +570,9 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
   const visit = (n: ts.Node, nestedFunction: boolean): void => {
     if (ts.isTypeNode(n) && !ts.isExpressionWithTypeArguments(n)) return;
     if (n !== node && ts.isFunctionLike(n)) {
-      if (hasModifier(n, ts.SyntaxKind.AsyncKeyword)) unsupported(n, 'async function');
+      if (hasModifier(n, ts.SyntaxKind.AsyncKeyword)) undecidable(n, 'async function');
       if ((ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n)) && n.asteriskToken) {
-        unsupported(n, 'generator function');
+        undecidable(n, 'generator function');
       }
       ts.forEachChild(n, (c) => visit(c, true));
       return;
@@ -573,10 +588,10 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
         result.unknown.push('with');
         break;
       case ts.SyntaxKind.AwaitExpression:
-        unsupported(n, 'await');
+        undecidable(n, 'await');
         break;
       case ts.SyntaxKind.YieldExpression:
-        unsupported(n, 'yield');
+        undecidable(n, 'yield');
         break;
       case ts.SyntaxKind.BigIntLiteral:
         numeric.add('bigint');
@@ -601,7 +616,7 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
         numeric.add('nan');
         unsupported(n, n.text);
       } else if (n.text === 'arguments' && ctx.isGlobal(n)) {
-        unsupported(n, 'arguments object');
+        undecidable(n, 'arguments object');
       } else if (IMPURE_GLOBALS.has(n.text) && ctx.isGlobal(n)) {
         sideEffect(n.text);
       } else {
@@ -643,7 +658,7 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
       const param = isOwnParam(n.expression);
       const key = skipParens(n.argumentExpression);
       if (param && !ts.isStringLiteralLike(key) && !ts.isNumericLiteral(key)) {
-        unsupported(n, `computed property access on parameter ${param}`);
+        undecidable(n, `computed property access on parameter ${param}`);
       }
     }
 
