@@ -1,0 +1,26 @@
+{
+  "name": "veritas-monorepo",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.21.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "lint": "biome check . && depcruise packages --config .dependency-cruiser.cjs",
+    "format": "biome check --write .",
+    "test": "vitest run --project unit",
+    "test:acceptance": "pnpm build && vitest run --project acceptance",
+    "schemas": "pnpm build && node scripts/export-schemas.mjs",
+    "clean": "tsc -b --clean"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.8",
+    "@types/node": "26.6.6",
+    "dependency-cruiser": "18.8.0",
+    "typescript": "6.0.3",
+    "vitest": "5.1.1"
+  }
+}
