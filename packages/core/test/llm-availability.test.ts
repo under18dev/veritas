@@ -21,4 +21,11 @@ describe('llmAvailability', () => {
     expect(LLM_CLI_ENV_ALLOWLIST).toContain('USER');
     expect(LLM_CLI_ENV_ALLOWLIST.some((name) => /KEY|TOKEN|SECRET/.test(name))).toBe(false);
   });
+
+  it('does not use codex unless reading local files is explicitly allowed', async () => {
+    expect(await llmAvailability('codex', {}, tmpdir())).toMatchObject({
+      state: 'unavailable',
+      detail: expect.stringMatching(/llm.allowCodexFileReads/),
+    });
+  });
 });

@@ -33,6 +33,7 @@ export async function llmAvailability(
   provider: LlmProviderName,
   env: NodeJS.ProcessEnv,
   cwd: string,
+  options: { allowCodexFileReads?: boolean } = {},
 ): Promise<LlmAvailability> {
   switch (provider) {
     case 'none':
@@ -66,6 +67,12 @@ export async function llmAvailability(
           };
     }
     case 'codex': {
+      if (!options.allowCodexFileReads)
+        return {
+          state: 'unavailable',
+          detail:
+            'codex configured but not enabled: its read-only shell can read local files, so set llm.allowCodexFileReads to use it',
+        };
       const run = await runCli('codex', ['login', 'status'], cwd);
       if (!run) return { state: 'unavailable', detail: 'codex configured but `codex` is not installed' };
       const text = `${run.stdout}\n${run.stderr}`;
