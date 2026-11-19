@@ -1,5 +1,5 @@
 // Packs every publishable package, installs the tarballs into an empty project outside the repository and runs
-// the documented quick start there: init, doctor, a deep run on the discount example, report and explain.
+// the README quick start there (on the discount example), followed by a markdown report.
 // Exits non-zero if any step fails or the expected boundary finding is missing.
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
@@ -14,6 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readmeQuickStart } from './readme-quick-start.mjs';
 import { workspacePackages } from './workspace-packages.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -88,14 +89,29 @@ execFileSync('git', ['-c', 'user.email=ci@example.invalid', '-c', 'user.name=ci'
   cwd: project,
 });
 const veritas = (...args) => run(pnpm, ['exec', 'veritas', ...args], project);
-veritas('init', '--yes');
-veritas('doctor');
-const output = JSON.parse(veritas('run', '--profile', 'deep', '--offline', '--include-proposed', '--json'));
-const mismatch = output.findings.find((f) => f.kind === 'spec_implementation_mismatch');
-if (!mismatch || !output.findings.some((f) => f.kind === 'survived_mutant')) {
-  console.error('expected findings missing', output.findings);
-  process.exit(1);
+// The README quick start, in order. `run` also prints JSON so its findings can be checked and used for
+// placeholders of later commands.
+let mismatch = null;
+for (const command of readmeQuickStart(repo)) {
+  const args = command.map((arg) => {
+    if (arg !== '<finding-id>') return arg;
+    if (!mismatch) throw new Error('the README quick start uses <finding-id> before `run`');
+    return mismatch.id;
+  });
+  const placeholder = args.find((arg) => /^<.*>$/.test(arg));
+  if (placeholder) throw new Error(`unknown placeholder ${placeholder} in the README quick start`);
+  if (args[0] !== 'run') {
+    veritas(...args);
+    continue;
+  }
+  const output = JSON.parse(veritas(...args, '--json'));
+  mismatch = output.findings.find((f) => f.kind === 'spec_implementation_mismatch');
+  if (!mismatch || !output.findings.some((f) => f.kind === 'survived_mutant')) {
+    console.error('expected findings missing', output.findings);
+    process.exit(1);
+  }
 }
+if (!mismatch) throw new Error('the README quick start never runs `veritas run`');
+// Beyond the quick start: the markdown report renders from the installed packages.
 veritas('report', '--format', 'markdown');
-veritas('explain', mismatch.id);
 console.log(`clean install check passed in ${project}`);
