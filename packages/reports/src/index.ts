@@ -206,6 +206,30 @@ export function renderMarkdown(input: ReportInput): string {
   return `# Veritas report: ${i.run.id}\n\n${body.replaceAll('<', '&lt;').replaceAll('>', '&gt;')}\n`;
 }
 
+/**
+ * A link target for a run artifact, or null when it is not a plain relative path. Rejects any URL scheme
+ * (`javascript:`, `data:`, `http:` ...), protocol-relative and absolute paths, and backslashes.
+ */
+export function safeArtifactHref(base: string, artifact: string): string | null {
+  const joined = `${base.replace(/\/$/, '')}/${artifact}`;
+  if (
+    /^[a-z][a-z0-9+.-]*:/i.test(joined) ||
+    joined.startsWith('//') ||
+    joined.startsWith('/') ||
+    joined.includes('\\')
+  )
+    return null;
+  if ([...joined].some((ch) => ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f)) return null;
+  return joined;
+}
+
+function artifactLink(base: string, artifact: string): string {
+  const href = safeArtifactHref(base, artifact);
+  return href
+    ? `<p><a href="${htmlEscape(href)}">solver input artifact</a></p>`
+    : `<p>solver input artifact: ${htmlEscape(artifact)} (link omitted: unsafe location)</p>`;
+}
+
 function htmlEscape(value: unknown): string {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -270,7 +294,7 @@ export function renderHtml(input: ReportInput): string {
   const claims = i.claims
     .map(
       (c) =>
-        `<article>${anchor(c.id)}<h3>${htmlEscape(c.id)} — ${htmlEscape(statusText(c.status))}</h3><p>${htmlEscape(claimText(c, i.artifactBase))}</p>${c.solverInputArtifact ? `<p><a href="${htmlEscape(`${i.artifactBase.replace(/\/$/, '')}/${c.solverInputArtifact}`)}">solver input artifact</a></p>` : ''}</article>`,
+        `<article>${anchor(c.id)}<h3>${htmlEscape(c.id)} — ${htmlEscape(statusText(c.status))}</h3><p>${htmlEscape(claimText(c, i.artifactBase))}</p>${c.solverInputArtifact ? artifactLink(i.artifactBase, c.solverInputArtifact) : ''}</article>`,
     )
     .join('');
   const table = `<table><thead><tr><th scope="col">Test</th><th scope="col">Property</th><th scope="col">Evidence</th></tr></thead><tbody>${i.edges.map((e) => `<tr><td><a href="#${htmlEscape(e.testId)}">${htmlEscape(e.testId)}</a></td><td>${e.propertyId ? `<a href="#${htmlEscape(e.propertyId)}">${htmlEscape(e.propertyId)}</a>` : 'unmapped'}</td><td>${htmlEscape(e.evidence.map((x) => x.kind).join(', ') || 'none')}</td></tr>`).join('')}</tbody></table>`;

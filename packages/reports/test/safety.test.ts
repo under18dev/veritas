@@ -6,6 +6,7 @@ import {
   renderMarkdown,
   renderSarif,
   renderText,
+  safeArtifactHref,
 } from '../src/index.js';
 import { fixture, reversedFixture } from './fixtures.js';
 
@@ -115,5 +116,33 @@ describe('report safety and stability', () => {
 
   it('omits the artifact link when no artifact URL is supplied', () => {
     expect(renderCiSummary(fixture())).not.toContain('Full report');
+  });
+});
+
+describe('artifact links', () => {
+  it.each([
+    'javascript:alert(1)',
+    'JAVASCRIPT:alert(1)',
+    'data:text/html,x',
+    'https://evil.example',
+    '//evil.example',
+    '/etc',
+    'C:\\runs',
+  ])('never links to %s', (base) => {
+    const html = renderHtml({ ...fixture(), artifactBase: base });
+    const hrefs = [...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1] as string);
+    for (const href of hrefs) {
+      expect(href.startsWith('#') || !/^[a-z][a-z0-9+.-]*:|^\/|\\/i.test(href.replaceAll('&amp;', '&'))).toBe(
+        true,
+      );
+    }
+    expect(html).toContain('link omitted: unsafe location');
+  });
+
+  it('keeps relative artifact links', () => {
+    expect(safeArtifactHref('.', 'proofs/C-1.smt2')).toBe('./proofs/C-1.smt2');
+    expect(safeArtifactHref('.veritas/runs/run-1', 'proofs/C-1.smt2')).toBe(
+      '.veritas/runs/run-1/proofs/C-1.smt2',
+    );
   });
 });
