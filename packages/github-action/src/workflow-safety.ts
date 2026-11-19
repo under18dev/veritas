@@ -7,7 +7,12 @@ export interface WorkflowSafety {
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 function containsSecret(value: unknown): boolean {
-  if (typeof value === 'string') return /\bsecrets\.[A-Za-z_][A-Za-z0-9_]*/.test(value);
+  // `secrets.*` and the automatic token (`github.token`, `secrets.GITHUB_TOKEN`) are both credentials.
+  if (typeof value === 'string') {
+    return /\bsecrets\.[A-Za-z_][A-Za-z0-9_]*|\bsecrets\[|\bgithub\.token\b|\bgithub\[\s*['"]token['"]\s*\]/.test(
+      value,
+    );
+  }
   if (Array.isArray(value)) return value.some(containsSecret);
   return value && typeof value === 'object'
     ? Object.entries(value).some(([key, child]) => containsSecret(key) || containsSecret(child))
@@ -57,7 +62,8 @@ export function checkWorkflowSafety(yamlText: string): WorkflowSafety {
     if (!prJob) continue;
     if (job.permissions !== undefined && !readOnly(job.permissions))
       problems.push(`job ${jobId} permissions must be read-only contents: read`);
-    if (containsSecret(job)) problems.push(`job ${jobId} references secrets in a pull_request workflow`);
+    if (containsSecret(job))
+      problems.push(`job ${jobId} references secrets or the GitHub token in a pull_request workflow`);
     for (const step of Array.isArray(job.steps) ? job.steps : []) {
       const stepRecord = record(step);
       if (typeof stepRecord.uses !== 'string' || !stepRecord.uses.startsWith('actions/checkout@')) continue;

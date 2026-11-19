@@ -128,3 +128,29 @@ describe('secret handling', () => {
     expect(source).not.toMatch(/GITHUB_TOKEN|secrets/);
   });
 });
+
+describe('workflow token exposure', () => {
+  // GitHub expression syntax, assembled so the source has no literal template placeholder.
+  const expression = (inner: string) => ['$', '{{ ', inner, ' }}'].join('');
+  it.each([expression('github.token'), expression('secrets.GITHUB_TOKEN'), expression("github['token']")])(
+    'flags %s in a pull_request job',
+    (value) => {
+      const yaml = [
+        'on: pull_request',
+        'permissions:',
+        '  contents: read',
+        'jobs:',
+        '  verify:',
+        '    runs-on: ubuntu-latest',
+        '    env:',
+        `      GH_TOKEN: ${value}`,
+        '    steps:',
+        '      - run: echo "$GH_TOKEN"',
+        '',
+      ].join('\n');
+      const result = checkWorkflowSafety(yaml);
+      expect(result.ok).toBe(false);
+      expect(result.problems.join('\n')).toMatch(/token/);
+    },
+  );
+});
