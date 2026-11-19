@@ -11,6 +11,7 @@ import {
   type Finding,
   type FormalClaim,
   hashValue,
+  leanToolCandidates,
   newRunId,
   PropertyIR,
   PUBLIC_SCHEMAS,
@@ -347,5 +348,25 @@ describe('schemas', () => {
       const json = z.toJSONSchema(schema, { io: 'input', unrepresentable: 'any' });
       expect(json, name).toHaveProperty('$schema');
     }
+  });
+});
+
+describe('doctor', () => {
+  it('looks for Lean on the PATH first, then in the elan install directories', () => {
+    const exe = process.platform === 'win32' ? 'lean.exe' : 'lean';
+    const home = path.join(tmpdir(), 'home');
+    expect(leanToolCandidates('lean', { HOME: home })).toEqual([
+      'lean',
+      path.join(home, '.elan', 'bin', exe),
+    ]);
+    const elanHome = path.join(tmpdir(), 'elan');
+    expect(leanToolCandidates('lean', { HOME: home, ELAN_HOME: elanHome })).toEqual([
+      'lean',
+      path.join(elanHome, 'bin', exe),
+      path.join(home, '.elan', 'bin', exe),
+    ]);
+    expect(leanToolCandidates('lake', { HOME: home }).at(-1)).toMatch(
+      /[\\/]\.elan[\\/]bin[\\/]lake(\.exe)?$/,
+    );
   });
 });

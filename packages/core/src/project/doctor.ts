@@ -1,5 +1,5 @@
 import { accessSync, constants, mkdtempSync, rmSync } from 'node:fs';
-import { release, tmpdir } from 'node:os';
+import { homedir, release, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { VeritasConfig } from '../config/schema.js';
@@ -32,6 +32,26 @@ export interface DoctorReport {
   os: { platform: string; arch: string; release: string };
   capabilities: Capability[];
   features: FeatureStatus[];
+}
+
+/**
+ * Where to look for a Lean toolchain executable: the PATH first, then elan's default install
+ * directories (`$ELAN_HOME/bin`, `~/.elan/bin`), which are often not on the PATH of non-login shells.
+ */
+export function leanToolCandidates(tool: 'lean' | 'lake', env: NodeJS.ProcessEnv = process.env): string[] {
+  const exe = process.platform === 'win32' ? `${tool}.exe` : tool;
+  const home = env.HOME || env.USERPROFILE || homedir();
+  const dirs = [env.ELAN_HOME ? path.join(env.ELAN_HOME, 'bin') : null, path.join(home, '.elan', 'bin')];
+  const candidates = [tool, ...dirs.filter((d): d is string => d !== null).map((d) => path.join(d, exe))];
+  return [...new Set(candidates)];
+}
+
+async function firstVersion(candidates: string[], args: string[], root: string): Promise<string | null> {
+  for (const command of candidates) {
+    const version = await versionOf(command, args, root);
+    if (version) return version;
+  }
+  return null;
 }
 
 async function versionOf(command: string, args: string[], root: string): Promise<string | null> {
@@ -141,12 +161,12 @@ export async function runDoctor(
     z3wasm.version ?? z3native,
   );
 
-  const lean = await versionOf('lean', ['--version'], root);
-  const lake = await versionOf('lake', ['--version'], root);
+  const lean = await firstVersion(leanToolCandidates('lean', env), ['--version'], root);
+  const lake = await firstVersion(leanToolCandidates('lake', env), ['--version'], root);
   add(
     'lean',
     lean && lake ? 'available' : 'unavailable',
-    lean && lake ? 'lean and lake found' : 'lean/lake not found (install via elan)',
+    lean && lake ? 'lean and lake found' : 'lean/lake not found on PATH or in ~/.elan/bin (install via elan)',
     lean,
   );
 
