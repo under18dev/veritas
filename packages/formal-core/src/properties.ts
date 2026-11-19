@@ -105,3 +105,73 @@ export function applyMutation(
   }
   return source.slice(0, offset) + mutation.replacement + source.slice(offset + mutation.original.length);
 }
+
+/**
+ * Restrict an IR to a finite set of inputs (for example the literal arguments of a test): a precondition that
+ * the parameters equal one of `inputs`. Each input must give every parameter a value of its sort.
+ */
+export function restrictToInputs(ir: PropertyIR, inputs: Record<string, string | boolean>[]): PropertyIR {
+  if (inputs.length === 0) throw new Error('at least one input is needed');
+  const equalities = inputs.map((input) =>
+    ir.params
+      .map((p): Expr => {
+        const value = input[p.name];
+        if (value === undefined || typeof value !== (p.sort === 'bool' ? 'boolean' : 'string'))
+          throw new Error(`input does not give ${p.name} a ${p.sort} value`);
+        return { kind: 'binary', op: '==', left: v(p.name), right: lit(value) };
+      })
+      .reduce((a, b): Expr => ({ kind: 'binary', op: 'and', left: a, right: b })),
+  );
+  const anyInput = equalities.reduce((a, b): Expr => ({ kind: 'binary', op: 'or', left: a, right: b }));
+  return { ...ir, preconditions: [...ir.preconditions, anyInput] };
+}
+
+/** `expr` with every call to `from` replaced by a call to `to`. */
+function renameCalls(expr: Expr, from: string, to: string): Expr {
+  switch (expr.kind) {
+    case 'unary':
+      return { ...expr, arg: renameCalls(expr.arg, from, to) };
+    case 'binary':
+      return { ...expr, left: renameCalls(expr.left, from, to), right: renameCalls(expr.right, from, to) };
+    case 'ite':
+      return {
+        ...expr,
+        cond: renameCalls(expr.cond, from, to),
+        whenTrue: renameCalls(expr.whenTrue, from, to),
+        whenFalse: renameCalls(expr.whenFalse, from, to),
+      };
+    case 'call':
+      return {
+        ...expr,
+        fn: expr.fn === from ? to : expr.fn,
+        args: expr.args.map((a) => renameCalls(a, from, to)),
+      };
+    default:
+      return expr;
+  }
+}
+
+/**
+ * Whether a property tells a mutant from the original: forall inputs, property(original) implies
+ * property(mutant). A counterexample is an input where the original satisfies the property and the mutant does
+ * not, so the property detects that change; where the original already violates it, nothing is credited.
+ * `mutant` must have the signature of the model named `original` and a different model name.
+ */
+export function detectionProperty(ir: PropertyIR, original: string, mutant: Translated): PropertyIR {
+  const current = ir.functions.find((f) => f.name === original);
+  const m = mutant.model;
+  if (
+    !current ||
+    m.name === original ||
+    current.returns !== m.returns ||
+    current.params.length !== m.params.length ||
+    current.params.some((p, i) => p.sort !== m.params[i]?.sort)
+  ) {
+    throw new Error(`the mutant of ${original} does not have the signature the property was written for`);
+  }
+  return {
+    ...ir,
+    functions: [...ir.functions, ...mutant.dependencies, m],
+    body: { kind: 'binary', op: 'implies', left: ir.body, right: renameCalls(ir.body, original, m.name) },
+  };
+}

@@ -74,7 +74,17 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
       exercised: hit.length > 0 ? 'yes' : 'no',
     });
   }
-  const claims = input.claims.filter((c) => propertyIds.includes(c.propertyId));
+  // Distinguishability claims name the tests whose inputs they checked.
+  const testClaims = input.claims.filter(
+    (c) =>
+      c.kind === 'distinguishability' &&
+      Array.isArray(c.scope.testIds) &&
+      (c.scope.testIds as unknown[]).includes(test.id),
+  );
+  const claims = [
+    ...input.claims.filter((c) => propertyIds.includes(c.propertyId) && c.kind !== 'distinguishability'),
+    ...testClaims,
+  ];
   const unknowns: string[] = [];
   if (!input.mutationAvailable)
     unknowns.push('no mutation results for this run; detection power not measured');
@@ -132,6 +142,16 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
     }
     for (const b of boundaryCoverage.filter((b) => b.exercised === 'no'))
       rationale.push(`boundary not exercised: ${b.boundary}`);
+    for (const c of testClaims.filter((c) => relevantSurvived.some((m) => m.id === c.mutantId))) {
+      if (c.status === 'counterexample_found')
+        rationale.push(
+          `its input ${JSON.stringify(c.counterexample)} distinguishes mutant ${c.mutantId} from the original, but no assertion caught it (${c.id})`,
+        );
+      else if (c.status === 'proven_within_model')
+        rationale.push(
+          `none of its inputs distinguishes mutant ${c.mutantId}; a new input is needed (${c.id})`,
+        );
+    }
   } else if (!input.mutationAvailable) {
     outcome = 'inconclusive';
     rationale.push('asserts a project result, but detection power was not measured (no mutation results)');

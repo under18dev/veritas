@@ -13,6 +13,19 @@
 
 Lean results carry `kernel_checked` assurance only without `sorry`, `admit` or extra axioms (ADR 0005). SMT results carry `smt_bounded` assurance. Reports show the difference.
 
+## What is checked
+
+Every formal claim is the same bounded query, "for all inputs within the domains, the preconditions imply the body"; its kind says which relation the body encodes. `veritas prove` checks conformance; the others need mutation results (`veritas run --profile deep`).
+
+| Kind                  | Question                                                                      | `counterexample_found`                                                                                      | `proven_within_model`                                                        |
+| --------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `conformance`         | Does the implementation satisfy the property?                                 | An input where it does not, replayed in JavaScript                                                          | No such input within the bounds                                              |
+| `bounded_equivalence` | Does any input tell a surviving mutant from the original?                     | A distinguishing input (a test with it and the specified result would kill the mutant)                      | None within the bounds: the mutant is `equivalent_proven`                    |
+| `distinguishability`  | Can the inputs a test already uses tell a surviving mutant from the original? | One of the test's inputs does: the test reaches the difference but its assertion does not check it          | None of them does: the test needs a new input                                |
+| `property_detection`  | Does the property tell a mutant from the original?                            | An input where the original satisfies the property and the mutant does not: the property detects the change | No such input within the bounds: the property cannot distinguish this mutant |
+
+Distinguishability uses only calls whose arguments are all integer or boolean literals inside the domain; a test with other arguments gets no claim. In the three mutant relations the mutant exists only as a model of the mutated source: the original side is replayed in JavaScript, the mutant side is not. At most 40 distinguishability and property-detection checks run per run; the stage messages say how many were skipped. Undecided results (`unknown`, `timeout`) leave the stage partial, as for conformance.
+
 ## Supported formal subset
 
 - Pure functions with no side effects, I/O, async, `this`, closures over mutable state, `eval` or `Proxy`.

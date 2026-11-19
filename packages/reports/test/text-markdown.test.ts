@@ -158,3 +158,41 @@ describe('mutation outcomes', () => {
     expect(section).not.toMatch(/^other/m);
   });
 });
+
+describe('property detection', () => {
+  it('says how many mutants of its function each property detects', () => {
+    const input = fixture();
+    const base = input.claims[0];
+    if (!base) throw new Error('fixture has no claim');
+    input.claims = [
+      ...input.claims,
+      {
+        ...base,
+        id: 'claim-d1',
+        propertyId: 'property-1',
+        kind: 'property_detection',
+        status: 'counterexample_found',
+        mutantId: 'mutant-1',
+      },
+      {
+        ...base,
+        id: 'claim-d2',
+        propertyId: 'property-1',
+        kind: 'property_detection',
+        status: 'proven_within_model',
+        mutantId: 'mutant-1',
+      },
+      {
+        ...base,
+        id: 'claim-d3',
+        propertyId: 'property-1',
+        kind: 'property_detection',
+        status: 'timeout',
+        mutantId: 'mutant-1',
+      },
+    ];
+    expect(renderText(input)).toMatch(
+      /property-1 \[accepted, normative\]: .*; detects 1 of 3 mutant\(s\) of its function within the model \(1 undecided\)/,
+    );
+  });
+});

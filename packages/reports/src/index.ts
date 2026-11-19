@@ -176,7 +176,15 @@ function propertyEvidence(i: ReportInput, p: Property): string {
     ...claims.map((c) => `${c.id} ${statusText(c.status)}`),
     ...observedCounterexamples.map((f) => `${f.id} counterexample`),
   ];
-  return `${p.id} [${p.status}, ${p.origin}]: static comparison with the code ${p.implementationAgreement}; observed ${observed.join(', ') || 'not run'}; tests ${tests.map((e) => `${e.testId} (${e.evidence.map((x) => x.kind).join('+') || 'none'})`).join(', ') || 'none'}; mutants ${killed} killed, ${survived} survived of ${mutants.length}`;
+  const detection = i.claims.filter((c) => c.propertyId === p.id && c.kind === 'property_detection');
+  const detected = detection.filter((c) => c.status === 'counterexample_found').length;
+  const undecided = detection.filter(
+    (c) => c.status !== 'counterexample_found' && c.status !== 'proven_within_model',
+  ).length;
+  const detectionText = detection.length
+    ? `; detects ${detected} of ${detection.length} mutant(s) of its function within the model${undecided ? ` (${undecided} undecided)` : ''}`
+    : '';
+  return `${p.id} [${p.status}, ${p.origin}]: static comparison with the code ${p.implementationAgreement}; observed ${observed.join(', ') || 'not run'}; tests ${tests.map((e) => `${e.testId} (${e.evidence.map((x) => x.kind).join('+') || 'none'})`).join(', ') || 'none'}; mutants ${killed} killed, ${survived} survived of ${mutants.length}${detectionText}`;
 }
 
 function sections(input: ReportInput): string[] {

@@ -353,6 +353,48 @@ describe('property-based test replay', () => {
   });
 });
 
+describe('test and property discriminating power', () => {
+  it('shows which test inputs can tell a surviving mutant apart and which mutants each property detects', () => {
+    const dir = setup('discount-boundary');
+    const result = runCli(['run', '--profile', 'deep', '--include-proposed', '--json'], dir);
+    const { runId } = json<RunJson>(result);
+    const read = (name: string) =>
+      JSON.parse(readFileSync(path.join(dir, '.veritas/runs', runId, name), 'utf8')).data;
+    const claims = read('claims.json') as {
+      id: string;
+      kind: string;
+      status: string;
+      propertyId: string;
+      mutantId?: string;
+      counterexample?: Record<string, string>;
+      scope: { testIds?: string[] };
+    }[];
+    const mutants = read('mutation.json').mutants as { id: string; status: string; replacement: string }[];
+    const boundary = mutants.find((m) => m.replacement === 'total >= 1000');
+    expect(boundary?.status).toBe('survived');
+    // The discount tests call discountAmount(2000) and discountAmount(10): neither input can tell the mutant apart.
+    const distinguish = claims.filter((c) => c.kind === 'distinguishability' && c.mutantId === boundary?.id);
+    expect(distinguish.length).toBeGreaterThan(0);
+    for (const c of distinguish) {
+      expect(c.status).toBe('proven_within_model');
+      expect(c.scope.testIds?.length).toBeGreaterThan(0);
+    }
+    const detection = claims.filter((c) => c.kind === 'property_detection');
+    expect(detection.some((c) => c.status === 'counterexample_found')).toBe(true);
+    // The README rule (total >= 1000 gives 100) is what the mutant implements: the rule cannot tell it apart.
+    expect(detection.find((c) => c.mutantId === boundary?.id)?.status).toBe('proven_within_model');
+    const assessments = read('assessments.json') as { testId: string; rationale: string[] }[];
+    const tested = distinguish.flatMap((c) => c.scope.testIds ?? []);
+    expect(
+      assessments
+        .filter((a) => tested.includes(a.testId))
+        .some((a) =>
+          a.rationale.some((r) => r.startsWith(`none of its inputs distinguishes mutant ${boundary?.id}`)),
+        ),
+    ).toBe(true);
+  });
+});
+
 describe('changes since a git ref', () => {
   it('marks properties of changed code with the change and refuses refs that look like options', () => {
     const dir = setup('discount-boundary');

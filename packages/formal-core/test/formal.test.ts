@@ -14,8 +14,10 @@ import { ContentCache, FormalClaim, hashValue, RunStore } from '@under18dev/veri
 import { describe, expect, it } from 'vitest';
 import {
   applyMutation,
+  detectionProperty,
   equivalenceProperty,
   proveProperty,
+  restrictToInputs,
   type TranslationResult,
   thresholdProperty,
   translateFunction,

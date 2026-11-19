@@ -124,7 +124,7 @@ export function deriveFindings(input: FindingInput): Finding[] {
   for (const m of input.mutants) {
     if (m.status !== 'survived' || m.relevance !== 'spec_relevant') continue;
     const distinguishing = input.claims.find(
-      (c) => c.mutantId === m.id && c.status === 'counterexample_found',
+      (c) => c.kind === 'bounded_equivalence' && c.mutantId === m.id && c.status === 'counterexample_found',
     );
     findings.push({
       id: stableId('F', { kind: 'survived_mutant', mutant: m.id }),

@@ -4,6 +4,7 @@ import { assessTests, deriveFindings, linkMutants, linkTests } from '@under18dev
 import {
   analyzeCode,
   type CodeIndex,
+  type FunctionInfo,
   inferBehaviorCandidates,
   markChangedCandidates,
   parseChangedLines,
@@ -20,9 +21,11 @@ import {
   type Mutant,
   newRunId,
   openCache,
+  type Param,
   type PolicyDecision,
   type PolicyEvidence,
   type Property,
+  type PropertyIR,
   parseConfig,
   type Run,
   RunStore,
@@ -39,8 +42,11 @@ import {
 } from '@under18dev/veritas-core';
 import {
   applyMutation,
+  detectionProperty,
   equivalenceProperty,
   proveProperty,
+  restrictToInputs,
+  type TranslationResult,
   translateFunction,
 } from '@under18dev/veritas-formal-core';
 import { LlmClient, type LlmProvider } from '@under18dev/veritas-llm';
@@ -586,7 +592,8 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       // Survived mutants in translatable functions: bounded equivalence or a distinguishing input.
       const functions =
         (ctx.outputs.get('index') as { code: CodeIndex } | undefined)?.code.functions ?? code0.functions;
-      for (const m of mutants.filter((m) => m.status === 'survived')) {
+      /** The exported function a mutant sits in, with the original and the mutated source. */
+      const mutantSource = (m: Mutant) => {
         const line = m.location.range?.start;
         const fn = functions.find(
           (f) =>
@@ -595,16 +602,30 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
             line >= (f.location.range?.start ?? 0) &&
             line <= (f.location.range?.end ?? 0),
         );
-        if (!fn || line === undefined || !fn.exported) continue;
+        if (!fn || line === undefined || !fn.exported) return null;
         const source = readFileSync(path.join(root, fn.file), 'utf8');
         const column = (source.split('\n')[line - 1] ?? '').indexOf(m.original) + 1;
-        if (column <= 0) continue;
-        let mutated: string;
+        if (column <= 0) return null;
         try {
-          mutated = applyMutation(source, { line, column, original: m.original, replacement: m.replacement });
+          const mutated = applyMutation(source, {
+            line,
+            column,
+            original: m.original,
+            replacement: m.replacement,
+          });
+          return { fn, source, mutated };
         } catch {
-          continue;
+          return null;
         }
+      };
+      const pairs = new Map<
+        string,
+        { fn: FunctionInfo; orig: Translated; mut: Translated; propertyId: string }
+      >();
+      for (const m of mutants.filter((m) => m.status === 'survived')) {
+        const found = mutantSource(m);
+        if (!found) continue;
+        const { fn, source, mutated } = found;
         const orig = translateFunction({
           file: fn.file,
           source,
@@ -650,11 +671,124 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         if (claim.status === 'proven_within_model') {
           m.status = 'equivalent_proven';
           m.statusReason = `bounded equivalence within ${JSON.stringify(domain)} (${claim.id})`;
+        } else {
+          pairs.set(m.id, { fn, orig, mut, propertyId: relevant[0]?.id as string });
         }
         messages.push(
           `mutant ${m.id}: ${claim.status}${claim.counterexample ? ` distinguishing input ${JSON.stringify(claim.counterexample)}` : ''}`,
         );
       }
+
+      // The two other relations cost a solver call each; at most MAX_RELATION_CLAIMS per run.
+      let budget = MAX_RELATION_CLAIMS;
+      let overBudget = 0;
+      const spend = () => (budget > 0 ? (budget--, true) : (overBudget++, false));
+
+      // Relation 2: can the inputs a test already uses tell a surviving mutant from the original?
+      const inventory = ctx.outputs.get('map') as TestInventory | undefined;
+      for (const [mutantId, { fn, orig, mut, propertyId }] of pairs) {
+        const byInputs = new Map<string, { inputs: Record<string, string | boolean>[]; testIds: string[] }>();
+        for (const test of inventory?.tests ?? []) {
+          const inputs = test.targetCalls
+            .filter((c) => c.symbol === fn.symbol)
+            .map((c) => literalInput(orig.params, c.args, domain));
+          if (inputs.length === 0) continue;
+          if (inputs.some((i) => i === null)) {
+            messages.push(
+              `mutant ${mutantId}: inputs of ${test.id} are not all integer or boolean literals in the domain`,
+            );
+            continue;
+          }
+          const usable = inputs as Record<string, string | boolean>[];
+          const key = JSON.stringify(usable);
+          const group = byInputs.get(key) ?? { inputs: usable, testIds: [] };
+          group.testIds.push(test.id);
+          byInputs.set(key, group);
+        }
+        for (const { inputs, testIds } of byInputs.values()) {
+          if (!spend()) continue;
+          const { claim } = await proveProperty({
+            kind: 'distinguishability',
+            propertyId,
+            ir: restrictToInputs(equivalenceProperty(orig, mut, domain), inputs),
+            root,
+            bindings: [{ modelName: 'original', modulePath: path.join(root, fn.file), exportName: fn.name }],
+            timeoutMs: config.formal.maxSolverMs,
+            store,
+            signal,
+            mutantId,
+            assumptions: [
+              `only the inputs of ${testIds.join(', ')} are considered; a counterexample means one of them gives a different result under the mutant`,
+            ],
+            allowNetworkWithoutIsolation: config.sandbox.allowNetworkWithoutIsolation,
+            cache,
+          });
+          const withTests = {
+            ...claim,
+            scope: { ...claim.scope, testIds },
+            semanticGaps: [...claim.semanticGaps, MUTANT_MODEL_GAP],
+          };
+          claims.push(withTests);
+          solverMs += claim.durationMs;
+          messages.push(
+            `mutant ${mutantId} vs inputs of ${testIds.join(', ')}: ${claim.status}${claim.counterexample ? ` (${JSON.stringify(claim.counterexample)} distinguishes it)` : ''}`,
+          );
+        }
+      }
+
+      // Relation 4: which mutants of its function does each verified property detect?
+      for (const p of toProve) {
+        const f = spec.formalized.get(p.id);
+        if (!f) continue;
+        for (const m of mutants.filter((m) => m.status !== 'pending' && m.status !== 'ignored')) {
+          const found = mutantSource(m);
+          if (!found || found.fn.symbol !== p.targetSymbols[0]) continue;
+          const mut = translateFunction({
+            file: found.fn.file,
+            source: found.mutated,
+            exportName: found.fn.name,
+            domain,
+            modelName: `${f.exportName}__mutant`,
+          });
+          let ir: PropertyIR;
+          try {
+            if (mut.status !== 'translated') throw new Error('outside the formal subset');
+            ir = detectionProperty(f.ir, f.exportName, mut);
+          } catch (error) {
+            messages.push(`${p.id} vs mutant ${m.id}: detection not checked (${(error as Error).message})`);
+            continue;
+          }
+          if (!spend()) continue;
+          const { claim } = await proveProperty({
+            kind: 'property_detection',
+            propertyId: p.id,
+            ir,
+            root,
+            // Only the original has a JavaScript export to replay; the mutant exists as a model.
+            bindings: [
+              { modelName: f.exportName, modulePath: path.join(root, f.file), exportName: f.exportName },
+            ],
+            timeoutMs: config.formal.maxSolverMs,
+            store,
+            signal,
+            mutantId: m.id,
+            assumptions: [
+              'a counterexample is an input where the original satisfies the property and the mutant does not (the property detects the change); proven_within_model means no such input exists within the bounds',
+            ],
+            allowNetworkWithoutIsolation: config.sandbox.allowNetworkWithoutIsolation,
+            cache,
+          });
+          claims.push({ ...claim, semanticGaps: [...claim.semanticGaps, MUTANT_MODEL_GAP] });
+          solverMs += claim.durationMs;
+          messages.push(
+            `${p.id} vs mutant ${m.id}: ${claim.status === 'counterexample_found' ? `detects it with ${JSON.stringify(claim.counterexample)}` : claim.status === 'proven_within_model' ? 'cannot distinguish it within the bounds' : claim.status}`,
+          );
+        }
+      }
+      if (overBudget > 0)
+        messages.push(
+          `${overBudget} distinguishability/property-detection check(s) skipped: limit of ${MAX_RELATION_CLAIMS} per run`,
+        );
       store.write(ARTIFACTS.claims.file, ARTIFACTS.claims.schema, claims);
       const undecided = claims.filter(
         (c) => c.status === 'timeout' || c.status === 'unknown' || c.status === 'error',
@@ -862,6 +996,41 @@ export function mutationCacheKey(
     scope: selection.scope ?? [],
     killMatrix: selection.killMatrix ?? false,
   });
+}
+
+/** Upper bound on distinguishability and property-detection solver calls in one run. */
+export const MAX_RELATION_CLAIMS = 40;
+
+type Translated = Extract<TranslationResult, { status: 'translated' }>;
+
+const MUTANT_MODEL_GAP =
+  'the mutant is checked as a model of the mutated source only; it is not run in JavaScript, so the original side is the only one replayed';
+
+/**
+ * The literal arguments of a call as an input for `params`, or null when any is not an integer (within the
+ * domain) or boolean literal of the right sort.
+ */
+export function literalInput(
+  params: Param[],
+  args: (string | null)[],
+  domain: { min: string; max: string },
+): Record<string, string | boolean> | null {
+  if (args.length !== params.length) return null;
+  const input: Record<string, string | boolean> = {};
+  for (const [i, p] of params.entries()) {
+    const raw = args[i]?.trim() ?? null;
+    if (raw === null) return null;
+    if (p.sort === 'bool') {
+      if (raw !== 'true' && raw !== 'false') return null;
+      input[p.name] = raw === 'true';
+    } else {
+      if (!/^-?\d+$/.test(raw)) return null;
+      const n = BigInt(raw);
+      if (n < BigInt(domain.min) || n > BigInt(domain.max)) return null;
+      input[p.name] = n.toString();
+    }
+  }
+  return input;
 }
 
 /**

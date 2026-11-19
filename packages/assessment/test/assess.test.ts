@@ -1,4 +1,4 @@
-import type { Mutant, Property, TestCase, TestPropertyEdge } from '@under18dev/veritas-core';
+import type { FormalClaim, Mutant, Property, TestCase, TestPropertyEdge } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import { type AssessInput, assessTest, boundaryPoints } from '../src/index.js';
 
@@ -106,6 +106,44 @@ describe('assessTest', () => {
     );
     expect(a.outcome).toBe('weak_or_incomplete');
     expect(a.survivedMutantIds).toEqual(['M-2']);
+  });
+
+  it('says whether the inputs of a weak test distinguish its surviving mutant, from distinguishability claims', () => {
+    const claim = (id: string, testId: string, status: FormalClaim['status'], counterexample?: object) =>
+      ({
+        id,
+        kind: 'distinguishability',
+        propertyId: 'P-discount',
+        mutantId: 'M-2',
+        status,
+        scope: { testIds: [testId] },
+        ...(counterexample ? { counterexample } : {}),
+      }) as unknown as FormalClaim;
+    const mutants = [
+      mutant('M-1', 'killed', ['T-b'], ['T-b']),
+      mutant('M-2', 'survived', [], ['T-b', 'T-a']),
+    ];
+    const claims = [
+      claim('C-weak', 'T-b', 'counterexample_found', { total: '1000' }),
+      claim('C-other', 'T-a', 'proven_within_model'),
+    ];
+    const weak = assessTest(
+      testCase({ id: 'T-b', targetCalls: [call(['1000'])] }),
+      input({ mutants, claims }),
+    );
+    expect(weak.outcome).toBe('weak_or_incomplete');
+    expect(weak.rationale.join(' ')).toContain(
+      'its input {"total":"1000"} distinguishes mutant M-2 from the original, but no assertion caught it (C-weak)',
+    );
+    expect(weak.formalClaimIds).toEqual(['C-weak']);
+    const other = assessTest(
+      testCase({ id: 'T-a', targetCalls: [call(['2000'])] }),
+      input({ mutants, claims }),
+    );
+    expect(other.rationale.join(' ')).toContain(
+      'none of its inputs distinguishes mutant M-2; a new input is needed (C-other)',
+    );
+    expect(other.formalClaimIds).toEqual(['C-other']);
   });
 
   it('is weak when the decisive boundary is never asserted', () => {
