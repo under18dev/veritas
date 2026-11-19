@@ -1,4 +1,11 @@
 {
   "files": [],
-  "references": [{ "path": "packages/core" }, { "path": "packages/cli" }]
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/cli" },
+    { "path": "packages/spec-discovery" },
+    { "path": "packages/code-intelligence" },
+    { "path": "packages/test-inventory" },
+    { "path": "packages/mutation-adapter" }
+  ]
 }

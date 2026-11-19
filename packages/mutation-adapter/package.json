@@ -1,0 +1,24 @@
+{
+  "name": "@veritas/mutation-adapter",
+  "version": "0.0.0",
+  "description": "Mutation testing adapter (@mizchi/mutator) for Veritas",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@veritas/core": "workspace:*",
+    "@mizchi/mutator": "0.4.5",
+    "zod": "4.6.7"
+  }
+}
