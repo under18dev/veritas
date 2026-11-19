@@ -67,6 +67,8 @@ export function evaluatePolicy(
     return { exitCode: ExitCode.Inconclusive, verdict: 'inconclusive', reasons: inconclusive };
   }
   if (confirmedViolations.length > 0) reasons.push('confirmed violations reported as warnings by policy');
+  const open = findings.filter((f) => f.certainty !== 'informational' && !confirmedViolations.includes(f));
+  if (open.length > 0) reasons.push(`${open.length} finding(s) to review (not policy failures)`);
   if (inconclusive.length > 0)
     reasons.push(...inconclusive.map((r) => `inconclusive (${policy.inconclusiveBehavior}): ${r}`));
   return {

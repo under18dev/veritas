@@ -72,6 +72,8 @@ export const Run = z.object({
   finishedAt: IsoDate.optional(),
   status: StageStatus,
   exitCode: z.number().int().min(0).max(4).optional(),
+  verdict: z.enum(['pass', 'pass_with_warnings', 'policy_failure', 'tool_error', 'inconclusive']).optional(),
+  policyReasons: z.array(z.string()).default([]),
   stages: z.array(StageResult),
   capabilities: z.array(Capability),
   environment: z.object({ os: z.string(), arch: z.string(), node: z.string() }),

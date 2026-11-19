@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runCommand } from './process.js';
@@ -40,20 +41,25 @@ export async function callInSandbox(options: {
   signal?: AbortSignal;
 }): Promise<SandboxResult> {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const runner = path.join(here, `sandbox-runner${import.meta.url.endsWith('.ts') ? '.ts' : '.js'}`);
+  // The permission model compares real paths, so symlinked roots (e.g. /var -> /private/var) must be resolved.
+  const runner = realpathSync(
+    path.join(here, `sandbox-runner${import.meta.url.endsWith('.ts') ? '.ts' : '.js'}`),
+  );
+  const root = realpathSync(options.root);
+  const modulePath = realpathSync(options.modulePath);
   const args = [
     '--permission',
-    `--allow-fs-read=${options.root}`,
+    `--allow-fs-read=${root}`,
     `--allow-fs-read=${runner}`,
     '--disallow-code-generation-from-strings',
     '--disable-warning=ExperimentalWarning',
     runner,
   ];
   const result = await runCommand(process.execPath, args, {
-    cwd: options.root,
+    cwd: root,
     timeoutMs: options.timeoutMs,
     input: JSON.stringify({
-      module: options.modulePath,
+      module: modulePath,
       exportName: options.exportName,
       calls: options.calls,
     }),

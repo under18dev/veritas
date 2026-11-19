@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -108,6 +108,21 @@ describe('sandboxed execution', () => {
     });
     expect(result.isolation.network).toBe(true);
     expect(result.results[0]).toEqual({ t: 'boolean', v: false });
+  });
+
+  it('works when the project root is reached through a symlink', async () => {
+    const { root, file } = project('export function f(x: number): number { return x + 1; }');
+    const link = path.join(realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-link-'))), 'proj');
+    symlinkSync(root, link);
+    const result = await callInSandbox({
+      root: link,
+      modulePath: path.join(link, path.basename(file)),
+      exportName: 'f',
+      calls: [[{ t: 'number', v: '1' }]],
+      timeoutMs: 20_000,
+    });
+    expect(result.status, result.error ?? '').toBe('ok');
+    expect(result.results).toEqual([{ t: 'number', v: '2' }]);
   });
 
   it('reports a missing export as an error, not a result', async () => {
