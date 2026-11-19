@@ -66,4 +66,15 @@ describe('schema and code collectors', () => {
     expect(DiscoveryResult.parse(result)).toEqual(result);
     for (const source of result.sources) expect(EvidenceSource.parse(source)).toEqual(source);
   });
+
+  it('collects JSDoc with the default brace include globs', async () => {
+    const root = tempProject('jsdoc-default');
+    writeProjectFile(root, 'src/a.ts', '/** The total must be at least 10. */\nexport function total() {}\n');
+    writeProjectFile(root, 'src/b.tsx', '/** The size must be at least 20. */\nexport function size() {}\n');
+    const result = await discoverEvidence({ root, config: config() });
+    expect(result.sources.filter((s) => s.kind === 'code').map((s) => s.locator).sort()).toEqual([
+      'src/a.ts',
+      'src/b.tsx',
+    ]);
+  });
 });

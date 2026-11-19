@@ -167,15 +167,8 @@ function walk(root: string): string[] {
 }
 function matchesInclude(file: string, root: string, patterns: string[]): boolean {
   const rel = path.relative(root, file).split(path.sep).join('/');
-  return patterns.some((pattern) => {
-    const escaped = pattern
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-      .replace(/\*\*\//g, '(?:.*/)?')
-      .replace(/\*\*/g, '.*')
-      .replace(/\*/g, '[^/]*')
-      .replace(/\{([^}]+)\}/g, '($1)');
-    return new RegExp(`^${escaped}$`).test(rel);
-  });
+  // The same matcher as code analysis, so `src/**/*.{ts,tsx}` selects the same files in both.
+  return patterns.some((pattern) => path.posix.matchesGlob(rel, pattern));
 }
 function exportedDocs(text: string): string {
   const output = Array.from({ length: text.split('\n').length }, () => '');

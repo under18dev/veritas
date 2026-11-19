@@ -8,9 +8,10 @@ import {
   type TestPropertyEdge,
   VeritasConfig,
 } from '@under18dev/veritas-core';
+import { analyzeCode } from '@under18dev/veritas-code-intelligence';
 import { inventoryTests } from '@under18dev/veritas-test-inventory';
 import { describe, expect, it } from 'vitest';
-import { linkTests } from '../src/index.js';
+import { linkMutants, linkTests } from '../src/index.js';
 
 function project(files: Record<string, string>): string {
   const root = mkdtempSync(path.join(tmpdir(), 'veritas-link-'));
@@ -122,5 +123,47 @@ describe('linkTests', () => {
     const linked = linkTests(tests, edges, [property], [killed]);
     expect(linked.filter((e) => e.propertyId !== null)).toEqual([]);
     expect(linked.map((e) => e.testId).sort()).toEqual(['T-llm', 'T-name']);
+  });
+});
+
+describe('linkMutants', () => {
+  it('relates a mutant to a property only when it uses the parameter as an identifier', () => {
+    const root = project({
+      'src/area.ts': [
+        'export function area(a: number, cache: number): number {',
+        '  const scaled = cache * 2;',
+        '  return a * a + scaled;',
+        '}',
+        '',
+      ].join('\n'),
+    });
+    const config = VeritasConfig.parse({});
+    const { functions } = analyzeCode({ root, config });
+    const areaProperty = {
+      id: 'P-area',
+      status: 'accepted',
+      origin: 'normative',
+      targetSymbols: ['src/area.ts#area'],
+      predicate: { param: 'a', operator: '>=', value: '0', consequence: 'non-negative' },
+    } as unknown as Property;
+    const mutant = (id: string, line: number, original: string): Mutant =>
+      ({
+        id,
+        location: { file: 'src/area.ts', range: { start: line, end: line } },
+        original,
+        replacement: '0',
+        status: 'survived',
+        propertyIds: [],
+        relevance: 'unknown',
+      }) as unknown as Mutant;
+    const [unrelated, related] = linkMutants(
+      [mutant('M-cache', 2, 'cache * 2'), mutant('M-a', 3, 'a * a')],
+      [areaProperty],
+      functions,
+    );
+    expect(unrelated?.relevance).toBe('unrelated');
+    expect(unrelated?.propertyIds).toEqual([]);
+    expect(related?.relevance).toBe('spec_relevant');
+    expect(related?.propertyIds).toEqual(['P-area']);
   });
 });

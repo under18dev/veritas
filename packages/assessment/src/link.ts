@@ -30,7 +30,7 @@ export function linkMutants(mutants: Mutant[], properties: Property[], functions
       const param = p.predicate.param;
       return (
         fn.comparisons.some((c) => c.param === param && c.location.range?.start === line) ||
-        m.original.includes(param)
+        mentions(m.original, param)
       );
     });
     return {
@@ -39,6 +39,12 @@ export function linkMutants(mutants: Mutant[], properties: Property[], functions
       propertyIds: related.map((p) => p.id),
     };
   });
+}
+
+/** Whether `code` uses `name` as a whole identifier (so parameter `a` is not found in `cache`). */
+function mentions(code: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\w$])${escaped}(?![\\w$])`).test(code);
 }
 
 /** Evidence that can never link a test to a property on its own. */
