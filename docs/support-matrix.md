@@ -42,4 +42,4 @@ What works in the current build. Planned items are listed separately and are not
 
 ## Planned
 
-MCP tools for planning and applying approved improvements, npm publication under a final package name (ADR 0008).
+npm publication under a final package name (ADR 0008).

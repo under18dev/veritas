@@ -76,7 +76,7 @@ Stop and ask the user when any of these occur:
 
 ## MCP
 
-`veritas-mcp --root <project>` serves `discover_specs`, `list_properties`, `analyze_tests`, `run_mutation`, `verify_property`, `get_evidence` and `get_run_status`. They write only under `.veritas/` and never change project sources.
+`veritas-mcp --root <project>` serves `discover_specs`, `list_properties`, `analyze_tests`, `run_mutation`, `verify_property`, `get_evidence`, `get_run_status` and `plan_improvement`. They write only under `.veritas/` and never change project sources. `apply_approved_improvement` exists only when the server is started with `--allow-write`, and needs the plan id and approval token the user reviewed; never call it without the user's explicit approval of that plan.
 
 ## Never
 
