@@ -72,9 +72,29 @@ describe('schema and code collectors', () => {
     writeProjectFile(root, 'src/a.ts', '/** The total must be at least 10. */\nexport function total() {}\n');
     writeProjectFile(root, 'src/b.tsx', '/** The size must be at least 20. */\nexport function size() {}\n');
     const result = await discoverEvidence({ root, config: config() });
-    expect(result.sources.filter((s) => s.kind === 'code').map((s) => s.locator).sort()).toEqual([
-      'src/a.ts',
-      'src/b.tsx',
-    ]);
+    expect(
+      result.sources
+        .filter((s) => s.kind === 'code')
+        .map((s) => s.locator)
+        .sort(),
+    ).toEqual(['src/a.ts', 'src/b.tsx']);
+  });
+
+  it('records the release a changelog statement belongs to, and ends it at a heading that names no version', async () => {
+    const root = tempProject('changelog');
+    writeProjectFile(
+      root,
+      'CHANGELOG.md',
+      '# Changelog\n\n## [2.0.0] - 2026-05-01\n\nA client may send at most 150 requests per minute.\n\n## Rates for 2.5 kg parcels\n\nParcels need at least 3 stamps.\n\n## v1.4\n\nA client may send at most 100 requests per minute.\n',
+    );
+    const result = await discoverEvidence({ root, config: config() });
+    const byValue = new Map(
+      result.statements
+        .filter((s) => s.relation.kind === 'threshold')
+        .map((s) => [s.relation.kind === 'threshold' ? s.relation.value : '', s.version]),
+    );
+    expect(byValue.get('150')).toBe('2.0.0');
+    expect(byValue.get('3')).toBeUndefined();
+    expect(byValue.get('100')).toBe('1.4');
   });
 });

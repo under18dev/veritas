@@ -179,6 +179,40 @@ describe('registry from documentation and code', () => {
     }
   });
 
+  it('suggests the statement from the newer release when two release notes disagree', () => {
+    const changelog = source('S-changelog', 'docs', 'CHANGELOG.md');
+    const statement = (id: string, line: number, value: string, version: string): StatementInput => ({
+      ...threshold(
+        id,
+        'S-changelog',
+        line,
+        `A client may send at most ${value} requests per minute.`,
+        'requests',
+        '<=',
+        value,
+        'a client may send',
+      ),
+      version,
+    });
+    const discovery = (versions: [string, string]): DiscoveryInput => ({
+      sources: [changelog],
+      statements: [statement('ST-old', 9, '100', versions[0]), statement('ST-new', 3, '150', versions[1])],
+      provenance: [],
+    });
+    const { registry } = registryFor('conflicting-docs', discovery(['1.9.0', '1.10.0']));
+    const newer = registry.properties.find((p) => p.statementIds.includes('ST-new'));
+    expect(registry.conflicts).toHaveLength(1);
+    expect(registry.conflicts[0]?.preferredPropertyId).toBe(newer?.id);
+    expect(registry.conflicts[0]?.rationale.join('\n')).toMatch(/version 1\.10\.0/);
+    expect(newer?.status).toBe('conflicted');
+    // The same two statements without release information give no preference.
+    const unversioned = registryFor('conflicting-docs', {
+      ...discovery(['1.0', '1.0']),
+      statements: discovery(['1.0', '1.0']).statements.map(({ version: _, ...rest }) => rest),
+    });
+    expect(unversioned.registry.conflicts[0]?.preferredPropertyId).toBeNull();
+  });
+
   it('marks README and Issue as conflicted, ignores the stale document and only suggests a reading', () => {
     const { registry } = registryFor('conflicting-docs', conflictDiscovery);
     const readme = registry.properties.find((p) => p.statementIds.includes('ST-r'));

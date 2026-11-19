@@ -124,6 +124,17 @@ export function implementationAgreement(
   return near ? 'disagree' : 'unknown';
 }
 
+/** Compare dotted numeric versions (`2.10.0` > `2.9`); missing parts count as 0. */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
 function sourceRank(source: EvidenceSource | undefined, statement: StatementInput): number {
   if (!source) return 0;
   let rank = {
@@ -297,17 +308,18 @@ export function buildRegistry(options: BuildOptions): Registry {
         g.property.conflictsWith = ids.filter((id) => id !== g.property.id);
         g.property.confidence.agreement = 'disagree';
       }
-      const ranked = [...live].sort(
-        (a, b) =>
-          sourceRank(sources.get(b.statement.sourceId), b.statement) -
-          sourceRank(sources.get(a.statement.sourceId), a.statement),
-      );
+      // A statement from a newer release outranks one from an older release of the same project.
+      const versions = live.map((g) => g.statement.version).filter((v): v is string => v !== undefined);
+      const newest = versions.length ? versions.reduce((a, b) => (compareVersions(a, b) >= 0 ? a : b)) : null;
+      const rankOf = (g: (typeof live)[number]) => {
+        const base = sourceRank(sources.get(g.statement.sourceId), g.statement);
+        const v = g.statement.version;
+        if (!v || !newest || versions.length < 2) return base;
+        return base + (compareVersions(v, newest) === 0 ? 2 : -2);
+      };
+      const ranked = [...live].sort((a, b) => rankOf(b) - rankOf(a));
       const [top, next] = ranked;
-      const tie =
-        top &&
-        next &&
-        sourceRank(sources.get(top.statement.sourceId), top.statement) ===
-          sourceRank(sources.get(next.statement.sourceId), next.statement);
+      const tie = top && next && rankOf(top) === rankOf(next);
       const [symbol, param] = [key.slice(0, key.lastIndexOf('#')), key.slice(key.lastIndexOf('#') + 1)];
       conflicts.push({
         id: stableId('CF', ids.sort()),
@@ -318,11 +330,11 @@ export function buildRegistry(options: BuildOptions): Registry {
         rationale: [
           ...live.map(
             (g) =>
-              `${g.property.citations[0]}: ${g.property.formalExpression} (${sources.get(g.statement.sourceId)?.kind ?? 'unknown'})`,
+              `${g.property.citations[0]}: ${g.property.formalExpression} (${sources.get(g.statement.sourceId)?.kind ?? 'unknown'}${g.statement.version ? `, version ${g.statement.version}` : ''})`,
           ),
           tie || !top
             ? 'no source is clearly preferable; a human decision is required'
-            : `suggested: ${top.property.citations[0]} (higher source rank or an explicit decision/outdated marker); not applied without approval`,
+            : `suggested: ${top.property.citations[0]} (newer release, higher source rank or an explicit decision/outdated marker); not applied without approval`,
           ...group
             .filter((g) => g.stale)
             .map((g) => `${g.property.citations[0]} is marked stale and was not counted`),

@@ -31,6 +31,8 @@ export const NormativeStatement = z.object({
   subjects: z.array(z.string()),
   relation: z.union([ThresholdRelation, FreeTextRelation]),
   flags: z.array(z.string()),
+  /** Release the statement belongs to, from the nearest preceding version heading (`## 2.1.0`, `## [v2.1]`). */
+  version: z.string().optional(),
 });
 export type NormativeStatement = z.infer<typeof NormativeStatement>;
 const Provenance = z.object({
@@ -104,8 +106,31 @@ function modality(text: string): NormativeStatement['modality'] {
   if (/\bmay\b|してもよい/i.test(text)) return 'may';
   return 'descriptive';
 }
+/**
+ * The release each offset belongs to: the nearest preceding version heading (`## 2.1.0`, `## [v2.1] - date`),
+ * until a heading of the same or a higher level that names no version ends that section.
+ */
+function versionAt(text: string): (offset: number) => string | undefined {
+  // Only headings that are a version (optionally "Version"/"Release", then a date or note), not `## 2.5 kg parcels`.
+  const version = /^(?:(?:version|release)[ \t]+)?\[?v?(\d+\.\d+(?:\.\d+)?)\]?(?=[ \t]*(?:$|[-–—(]))/i;
+  const headings = [...text.matchAll(/^(#{1,6})[ \t]+(.*)$/gm)].map((m) => ({
+    at: m.index ?? 0,
+    level: m[1]?.length ?? 1,
+    version: version.exec((m[2] ?? '').trim())?.[1],
+  }));
+  return (offset) => {
+    let current: { level: number; version: string } | undefined;
+    for (const h of headings) {
+      if (h.at > offset) break;
+      if (h.version) current = { level: h.level, version: h.version };
+      else if (current && h.level <= current.level) current = undefined;
+    }
+    return current?.version;
+  };
+}
 function extract(text: string, sourceId: string, stale: boolean): NormativeStatement[] {
   const output: NormativeStatement[] = [];
+  const releaseOf = versionAt(text);
   for (const match of text.matchAll(/[^。.!?\n]+(?:[。.!?]+|$)/g)) {
     const raw = match[0].trim();
     if (!raw) continue;
@@ -139,6 +164,7 @@ function extract(text: string, sourceId: string, stale: boolean): NormativeState
       continue;
     const start = match.index ?? 0;
     const range = lineRange(text, start, start + match[0].length);
+    const version = releaseOf(start);
     output.push({
       id: stableId('stmt', { sourceId, range, quote, relation }),
       sourceId,
@@ -148,6 +174,7 @@ function extract(text: string, sourceId: string, stale: boolean): NormativeState
       subjects: subjects(raw),
       relation,
       flags,
+      ...(version ? { version } : {}),
     });
   }
   return output;

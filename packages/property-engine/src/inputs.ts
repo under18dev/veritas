@@ -20,6 +20,7 @@ export const StatementInput = z.object({
   subjects: z.array(z.string()),
   relation: z.union([ThresholdRelation, z.object({ kind: z.literal('free_text') })]),
   flags: z.array(z.string()),
+  version: z.string().optional(),
 });
 export type StatementInput = z.infer<typeof StatementInput>;
 
