@@ -9,7 +9,7 @@
       "!schemas",
       "!packages/*/schemas",
       "!tasks",
-      "!fixtures/**/.veritas"
+      "!fixtures"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },

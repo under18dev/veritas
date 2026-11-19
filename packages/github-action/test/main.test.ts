@@ -186,7 +186,9 @@ describe('main end to end', { timeout: 300_000 }, () => {
     expect(values.verdict).not.toBe('pass');
     const reportPath = values['report-path'];
     expect(reportPath).toBeTruthy();
-    const run = JSON.parse(readFileSync(path.join(project, reportPath as string), 'utf8')) as { policyReasons?: string[] };
+    const run = JSON.parse(readFileSync(path.join(project, reportPath as string), 'utf8')) as {
+      policyReasons?: string[];
+    };
     if (run.policyReasons?.some((reason) => /timeout|unknown/i.test(reason)))
       expect(values.verdict).not.toBe('pass');
     expect(code).not.toBe(0);
