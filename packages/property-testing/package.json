@@ -1,0 +1,25 @@
+{
+  "name": "@veritas/property-testing",
+  "version": "0.0.0",
+  "description": "Sandboxed property-based testing (fast-check) for Veritas properties",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@veritas/core": "workspace:*",
+    "@veritas/formal-core": "workspace:*",
+    "fast-check": "4.10.3",
+    "zod": "4.6.7"
+  }
+}

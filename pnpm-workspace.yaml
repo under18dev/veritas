@@ -8,3 +8,4 @@ minimumReleaseAgeExclude:
   - "@mizchi/mutator-typecheck@0.4.5"
   - "@mizchi/mutator-vitest@0.4.5"
   - "@mizchi/mutator@0.4.5"
+  - fast-check@4.10.3
