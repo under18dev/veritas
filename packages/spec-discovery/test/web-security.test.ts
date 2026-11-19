@@ -165,4 +165,26 @@ describe('web crawl limits', () => {
     expect(requested.length).toBeLessThan(3);
     expect(result.skipped).toContainEqual({ source: 'web', reason: 'time budget exhausted' });
   });
+
+  it('counts DNS lookups against the crawl deadline', async () => {
+    const root = tempProject('web-dns');
+    seed(root, 'https://docs.example.test/a');
+    let fetched = false;
+    const started = Date.now();
+    const result = await discoverEvidence({
+      root,
+      lookup: () => new Promise(() => {}),
+      config: webConfig({ maxDepth: 0, maxDurationMs: 50 }),
+      fetch: async () => {
+        fetched = true;
+        return new Response('<p>page</p>');
+      },
+    });
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(fetched).toBe(false);
+    expect(result.skipped).toContainEqual({
+      source: 'https://docs.example.test/a',
+      reason: 'DNS lookup timed out',
+    });
+  });
 });

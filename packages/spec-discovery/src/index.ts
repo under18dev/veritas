@@ -509,7 +509,12 @@ async function collectWeb(
       skipped.push({ source: next.url, reason: 'URL refused by protocol, SSRF, or allowlist policy' });
       continue;
     }
-    const dnsRefusal = await refuseByDns(url.hostname, lookup);
+    // DNS counts against the crawl deadline too: a resolver that never answers must not stall discovery.
+    const dnsRefusal = await withDeadline(
+      refuseByDns(url.hostname, lookup),
+      deadline,
+      'DNS lookup timed out',
+    );
     if (dnsRefusal) {
       skipped.push({ source: next.url, reason: dnsRefusal });
       continue;
@@ -528,7 +533,12 @@ async function collectWeb(
         (response.status >= 300 && response.status < 400) ||
         !['http:', 'https:'].includes(destination.protocol) ||
         !hostAllowed(destination.hostname, config.sources.web.allowDomains) ||
-        (destination.hostname !== url.hostname && (await refuseByDns(destination.hostname, lookup)) !== null)
+        (destination.hostname !== url.hostname &&
+          (await withDeadline(
+            refuseByDns(destination.hostname, lookup),
+            deadline,
+            'DNS lookup timed out',
+          )) !== null)
       ) {
         skipped.push({ source: next.url, reason: 'redirect refused by allowlist or SSRF policy' });
         continue;
@@ -572,6 +582,19 @@ async function collectWeb(
     skipped.push({ source: 'web', reason: 'character budget exhausted' });
   return requests;
 }
+/** The result of `refusal`, or `reason` when the crawl deadline passes before it settles. */
+function withDeadline(
+  refusal: Promise<string | null>,
+  deadline: number,
+  reason: string,
+): Promise<string | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<string>((resolve) => {
+    timer = setTimeout(() => resolve(reason), Math.max(0, deadline - Date.now()));
+  });
+  return Promise.race([refusal, timeout]).finally(() => clearTimeout(timer));
+}
+
 /** Upper bound for one GitHub issues response (50 issues with long bodies). */
 const GITHUB_MAX_BYTES = 5_000_000;
 
