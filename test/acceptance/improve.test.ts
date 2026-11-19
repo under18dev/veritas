@@ -148,7 +148,7 @@ describe('improve on agent-loop', () => {
   });
 
   it(
-    'rolls back completely when an added test fails in the isolated workspace (AT-15)',
+    'rolls back completely when an added test fails in the isolated workspace',
     async () => {
       const hash = projectHash(dir);
       const attempt = await applyImprovement({
@@ -175,7 +175,7 @@ describe('improve on agent-loop', () => {
   );
 
   it(
-    'applies with the token, kills the surviving mutant and adds only the new test file (AT-14)',
+    'applies with the token, kills the surviving mutant and adds only the new test file',
     () => {
       const result = runCli(
         ['improve', '--apply', '--plan', plan.planId, '--approve', plan.approvalToken as string, '--json'],
@@ -210,7 +210,7 @@ describe('improve on agent-loop', () => {
 
 describe('improve stops instead of adapting expectations', () => {
   it(
-    'reports discountAmount(1000) === 100 as a spec violation candidate, never as a patch (AT-13)',
+    'reports discountAmount(1000) === 100 as a spec violation candidate, never as a patch',
     () => {
       const dir = analyzed('discount-boundary');
       const status = gitStatus(dir);
@@ -241,7 +241,7 @@ describe('improve stops instead of adapting expectations', () => {
   );
 
   it(
-    'stops with needs_spec_decision and no plan on conflicting documents (AT-16)',
+    'stops with needs_spec_decision and no plan on conflicting documents',
     () => {
       const dir = analyzed('conflicting-docs');
       const status = gitStatus(dir);

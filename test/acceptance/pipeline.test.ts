@@ -64,6 +64,8 @@ describe('discount-boundary end to end', () => {
         counterexample?: Record<string, string>;
         semanticValidation: string;
         solverInputArtifact?: string;
+        assumptions: string[];
+        scope: { params?: { domain?: unknown }[] };
       }[]
     >(dir, run.runId, 'claims.json');
     const conformance = claims.find((c) => c.kind === 'conformance' && c.counterexample);
@@ -77,7 +79,15 @@ describe('discount-boundary end to end', () => {
       'utf8',
     );
     expect(smt).toContain('(check-sat)');
-    expect(claims.some((c) => c.kind === 'conformance' && c.status === 'proven_within_model')).toBe(true);
+    const proven = claims.find((c) => c.kind === 'conformance' && c.status === 'proven_within_model');
+    expect(proven).toBeDefined();
+    // An unsat result keeps its solver input, the bounded domain and the assumptions it depends on.
+    expect(
+      readFileSync(path.join(dir, '.veritas/runs', run.runId, proven?.solverInputArtifact as string), 'utf8'),
+    ).toContain('(check-sat)');
+    expect(proven?.scope.params?.[0]?.domain).toEqual({ min: '-10000', max: '10000' });
+    expect(proven?.assumptions.join(' ')).toMatch(/restricted to the stated domains/);
+    expect(run.findings.some((f) => f.kind === 'spec_conflict')).toBe(false);
 
     const tests = readRunArtifact<{ tests: { id: string; name: string }[] }>(
       dir,
