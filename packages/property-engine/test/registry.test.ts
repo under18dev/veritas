@@ -188,6 +188,7 @@ describe('registry from documentation and code', () => {
       statements: [
         at('ST-count', 'Shipping is free when the item count is 3 or more.', 'count', '3'),
         at('ST-plural', 'Shipping is free for 3 or more items.', 'item', '3'),
+        at('ST-at-least', 'Shipping is free with at least 3 items.', 'shipping', '3'),
         at('ST-element', 'Shipping is free when the second item is at least 3.', 'item', '3'),
       ],
       provenance: [],
@@ -197,6 +198,9 @@ describe('registry from documentation and code', () => {
       'items.length',
     );
     expect(registry.properties.find((p) => p.statementIds.includes('ST-plural'))?.predicate?.param).toBe(
+      'items.length',
+    );
+    expect(registry.properties.find((p) => p.statementIds.includes('ST-at-least'))?.predicate?.param).toBe(
       'items.length',
     );
     expect(mapped('ST-element')?.status).toBe('unmapped');

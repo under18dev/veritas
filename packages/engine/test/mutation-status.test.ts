@@ -93,5 +93,24 @@ describe('literalInput', () => {
     expect(literalInput(params, ['{"total":"10","vip":true}', '["1","2","3"]'], domain, jsParams)).toBeNull();
     expect(literalInput(params, ['{"total":"10"}', '[]'], domain, jsParams)).toBeNull();
     expect(literalInput(params, ['{"total":"1000","vip":true}', '[]'], domain, jsParams)).toBeNull();
+    // An array length is checked against the slots, not against the integer domain of the elements.
+    const narrow = (min: string, max: string) =>
+      params.map((p) => (p.sort === 'int' ? { ...p, domain: { min, max } } : p));
+    expect(
+      literalInput(
+        narrow('0', '1'),
+        ['{"total":"1","vip":true}', '["1","0"]'],
+        { min: '0', max: '1' },
+        jsParams,
+      ),
+    ).toMatchObject({ xs__length: '2' });
+    expect(
+      literalInput(
+        narrow('1', '100'),
+        ['{"total":"5","vip":true}', '[]'],
+        { min: '1', max: '100' },
+        jsParams,
+      ),
+    ).toMatchObject({ xs__length: '0', xs__0: '1', xs__1: '1' });
   });
 });

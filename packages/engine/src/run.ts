@@ -1030,7 +1030,7 @@ export function literalInput(
 ): Record<string, string | boolean> | null {
   const sortOf = new Map(params.map((p) => [p.name, p.sort]));
   const input: Record<string, string | boolean> = {};
-  const set = (param: string, value: unknown): boolean => {
+  const set = (param: string, value: unknown, range = domain): boolean => {
     const sort = sortOf.get(param);
     if (sort === 'bool') {
       if (typeof value !== 'boolean') return false;
@@ -1039,7 +1039,7 @@ export function literalInput(
     }
     if (sort !== 'int' || typeof value !== 'string' || !/^-?\d+$/.test(value)) return false;
     const n = BigInt(value);
-    if (n < BigInt(domain.min) || n > BigInt(domain.max)) return false;
+    if (n < BigInt(range.min) || n > BigInt(range.max)) return false;
     input[param] = n.toString();
     return true;
   };
@@ -1067,7 +1067,9 @@ export function literalInput(
       for (const f of shape.fields) if (!set(f.param, record[f.key])) return null;
     } else {
       if (!Array.isArray(value) || value.length > shape.elements.length) return null;
-      if (!set(shape.length, String(value.length))) return null;
+      // The length ranges over [0, number of slots], not over the integer domain of the elements.
+      if (!set(shape.length, String(value.length), { min: '0', max: String(shape.elements.length) }))
+        return null;
       // Slots beyond the length do not affect the result in the model; give them a fixed value.
       for (const [k, param] of shape.elements.entries())
         if (!set(param, k < value.length ? value[k] : sortOf.get(param) === 'bool' ? false : domain.min))

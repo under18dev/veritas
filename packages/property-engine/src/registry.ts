@@ -72,12 +72,13 @@ interface Target {
  * the number right before the array's noun ("3 or more items", "at least 2 values") without an ordinal
  * ("the second value" is about one element).
  */
-function lengthStatement(quote: string, quantityWords: string[], arrayWords: string[]): boolean {
+function lengthStatement(quote: string, arrayWords: string[]): boolean {
   if (/\b(?:first|second|third|fourth|fifth|last|\d+(?:st|nd|rd|th))\s+\w+/i.test(quote)) return false;
   if (/\b(?:count|number of|length|size|how many)\b/i.test(quote)) return true;
-  const noun = arrayWords.find((w) => quantityWords.includes(w));
-  if (!noun) return false;
-  return new RegExp(`\\d[\\d,]*\\s+(?:or\\s+(?:more|fewer|less)\\s+)?${noun}`, 'i').test(quote);
+  // "3 or more items", "at least 3 items", "up to 5 values": a number right before the array's noun.
+  return arrayWords.some((noun) =>
+    new RegExp(`\\d[\\d,]*\\s+(?:or\\s+(?:more|fewer|less)\\s+)?${noun}`, 'i').test(quote),
+  );
 }
 
 /** Pick the function and parameter a threshold statement talks about, or null when nothing fits clearly. */
@@ -107,7 +108,7 @@ function mapStatement(
       // never about one element ("the second value") and never on the function name alone.
       if (p.name.endsWith('.length')) {
         const arrayWords = words(p.name.slice(0, -'.length'.length));
-        if (!lengthStatement(statement.quote, quantityWords, arrayWords)) continue;
+        if (!lengthStatement(statement.quote, arrayWords)) continue;
       }
       const paramWords = p.words;
       const paramHit =
