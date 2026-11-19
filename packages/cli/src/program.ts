@@ -62,7 +62,10 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
     program
       .command('discover')
       .description('collect specification evidence')
-      .option('--offline', 'never access the network')
+      .option(
+        '--offline',
+        'Veritas makes no network requests (sources, LLM); project tests still run as with `pnpm test`',
+      )
       .addOption(new Option('--sources <list>', 'comma-separated: local,github,web,all').default('local'))
       .option('--allow-domain <domain...>', 'allow a web domain (also needs sources.web.enabled in config)')
       .option('--max-pages <n>', 'web page budget'),
@@ -114,7 +117,8 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
         'generate fast-check property tests for formalized properties (written under .veritas/generated-tests)',
       )
       .option('--property <id>')
-      .option('--dry-run', 'print instead of writing'),
+      .option('--dry-run', 'print instead of writing')
+      .option('--force', 'replace generated files that were changed since they were written'),
     (o) => testGenerateCommand(o),
   );
   wire(
@@ -155,7 +159,10 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
       .command('run')
       .description('run the full pipeline')
       .addOption(new Option('--profile <profile>').choices(['quick', 'standard', 'deep']).default('standard'))
-      .option('--offline', 'never access the network')
+      .option(
+        '--offline',
+        'Veritas makes no network requests (sources, LLM); project tests still run as with `pnpm test`',
+      )
       .option('--since <ref>')
       .option('--include-proposed', 'also verify properties that are not accepted (experimental)'),
     (o) => runCommandCli(o),

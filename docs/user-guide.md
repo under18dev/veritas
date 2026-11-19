@@ -17,7 +17,7 @@ veritas run --profile standard   # + mutation testing
 veritas run --profile deep       # + property-based tests and Z3 checks
 ```
 
-Add `--include-proposed` to check properties that nobody has accepted yet. Their results stay `suspected`. Add `--offline` to guarantee that no network source is used.
+Add `--include-proposed` to check properties that nobody has accepted yet. Their results stay `suspected`. Add `--offline` to guarantee that Veritas itself makes no network request (no web or GitHub sources, no LLM). Mutation testing and `improve` still run your own tests, as `pnpm test` would; to keep those off the network as well, run Veritas where there is no network, for example in a container started with `--network none`.
 
 Results go to `.veritas/runs/<run-id>/`: `evidence.json`, `properties.json`, `test-map.json`, `mutation.json`, `pbt.json`, `claims.json` (with `proofs/` holding SMT and Lean inputs and outputs), `assessments.json`, `findings.json`, `run.json`, and `report.{json,md,html,sarif}`.
 
