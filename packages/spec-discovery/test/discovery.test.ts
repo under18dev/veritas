@@ -4,6 +4,7 @@ import path from 'node:path';
 import { VeritasConfig } from '@veritas/core';
 import { describe, expect, it } from 'vitest';
 import { discoverEvidence } from '../src/index.js';
+import { publicLookup } from './helpers.js';
 
 const repo = path.resolve(import.meta.dirname, '../../../');
 const fixture = (name: string) => {
@@ -112,6 +113,7 @@ describe('discoverEvidence', () => {
         },
       }),
       fetch: fetcher,
+      lookup: publicLookup,
     });
     expect(calls).toBe(1);
     expect(result.networkRequests).toBe(1);

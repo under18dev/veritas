@@ -1,3 +1,4 @@
+import { lookup as dnsLookup } from 'node:dns/promises';
 import { readdirSync, readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import path from 'node:path';
@@ -313,29 +314,130 @@ function hostAllowed(host: string, domains: string[]): boolean {
   const lower = host.toLowerCase();
   return domains.some((d) => lower === d.toLowerCase() || lower.endsWith(`.${d.toLowerCase()}`));
 }
-function unsafeHost(host: string): boolean {
-  if (!isIP(host)) return false;
-  const normalized = host.toLowerCase();
-  if (
-    normalized === '127.0.0.1' ||
-    normalized === '::1' ||
-    normalized === '0.0.0.0' ||
-    normalized.startsWith('10.') ||
-    normalized.startsWith('192.168.') ||
-    normalized.startsWith('169.254.') ||
-    normalized.startsWith('fc') ||
-    normalized.startsWith('fd') ||
-    normalized.startsWith('fe80:')
-  )
+/** Resolves a hostname to every address it maps to; injectable so tests never touch DNS. */
+export type HostLookup = (hostname: string) => Promise<Array<{ address: string; family: number }>>;
+const defaultLookup: HostLookup = (hostname) => dnsLookup(hostname, { all: true, verbatim: true });
+
+function unsafeIPv4(octets: number[]): boolean {
+  const [a = 0, b = 0, c = 0] = octets;
+  return (
+    a === 0 || // "this" network, includes 0.0.0.0
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) || // carrier-grade NAT
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 192 && b === 0 && c === 0) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    a >= 224 // multicast, reserved, broadcast
+  );
+}
+/** Parses inet_aton-style IPv4 forms (decimal, octal, hex, 1-4 parts). */
+function parseLegacyIPv4(host: string): number[] | null {
+  if (!/^(?:0x[0-9a-f]*|\d+)(?:\.(?:0x[0-9a-f]*|\d+)){0,3}\.?$/i.test(host)) return null;
+  const parts = host.replace(/\.$/, '').split('.');
+  const values: number[] = [];
+  for (const part of parts) {
+    const value = /^0x/i.test(part)
+      ? Number.parseInt(part.slice(2) || '0', 16)
+      : /^0\d/.test(part)
+        ? /^[0-7]+$/.test(part)
+          ? Number.parseInt(part, 8)
+          : Number.NaN
+        : Number(part);
+    if (!Number.isFinite(value)) return null;
+    values.push(value);
+  }
+  const last = values.pop() ?? 0;
+  if (values.some((v) => v > 255) || last >= 256 ** (4 - values.length)) return null;
+  const octets = [...values];
+  for (let i = 3 - values.length; i >= 0; i--) octets.push(Math.floor(last / 256 ** i) % 256);
+  return octets;
+}
+function parseIPv6(host: string): number[] | null {
+  let text = host;
+  const v4 = /(\d+\.\d+\.\d+\.\d+)$/.exec(text);
+  let tail: number[] = [];
+  if (v4?.[1]) {
+    const octets = v4[1].split('.').map(Number);
+    if (octets.some((o) => o > 255)) return null;
+    tail = [((octets[0] ?? 0) << 8) | (octets[1] ?? 0), ((octets[2] ?? 0) << 8) | (octets[3] ?? 0)];
+    text = text.slice(0, -v4[1].length);
+    if (!text.endsWith('::') && text.endsWith(':')) text = text.slice(0, -1);
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const parse = (s: string) => (s ? s.split(':').map((g) => Number.parseInt(g, 16)) : []);
+  const head = parse(halves[0] ?? '');
+  const rest = halves.length === 2 ? parse(halves[1] ?? '') : [];
+  const fill = 8 - tail.length - head.length - rest.length;
+  if (fill < 0 || (halves.length === 1 && fill !== 0)) return null;
+  const groups = [...head, ...Array<number>(halves.length === 2 ? fill : 0).fill(0), ...rest, ...tail];
+  return groups.length === 8 && groups.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff)
+    ? groups
+    : null;
+}
+function unsafeIPv6(groups: number[]): boolean {
+  const [g0 = 0, g1 = 0, g2 = 0, g3 = 0, g4 = 0, g5 = 0, g6 = 0, g7 = 0] = groups;
+  const embedded = [g6 >> 8, g6 & 0xff, g7 >> 8, g7 & 0xff];
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0) {
+    // ::, ::1, IPv4-compatible (::a.b.c.d) and IPv4-mapped (::ffff:a.b.c.d): all refused.
+    if (g5 === 0 || g5 === 0xffff) return true;
+  }
+  if (g0 === 0x64 && g1 === 0xff9b) return unsafeIPv4(embedded); // NAT64
+  if (g0 === 0x2002) return unsafeIPv4([g1 >> 8, g1 & 0xff, g2 >> 8, g2 & 0xff]); // 6to4
+  return (
+    (g0 & 0xfe00) === 0xfc00 || // unique local
+    (g0 & 0xffc0) === 0xfe80 || // link-local
+    (g0 & 0xffc0) === 0xfec0 || // site-local (deprecated)
+    (g0 & 0xff00) === 0xff00 // multicast
+  );
+}
+/**
+ * True when a host (as written in a URL, with or without IPv6 brackets) is a loopback, private,
+ * link-local, unique-local, unspecified, multicast or otherwise reserved address, in any literal
+ * spelling, or a `localhost` name. Unparsable numeric hosts are treated as unsafe.
+ */
+export function isUnsafeHost(host: string): boolean {
+  const normalized = host
+    .toLowerCase()
+    .replace(/^\[(.*)\]$/, '$1')
+    .replace(/%.*$/, '');
+  if (normalized === 'localhost' || normalized.endsWith('.localhost') || normalized === 'localhost.')
     return true;
-  const p = host.split('.').map(Number);
-  return p.length === 4 && p[0] === 172 && (p[1] ?? 0) >= 16 && (p[1] ?? 0) <= 31;
+  if (normalized.includes(':')) {
+    const groups = parseIPv6(normalized);
+    return groups === null || unsafeIPv6(groups);
+  }
+  if (/^(?:0x[0-9a-f]*|\d+)(?:\.(?:0x[0-9a-f]*|\d+))*\.?$/i.test(normalized)) {
+    const octets = parseLegacyIPv4(normalized);
+    return octets === null || unsafeIPv4(octets);
+  }
+  return false;
+}
+/** Resolves `host` and returns a refusal reason, or null when every address is public. */
+async function refuseByDns(host: string, lookup: HostLookup): Promise<string | null> {
+  if (isUnsafeHost(host)) return 'URL refused by protocol, SSRF, or allowlist policy';
+  const bare = host.replace(/^\[(.*)\]$/, '$1');
+  if (isIP(bare)) return null;
+  let addresses: Array<{ address: string }>;
+  try {
+    addresses = await lookup(bare);
+  } catch {
+    return 'DNS lookup failed';
+  }
+  if (addresses.length === 0) return 'DNS lookup failed';
+  if (addresses.some((entry) => isUnsafeHost(entry.address)))
+    return 'URL refused: host resolves to a private, loopback, or reserved address';
+  return null;
 }
 async function collectWeb(
   inputs: SourceInput[],
   config: VeritasConfig,
   offline: boolean,
   fetcher: typeof fetch,
+  lookup: HostLookup,
   skipped: DiscoveryResult['skipped'],
 ): Promise<number> {
   if (!config.sources.web.enabled) {
@@ -366,10 +468,15 @@ async function collectWeb(
     }
     if (
       !['http:', 'https:'].includes(url.protocol) ||
-      unsafeHost(url.hostname) ||
+      isUnsafeHost(url.hostname) ||
       !hostAllowed(url.hostname, config.sources.web.allowDomains)
     ) {
       skipped.push({ source: next.url, reason: 'URL refused by protocol, SSRF, or allowlist policy' });
+      continue;
+    }
+    const dnsRefusal = await refuseByDns(url.hostname, lookup);
+    if (dnsRefusal) {
+      skipped.push({ source: next.url, reason: dnsRefusal });
       continue;
     }
     requests++;
@@ -381,8 +488,9 @@ async function collectWeb(
       const destination = response.url ? new URL(response.url) : url;
       if (
         (response.status >= 300 && response.status < 400) ||
+        !['http:', 'https:'].includes(destination.protocol) ||
         !hostAllowed(destination.hostname, config.sources.web.allowDomains) ||
-        unsafeHost(destination.hostname)
+        (destination.hostname !== url.hostname && (await refuseByDns(destination.hostname, lookup)) !== null)
       ) {
         skipped.push({ source: next.url, reason: 'redirect refused by allowlist or SSRF policy' });
         continue;
@@ -428,6 +536,8 @@ export async function discoverEvidence(options: {
   sources?: ('local' | 'github' | 'web')[];
   offline?: boolean;
   fetch?: typeof fetch;
+  /** DNS resolver used to refuse hosts resolving to private addresses; default `dns.promises.lookup`. */
+  lookup?: HostLookup;
   now?: () => Date;
 }): Promise<DiscoveryResult> {
   const capturedAt = (options.now ?? (() => new Date()))().toISOString();
@@ -450,6 +560,8 @@ export async function discoverEvidence(options: {
     else {
       const repo = options.config.sources.github.repo;
       try {
+        // Counted before the call so failed and timed-out requests are included.
+        networkRequests++;
         const response = await (options.fetch ?? globalThis.fetch)(
           `https://api.github.com/repos/${repo}/issues?state=all&per_page=50`,
           {
@@ -459,7 +571,6 @@ export async function discoverEvidence(options: {
             },
           },
         );
-        networkRequests++;
         if (!response.ok) skipped.push({ source: 'github', reason: `fetch failed (${response.status})` });
         else
           for (const item of (await response.json()) as Array<Record<string, unknown>>)
@@ -480,6 +591,7 @@ export async function discoverEvidence(options: {
       options.config,
       options.offline === true,
       options.fetch ?? globalThis.fetch,
+      options.lookup ?? defaultLookup,
       skipped,
     );
   const sources: EvidenceSource[] = [];

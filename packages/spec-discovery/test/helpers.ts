@@ -29,3 +29,5 @@ export function config(input: Record<string, unknown> = {}) {
     },
   });
 }
+/** Stub DNS resolver returning a public address, so web tests never perform real lookups. */
+export const publicLookup = async (_hostname: string) => [{ address: '93.184.216.34', family: 4 }];

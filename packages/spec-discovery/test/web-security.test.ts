@@ -1,7 +1,7 @@
 import { readdirSync, writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { discoverEvidence } from '../src/index.js';
-import { config, tempProject } from './helpers.js';
+import { config, publicLookup, tempProject } from './helpers.js';
 
 const webConfig = (extra: Record<string, unknown> = {}) =>
   config({
@@ -29,6 +29,7 @@ describe('web safety and budgets', () => {
     const requested: string[] = [];
     const result = await discoverEvidence({
       root,
+      lookup: publicLookup,
       config: webConfig(),
       fetch: async (input) => {
         requested.push(String(input));
@@ -45,6 +46,7 @@ describe('web safety and budgets', () => {
     const requested: string[] = [];
     const result = await discoverEvidence({
       root,
+      lookup: publicLookup,
       config: webConfig({ maxDepth: 1, maxChars: 12, timeoutMs: 5 }),
       fetch: async (input, init) => {
         const url = String(input);
@@ -70,6 +72,7 @@ describe('web safety and budgets', () => {
     const depthRequested: string[] = [];
     const depthResult = await discoverEvidence({
       root: depthRoot,
+      lookup: publicLookup,
       config: webConfig({ maxDepth: 1, maxChars: 1000 }),
       fetch: async (input) => {
         const url = String(input);
@@ -89,6 +92,7 @@ describe('web safety and budgets', () => {
     seed(timeoutRoot, 'https://docs.example.test/slow');
     const timeout = await discoverEvidence({
       root: timeoutRoot,
+      lookup: publicLookup,
       config: webConfig({ maxChars: 1000, timeoutMs: 5 }),
       fetch: async (_input, init) => {
         await new Promise<void>((_resolve, reject) =>
