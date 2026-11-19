@@ -29,6 +29,19 @@ export const Property = z.object({
   assumptions: z.array(z.string()),
   inputDomain: z.record(z.string(), z.unknown()),
   formalExpression: z.string().optional(),
+  /** Structured threshold claim, e.g. `total >= 1000`, when the property is a boundary on one parameter. */
+  predicate: z
+    .object({
+      param: z.string(),
+      operator: z.enum(['<', '<=', '>', '>=', '==']),
+      value: z.string().regex(/^-?\d+$/),
+      consequence: z.string(),
+    })
+    .optional(),
+  /** Statements this property was derived from (discovery statement ids). */
+  statementIds: z.array(Id).default([]),
+  /** Short quote locations for the report, e.g. `README.md:7`. */
+  citations: z.array(z.string()).default([]),
   ir: PropertyIR.optional(),
   conflictsWith: z.array(Id),
   supersededBy: Id.optional(),

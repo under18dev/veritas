@@ -280,6 +280,21 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
 
+  packages/property-engine:
+    dependencies:
+      '@veritas/code-intelligence':
+        specifier: workspace:*
+        version: link:../code-intelligence
+      '@veritas/core':
+        specifier: workspace:*
+        version: link:../core
+      '@veritas/formal-core':
+        specifier: workspace:*
+        version: link:../formal-core
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+
   packages/solver-z3:
     dependencies:
       '@veritas/core':

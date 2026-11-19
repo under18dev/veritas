@@ -24,6 +24,9 @@
     },
     {
       "path": "packages/formal-core"
+    },
+    {
+      "path": "packages/property-engine"
     }
   ]
 }

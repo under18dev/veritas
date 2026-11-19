@@ -80,6 +80,53 @@
     "formalExpression": {
       "type": "string"
     },
+    "predicate": {
+      "type": "object",
+      "properties": {
+        "param": {
+          "type": "string"
+        },
+        "operator": {
+          "type": "string",
+          "enum": [
+            "<",
+            "<=",
+            ">",
+            ">=",
+            "=="
+          ]
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^-?\\d+$"
+        },
+        "consequence": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "param",
+        "operator",
+        "value",
+        "consequence"
+      ]
+    },
+    "statementIds": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "citations": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "ir": {
       "type": "object",
       "properties": {
