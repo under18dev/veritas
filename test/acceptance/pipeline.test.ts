@@ -247,6 +247,27 @@ describe('discount-boundary end to end', () => {
   });
 });
 
+describe('a ten-function project', () => {
+  it('finds exactly the two boundary mismatches and no false counterexample', () => {
+    const dir = setup('small-app');
+    const run = json<RunJson>(runCli(['run', '--profile', 'deep', '--include-proposed', '--json'], dir));
+    const mismatches = run.findings.filter((f) => f.kind === 'spec_implementation_mismatch');
+    const claims = readRunArtifact<
+      { kind: string; status: string; propertyId: string; counterexample?: Record<string, string> }[]
+    >(dir, run.runId, 'claims.json').filter((c) => c.kind === 'conformance');
+    const counterexamples = claims
+      .filter((c) => c.status === 'counterexample_found')
+      .map((c) => c.counterexample)
+      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    expect(counterexamples).toEqual([{ distance: '50' }, { points: '300' }]);
+    expect(mismatches).toHaveLength(2);
+    // Rules the extractor cannot read are reported (unsupported or not formalized), never guessed.
+    for (const c of claims)
+      expect(['proven_within_model', 'counterexample_found', 'unsupported']).toContain(c.status);
+    expect(claims.filter((c) => c.status === 'proven_within_model').length).toBeGreaterThanOrEqual(5);
+  });
+});
+
 describe('specification sources', () => {
   it('keeps code-only specifications inferred and unaccepted', () => {
     const dir = setup('no-spec');
