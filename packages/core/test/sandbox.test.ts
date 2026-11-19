@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   callInSandbox,
   runCommand,
+  runProjectTests,
   sandboxBlocksNetwork,
   sandboxRefusal,
   sandboxRuntime,
@@ -159,23 +160,27 @@ describe('runCommand timeouts', () => {
       `import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' });
-writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+// A second descendant in its own process group, detached from this one.
+const detached = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
+detached.unref();
+writeFileSync(${JSON.stringify(pidFile)}, JSON.stringify([child.pid, detached.pid]));
 setInterval(() => {}, 1000);
 `,
     );
     const result = await runCommand(process.execPath, [script], { cwd: dir, timeoutMs: 2_000 });
     expect(result.timedOut).toBe(true);
-    const pid = Number(readFileSync(pidFile, 'utf8'));
-    const alive = () => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    for (let i = 0; i < 50 && alive(); i++) await new Promise((r) => setTimeout(r, 100));
-    expect(alive()).toBe(false);
+    const pids = JSON.parse(readFileSync(pidFile, 'utf8')) as number[];
+    const alive = () =>
+      pids.filter((pid) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+    for (let i = 0; i < 50 && alive().length > 0; i++) await new Promise((r) => setTimeout(r, 100));
+    expect(alive()).toEqual([]);
   }, 30_000);
 });
 
@@ -199,5 +204,24 @@ describe('sandbox runtime', () => {
   it('ignores a VERITAS_SANDBOX_NODE that does not run', () => {
     const runtime = sandboxRuntime({ PATH: '', VERITAS_SANDBOX_NODE: '/no/such/node' }, old);
     expect(runtime.networkIsolated).toBe(false);
+  });
+});
+
+describe('runProjectTests', () => {
+  it("gives project tests an empty temporary home instead of the user's, and removes it afterwards", async () => {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-home-test-')));
+    const result = await runProjectTests(
+      process.execPath,
+      [
+        '-e',
+        'const fs = require("node:fs"); console.log(JSON.stringify({ home: process.env.HOME, files: fs.readdirSync(process.env.HOME), profile: process.env.USERPROFILE }))',
+      ],
+      { cwd: dir, timeoutMs: 20_000 },
+    );
+    const seen = JSON.parse(result.stdout) as { home: string; files: string[]; profile: string };
+    expect(seen.home).not.toBe(process.env.HOME);
+    expect(seen.profile).toBe(seen.home);
+    expect(seen.files).toEqual([]);
+    expect(existsSync(seen.home)).toBe(false);
   });
 });

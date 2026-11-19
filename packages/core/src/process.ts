@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { redact } from './redact.js';
 
@@ -125,19 +126,55 @@ function installExitHook(): void {
   }
 }
 
-/** Kill a child and everything it started: its process group on POSIX, `taskkill /T` on Windows. */
+/** Kill a child and everything it started: its descendants (found by parent pid, including ones that started their
+ * own process group) and its process group on POSIX, `taskkill /T` on Windows. A process that was re-parented
+ * before this runs (a daemon whose parent already exited) can no longer be found. */
 function killTree(child: ChildProcess): void {
   if (child.pid === undefined) return;
   try {
     if (process.platform === 'win32') {
       spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
     } else {
+      for (const pid of descendants(child.pid)) {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {
+          // not a group leader
+        }
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
       process.kill(-child.pid, 'SIGKILL');
     }
   } catch {
     // already gone
   }
   child.kill('SIGKILL');
+}
+
+/** Every process below `root` by parent pid (POSIX `ps`). */
+function descendants(root: number): number[] {
+  const ps = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 5_000 });
+  if (ps.status !== 0) return [];
+  const children = new Map<number, number[]>();
+  for (const line of ps.stdout.split('\n')) {
+    const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+    if (!pid || ppid === undefined || Number.isNaN(ppid)) continue;
+    children.set(ppid, [...(children.get(ppid) ?? []), pid]);
+  }
+  const out: number[] = [];
+  const queue = [root];
+  while (queue.length > 0) {
+    const next = queue.shift() as number;
+    for (const pid of children.get(next) ?? []) {
+      out.push(pid);
+      queue.push(pid);
+    }
+  }
+  return out;
 }
 
 /** How to start a command found on PATH, without a shell. */
@@ -158,7 +195,14 @@ export function resolveCommand(
   options: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv } = {},
 ): ResolvedCommand | null {
   const platform = options.platform ?? process.platform;
-  if (platform !== 'win32' || /[\\/]/.test(name) || path.extname(name)) return { command: name, prefix: [] };
+  if (platform !== 'win32') return { command: name, prefix: [] };
+  const ext = path.extname(name).toLowerCase();
+  if (ext === '.cmd' || ext === '.bat') {
+    // An explicit batch file: only an npm/pnpm shim can be run (through its Node.js script).
+    const script = existsSync(name) ? shimTarget(name) : null;
+    return script ? { command: process.execPath, prefix: [script] } : null;
+  }
+  if (/[\\/]/.test(name) || ext) return { command: name, prefix: [] };
   const env = options.env ?? process.env;
   const dirs = (env.PATH ?? env.Path ?? '').split(';').filter(Boolean);
   for (const dir of dirs) {
@@ -180,4 +224,25 @@ function shimTarget(file: string): string | null {
   if (!match?.[1]) return null;
   const script = path.resolve(path.dirname(file), ...match[1].split('\\'));
   return existsSync(script) ? script : null;
+}
+
+/**
+ * Run the project's own tests (Vitest, mutator) the way `pnpm test` would, with an allowlisted environment
+ * and an empty temporary home directory, so nothing under the user's real home is found through HOME.
+ * This is not a sandbox: test code runs with the user's file and network access (see the threat model).
+ */
+export async function runProjectTests(
+  command: string,
+  args: string[],
+  options: RunCommandOptions,
+): Promise<CommandResult> {
+  const home = mkdtempSync(path.join(tmpdir(), 'veritas-home-'));
+  try {
+    return await runCommand(command, args, {
+      ...options,
+      env: { ...(options.env ?? {}), HOME: home, USERPROFILE: home },
+    });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 }

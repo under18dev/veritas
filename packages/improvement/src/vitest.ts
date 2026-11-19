@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
-import { redact, runCommand } from '@under18dev/veritas-core';
+import { redact, runProjectTests } from '@under18dev/veritas-core';
 
 export type TestStatus = 'passed' | 'failed' | 'skipped';
 
@@ -47,7 +47,7 @@ export async function runVitest(
   const outDir = path.join(cwd, '.veritas', 'improve');
   mkdirSync(outDir, { recursive: true });
   const outFile = path.join(outDir, `vitest-${options.label}.json`);
-  const result = await runCommand(
+  const result = await runProjectTests(
     process.execPath,
     [bin, 'run', '--reporter=json', `--outputFile=${outFile}`],
     {

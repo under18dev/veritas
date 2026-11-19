@@ -61,4 +61,23 @@ describe('resolveCommand', () => {
     expect(resolveCommand('codex', { platform: 'win32', env: { PATH: dir } })).toBeNull();
     expect(resolveCommand('claude', { platform: 'win32', env: { PATH: dir } })).toBeNull();
   });
+
+  it('resolves an explicit shim path and refuses other batch files given by path', () => {
+    const dir = bin();
+    const shim = path.join(dir, 'codex.cmd');
+    writeFileSync(shim, NPM_SHIM);
+    const script = path.join(dir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    mkdirSync(path.dirname(script), { recursive: true });
+    writeFileSync(script, '');
+    expect(resolveCommand(shim, { platform: 'win32', env: { PATH: '' } })).toEqual({
+      command: process.execPath,
+      prefix: [script],
+    });
+    const other = path.join(dir, 'tool.bat');
+    writeFileSync(other, '@echo off\r\ntool.exe %*\r\n');
+    expect(resolveCommand(other, { platform: 'win32', env: { PATH: '' } })).toBeNull();
+    expect(
+      resolveCommand(path.join(dir, 'missing.cmd'), { platform: 'win32', env: { PATH: '' } }),
+    ).toBeNull();
+  });
 });

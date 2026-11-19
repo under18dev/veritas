@@ -5,7 +5,7 @@ import {
   redact,
   redactDeep,
   resolveInsideRoot,
-  runCommand,
+  runProjectTests,
   type VeritasConfig,
   VeritasError,
 } from '@under18dev/veritas-core';
@@ -173,7 +173,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
 
   mkdirSync(reportDir, { recursive: true });
   const command = [process.execPath, detection.binPath, ...args];
-  const run = await runCommand(process.execPath, [detection.binPath, ...args], {
+  const run = await runProjectTests(process.execPath, [detection.binPath, ...args], {
     cwd: options.root,
     timeoutMs: options.config.mutation.timeoutMs,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
