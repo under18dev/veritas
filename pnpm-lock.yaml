@@ -184,6 +184,12 @@ importers:
       '@types/node':
         specifier: 26.6.6
         version: 26.6.6
+      '@under18dev/veritas-core':
+        specifier: workspace:*
+        version: link:packages/core
+      '@under18dev/veritas-engine':
+        specifier: workspace:*
+        version: link:packages/engine
       '@under18dev/veritas-reports':
         specifier: workspace:*
         version: link:packages/reports
@@ -315,6 +321,10 @@ importers:
       zod:
         specifier: 4.6.7
         version: 4.6.7
+    devDependencies:
+      '@under18dev/veritas-test-inventory':
+        specifier: workspace:*
+        version: link:../test-inventory
 
   packages/cli:
     dependencies:
