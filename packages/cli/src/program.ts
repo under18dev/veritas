@@ -109,7 +109,15 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
       .command('mutate')
       .description('run mutation testing and relate mutants to properties')
       .option('--since <ref>')
-      .option('--scope <glob>'),
+      .option('--scope <glob>')
+      .option(
+        '--import <file>',
+        'normalize an existing mutation-testing-elements report instead of running mutator',
+      )
+      .option(
+        '--kill-matrix',
+        'run every covering test for every mutant and report the kill matrix (slower)',
+      ),
     (o) => mutateCommand(o),
   );
   wire(

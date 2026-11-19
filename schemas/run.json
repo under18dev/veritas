@@ -76,6 +76,12 @@
             ]
           }
         },
+        "mutationReport": {
+          "type": "string"
+        },
+        "killMatrix": {
+          "type": "boolean"
+        },
         "offline": {
           "type": "boolean"
         }

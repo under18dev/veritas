@@ -34,7 +34,8 @@ export const MutationRunResult = z.object({
   status: MutationRunStatus,
   /** Human-readable reason for a non-success status (redacted stderr summary, missing binary, ...). */
   detail: z.string().nullable(),
-  backend: z.object({ name: z.literal('mizchi'), version: z.string().nullable() }),
+  /** `mizchi` when Veritas ran mutator; `imported` for an existing mutation-testing-elements report. */
+  backend: z.object({ name: z.enum(['mizchi', 'imported']), version: z.string().nullable() }),
   /** Exact argv: the Node executable, the mutator CLI script and its arguments. Empty when nothing ran. */
   command: z.array(z.string()),
   exitCode: z.number().int().nullable(),

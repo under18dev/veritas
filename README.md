@@ -52,7 +52,7 @@ node /path/to/veritas/packages/cli/dist/bin.js explain <finding-id>
 | `veritas discover [--offline] [--sources local,github,web]`            | Collect specification evidence                                               |
 | `veritas spec list\|show\|accept\|reject\|diff\|export`                | Review properties; `accept`/`reject` record who decided and why              |
 | `veritas analyze [path]`                                               | Map tests to properties and assess them (no project code executed)           |
-| `veritas mutate [--since <ref>] [--scope <glob>]`                      | Mutation testing with [`@mizchi/mutator`](https://github.com/mizchi/mutator) |
+| `veritas mutate [--since <ref>] [--scope <glob>] [--kill-matrix]`      | Mutation testing with [`@mizchi/mutator`](https://github.com/mizchi/mutator) |
 | `veritas test generate [--property <id>] [--dry-run]`                  | Generate fast-check property tests                                           |
 | `veritas prove [--engine z3\|lean] [--property <id>]`                  | Bounded checks with Z3, or kernel-checked proofs with Lean 4                 |
 | `veritas run [--profile quick\|standard\|deep] [--offline]`            | The whole pipeline                                                           |
@@ -61,7 +61,7 @@ node /path/to/veritas/packages/cli/dist/bin.js explain <finding-id>
 | `veritas improve [--dry-run \| --apply --plan <id> --approve <token>]` | Plan test-only improvements; apply an approved plan in an isolated copy      |
 | `veritas replay <run-id>`                                              | Re-run a previous run with the same stages and options, offline              |
 
-`discover --allow-domain <domain>` and `--max-pages <n>` add to and override `sources.web` for one run; web discovery still has to be enabled in the configuration.
+`mutate --import <report.json>` normalizes an existing mutation-testing-elements report (for example from Stryker) instead of running mutator. `discover --allow-domain <domain>` and `--max-pages <n>` add to and override `sources.web` for one run; web discovery still has to be enabled in the configuration.
 
 Exit codes: `0` success, `1` confirmed policy failure, `2` invalid configuration or usage, `3` tool or infrastructure error, `4` inconclusive under the configured policy. With `--json`, stdout contains only JSON, usage errors included; `report --json` cannot be combined with another `--format`.
 

@@ -117,6 +117,12 @@ export function analyzeCommand(opts: Opts, args: string[]): Promise<ExitCode> {
 }
 
 export function mutateCommand(opts: Opts): Promise<ExitCode> {
+  if (opts.import !== undefined && opts.killMatrix)
+    throw new VeritasError(
+      'user',
+      'OPTION_CONFLICT',
+      '--import reads an existing report; --kill-matrix needs a run',
+    );
   const scope = opts.scope === undefined ? undefined : String(opts.scope);
   if (scope && !/[*?[\]{}]/.test(scope) && !existsSync(path.resolve(opts.root, scope)))
     throw new VeritasError('user', 'PATH_NOT_FOUND', `no such file or directory in the project: ${scope}`);
@@ -124,6 +130,8 @@ export function mutateCommand(opts: Opts): Promise<ExitCode> {
     offline: true,
     ...(opts.since ? { since: String(opts.since) } : {}),
     ...(opts.scope ? { scope: [String(opts.scope)] } : {}),
+    ...(typeof opts.import === 'string' ? { mutationReport: opts.import } : {}),
+    ...(opts.killMatrix ? { killMatrix: true } : {}),
   });
 }
 
@@ -164,6 +172,8 @@ export async function replayCommand(opts: Opts, args: string[]): Promise<ExitCod
     ...(run.options?.propertyIds ? { propertyIds: run.options.propertyIds } : {}),
     ...(run.options?.formalEngine ? { formalEngine: run.options.formalEngine } : {}),
     ...(run.options?.sources ? { sources: run.options.sources } : {}),
+    ...(run.options?.mutationReport ? { mutationReport: run.options.mutationReport } : {}),
+    ...(run.options?.killMatrix ? { killMatrix: true } : {}),
     ...(run.scope.paths.length ? { scope: run.scope.paths } : {}),
     ...(run.scope.since ? { since: run.scope.since } : {}),
     allowCodeConfig: Boolean(opts.allowCodeConfig),

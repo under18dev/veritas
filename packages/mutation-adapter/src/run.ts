@@ -256,3 +256,46 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     detail: null,
   });
 }
+
+/**
+ * Normalize an existing mutation-testing-elements (schemaVersion 2) report, such as one written by Stryker,
+ * instead of running mutator. The file must be inside the project. Survivors stay `survived`.
+ */
+export function importMutationResult(options: { root: string; reportFile: string }): MutationRunResult {
+  const file = resolveInsideRoot(options.root, options.reportFile);
+  let json: unknown;
+  try {
+    json = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new VeritasError(
+      'user',
+      'MUTATION_REPORT_UNREADABLE',
+      `cannot read mutation report ${options.reportFile}: ${redact((error as Error).message)}`,
+    );
+  }
+  let mutants: Mutant[];
+  try {
+    mutants = importMutationReport(json, { root: options.root, source: 'mutation-testing-elements' });
+  } catch (error) {
+    throw new VeritasError('user', 'MUTATION_REPORT_INVALID', (error as Error).message);
+  }
+  const framework = (json as { framework?: { name?: unknown; version?: unknown } }).framework;
+  const counts = countMutants(mutants);
+  return {
+    status: 'succeeded',
+    detail: null,
+    backend: { name: 'imported', version: typeof framework?.version === 'string' ? framework.version : null },
+    command: [],
+    exitCode: null,
+    durationMs: 0,
+    mutants,
+    counts,
+    rawReportPath: file,
+    agentReport: null,
+    killMatrix: null,
+    warnings: [
+      `imported ${mutants.length} mutant(s) from ${options.reportFile}${typeof framework?.name === 'string' ? ` (${framework.name})` : ''}; mutation testing was not run`,
+      ...(counts.pending > 0 ? [`${counts.pending} mutant(s) in the report are pending`] : []),
+    ],
+  };
+}

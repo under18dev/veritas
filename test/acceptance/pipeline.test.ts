@@ -325,6 +325,68 @@ describe('discount-boundary end to end', () => {
   });
 });
 
+describe('existing mutation reports', () => {
+  const strykerReport = {
+    schemaVersion: '2.0',
+    thresholds: { high: 80, low: 60 },
+    framework: { name: 'StrykerJS', version: '9.0.0' },
+    files: {
+      'src/pricing.ts': {
+        language: 'typescript',
+        source: '',
+        mutants: [
+          {
+            id: '7',
+            mutatorName: 'EqualityOperator',
+            replacement: 'total >= 1000',
+            location: { start: { line: 3, column: 7 }, end: { line: 3, column: 19 } },
+            status: 'Survived',
+            coveredBy: [],
+          },
+        ],
+      },
+    },
+  };
+
+  it('imports a mutation-testing-elements report instead of running mutator and relates it to properties', () => {
+    const dir = setup('discount-boundary');
+    writeFileSync(path.join(dir, 'reports-mutation.json'), JSON.stringify(strykerReport));
+    const result = runCli(['mutate', '--import', 'reports-mutation.json', '--json'], dir);
+    expect([0, 4], result.stderr).toContain(result.status);
+    const summary = json<RunJson>(result);
+    const mutate = summary.stages.find((s) => s.stage === 'mutate');
+    expect(mutate?.status).toBe('succeeded');
+    expect(mutate?.messages.join('\n')).toMatch(
+      /imported 1 mutant\(s\) from reports-mutation\.json \(StrykerJS\)/,
+    );
+    const mutation = JSON.parse(
+      readFileSync(path.join(dir, '.veritas/runs', summary.runId, 'mutation.json'), 'utf8'),
+    ).data as {
+      backend: { name: string; version: string };
+      mutants: { status: string; relevance: string }[];
+    };
+    expect(mutation.backend).toEqual({ name: 'imported', version: '9.0.0' });
+    expect(mutation.mutants.map((m) => [m.status, m.relevance])).toEqual([['survived', 'spec_relevant']]);
+  });
+
+  it('refuses reports outside the project, invalid reports and --import with --kill-matrix', () => {
+    const dir = setup('discount-boundary');
+    writeFileSync(path.join(dir, 'bad.json'), JSON.stringify({ schemaVersion: '1', files: {} }));
+    writeFileSync(path.join(dir, 'ok.json'), JSON.stringify(strykerReport));
+    const cases: [string[], string][] = [
+      [['--import', '../outside.json'], 'PATH_OUTSIDE_ROOT'],
+      [['--import', 'bad.json'], 'MUTATION_REPORT_INVALID'],
+      [['--import', 'missing.json'], 'MUTATION_REPORT_UNREADABLE'],
+      [['--import', 'ok.json', '--kill-matrix'], 'OPTION_CONFLICT'],
+    ];
+    for (const [args, code] of cases) {
+      const result = runCli(['mutate', ...args, '--json'], dir);
+      expect(result.status, args.join(' ')).toBe(2);
+      expect(json(result), args.join(' ')).toMatchObject({ status: 'error', code });
+    }
+  });
+});
+
 describe('a ten-function project', () => {
   it('finds exactly the two boundary mismatches and no false counterexample', () => {
     const dir = setup('small-app');

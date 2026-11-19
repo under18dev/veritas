@@ -38,7 +38,12 @@ import {
   translateFunction,
 } from '@under18dev/veritas-formal-core';
 import { LlmClient, type LlmProvider } from '@under18dev/veritas-llm';
-import { locateMutator, MutationRunResult, runMutation } from '@under18dev/veritas-mutation-adapter';
+import {
+  importMutationResult,
+  locateMutator,
+  MutationRunResult,
+  runMutation,
+} from '@under18dev/veritas-mutation-adapter';
 import {
   applyApprovals,
   buildRegistry,
@@ -70,6 +75,10 @@ export interface RunOptions {
   localSourcesOnly?: boolean;
   /** Sources to collect; by default local plus the network sources enabled in the configuration. */
   sources?: ('local' | 'github' | 'web')[];
+  /** Import this mutation-testing-elements report (path inside the project) instead of running mutator. */
+  mutationReport?: string;
+  /** Run every covering test for every mutant and report the kill matrix (slower). */
+  killMatrix?: boolean;
   /** Web discovery overrides from the command line: extra allowed domains and a page budget. */
   web?: { allowDomains?: string[]; maxPages?: number };
   since?: string;
@@ -156,6 +165,10 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         'command-line options',
       )
     : config;
+  // An imported mutation report is read before any stage runs, so a bad path or report is a user error.
+  const imported = options.mutationReport
+    ? importMutationResult({ root, reportFile: options.mutationReport })
+    : null;
   const runId = newRunId();
   const startedAt = new Date().toISOString();
   // Scope entries must stay inside the project; `..`, absolute paths elsewhere and escaping symlinks are refused.
@@ -338,8 +351,31 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
     name: 'mutate',
     dependsOn: [],
     run: async () => {
+      if (imported) {
+        const result = imported;
+        mutants = result.mutants;
+        mutationAvailable = true;
+        const { status, undecided } = mutationStageStatus(result, { incremental: Boolean(options.since) });
+        return {
+          status,
+          output: result,
+          usage: { mutants: result.mutants.length },
+          messages: [
+            `counts: ${JSON.stringify(Object.fromEntries(Object.entries(result.counts).filter(([, n]) => n > 0)))}`,
+            ...result.warnings,
+            ...(undecided > 0
+              ? [`${undecided} mutant(s) not decided (pending or unknown); mutation results are partial`]
+              : []),
+          ],
+        };
+      }
       const cacheKey = cache
-        ? mutationCacheKey(cache, root, { configHash, since: options.since, scope: options.scope })
+        ? mutationCacheKey(cache, root, {
+            configHash,
+            since: options.since,
+            scope: options.scope,
+            killMatrix: Boolean(options.killMatrix),
+          })
         : null;
       const cached = cache && cacheKey ? cache.get('mutation', cacheKey, MutationRunResult) : undefined;
       const result =
@@ -351,6 +387,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
           signal,
           ...(options.since ? { since: options.since } : {}),
           ...(options.scope ? { scope: options.scope } : {}),
+          ...(options.killMatrix ? { killMatrix: true } : {}),
         }));
       // Only a complete mutation run is reused; a failed or unsupported one is always retried.
       if (!cached && cache && cacheKey && result.status === 'succeeded')
@@ -698,6 +735,8 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       ...(options.propertyIds ? { propertyIds: options.propertyIds } : {}),
       ...(options.formalEngine ? { formalEngine: options.formalEngine } : {}),
       ...(options.sources ? { sources: options.sources } : {}),
+      ...(options.mutationReport ? { mutationReport: options.mutationReport } : {}),
+      ...(options.killMatrix ? { killMatrix: true } : {}),
       offline: Boolean(options.offline),
     },
     startedAt,
@@ -739,7 +778,12 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
 export function mutationCacheKey(
   cache: ContentCache,
   root: string,
-  selection: { configHash: string; since?: string | undefined; scope?: string[] | undefined },
+  selection: {
+    configHash: string;
+    since?: string | undefined;
+    scope?: string[] | undefined;
+    killMatrix?: boolean;
+  },
 ): string | null {
   const listed = gitOutput(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
   if (listed === null) return null;
@@ -772,6 +816,7 @@ export function mutationCacheKey(
     configHash: selection.configHash,
     since: since?.trim() ?? null,
     scope: selection.scope ?? [],
+    killMatrix: selection.killMatrix ?? false,
   });
 }
 

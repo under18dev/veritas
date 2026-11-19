@@ -75,6 +75,8 @@ export const Run = z.object({
       propertyIds: z.array(z.string()).optional(),
       formalEngine: z.enum(['z3', 'lean']).optional(),
       sources: z.array(z.enum(['local', 'github', 'web'])).optional(),
+      mutationReport: z.string().optional(),
+      killMatrix: z.boolean().optional(),
       offline: z.boolean(),
     })
     .optional(),
