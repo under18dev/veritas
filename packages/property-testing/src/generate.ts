@@ -119,7 +119,20 @@ export function generateVitestFile(options: GenerateVitestOptions): string {
         const args = expr.args.map((a) => code(a, vars));
         const b = bound.get(expr.fn);
         if (b) {
-          const jsArgs = b.model.params.map((p, i) => (p.sort === 'int' ? `arg(${args[i]})` : args[i]));
+          const scalar = new Map(
+            b.model.params.map((p, i) => [p.name, p.sort === 'int' ? `arg(${args[i]})` : `${args[i]}`]),
+          );
+          const at = (name: string) => scalar.get(name) as string;
+          // Records and arrays are rebuilt from their flattened model parameters.
+          const jsArgs = b.model.jsParams
+            ? b.model.jsParams.map((j) => {
+                if (j.kind === 'scalar') return at(j.param);
+                if (j.kind === 'record')
+                  return `{ ${j.fields.map((f) => `${JSON.stringify(f.key)}: ${at(f.param)}`).join(', ')} }`;
+                const length = args[b.model.params.findIndex((p) => p.name === j.length)];
+                return `[${j.elements.map(at).join(', ')}].slice(0, Number(${length}))`;
+              })
+            : b.model.params.map((p) => at(p.name));
           const check = b.model.returns === 'int' ? 'int' : 'bool';
           return `${check}(${b.local}(${jsArgs.join(', ')}), ${JSON.stringify(expr.fn)})`;
         }

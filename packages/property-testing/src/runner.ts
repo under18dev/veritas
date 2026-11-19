@@ -56,9 +56,15 @@ const plain = (v: IRValue): string | boolean => (typeof v === 'bigint' ? v.toStr
 
 async function main(): Promise<void> {
   const fc = (await import(pathToFileURL(job.fastCheck).href)) as typeof FastCheck;
-  const { evaluate, toLiteral } = (await import(pathToFileURL(job.interpret).href)) as {
+  const { evaluate, toLiteral, shapeArguments } = (await import(pathToFileURL(job.interpret).href)) as {
     evaluate: (expr: Expr, env: Map<string, IRValue>, functions: Map<string, FunctionModel>) => IRValue;
     toLiteral: (v: IRValue) => Expr;
+    shapeArguments: (
+      model: FunctionModel,
+      values: Map<string, IRValue>,
+      leaf: (v: IRValue) => unknown,
+      length: (v: IRValue) => number,
+    ) => unknown[];
   };
   const { ir } = job;
   const table = new Map(ir.functions.map((f) => [f.name, f]));
@@ -105,14 +111,21 @@ async function main(): Promise<void> {
 
   const callJs = (name: string, args: IRValue[]): IRValue => {
     const target = bound.get(name) as { model: FunctionModel; fn: (...args: unknown[]) => unknown };
-    const jsArgs = args.map((a) => {
+    const toJs = (a: IRValue): number | boolean => {
       if (typeof a === 'boolean') return a;
       const n = Number(a);
       if (!Number.isSafeInteger(n) || BigInt(n) !== a) {
         throw new Error(`argument ${a} to ${name} is outside the safe-integer range`);
       }
       return n;
-    });
+    };
+    // Records and arrays are rebuilt from their flattened model parameters.
+    const jsArgs = shapeArguments(
+      target.model,
+      new Map(target.model.params.map((p, i) => [p.name, args[i] as IRValue])),
+      toJs,
+      (v) => Number(v),
+    );
     let raw: unknown;
     try {
       raw = target.fn(...jsArgs);
