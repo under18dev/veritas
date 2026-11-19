@@ -62,10 +62,22 @@ export async function extractWithLlm(
     if (!source || !item.threshold) continue;
     // Keep only values that literally appear in the quoted text: the model may not invent numbers.
     if (!source.quote.replace(/,/g, '').includes(item.threshold.value.replace(/^-/, ''))) continue;
+    // Text fields must come from the statement itself, so nothing else the model saw or produced (for example
+    // file contents a CLI agent could read) can reach artifacts or reports.
+    const quote = normalize(source.quote);
+    const quantity = normalize(item.threshold.quantity);
+    // The quantity may paraphrase (it is matched against parameter names), but only as a short word, never data.
+    if (!quote.includes(quantity) && !/^[a-z][a-z _-]{0,23}$/.test(quantity)) continue;
+    const threshold = {
+      ...item.threshold,
+      consequence: quote.includes(normalize(item.threshold.consequence))
+        ? item.threshold.consequence
+        : source.quote,
+    };
     added.push({
       ...source,
-      id: stableId('stmt', { llm: source.id, threshold: item.threshold }),
-      relation: { kind: 'threshold', ...item.threshold },
+      id: stableId('stmt', { llm: source.id, threshold }),
+      relation: { kind: 'threshold', ...threshold },
       flags: [...source.flags, 'llm_extracted'],
     });
   }
@@ -76,4 +88,8 @@ export async function extractWithLlm(
       `llm ${result.provider}/${result.model}: ${added.length} threshold(s) from ${candidates.length} statement(s); input ${result.inputHash.slice(0, 12)} (not reproducible)`,
     ],
   };
+}
+
+function normalize(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, ' ').trim();
 }

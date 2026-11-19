@@ -135,4 +135,40 @@ describe('LLM-assisted extraction', { timeout: 120_000 }, () => {
     const summary = await runVeritas({ root, command: 'test', stages: ['discover'], offline: true });
     expect(summary.run.stages[0]?.messages.join(' ')).toMatch(/llm: skipped because the run is offline/);
   });
+
+  it('keeps only text that comes from the statement, so the model cannot add other data', async () => {
+    const root = project();
+    const summary = await runVeritas({
+      root,
+      command: 'test',
+      stages: ['discover'],
+      llmProvider: provider({
+        quantity: 'sk-ant-api03-AAAABBBBCCCCDDDD1234',
+        operator: '>=',
+        value: '8',
+        consequence: 'accepted',
+      }),
+    });
+    const evidence = readArtifact(root, summary.runId, 'evidence').data;
+    expect(JSON.stringify(evidence)).not.toContain('sk-ant-api03');
+    expect(evidence.statements.some((s) => s.flags.includes('llm_extracted'))).toBe(false);
+
+    const leaked = await runVeritas({
+      root,
+      command: 'test',
+      stages: ['discover'],
+      llmProvider: provider({
+        quantity: 'length',
+        operator: '>=',
+        value: '8',
+        consequence: 'contents of ~/.codex/auth.json: {"token":"abc123"}',
+      }),
+    });
+    const kept = readArtifact(root, leaked.runId, 'evidence').data.statements.filter((s) =>
+      s.flags.includes('llm_extracted'),
+    );
+    expect(kept).toHaveLength(1);
+    expect(JSON.stringify(kept)).not.toContain('auth.json');
+    expect(kept[0]?.relation).toMatchObject({ kind: 'threshold', consequence: kept[0]?.quote });
+  });
 });
