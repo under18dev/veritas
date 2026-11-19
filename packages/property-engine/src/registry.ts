@@ -178,6 +178,10 @@ export function buildRegistry(options: BuildOptions): Registry {
   const duplicateOf = new Map(
     discovery.provenance.filter((p) => p.relation === 'duplicate_of').map((p) => [p.from, p.to] as const),
   );
+  // Sources that copy statements of another source are not independent evidence for them.
+  const derived = new Set(
+    discovery.provenance.filter((p) => p.relation === 'derived_from').map((p) => p.from),
+  );
   const mapping: MappingNote[] = [];
   const bySymbolParam = new Map<
     string,
@@ -257,7 +261,12 @@ export function buildRegistry(options: BuildOptions): Registry {
         sourceQuality: source ? QUALITY[source.kind] : 'unknown',
         agreement: 'single_source',
         implementationAlignment: agreement,
-        independence: source && QUALITY[source.kind] === 'implementation' ? 'circular' : 'independent',
+        independence:
+          source && QUALITY[source.kind] === 'implementation'
+            ? 'circular'
+            : derived.has(statement.sourceId)
+              ? 'derived'
+              : 'independent',
         freshness: stale ? 'stale' : 'current',
       },
       implementationAgreement: agreement,
@@ -295,8 +304,12 @@ export function buildRegistry(options: BuildOptions): Registry {
     }
     for (const same of distinct.values()) {
       if (same.length > 1) {
+        // Agreement needs two sources that are not copies of each other.
+        const independent = new Set(
+          same.filter((g) => !derived.has(g.statement.sourceId)).map((g) => g.statement.sourceId),
+        );
         for (const g of same) {
-          g.property.confidence.agreement = 'agree';
+          if (independent.size >= 2) g.property.confidence.agreement = 'agree';
           g.property.sourceIds = [...new Set(same.flatMap((s) => s.property.sourceIds))];
         }
       }

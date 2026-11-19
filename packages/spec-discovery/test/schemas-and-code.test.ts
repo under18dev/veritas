@@ -97,4 +97,33 @@ describe('schema and code collectors', () => {
     expect(byValue.get('3')).toBeUndefined();
     expect(byValue.get('100')).toBe('1.4');
   });
+
+  it('links copied statements as derived and outdated documents as superseded', async () => {
+    const root = tempProject('provenance');
+    writeProjectFile(root, 'README.md', '# Limits\n\nA client may send at most 100 requests per minute.\n');
+    writeProjectFile(
+      root,
+      'docs/faq.md',
+      '# FAQ\n\nA client may send at most 100 requests per minute.\n\nOther notes follow here.\n',
+    );
+    writeProjectFile(
+      root,
+      'docs/limits.md',
+      '# Limits v2\n\nThe README is outdated: a client may send at most 120 requests per minute.\n',
+    );
+    const result = await discoverEvidence({ root, config: config() });
+    const id = (locator: string) => result.sources.find((s) => s.locator === locator)?.id;
+    expect(result.provenance).toContainEqual({
+      from: id('docs/faq.md'),
+      to: id('README.md'),
+      relation: 'derived_from',
+    });
+    expect(result.provenance).toContainEqual({
+      from: id('docs/limits.md'),
+      to: id('README.md'),
+      relation: 'supersedes',
+    });
+    expect(result.sources.find((s) => s.locator === 'docs/faq.md')?.derivedFrom).toEqual([id('README.md')]);
+    expect(result.provenance.some((e) => e.from === id('README.md'))).toBe(false);
+  });
 });

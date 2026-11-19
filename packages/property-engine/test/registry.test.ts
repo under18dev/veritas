@@ -179,6 +179,28 @@ describe('registry from documentation and code', () => {
     }
   });
 
+  it('does not count a verbatim copy as an independent, agreeing source', () => {
+    const quote = 'A client may send at most 100 requests per minute.';
+    const statement = (id: string, sourceId: string) =>
+      threshold(id, sourceId, 3, quote, 'requests', '<=', '100', 'a client may send');
+    const discovery = (provenance: DiscoveryInput['provenance']): DiscoveryInput => ({
+      sources: [source('S-readme', 'readme', 'README.md'), source('S-faq', 'docs', 'docs/faq.md')],
+      statements: [statement('ST-readme', 'S-readme'), statement('ST-faq', 'S-faq')],
+      provenance,
+    });
+    const copied = registryFor(
+      'conflicting-docs',
+      discovery([{ from: 'S-faq', to: 'S-readme', relation: 'derived_from' }]),
+    );
+    const faq = copied.registry.properties.find((p) => p.statementIds.includes('ST-faq'));
+    expect(faq?.confidence.independence).toBe('derived');
+    expect(faq?.confidence.agreement).toBe('single_source');
+    const independent = registryFor('conflicting-docs', discovery([]));
+    expect(
+      independent.registry.properties.find((p) => p.statementIds.includes('ST-faq'))?.confidence.agreement,
+    ).toBe('agree');
+  });
+
   it('suggests the statement from the newer release when two release notes disagree', () => {
     const changelog = source('S-changelog', 'docs', 'CHANGELOG.md');
     const statement = (id: string, line: number, value: string, version: string): StatementInput => ({

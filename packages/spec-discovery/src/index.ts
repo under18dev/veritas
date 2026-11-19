@@ -559,6 +559,48 @@ async function collectWeb(
     skipped.push({ source: 'web', reason: 'character budget exhausted' });
   return requests;
 }
+/**
+ * Provenance beyond whole-document duplicates: a source that repeats a statement of an earlier source word for
+ * word is `derived_from` it (a copy is not independent evidence), and a source that calls another one outdated
+ * or superseded (`README is outdated`, `supersedes docs/limits.md`) `supersedes` it.
+ */
+function derivedAndSuperseded(
+  sources: EvidenceSource[],
+  statements: NormativeStatement[],
+  inputs: SourceInput[],
+  sourceByInput: Map<SourceInput, EvidenceSource>,
+): DiscoveryResult['provenance'] {
+  const edges = new Map<string, DiscoveryResult['provenance'][number]>();
+  const add = (edge: DiscoveryResult['provenance'][number]) => {
+    if (edge.from !== edge.to) edges.set(`${edge.from}>${edge.to}>${edge.relation}`, edge);
+  };
+  const firstQuote = new Map<string, string>();
+  for (const st of statements) {
+    const key = st.quote.replace(/\s+/g, ' ').trim().toLowerCase();
+    if (key.length < 30) continue;
+    const earlier = firstQuote.get(key);
+    if (earlier === undefined) firstQuote.set(key, st.sourceId);
+    else if (earlier !== st.sourceId) add({ from: st.sourceId, to: earlier, relation: 'derived_from' });
+  }
+  for (const input of inputs) {
+    const source = sourceByInput.get(input);
+    if (!source) continue;
+    for (const other of sources) {
+      if (other.id === source.id) continue;
+      const name = escapeRegExp(path.posix.basename(other.locator).replace(/\.(md|markdown|txt)$/i, ''));
+      if (name.length < 3) continue;
+      const mentions = new RegExp(
+        `\\b${name}(?:\\.\\w+)?\\b[^.\\n]{0,40}\\b(?:is|are)\\s+(?:outdated|obsolete|superseded)\\b|\\b(?:supersedes|replaces)\\s+(?:the\\s+)?\\S*${name}\\b`,
+        'i',
+      );
+      if (mentions.test(input.text)) add({ from: source.id, to: other.id, relation: 'supersedes' });
+    }
+  }
+  return [...edges.values()];
+}
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 export async function discoverEvidence(options: {
   root: string;
   config: VeritasConfig;
@@ -650,5 +692,11 @@ export async function discoverEvidence(options: {
         : extract(input.text, source.id, stale)),
     );
   }
+  provenance.push(...derivedAndSuperseded(sources, statements, inputs, sourceByInput));
+  for (const edge of provenance)
+    if (edge.relation === 'derived_from') {
+      const from = sources.find((s) => s.id === edge.from);
+      if (from && !from.derivedFrom.includes(edge.to)) from.derivedFrom.push(edge.to);
+    }
   return DiscoveryResult.parse({ sources, statements, provenance, skipped, networkRequests });
 }
