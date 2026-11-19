@@ -59,7 +59,10 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
   );
   const other = covered.filter((m) => m.status !== 'survived' && m.status !== 'killed');
   const assertedArgs = new Set(
-    test.targetCalls.filter((c) => c.asserted).flatMap((c) => c.args.filter((a): a is string => a !== null)),
+    test.targetCalls
+      .filter((c) => c.asserted)
+      .flatMap((c) => c.args.filter((a): a is string => a !== null))
+      .flatMap(argumentValues),
   );
   const assertedCall = test.targetCalls.some((c) => c.asserted);
 
@@ -191,4 +194,21 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
 
 export function assessTests(input: AssessInput): TestAssessment[] {
   return input.tests.map((t) => assessTest(t, input));
+}
+
+/**
+ * The values a literal argument supplies for boundary checks: the literal itself, or for a recorded array or
+ * object literal (JSON) its number fields and elements and, for an array, its length.
+ */
+function argumentValues(arg: string): string[] {
+  if (!arg.startsWith('[') && !arg.startsWith('{')) return [arg];
+  try {
+    const parsed = JSON.parse(arg) as unknown;
+    const leaves = Object.values(parsed as Record<string, unknown>).filter(
+      (v): v is string => typeof v === 'string',
+    );
+    return Array.isArray(parsed) ? [...leaves, String(parsed.length)] : leaves;
+  } catch {
+    return [arg];
+  }
 }

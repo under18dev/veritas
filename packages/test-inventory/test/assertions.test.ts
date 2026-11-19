@@ -53,4 +53,22 @@ describe('assertion evidence', () => {
     expect(inventory.tests.find((test) => test.name === 'snapshots')?.assertionCount).toBe(2);
     expect(inventory.tests.find((test) => test.name === 'snapshots')?.usesSnapshots).toBe(true);
   });
+
+  it('records array and object literal arguments as exact JSON, and nothing for other shapes', () => {
+    const root = tempProject({
+      'src/order.ts':
+        'export function fee(order: { total: number; vip: boolean }, xs: readonly number[]): number { return order.total + xs.length; }\n',
+      'test/order.test.ts': `
+        import { expect, test } from 'vitest';
+        import { fee } from '../src/order.js';
+        const items = [1];
+        test('literals', () => { expect(fee({ total: 9007199254740993, vip: true }, [1, -2])).toBe(0); });
+        test('not literal', () => { expect(fee({ total: 1, vip: true, ...{} }, items)).toBe(0); });
+      `,
+    });
+    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+    const args = (name: string) => inventory.tests.find((t) => t.name === name)?.targetCalls[0]?.args;
+    expect(args('literals')).toEqual(['{"total":"9007199254740993","vip":true}', '["1","-2"]']);
+    expect(args('not literal')).toEqual([null, null]);
+  });
 });

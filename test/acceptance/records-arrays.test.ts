@@ -47,3 +47,26 @@ describe('records and arrays', () => {
     expect(report.stdout).toContain('{"order":{"total":"1000"');
   }, 300_000);
 });
+
+describe('test inputs with records and arrays', () => {
+  it('checks whether the record literals a test passes can tell a surviving mutant apart', () => {
+    const dir = copyFixture('order-records', { git: true, linkDeps: true });
+    expect(runCli(['init', '--yes'], dir).status).toBe(0);
+    const run = runCli(['run', '--profile', 'deep', '--include-proposed', '--json'], dir);
+    expect([0, 1, 4], run.stderr).toContain(run.status);
+    const { runId } = json<{ runId: string }>(run);
+    const read = (name: string) =>
+      JSON.parse(readFileSync(path.join(dir, '.veritas/runs', runId, name), 'utf8')).data;
+    const testMap = read('test-map.json') as { tests: { targetCalls: { args: (string | null)[] }[] }[] };
+    expect(testMap.tests.flatMap((t) => t.targetCalls.map((c) => c.args[0]))).toContain(
+      '{"total":"2000","vip":false}',
+    );
+    const claims = read('claims.json') as (Claim & { scope: { testIds?: string[] } })[];
+    const distinguishing = claims.filter((c) => c.kind === 'distinguishability');
+    expect(distinguishing.length).toBeGreaterThan(0);
+    // The tests use totals 2000 and 10: neither tells `total >= 1000` from `total > 1000`.
+    expect(
+      distinguishing.some((c) => c.status === 'proven_within_model' && (c.scope.testIds?.length ?? 0) > 0),
+    ).toBe(true);
+  }, 300_000);
+});

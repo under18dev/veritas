@@ -620,9 +620,35 @@ function location(
  * (`0x10` -> `'16'`), a leading `-`/`+` on a numeric or bigint literal is folded in (`-1` -> `'-1'`),
  * and parentheses are ignored.
  */
+/**
+ * The literal text of a call argument, or null. Arrays and object literals of number/boolean literals are
+ * recorded as JSON with numbers as decimal strings (`["1","2"]`, `{"total":"1000","vip":true}`), so they stay exact.
+ */
 function literalArgument(input: ts.Expression): string | null {
   const node = skipParens(input);
-  if (ts.isNumericLiteral(node)) return node.text;
+  const scalar = (e: ts.Expression): string | boolean | null => {
+    const text = literalArgument(e);
+    if (text === 'true' || text === 'false') return text === 'true';
+    return text !== null && /^-?\d+(?:\.\d+)?$/.test(text) ? text : null;
+  };
+  if (ts.isArrayLiteralExpression(node)) {
+    const values = node.elements.map((e) => (ts.isSpreadElement(e) ? null : scalar(e)));
+    return values.every((v) => v !== null) ? JSON.stringify(values) : null;
+  }
+  if (ts.isObjectLiteralExpression(node)) {
+    const out: Record<string, string | boolean> = {};
+    for (const prop of node.properties) {
+      if (!ts.isPropertyAssignment(prop)) return null;
+      const key = ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name) ? prop.name.text : null;
+      const value = scalar(prop.initializer);
+      if (key === null || value === null) return null;
+      out[key] = value;
+    }
+    return JSON.stringify(out);
+  }
+  // `text` is the value as a double; plain decimal digits are kept as written so large integers stay exact.
+  const digits = (n: ts.NumericLiteral) => (/^\d+$/.test(n.getText()) ? n.getText() : n.text);
+  if (ts.isNumericLiteral(node)) return digits(node);
   if (ts.isBigIntLiteral(node)) return node.text;
   if (
     ts.isPrefixUnaryExpression(node) &&
@@ -630,7 +656,8 @@ function literalArgument(input: ts.Expression): string | null {
   ) {
     const operand = skipParens(node.operand);
     if (!ts.isNumericLiteral(operand) && !ts.isBigIntLiteral(operand)) return null;
-    return node.operator === ts.SyntaxKind.MinusToken ? `-${operand.text}` : operand.text;
+    const text = ts.isNumericLiteral(operand) ? digits(operand) : operand.text;
+    return node.operator === ts.SyntaxKind.MinusToken ? `-${text}` : text;
   }
   return ts.isStringLiteral(node) ||
     ts.isNoSubstitutionTemplateLiteral(node) ||

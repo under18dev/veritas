@@ -18,6 +18,7 @@ import {
   type FormalClaim,
   gitOutput,
   hashValue,
+  type JsParam,
   type Mutant,
   newRunId,
   openCache,
@@ -697,17 +698,11 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       // Relation 2: can the inputs a test already uses tell a surviving mutant from the original?
       const inventory = ctx.outputs.get('map') as TestInventory | undefined;
       for (const [mutantId, { fn, orig, mut, propertyId }] of pairs) {
-        if (orig.model.jsParams) {
-          messages.push(
-            `mutant ${mutantId}: test inputs are only compared for integer and boolean parameters`,
-          );
-          continue;
-        }
         const byInputs = new Map<string, { inputs: Record<string, string | boolean>[]; testIds: string[] }>();
         for (const test of inventory?.tests ?? []) {
           const inputs = test.targetCalls
             .filter((c) => c.symbol === fn.symbol)
-            .map((c) => literalInput(orig.params, c.args, domain));
+            .map((c) => literalInput(orig.params, c.args, domain, orig.model.jsParams));
           if (inputs.length === 0) continue;
           if (inputs.some((i) => i === null)) {
             messages.push(
@@ -1031,20 +1026,52 @@ export function literalInput(
   params: Param[],
   args: (string | null)[],
   domain: { min: string; max: string },
+  jsParams?: JsParam[],
 ): Record<string, string | boolean> | null {
-  if (args.length !== params.length) return null;
+  const sortOf = new Map(params.map((p) => [p.name, p.sort]));
   const input: Record<string, string | boolean> = {};
-  for (const [i, p] of params.entries()) {
+  const set = (param: string, value: unknown): boolean => {
+    const sort = sortOf.get(param);
+    if (sort === 'bool') {
+      if (typeof value !== 'boolean') return false;
+      input[param] = value;
+      return true;
+    }
+    if (sort !== 'int' || typeof value !== 'string' || !/^-?\d+$/.test(value)) return false;
+    const n = BigInt(value);
+    if (n < BigInt(domain.min) || n > BigInt(domain.max)) return false;
+    input[param] = n.toString();
+    return true;
+  };
+  const scalar = (raw: string): unknown => (raw === 'true' ? true : raw === 'false' ? false : raw);
+  // Without jsParams every JavaScript argument is the model parameter of the same position.
+  const shapes: JsParam[] = jsParams ?? params.map((p) => ({ kind: 'scalar', name: p.name, param: p.name }));
+  if (args.length !== shapes.length) return null;
+  for (const [i, shape] of shapes.entries()) {
     const raw = args[i]?.trim() ?? null;
     if (raw === null) return null;
-    if (p.sort === 'bool') {
-      if (raw !== 'true' && raw !== 'false') return null;
-      input[p.name] = raw === 'true';
+    if (shape.kind === 'scalar') {
+      if (!set(shape.param, scalar(raw))) return null;
+      continue;
+    }
+    let value: unknown;
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (shape.kind === 'record') {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+      const record = value as Record<string, unknown>;
+      if (Object.keys(record).length !== shape.fields.length) return null;
+      for (const f of shape.fields) if (!set(f.param, record[f.key])) return null;
     } else {
-      if (!/^-?\d+$/.test(raw)) return null;
-      const n = BigInt(raw);
-      if (n < BigInt(domain.min) || n > BigInt(domain.max)) return null;
-      input[p.name] = n.toString();
+      if (!Array.isArray(value) || value.length > shape.elements.length) return null;
+      if (!set(shape.length, String(value.length))) return null;
+      // Slots beyond the length do not affect the result in the model; give them a fixed value.
+      for (const [k, param] of shape.elements.entries())
+        if (!set(param, k < value.length ? value[k] : sortOf.get(param) === 'bool' ? false : domain.min))
+          return null;
     }
   }
   return input;
