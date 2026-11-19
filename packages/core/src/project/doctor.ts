@@ -7,6 +7,7 @@ import { runCommand } from '../process.js';
 import { sandboxBlocksNetwork } from '../sandbox.js';
 import type { Capability, CapabilityName } from '../schema/run.js';
 import { detectProject, resolvePackageVersion } from './detect.js';
+import { llmAvailability } from './llm.js';
 
 /** Which features depend on which capabilities. `required` missing => disabled; `optional` missing => degraded. */
 export const FEATURES: Record<string, { required: CapabilityName[]; optional: CapabilityName[] }> = {
@@ -170,17 +171,8 @@ export async function runDoctor(
     lean,
   );
 
-  const provider = config?.llm.provider ?? 'none';
-  const hasKey = Boolean(env.ANTHROPIC_API_KEY);
-  add(
-    'llm',
-    provider === 'none' ? 'disabled' : hasKey ? 'available' : 'unavailable',
-    provider === 'none'
-      ? 'no LLM provider configured; rule-based analysis only'
-      : hasKey
-        ? `${provider} configured, API key present`
-        : `${provider} configured but ANTHROPIC_API_KEY is not set`,
-  );
+  const llm = await llmAvailability(config?.llm.provider ?? 'none', env, root);
+  add('llm', llm.state, llm.detail);
 
   const networkWanted = Boolean(config?.sources.web.enabled || config?.sources.github.enabled);
   add(

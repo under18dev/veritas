@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { initProject } from '@under18dev/veritas-core';
@@ -103,5 +103,36 @@ describe('LLM-assisted extraction', { timeout: 120_000 }, () => {
     });
     expect(called).toBe(false);
     expect(summary.run.stages[0]?.messages.join(' ')).toMatch(/offline/);
+  });
+
+  it('falls back to rule-based results with a reason when the configured provider cannot be used', async () => {
+    const root = project();
+    const configPath = path.join(root, '.veritas/config.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.llm.provider = 'openai';
+    writeFileSync(configPath, JSON.stringify(config));
+    const previous = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const summary = await runVeritas({ root, command: 'test', stages: ['discover'] });
+      expect(summary.run.stages[0]?.status).toBe('succeeded');
+      expect(summary.run.stages[0]?.messages.join(' ')).toMatch(
+        /OPENAI_API_KEY is not set; rule-based results only/,
+      );
+      const evidence = readArtifact(root, summary.runId, 'evidence').data;
+      expect(evidence.statements.some((s) => s.flags.includes('llm_extracted'))).toBe(false);
+    } finally {
+      if (previous !== undefined) process.env.OPENAI_API_KEY = previous;
+    }
+  });
+
+  it('does not even check a CLI provider login when the run is offline', async () => {
+    const root = project();
+    const configPath = path.join(root, '.veritas/config.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.llm.provider = 'claude-code';
+    writeFileSync(configPath, JSON.stringify(config));
+    const summary = await runVeritas({ root, command: 'test', stages: ['discover'], offline: true });
+    expect(summary.run.stages[0]?.messages.join(' ')).toMatch(/llm: skipped because the run is offline/);
   });
 });

@@ -84,7 +84,7 @@ export const VeritasConfig = z
       .prefault({}),
     llm: z
       .object({
-        provider: z.enum(['none', 'claude']).default('none'),
+        provider: z.enum(['none', 'claude', 'claude-code', 'openai', 'codex']).default('none'),
         model: z.string().optional(),
         maxTokensPerRun: z.number().int().nonnegative().default(200_000),
       })

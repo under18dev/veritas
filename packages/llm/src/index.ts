@@ -1,5 +1,5 @@
 import { hashValue, redact } from '@under18dev/veritas-core';
-import type { z } from 'zod';
+import { toJSONSchema, type z } from 'zod';
 
 export type LlmStatus =
   | 'ok'
@@ -125,4 +125,18 @@ export class LlmClient {
     this.used += result.usage.inputTokens + result.usage.outputTokens;
     return { ...result, inputHash };
   }
+}
+
+/** JSON Schema for a request schema, for providers that take a schema document (CLI agents, strict JSON modes). */
+export function jsonSchemaOf(schema: z.ZodType): Record<string, unknown> {
+  const { $schema: _ignored, ...rest } = toJSONSchema(schema, { target: 'draft-7' }) as Record<
+    string,
+    unknown
+  >;
+  return rest;
+}
+
+/** The full prompt for providers without a separate system channel. */
+export function renderPrompt(request: Pick<LlmRequest<z.ZodType>, 'instructions' | 'documents'>): string {
+  return `${request.instructions}\n\n${renderDocuments(request.documents)}`;
 }

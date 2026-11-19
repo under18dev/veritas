@@ -53,6 +53,15 @@
       "path": "packages/llm-providers/claude"
     },
     {
+      "path": "packages/llm-providers/claude-code"
+    },
+    {
+      "path": "packages/llm-providers/codex"
+    },
+    {
+      "path": "packages/llm-providers/openai"
+    },
+    {
       "path": "packages/solver-lean"
     },
     {

@@ -21,15 +21,18 @@
     "@under18dev/veritas-code-intelligence": "workspace:*",
     "@under18dev/veritas-core": "workspace:*",
     "@under18dev/veritas-formal-core": "workspace:*",
-    "@under18dev/veritas-mutation-adapter": "workspace:*",
-    "@under18dev/veritas-property-engine": "workspace:*",
-    "@under18dev/veritas-spec-discovery": "workspace:*",
-    "@under18dev/veritas-test-inventory": "workspace:*",
-    "zod": "4.6.7",
-    "@under18dev/veritas-property-testing": "workspace:*",
     "@under18dev/veritas-llm": "workspace:*",
     "@under18dev/veritas-llm-claude": "workspace:*",
+    "@under18dev/veritas-llm-claude-code": "workspace:*",
+    "@under18dev/veritas-llm-codex": "workspace:*",
+    "@under18dev/veritas-llm-openai": "workspace:*",
+    "@under18dev/veritas-mutation-adapter": "workspace:*",
+    "@under18dev/veritas-property-engine": "workspace:*",
+    "@under18dev/veritas-property-testing": "workspace:*",
     "@under18dev/veritas-reports": "workspace:*",
-    "@under18dev/veritas-solver-lean": "workspace:*"
+    "@under18dev/veritas-solver-lean": "workspace:*",
+    "@under18dev/veritas-spec-discovery": "workspace:*",
+    "@under18dev/veritas-test-inventory": "workspace:*",
+    "zod": "4.6.7"
   }
 }

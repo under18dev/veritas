@@ -275,7 +275,10 @@
           "type": "string",
           "enum": [
             "none",
-            "claude"
+            "claude",
+            "claude-code",
+            "openai",
+            "codex"
           ]
         },
         "model": {

@@ -7,7 +7,7 @@ module.exports = {
       comment: 'core must not depend on any other workspace package, CLI framework or LLM SDK',
       severity: 'error',
       from: { path: '^packages/core/' },
-      to: { path: '^packages/(?!core/)|node_modules/(commander|@anthropic-ai|@modelcontextprotocol)' },
+      to: { path: '^packages/(?!core/)|node_modules/(commander|@anthropic-ai|openai|@modelcontextprotocol)' },
     },
   ],
   options: {

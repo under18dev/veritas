@@ -31,7 +31,6 @@ import {
   translateFunction,
 } from '@under18dev/veritas-formal-core';
 import { LlmClient, type LlmProvider } from '@under18dev/veritas-llm';
-import { ClaudeProvider } from '@under18dev/veritas-llm-claude';
 import { runMutation } from '@under18dev/veritas-mutation-adapter';
 import {
   applyApprovals,
@@ -45,6 +44,7 @@ import { type DiscoveryResult, discoverEvidence } from '@under18dev/veritas-spec
 import { inventoryTests, type TestInventory } from '@under18dev/veritas-test-inventory';
 import { ARTIFACTS } from './artifacts.js';
 import { extractWithLlm } from './llm-extract.js';
+import { createLlmProvider } from './llm-providers.js';
 import { defaultSeed, latestRunWith, openProject, readArtifact } from './project.js';
 import { buildReportInput, REPORT_FILES, renderReport } from './report.js';
 
@@ -57,7 +57,10 @@ export interface RunOptions {
   /** Stages to run; dependencies earlier in the list are run too. */
   stages: StageName[];
   profile?: Profile;
+  /** Never access the network: no network sources and no LLM requests. */
   offline?: boolean;
+  /** Collect only local sources (no GitHub or web), while still allowing a configured LLM. */
+  localSourcesOnly?: boolean;
   since?: string;
   scope?: string[];
   /** Verify proposed (not yet accepted) properties as experimental. Accepted ones are always verified. */
@@ -68,7 +71,7 @@ export interface RunOptions {
   allowCodeConfig?: boolean;
   signal?: AbortSignal;
   log?: (message: string) => void;
-  /** Injected LLM provider (tests). By default Claude is used only when configured and a key is present. */
+  /** Injected LLM provider (tests). By default the configured provider is used when it is available. */
   llmProvider?: LlmProvider | null;
 }
 
@@ -178,17 +181,25 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
     name: 'discover',
     dependsOn: [],
     run: async () => {
-      const result = await discoverEvidence({ root, config, offline: options.offline ?? false });
+      const result = await discoverEvidence({
+        root,
+        config,
+        offline: Boolean(options.offline || options.localSourcesOnly),
+      });
       let llmTokens = 0;
       const llmMessages: string[] = [];
-      const provider =
-        options.llmProvider !== undefined
-          ? options.llmProvider
-          : config.llm.provider === 'claude' && process.env.ANTHROPIC_API_KEY
-            ? new ClaudeProvider({ ...(config.llm.model ? { model: config.llm.model } : {}) })
-            : null;
-      if (provider && options.offline) llmMessages.push('llm: skipped because the run is offline');
-      else if (provider) {
+      let provider: LlmProvider | null = null;
+      if (options.offline) {
+        if (options.llmProvider || config.llm.provider !== 'none')
+          llmMessages.push('llm: skipped because the run is offline');
+      } else if (options.llmProvider !== undefined) {
+        provider = options.llmProvider;
+      } else {
+        const created = await createLlmProvider(config, root);
+        provider = created.provider;
+        if (created.message) llmMessages.push(created.message);
+      }
+      if (provider) {
         const client = new LlmClient(provider, {
           tokenBudget: config.llm.maxTokensPerRun,
           sendFullText: config.sources.sendFullTextToLlm,
@@ -197,8 +208,6 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         result.statements.push(...extracted.added);
         llmTokens = extracted.tokens;
         llmMessages.push(...extracted.messages);
-      } else if (config.llm.provider !== 'none') {
-        llmMessages.push(`llm: ${config.llm.provider} configured but no API key; rule-based results only`);
       }
       const messages = [
         ...llmMessages,

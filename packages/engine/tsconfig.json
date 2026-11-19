@@ -40,6 +40,15 @@
       "path": "../llm-providers/claude"
     },
     {
+      "path": "../llm-providers/claude-code"
+    },
+    {
+      "path": "../llm-providers/codex"
+    },
+    {
+      "path": "../llm-providers/openai"
+    },
+    {
       "path": "../reports"
     },
     {
