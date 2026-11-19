@@ -9,6 +9,7 @@ import {
 } from '@under18dev/veritas-core';
 import {
   buildReportInput,
+  COMMAND_STAGES,
   decideProperty,
   diffLatest,
   explainFinding,
@@ -96,7 +97,7 @@ export function discoverCommand(opts: Opts): Promise<ExitCode> {
   if (opts.offline && network) log('note: --offline overrides network sources');
   const allowDomains = Array.isArray(opts.allowDomain) ? opts.allowDomain.map(String) : [];
   const maxPages = opts.maxPages === undefined ? undefined : positiveInt(opts.maxPages, '--max-pages', 1000);
-  return stagesCommand(opts, 'discover', ['discover'], {
+  return stagesCommand(opts, 'discover', [...COMMAND_STAGES.discover], {
     offline: Boolean(opts.offline),
     sources,
     ...(allowDomains.length || maxPages !== undefined
@@ -108,7 +109,7 @@ export function discoverCommand(opts: Opts): Promise<ExitCode> {
 export function analyzeCommand(opts: Opts, args: string[]): Promise<ExitCode> {
   if (args[0] && !existsSync(path.resolve(opts.root, args[0])))
     throw new VeritasError('user', 'PATH_NOT_FOUND', `no such file or directory in the project: ${args[0]}`);
-  return stagesCommand(opts, 'analyze', ['index', 'discover', 'spec', 'map', 'assess'], {
+  return stagesCommand(opts, 'analyze', [...COMMAND_STAGES.analyze], {
     offline: true,
     ...(args[0] ? { scope: [args[0]] } : {}),
     ...(opts.since ? { since: String(opts.since) } : {}),
@@ -119,7 +120,7 @@ export function mutateCommand(opts: Opts): Promise<ExitCode> {
   const scope = opts.scope === undefined ? undefined : String(opts.scope);
   if (scope && !/[*?[\]{}]/.test(scope) && !existsSync(path.resolve(opts.root, scope)))
     throw new VeritasError('user', 'PATH_NOT_FOUND', `no such file or directory in the project: ${scope}`);
-  return stagesCommand(opts, 'mutate', ['index', 'discover', 'spec', 'map', 'mutate', 'assess'], {
+  return stagesCommand(opts, 'mutate', [...COMMAND_STAGES.mutate], {
     offline: true,
     ...(opts.since ? { since: String(opts.since) } : {}),
     ...(opts.scope ? { scope: [String(opts.scope)] } : {}),
@@ -127,7 +128,7 @@ export function mutateCommand(opts: Opts): Promise<ExitCode> {
 }
 
 export function proveCommand(opts: Opts): Promise<ExitCode> {
-  return stagesCommand(opts, 'prove', ['index', 'discover', 'spec', 'map', 'prove', 'assess', 'report'], {
+  return stagesCommand(opts, 'prove', [...COMMAND_STAGES.prove], {
     offline: true,
     includeProposed: Boolean(opts.includeProposed),
     formalEngine: opts.engine === 'lean' ? 'lean' : 'z3',

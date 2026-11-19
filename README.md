@@ -79,6 +79,7 @@ See the [support matrix](docs/support-matrix.md) for what is available in the cu
 - Agent Skill: [`skills/veritas/SKILL.md`](skills/veritas/SKILL.md)
 - MCP server: `veritas-mcp --root <project>` (read-only analysis tools; `--allow-write` adds the tool that applies an approved improvement plan)
 - GitHub Action: [docs/github-action.md](docs/github-action.md)
+- Node API: [docs/api.md](docs/api.md) (`import { analyze } from '@under18dev/veritas'`)
 
 ## Documentation
 

@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { redact, type StageName, VeritasError } from '@under18dev/veritas-core';
 import {
+  COMMAND_STAGES,
   explainFinding,
   listProperties,
   type RunSummary,
@@ -155,7 +156,9 @@ export function createServer(options: ServerOptions): McpServer {
     },
     async (_args, extra) => {
       try {
-        const summary = await runStages(extra as unknown as Extra, 'discover_specs', ['discover']);
+        const summary = await runStages(extra as unknown as Extra, 'discover_specs', [
+          ...COMMAND_STAGES.discover,
+        ]);
         const evidence = readArtifact(root, summary.runId, 'evidence').data;
         return ok({
           ...summarize(summary),
@@ -209,11 +212,7 @@ export function createServer(options: ServerOptions): McpServer {
     async (_args, extra) => {
       try {
         const summary = await runStages(extra as unknown as Extra, 'analyze_tests', [
-          'index',
-          'discover',
-          'spec',
-          'map',
-          'assess',
+          ...COMMAND_STAGES.analyze,
         ]);
         return ok({
           ...summarize(summary),
@@ -237,7 +236,7 @@ export function createServer(options: ServerOptions): McpServer {
         const summary = await runStages(
           extra as unknown as Extra,
           'run_mutation',
-          ['index', 'discover', 'spec', 'map', 'mutate', 'assess'],
+          [...COMMAND_STAGES.mutate],
           since ? { since } : {},
         );
         const mutation = readArtifact(root, summary.runId, 'mutation').data;
@@ -261,7 +260,7 @@ export function createServer(options: ServerOptions): McpServer {
         const summary = await runStages(
           extra as unknown as Extra,
           'verify_property',
-          ['index', 'discover', 'spec', 'map', 'prove', 'assess'],
+          [...COMMAND_STAGES.prove],
           {
             includeProposed,
             ...(propertyId ? { propertyIds: [propertyId] } : {}),

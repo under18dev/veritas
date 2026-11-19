@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import * as veritas from '@under18dev/veritas';
 import { PROFILE_STAGES, runVeritas } from '@under18dev/veritas-engine';
 import { describe, expect, it } from 'vitest';
 import { copyFixture, json, runCli } from './helpers.js';
@@ -129,5 +130,21 @@ describe('Node API', () => {
       cli.stages.map((s) => [s.stage, s.status]),
     );
     expect(api.dir).toBe(path.join(apiDir, '.veritas/runs', api.runId));
+  }, 300_000);
+
+  it('exposes each stage from the published package with the same stages and results as the CLI', async () => {
+    expect(typeof veritas.main).toBe('function');
+    for (const command of ['discover', 'analyze', 'mutate', 'prove', 'run'] as const)
+      expect(typeof veritas[command]).toBe('function');
+    const cliDir = setup('discount-boundary');
+    const apiDir = setup('discount-boundary');
+    const cli = json<RunJson>(runCli(['analyze', '--json'], cliDir));
+    const api = await veritas.analyze({ root: apiDir, llmProvider: null });
+    expect(api.run.command).toBe('analyze');
+    expect(api.run.stages.map((s) => s.stage)).toEqual(cli.stages.map((s) => s.stage));
+    expect(api.findings.map((f) => f.id).sort()).toEqual(cli.findings.map((f) => f.id).sort());
+    const artifacts = (dir: string, runId: string) =>
+      readdirSync(path.join(dir, '.veritas/runs', runId)).sort();
+    expect(artifacts(apiDir, api.runId)).toEqual(artifacts(cliDir, cli.runId));
   }, 300_000);
 });

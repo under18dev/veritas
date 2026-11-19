@@ -184,6 +184,9 @@ importers:
       '@types/node':
         specifier: 26.6.6
         version: 26.6.6
+      '@under18dev/veritas':
+        specifier: workspace:*
+        version: link:packages/cli
       '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:packages/core

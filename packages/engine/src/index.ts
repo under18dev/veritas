@@ -1,3 +1,4 @@
+export * from './api.js';
 export * from './artifacts.js';
 export * from './explain.js';
 export * from './generate.js';
