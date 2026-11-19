@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { analyzeCode } from '@under18dev/veritas-code-intelligence';
 import {
   type Mutant,
   type Property,
@@ -8,7 +9,6 @@ import {
   type TestPropertyEdge,
   VeritasConfig,
 } from '@under18dev/veritas-core';
-import { analyzeCode } from '@under18dev/veritas-code-intelligence';
 import { inventoryTests } from '@under18dev/veritas-test-inventory';
 import { describe, expect, it } from 'vitest';
 import { linkMutants, linkTests } from '../src/index.js';

@@ -745,9 +745,11 @@ export function shipping(weight: number): number {
   });
 
   it('proposes commutativity only for symmetric names with two same-typed params', () => {
-    expect(of('max').filter((c) => c.template === 'commutativity').map((c) => c.description)).toEqual([
-      'max(a, b) equals max(b, a)',
-    ]);
+    expect(
+      of('max')
+        .filter((c) => c.template === 'commutativity')
+        .map((c) => c.description),
+    ).toEqual(['max(a, b) equals max(b, a)']);
     expect(of('subtract').some((c) => c.template === 'commutativity')).toBe(false);
   });
 
