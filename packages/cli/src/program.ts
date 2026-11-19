@@ -148,7 +148,8 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
     program
       .command('report')
       .description('print the latest results')
-      .addOption(new Option('--format <format>').choices(['text', 'json', 'markdown', 'html', 'sarif'])),
+      .addOption(new Option('--format <format>').choices(['text', 'json', 'markdown', 'html', 'sarif']))
+      .option('--run <run-id>', 'report on this run instead of the latest'),
     (o) => reportCommand(o),
   );
   wire(

@@ -1,5 +1,6 @@
-import { ExitCode as Exit, type ExitCode, type StageName, VeritasError } from '@veritas/core';
+import { ExitCode as Exit, type ExitCode, redact, type StageName, VeritasError } from '@veritas/core';
 import {
+  buildReportInput,
   decideProperty,
   diffLatest,
   explainFinding,
@@ -7,9 +8,11 @@ import {
   listProperties,
   PROFILE_STAGES,
   type Profile,
+  type ReportFormat,
   type RunSummary,
   readArtifact,
   readLatest,
+  renderReport,
   runVeritas,
   showProperty,
 } from '@veritas/engine';
@@ -78,17 +81,10 @@ export function mutateCommand(opts: Opts): Promise<ExitCode> {
 }
 
 export function proveCommand(opts: Opts): Promise<ExitCode> {
-  if (opts.engine === 'lean') {
-    throw new VeritasError(
-      'tool',
-      'LEAN_NOT_AVAILABLE',
-      'the Lean engine is not available in this build',
-      'use --engine z3',
-    );
-  }
-  return stagesCommand(opts, 'prove', ['index', 'discover', 'spec', 'map', 'prove', 'assess'], {
+  return stagesCommand(opts, 'prove', ['index', 'discover', 'spec', 'map', 'prove', 'assess', 'report'], {
     offline: true,
     includeProposed: Boolean(opts.includeProposed),
+    formalEngine: opts.engine === 'lean' ? 'lean' : 'z3',
     ...(opts.property ? { propertyIds: [String(opts.property)] } : {}),
   });
 }
@@ -123,28 +119,16 @@ export async function replayCommand(opts: Opts, args: string[]): Promise<ExitCod
 }
 
 export async function reportCommand(opts: Opts): Promise<ExitCode> {
-  const format = String(opts.format ?? (opts.json ? 'json' : 'text'));
-  const { runId, data: findings } = readLatest(opts.root, 'findings');
-  const run = readArtifact(opts.root, runId, 'run').data;
-  if (format === 'json') {
-    emitJson({ runId, run, findings });
-    return Exit.Success;
-  }
-  if (format === 'text') {
-    const decision = {
-      exitCode: (run.exitCode ?? Exit.ToolError) as ExitCode,
-      verdict: run.verdict ?? 'inconclusive',
-      reasons: run.policyReasons,
-    };
-    emitText(formatRunText({ runId, dir: '', run, findings, decision }));
-    return Exit.Success;
-  }
-  throw new VeritasError(
-    'tool',
-    'FORMAT_NOT_AVAILABLE',
-    `report format ${format} is not available in this build`,
-    'use --format text or json',
+  const format = String(opts.format ?? (opts.json ? 'json' : 'text')) as ReportFormat;
+  const runId = typeof opts.run === 'string' ? opts.run : undefined;
+  const input = buildReportInput(
+    opts.root,
+    runId,
+    runId ? '.' : `.veritas/runs/${readLatest(opts.root, 'run').runId}`,
   );
+  process.stdout.write(redact(renderReport(input, format)));
+  if (format === 'text' || format === 'markdown') process.stdout.write('\n');
+  return Exit.Success;
 }
 
 export async function explainCommand(opts: Opts, args: string[]): Promise<ExitCode> {
