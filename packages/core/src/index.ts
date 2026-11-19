@@ -12,6 +12,7 @@ export * from './project/detect.js';
 export * from './project/doctor.js';
 export * from './project/init.js';
 export * from './redact.js';
+export * from './sandbox.js';
 export * from './schema/common.js';
 export * from './schema/evidence.js';
 export * from './schema/finding.js';

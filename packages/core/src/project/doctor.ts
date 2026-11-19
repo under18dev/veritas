@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { VeritasConfig } from '../config/schema.js';
 import { runCommand } from '../process.js';
+import { sandboxBlocksNetwork } from '../sandbox.js';
 import type { Capability, CapabilityName } from '../schema/run.js';
 import { detectProject, resolvePackageVersion } from './detect.js';
 
