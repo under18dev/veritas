@@ -2,5 +2,9 @@
   "name": "fixture-agent-loop",
   "private": true,
   "type": "module",
-  "devDependencies": { "@mizchi/mutator": "0.4.5", "fast-check": "4.10.3", "vitest": "5.1.1" }
+  "devDependencies": {
+    "@mizchi/mutator": "0.4.5",
+    "fast-check": "4.10.3",
+    "vitest": "5.1.1"
+  }
 }
