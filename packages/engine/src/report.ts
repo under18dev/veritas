@@ -29,8 +29,11 @@ function optional<N extends ArtifactName, T>(
 ): T {
   try {
     return pick(readArtifact(root, runId, name).data);
-  } catch {
-    return fallback;
+  } catch (error) {
+    // A stage that did not run leaves its section empty; an artifact that exists but cannot be read is an error,
+    // never an empty section that would hide its findings.
+    if (error instanceof VeritasError && error.code === 'ARTIFACT_MISSING') return fallback;
+    throw error;
   }
 }
 
@@ -38,7 +41,7 @@ function optional<N extends ArtifactName, T>(
 export function buildReportInput(root: string, runId?: string, artifactBase = '.'): ReportInput {
   const id = runId ?? latestRunWith(root, 'run');
   if (!id) throw new VeritasError('user', 'NO_RUN', 'no run to report on', 'run `veritas run` first');
-  const run = readArtifact(root, id, 'run').data;
+  const { meta, data: run } = readArtifact(root, id, 'run');
   const evidence = optional(root, id, 'evidence', (d) => d, {
     sources: [],
     statements: [],
@@ -60,6 +63,7 @@ export function buildReportInput(root: string, runId?: string, artifactBase = '.
     diagnostics: [],
   });
   return {
+    meta,
     run,
     sources: evidence.sources,
     statements: evidence.statements.map((s) => ({

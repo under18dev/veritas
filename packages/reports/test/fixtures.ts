@@ -5,6 +5,15 @@ const timestamp = '2026-01-01T00:00:00Z';
 
 export function fixture(): ParsedReportInput {
   return ReportInput.parse({
+    meta: {
+      schemaVersion: '1.0.0',
+      runId: 'run-1',
+      createdAt: timestamp,
+      toolVersion: '0.0.0-test',
+      gitCommit: '0123456789abcdef0123456789abcdef01234567',
+      configHash: hash,
+      sourceHash: 'b'.repeat(64),
+    },
     run: {
       id: 'run-1',
       command: 'veritas report',

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
+  ArtifactMeta,
   EvidenceSource,
   Finding,
   FormalClaim,
@@ -33,6 +34,8 @@ const Conflict = z.object({
 });
 
 export const ReportInput = z.object({
+  /** Traceability metadata of the run (from the `run.json` envelope). */
+  meta: ArtifactMeta,
   run: Run,
   sources: z.array(EvidenceSource),
   statements: z.array(Statement),
@@ -51,11 +54,16 @@ export type ReportStatement = z.infer<typeof Statement>;
 export type SarifLog = {
   version: '2.1.0';
   $schema: string;
-  runs: Array<{ tool: { driver: { name: string; rules: unknown[] } }; results: unknown[] }>;
+  runs: Array<{
+    tool: { driver: { name: string; version?: string; rules: unknown[] } };
+    properties?: Record<string, unknown>;
+    results: unknown[];
+  }>;
 };
 
 const ReportDocument = z.object({
   schemaVersion: z.literal('1.0.0'),
+  meta: ArtifactMeta,
   run: Run,
   sources: z.array(EvidenceSource),
   statements: z.array(Statement),
@@ -120,7 +128,7 @@ function sections(input: ReportInput): string[] {
     return `${group} (${members.length}): ${members.map((m) => `${m.id} ${m.original} -> ${m.replacement}`).join('; ') || 'none'}`;
   });
   return [
-    `1. Run metadata/environment/scope\nrun ${run.id}; command ${run.command} ${run.args.join(' ')}; profile ${run.profile ?? 'none'}; git commit ${run.scope.since ?? 'not supplied'}; OS ${run.environment.os}; Node ${run.environment.node}; verdict ${run.verdict ?? 'none'}; exit code ${run.exitCode ?? 'none'}; scope ${run.scope.root} (${run.scope.paths.join(', ') || 'all'}); policy reasons ${run.policyReasons.join('; ') || 'none'}; replay with \`${run.replay}\``,
+    `1. Run metadata/environment/scope\nrun ${run.id}; command ${run.command} ${run.args.join(' ')}; profile ${run.profile ?? 'none'}; git commit ${i.meta.gitCommit ?? 'none (not a git repository)'}${run.scope.since ? `; changes since ${run.scope.since}` : ''}; Veritas ${i.meta.toolVersion}; schema ${i.meta.schemaVersion}; config hash ${i.meta.configHash}; source hash ${i.meta.sourceHash}; OS ${run.environment.os}; Node ${run.environment.node}; verdict ${run.verdict ?? 'none'}; exit code ${run.exitCode ?? 'none'}; scope ${run.scope.root} (${run.scope.paths.join(', ') || 'all'}); policy reasons ${run.policyReasons.join('; ') || 'none'}; replay with \`${run.replay}\``,
     `2. Collected evidence with provenance\n${
       i.sources
         .map(
@@ -328,8 +336,13 @@ export function renderSarif(input: ReportInput): SarifLog {
     runs: [
       {
         tool: {
-          driver: { name: 'veritas', rules: kinds.map((id) => ({ id, shortDescription: { text: id } })) },
+          driver: {
+            name: 'veritas',
+            version: i.meta.toolVersion,
+            rules: kinds.map((id) => ({ id, shortDescription: { text: id } })),
+          },
         },
+        properties: { veritas: i.meta },
         results: i.findings.map((f) => ({
           ruleId: f.kind,
           level: sarifLevel(f),
