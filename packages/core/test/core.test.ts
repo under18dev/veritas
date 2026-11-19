@@ -11,6 +11,7 @@ import {
   type Finding,
   type FormalClaim,
   hashValue,
+  newRunId,
   PropertyIR,
   PUBLIC_SCHEMAS,
   parseConfig,
@@ -94,6 +95,13 @@ describe('redaction', () => {
 });
 
 describe('ids and hashing', () => {
+  it('orders run ids by creation time, also within one millisecond', () => {
+    const now = new Date('2026-11-19T09:11:47.123Z');
+    const ids = [newRunId(now), newRunId(now), newRunId(new Date('2026-11-19T09:11:47.124Z'))];
+    expect([...ids].sort()).toEqual(ids);
+    expect(ids[0]).toMatch(/^run-20261119T091147123Z-000-[0-9a-f]{6}$/);
+  });
+
   it('is stable regardless of key order', () => {
     expect(canonicalJson({ b: 1, a: { d: 2, c: 3 } })).toBe('{"a":{"c":3,"d":2},"b":1}');
     expect(stableId('P', { a: 1, b: 2 })).toBe(stableId('P', { b: 2, a: 1 }));
