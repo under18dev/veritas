@@ -96,9 +96,10 @@ describe('sandboxed execution', () => {
     expect(result.status).toBe('timeout');
   });
 
-  it('blocks network on Node 25+', async () => {
-    if (!sandboxBlocksNetwork()) return;
-    const { root, file } = project('export function f() { return process.permission.has("net"); }');
+  it('blocks network on Node 25+ and reports that it does not on older versions', async () => {
+    const { root, file } = project(
+      'export function f() { return typeof process.permission?.has === "function" && process.permission.has("net"); }',
+    );
     const result = await callInSandbox({
       root,
       modulePath: file,
@@ -106,8 +107,12 @@ describe('sandboxed execution', () => {
       calls: [[]],
       timeoutMs: 20_000,
     });
-    expect(result.isolation.network).toBe(true);
-    expect(result.results[0]).toEqual({ t: 'boolean', v: false });
+    expect(result.status).toBe('ok');
+    const major = Number(process.versions.node.split('.')[0]);
+    // Both branches assert: CI runs this on Node 24 and on the current LTS.
+    expect(result.isolation.network).toBe(major >= 25);
+    if (major >= 25) expect(result.results[0]).toEqual({ t: 'boolean', v: false });
+    else expect(sandboxBlocksNetwork()).toBe(false);
   });
 
   it('works when the project root is reached through a symlink', async () => {
