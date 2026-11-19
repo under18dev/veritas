@@ -1,0 +1,226 @@
+import { stableId } from '@veritas/core';
+import type {
+  BehaviorCandidate,
+  CandidateBasis,
+  CodeIndex,
+  ComparisonOperator,
+  FunctionInfo,
+} from './schema.js';
+
+/** Flip a comparison so the parameter reads on the left: `1000 < total` becomes `total > 1000`. */
+const FLIPPED: Record<ComparisonOperator, ComparisonOperator> = {
+  '<': '>',
+  '<=': '>=',
+  '>': '<',
+  '>=': '<=',
+  '===': '===',
+  '!==': '!==',
+  '==': '==',
+  '!=': '!=',
+};
+
+/** Name pairs that suggest a round trip; a candidate needs both functions and matching types. */
+const ROUND_TRIP_PAIRS: [RegExp, string][] = [
+  [/^encode(.*)$/, 'decode$1'],
+  [/^serialize(.*)$/, 'deserialize$1'],
+  [/^stringify(.*)$/, 'parse$1'],
+  [/^format(.*)$/, 'parse$1'],
+  [/^compress(.*)$/, 'decompress$1'],
+  [/^encrypt(.*)$/, 'decrypt$1'],
+  [/^marshal(.*)$/, 'unmarshal$1'],
+  [/^escape(.*)$/, 'unescape$1'],
+  [/^pack(.*)$/, 'unpack$1'],
+  [/^to(.+)$/, 'from$1'],
+];
+
+const IDEMPOTENT_NAME = /^(normalize|sanitize|canonicali[sz]e|trim|dedupe|unique|sort|clamp|abs|slugify)/i;
+
+/**
+ * Propose behaviour candidates from code alone. Every candidate is `inferred`: it is a question
+ * to check against a specification, never a specification. Templates are only proposed with
+ * concrete evidence in the index.
+ */
+export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
+  const out: BehaviorCandidate[] = [];
+  const exported = index.functions.filter((f) => f.exported);
+  for (const fn of exported) {
+    const notes = commonNotes(fn);
+    const seen = new Set<string>();
+    const add = (key: string, candidate: Omit<BehaviorCandidate, 'id' | 'symbol' | 'origin' | 'notes'>) => {
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({
+        id: stableId('cand', { symbol: fn.symbol, template: candidate.template, key }),
+        symbol: fn.symbol,
+        origin: 'inferred',
+        ...candidate,
+        notes: [...notes],
+      });
+    };
+
+    for (const c of fn.comparisons) {
+      if (c.param === null) continue;
+      const paramOnLeft = stripParens(c.left) === c.param;
+      const operator = paramOnLeft ? c.operator : FLIPPED[c.operator];
+      const other = paramOnLeft ? c.right : c.left;
+      const at = `line ${c.location.range?.start}`;
+      if (c.literal !== null) {
+        const basis: CandidateBasis[] = ['implementation'];
+        if (fn.jsdoc && new RegExp(`(^|[^\\d])${escapeRegExp(c.literal)}([^\\d]|$)`).test(fn.jsdoc)) {
+          basis.push('comment');
+        }
+        add(`boundary:${c.param}:${operator}:${c.literal}`, {
+          template: 'boundary',
+          description: `${fn.name}: behaviour may change at ${c.param} ${operator} ${c.literal} (${at}); check ${c.param} = ${c.literal} and its neighbours`,
+          boundary: { param: c.param, operator, value: c.literal },
+          basis,
+        });
+      } else {
+        add(`relation:${c.param}:${operator}:${other}`, {
+          template: 'boundary',
+          description: `${fn.name}: behaviour may change where ${c.param} ${operator} ${other} flips (${at}); check equal and adjacent values`,
+          basis: ['implementation'],
+        });
+      }
+    }
+
+    for (const p of fn.params) {
+      const parts = unionParts(p.type);
+      const base = parts.filter((t) => t !== 'undefined' && t !== 'null');
+      if (p.optional || parts.includes('undefined')) {
+        add(`undefined:${p.name}`, {
+          template: 'boundary',
+          description: `${fn.name}: behaviour when ${p.name} is undefined`,
+          basis: ['type'],
+        });
+      }
+      if (parts.includes('null')) {
+        add(`null:${p.name}`, {
+          template: 'boundary',
+          description: `${fn.name}: behaviour when ${p.name} is null`,
+          basis: ['type'],
+        });
+      }
+      if (base.length === 1 && base[0] === 'string') {
+        add(`empty-string:${p.name}`, {
+          template: 'boundary',
+          description: `${fn.name}: behaviour when ${p.name} is the empty string`,
+          basis: ['type'],
+        });
+      }
+      if (base.length === 1 && isArrayType(base[0] as string)) {
+        add(`empty-array:${p.name}`, {
+          template: 'boundary',
+          description: `${fn.name}: behaviour when ${p.name} is an empty array`,
+          basis: ['type'],
+        });
+      }
+      if (base.length > 0 && base.every(isNumericType)) {
+        add(`negative:${p.name}`, {
+          template: 'boundary',
+          description: `${fn.name}: behaviour for negative ${p.name} (and zero)`,
+          basis: ['type'],
+        });
+      }
+    }
+
+    for (const t of fn.throws) {
+      const line = t.location.range?.start ?? 0;
+      const guard = fn.branches
+        .filter((b) => (b.location.range?.start ?? 0) <= line && (b.location.range?.end ?? 0) >= line)
+        .sort((a, b) => span(a.location) - span(b.location))[0];
+      const basis: CandidateBasis[] = ['implementation'];
+      if (fn.jsdoc && /@throws|\bthrows?\b/i.test(fn.jsdoc)) basis.push('comment');
+      add(`throws:${line}:${t.expression}`, {
+        template: 'exception_condition',
+        description: guard
+          ? `${fn.name}: throws ${t.expression} when ${guard.condition} (line ${line})`
+          : `${fn.name}: throws ${t.expression} (line ${line})`,
+        basis,
+      });
+    }
+
+    const partner = roundTripPartner(fn, exported);
+    if (partner) {
+      add(`round-trip:${partner.symbol}`, {
+        template: 'round_trip',
+        description: `${partner.name}(${fn.name}(x)) returns x for ${fn.params[0]?.type} inputs`,
+        basis: ['name', 'type'],
+      });
+    }
+
+    if (
+      fn.params.length === 1 &&
+      fn.params[0]?.type === fn.returnType &&
+      IDEMPOTENT_NAME.test(fn.name.split('.').pop() ?? '') &&
+      fn.purity === 'pure'
+    ) {
+      add('idempotence', {
+        template: 'idempotence',
+        description: `${fn.name}(${fn.name}(x)) equals ${fn.name}(x)`,
+        basis: ['name', 'type'],
+      });
+    }
+  }
+  return out;
+}
+
+function commonNotes(fn: FunctionInfo): string[] {
+  const notes = ['inferred from code only; not a specification until reviewed and accepted'];
+  if (fn.purity !== 'pure') notes.push(`purity is ${fn.purity}; results may depend on state or I/O`);
+  if (fn.unsupported.length > 0) {
+    const reasons = [...new Set(fn.unsupported.map((u) => u.reason))].join(', ');
+    notes.push(`contains constructs outside the supported subset: ${reasons}`);
+  }
+  return notes;
+}
+
+function roundTripPartner(fn: FunctionInfo, all: FunctionInfo[]): FunctionInfo | null {
+  if (fn.params.length !== 1 || fn.purity !== 'pure') return null;
+  const local = fn.name.split('.').pop() ?? fn.name;
+  for (const [pattern, replacement] of ROUND_TRIP_PAIRS) {
+    if (!pattern.test(local)) continue;
+    const wanted = local.replace(pattern, replacement);
+    const partner = all.find(
+      (other) =>
+        other !== fn &&
+        other.file === fn.file &&
+        (other.name.split('.').pop() ?? other.name) === wanted &&
+        other.params.length === 1 &&
+        other.purity === 'pure' &&
+        other.params[0]?.type === fn.returnType &&
+        other.returnType === fn.params[0]?.type,
+    );
+    if (partner) return partner;
+  }
+  return null;
+}
+
+/** Split a printed type on top-level `|`. */
+function unionParts(type: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of type) {
+    if ('<([{'.includes(ch)) depth++;
+    if ('>)]}'.includes(ch)) depth--;
+    if (ch === '|' && depth === 0) {
+      parts.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  parts.push(current.trim());
+  return parts.filter(Boolean);
+}
+
+const isArrayType = (t: string) => /\[\]$/.test(t) || /^(Readonly)?Array<.*>$/.test(t);
+
+const isNumericType = (t: string) => t === 'number' || t === 'bigint' || /^-?\d+n?$/.test(t);
+
+const span = (l: { range?: { start: number; end: number } }) => (l.range ? l.range.end - l.range.start : 0);
+
+const stripParens = (s: string) => s.replace(/^\(+|\)+$/g, '').trim();
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
