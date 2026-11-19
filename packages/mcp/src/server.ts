@@ -34,6 +34,16 @@ const GitRef = z
   .max(200)
   .regex(/^[A-Za-z0-9._/@~^-]+$/, 'not a plain git ref')
   .refine((s) => !s.startsWith('-'), 'refs may not start with -');
+/** A path or glob relative to the project root; anything resolving outside it is refused again by the engine. */
+const ProjectPath = z
+  .string()
+  .min(1)
+  .max(500)
+  .refine((s) => !s.startsWith('-') && !s.includes('\0'), 'not a plain project path')
+  .refine(
+    (s) => !/^([A-Za-z]:|[\\/])/.test(s) && !s.split(/[\\/]/).includes('..'),
+    'must stay inside the project',
+  );
 
 /** Limits concurrent long operations; extra calls wait their turn (or are cancelled while waiting). */
 class Semaphore {
@@ -228,16 +238,34 @@ export function createServer(options: ServerOptions): McpServer {
     'run_mutation',
     {
       description: 'Run mutation testing (real mutator) and relate mutants to properties and tests.',
-      inputSchema: { since: GitRef.optional() },
+      inputSchema: {
+        since: GitRef.optional(),
+        scope: ProjectPath.optional().describe('source glob to mutate, relative to the project'),
+        killMatrix: z.boolean().default(false).describe('run every covering test for every mutant (slower)'),
+        reportFile: ProjectPath.optional().describe(
+          'import this mutation-testing-elements report instead of running mutator',
+        ),
+      },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ since }, extra) => {
+    async ({ since, scope, killMatrix, reportFile }, extra) => {
       try {
+        if (reportFile && killMatrix)
+          throw new VeritasError(
+            'user',
+            'OPTION_CONFLICT',
+            'reportFile is read as is; killMatrix needs a run',
+          );
         const summary = await runStages(
           extra as unknown as Extra,
           'run_mutation',
           [...COMMAND_STAGES.mutate],
-          since ? { since } : {},
+          {
+            ...(since ? { since } : {}),
+            ...(scope ? { scope: [scope] } : {}),
+            ...(killMatrix ? { killMatrix: true } : {}),
+            ...(reportFile ? { mutationReport: reportFile } : {}),
+          },
         );
         const mutation = readArtifact(root, summary.runId, 'mutation').data;
         return ok({ ...summarize(summary), counts: mutation.counts, mutants: mutation.mutants });

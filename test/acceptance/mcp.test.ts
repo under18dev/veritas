@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -53,6 +53,38 @@ afterEach(async () => {
 });
 
 describe('MCP server', () => {
+  it('imports an existing mutation report through run_mutation like the CLI', async () => {
+    const dir = copyFixture('discount-boundary', { git: true, linkDeps: true });
+    expect(runCli(['init', '--yes'], dir).status).toBe(0);
+    writeFileSync(
+      path.join(dir, 'report.json'),
+      JSON.stringify({
+        schemaVersion: '2.0',
+        framework: { name: 'StrykerJS', version: '9.0.0' },
+        files: {
+          'src/pricing.ts': {
+            language: 'typescript',
+            source: '',
+            mutants: [
+              {
+                id: '1',
+                mutatorName: 'EqualityOperator',
+                replacement: 'total >= 1000',
+                location: { start: { line: 3, column: 7 }, end: { line: 3, column: 19 } },
+                status: 'Survived',
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const client = await connect(dir);
+    const result = data(
+      await client.callTool({ name: 'run_mutation', arguments: { reportFile: 'report.json' } }),
+    );
+    expect((result.mutants as { status: string }[]).map((m) => m.status)).toEqual(['survived']);
+  }, 120_000);
+
   it('runs discover -> analyze -> verify -> evidence -> status from an MCP client', async () => {
     const dir = copyFixture('discount-boundary', { git: true, linkDeps: true });
     expect(runCli(['init', '--yes'], dir).status).toBe(0);
@@ -124,6 +156,16 @@ describe('MCP server', () => {
       arguments: { since: '--upload-pack=evil' },
     })) as { isError?: boolean };
     expect(bad.isError).toBe(true);
+    for (const args of [
+      { reportFile: '../outside.json' },
+      { scope: '/etc' },
+      { reportFile: 'r.json', killMatrix: true },
+    ]) {
+      const refused = (await client.callTool({ name: 'run_mutation', arguments: args })) as {
+        isError?: boolean;
+      };
+      expect(refused.isError, JSON.stringify(args)).toBe(true);
+    }
     const run = (await client.callTool({ name: 'get_run_status', arguments: { runId: '../../x' } })) as {
       isError?: boolean;
     };

@@ -132,19 +132,47 @@ describe('Node API', () => {
     expect(api.dir).toBe(path.join(apiDir, '.veritas/runs', api.runId));
   }, 300_000);
 
-  it('exposes each stage from the published package with the same stages and results as the CLI', async () => {
+  it('runs every command from the published package with the same stages, artifacts and findings as the CLI', async () => {
     expect(typeof veritas.main).toBe('function');
-    for (const command of ['discover', 'analyze', 'mutate', 'prove', 'run'] as const)
-      expect(typeof veritas[command]).toBe('function');
     const cliDir = setup('discount-boundary');
     const apiDir = setup('discount-boundary');
-    const cli = json<RunJson>(runCli(['analyze', '--json'], cliDir));
-    const api = await veritas.analyze({ root: apiDir, llmProvider: null });
-    expect(api.run.command).toBe('analyze');
-    expect(api.run.stages.map((s) => s.stage)).toEqual(cli.stages.map((s) => s.stage));
-    expect(api.findings.map((f) => f.id).sort()).toEqual(cli.findings.map((f) => f.id).sort());
-    const artifacts = (dir: string, runId: string) =>
-      readdirSync(path.join(dir, '.veritas/runs', runId)).sort();
-    expect(artifacts(apiDir, api.runId)).toEqual(artifacts(cliDir, cli.runId));
-  }, 300_000);
+    const commands: [string[], () => ReturnType<typeof veritas.run>][] = [
+      [['discover'], () => veritas.discover({ root: apiDir, llmProvider: null })],
+      [['analyze'], () => veritas.analyze({ root: apiDir, llmProvider: null })],
+      [['mutate'], () => veritas.mutate({ root: apiDir, llmProvider: null })],
+      [
+        ['prove', '--include-proposed'],
+        () => veritas.prove({ root: apiDir, includeProposed: true, llmProvider: null }),
+      ],
+      [
+        ['run', '--profile', 'quick'],
+        () => veritas.run({ root: apiDir, profile: 'quick', llmProvider: null }),
+      ],
+    ];
+    const artifact = (dir: string, runId: string, name: string) => {
+      const file = path.join(dir, '.veritas/runs', runId, name);
+      // The two copies live in different directories; reproduction commands name them.
+      return statSync(file, { throwIfNoEntry: false })
+        ? JSON.parse(readFileSync(file, 'utf8').replaceAll(JSON.stringify(dir).slice(1, -1), '<root>')).data
+        : null;
+    };
+    for (const [args, call] of commands) {
+      const cli = json<RunJson>(runCli([...args, '--json'], cliDir));
+      const api = await call();
+      const label = args.join(' ');
+      expect(api.run.command, label).toBe(args[0]);
+      expect(
+        api.run.stages.map((s) => [s.stage, s.status]),
+        label,
+      ).toEqual(cli.stages.map((s) => [s.stage, s.status]));
+      expect(api.decision.exitCode, label).toBe(cli.exitCode);
+      const files = (dir: string, runId: string) =>
+        readdirSync(path.join(dir, '.veritas/runs', runId)).sort();
+      expect(files(apiDir, api.runId), label).toEqual(files(cliDir, cli.runId));
+      for (const name of ['findings.json', 'properties.json', 'assessments.json'])
+        expect(artifact(apiDir, api.runId, name), `${label} ${name}`).toEqual(
+          artifact(cliDir, cli.runId, name),
+        );
+    }
+  }, 600_000);
 });
