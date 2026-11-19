@@ -691,3 +691,70 @@ export const useInternal = (n: number): number => internal(n);
     expect(notes.some((n) => n.includes('/ operator'))).toBe(true);
   });
 });
+
+describe('numeric, ordering, symmetry and usage candidates', () => {
+  const root = project({
+    'src/math.ts': `export function ratio(a: number, b: number): number {
+  return a / b;
+}
+export function count(n: bigint): bigint {
+  return n;
+}
+export function total(xs: number[]): number {
+  let sum = 0;
+  for (const x of xs) sum += x;
+  return sum;
+}
+export function max(a: number, b: number): number {
+  return a > b ? a : b;
+}
+export function subtract(a: number, b: number): number {
+  return a - b;
+}
+export function fee(amount: number): number {
+  return amount >= 1000 ? 0 : 50;
+}
+export function checkout(amount: number): number {
+  if (amount >= 1000) return fee(amount);
+  return fee(amount) + 1;
+}
+export function shipping(weight: number): number {
+  return weight > 20 ? 10 : 5;
+}
+`,
+  });
+  const candidates = inferBehaviorCandidates(analyze(root));
+  const of = (name: string) => candidates.filter((c) => c.symbol === `src/math.ts#${name}`);
+
+  it('flags fractions, NaN and Infinity for number params, and division by zero', () => {
+    expect(of('ratio').map((c) => c.description)).toEqual(
+      expect.arrayContaining([
+        'ratio: behaviour for non-integer, NaN, ±Infinity and unsafe-integer values of a',
+        expect.stringContaining('ratio: division can give a fraction, or ±Infinity/NaN for a zero divisor'),
+      ]),
+    );
+    expect(of('count').some((c) => c.description.includes('non-integer'))).toBe(false);
+    expect(of('max').some((c) => c.description.includes('division'))).toBe(false);
+  });
+
+  it('asks whether a pure function over an array depends on element order', () => {
+    expect(of('total').map((c) => [c.template, c.description])).toContainEqual([
+      'custom',
+      'total: whether the result depends on the order of xs; check a reordered xs and duplicate elements',
+    ]);
+  });
+
+  it('proposes commutativity only for symmetric names with two same-typed params', () => {
+    expect(of('max').filter((c) => c.template === 'commutativity').map((c) => c.description)).toEqual([
+      'max(a, b) equals max(b, a)',
+    ]);
+    expect(of('subtract').some((c) => c.template === 'commutativity')).toBe(false);
+  });
+
+  it('records callers that compare against the same boundary as usage evidence', () => {
+    const boundary = of('fee').find((c) => c.boundary?.value === '1000');
+    expect(boundary?.basis).toContain('usage');
+    expect(boundary?.description).toContain('checkout also compares against 1000 before calling it');
+    expect(of('shipping').find((c) => c.boundary?.value === '20')?.basis).not.toContain('usage');
+  });
+});

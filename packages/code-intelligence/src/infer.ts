@@ -35,6 +35,10 @@ const ROUND_TRIP_PAIRS: [RegExp, string][] = [
 
 const IDEMPOTENT_NAME = /^(normalize|sanitize|canonicali[sz]e|trim|dedupe|unique|sort|clamp|abs|slugify)/i;
 
+/** Names of binary operations that are usually symmetric; a candidate also needs two same-typed params. */
+const COMMUTATIVE_NAME =
+  /^(add|sum|plus|multiply|times|max|min|gcd|lcm|merge|union|intersect(ion)?|equals?|isEqual|same|distance|hypot|overlaps?)$/i;
+
 /**
  * Propose behaviour candidates from code alone. Every candidate is `inferred`: it is a question
  * to check against a specification, never a specification. Templates are only proposed with
@@ -69,9 +73,18 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
         if (fn.jsdoc && new RegExp(`(^|[^\\d])${escapeRegExp(c.literal)}([^\\d]|$)`).test(fn.jsdoc)) {
           basis.push('comment');
         }
+        // Callers that compare against the same value before calling corroborate the boundary.
+        const literal = c.literal;
+        const callers = index.functions.filter(
+          (other) =>
+            other !== fn &&
+            other.calls.includes(fn.symbol) &&
+            other.comparisons.some((oc) => oc.literal === literal),
+        );
+        if (callers.length) basis.push('usage');
         add(`boundary:${c.param}:${operator}:${c.literal}`, {
           template: 'boundary',
-          description: `${fn.name}: behaviour may change at ${c.param} ${operator} ${c.literal} (${at}); check ${c.param} = ${c.literal} and its neighbours`,
+          description: `${fn.name}: behaviour may change at ${c.param} ${operator} ${c.literal} (${at}); check ${c.param} = ${c.literal} and its neighbours${callers.length ? `; ${callers.map((f) => f.name).join(', ')} also compare${callers.length === 1 ? 's' : ''} against ${c.literal} before calling it` : ''}`,
           boundary: { param: c.param, operator, value: c.literal },
           basis,
         });
@@ -122,6 +135,45 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
           basis: ['type'],
         });
       }
+      if (base.length > 0 && base.every((t) => t === 'number')) {
+        // `number` admits fractions, NaN, ±Infinity, -0 and values beyond the safe integer range.
+        add(`non-integer:${p.name}`, {
+          template: 'boundary',
+          description: `${fn.name}: behaviour for non-integer, NaN, ±Infinity and unsafe-integer values of ${p.name}`,
+          basis: ['type'],
+        });
+      }
+      if (base.length === 1 && isArrayType(base[0] as string) && fn.purity === 'pure') {
+        add(`order:${p.name}`, {
+          template: 'custom',
+          description: `${fn.name}: whether the result depends on the order of ${p.name}; check a reordered ${p.name} and duplicate elements`,
+          basis: ['type'],
+        });
+      }
+    }
+
+    if (fn.numericKinds.includes('division')) {
+      add('division', {
+        template: 'boundary',
+        description: `${fn.name}: division can give a fraction, or ±Infinity/NaN for a zero divisor; check divisors of 0 and values that do not divide evenly`,
+        basis: ['implementation'],
+      });
+    }
+
+    const [first, second] = fn.params;
+    if (
+      fn.params.length === 2 &&
+      first &&
+      second &&
+      first.type === second.type &&
+      fn.purity === 'pure' &&
+      COMMUTATIVE_NAME.test(fn.name.split('.').pop() ?? '')
+    ) {
+      add('commutativity', {
+        template: 'commutativity',
+        description: `${fn.name}(${first.name}, ${second.name}) equals ${fn.name}(${second.name}, ${first.name})`,
+        basis: ['name', 'type'],
+      });
     }
 
     for (const t of fn.throws) {
