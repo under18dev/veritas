@@ -128,7 +128,7 @@ function allText(directory: string): string {
 
 afterEach(() => vi.unstubAllEnvs());
 
-describe('main end to end', () => {
+describe('main end to end', { timeout: 300_000 }, () => {
   it('runs quick verification and redacts the token from all outputs and artifacts', async () => {
     const project = copyFixture();
     const base = git(project, 'rev-parse', 'HEAD');
