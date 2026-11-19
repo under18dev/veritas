@@ -230,6 +230,44 @@ describe('semantic mismatch between the integer model and JavaScript numbers', (
     expect(claim.assurance).toBe('none');
     expect(claim.semanticGaps.join(' ')).toMatch(/safe-integer range/);
   }, 60_000);
+
+  it('reports semantic_mismatch, not a counterexample, when JavaScript disagrees with the model on replay', async () => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-formal-')));
+    mkdirSync(path.join(root, 'src'));
+    // The real function always returns 0; the model (as if mistranslated) returns x.
+    writeFileSync(path.join(root, 'src/zero.ts'), 'export function f(x: number): number { return 0; }\n');
+    const model = translated(
+      translateFunction({
+        file: 'src/zero.ts',
+        source: 'export function f(x: number): number { return x; }\n',
+        exportName: 'f',
+        domain: DOMAIN,
+      }),
+    );
+    const ir = {
+      irVersion: 1 as const,
+      params: model.params,
+      preconditions: [],
+      functions: [model.model],
+      body: {
+        kind: 'binary' as const,
+        op: '==' as const,
+        left: { kind: 'call' as const, fn: 'f', args: [{ kind: 'var' as const, name: 'x' }] },
+        right: { kind: 'int' as const, value: '0' },
+      },
+    };
+    const { claim } = await proveProperty({
+      kind: 'conformance',
+      propertyId: 'P-zero',
+      ir,
+      root,
+      bindings: [{ modelName: 'f', modulePath: path.join(root, 'src/zero.ts'), exportName: 'f' }],
+      timeoutMs: 10_000,
+    });
+    expect(claim.status).toBe('semantic_mismatch');
+    expect(claim.semanticValidation).toBe('mismatch');
+    expect(claim.assurance).toBe('none');
+  }, 60_000);
 });
 
 describe('mutants', () => {
