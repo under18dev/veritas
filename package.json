@@ -22,6 +22,7 @@
     "dependency-cruiser": "18.8.0",
     "typescript": "6.0.3",
     "vitest": "5.1.1",
-    "@modelcontextprotocol/sdk": "1.32.2"
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@veritas/reports": "workspace:*"
   }
 }

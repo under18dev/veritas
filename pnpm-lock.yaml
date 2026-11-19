@@ -184,6 +184,9 @@ importers:
       '@types/node':
         specifier: 26.6.6
         version: 26.6.6
+      '@veritas/reports':
+        specifier: workspace:*
+        version: link:packages/reports
       dependency-cruiser:
         specifier: 18.8.0
         version: 18.8.0
@@ -324,6 +327,12 @@ importers:
       '@veritas/property-testing':
         specifier: workspace:*
         version: link:../property-testing
+      '@veritas/reports':
+        specifier: workspace:*
+        version: link:../reports
+      '@veritas/solver-lean':
+        specifier: workspace:*
+        version: link:../solver-lean
       '@veritas/spec-discovery':
         specifier: workspace:*
         version: link:../spec-discovery
