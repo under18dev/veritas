@@ -196,6 +196,9 @@ importers:
       '@mizchi/mutator':
         specifier: 0.4.5
         version: 0.4.5(vite@8.3.8(@types/node@26.6.6))(vitest@5.1.1(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)))
+      fast-check:
+        specifier: 4.10.3
+        version: 4.10.3
       vitest:
         specifier: 5.1.1
         version: 5.1.1(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6))
@@ -205,6 +208,9 @@ importers:
       '@mizchi/mutator':
         specifier: 0.4.5
         version: 0.4.5(vite@8.3.8(@types/node@26.6.6))(vitest@5.1.1(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)))
+      fast-check:
+        specifier: 4.10.3
+        version: 4.10.3
       vitest:
         specifier: 5.1.1
         version: 5.1.1(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6))
@@ -214,6 +220,9 @@ importers:
       '@mizchi/mutator':
         specifier: 0.4.5
         version: 0.4.5(vite@8.3.8(@types/node@26.6.6))(vitest@5.1.1(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)))
+      fast-check:
+        specifier: 4.10.3
+        version: 4.10.3
       vitest:
         specifier: 5.1.1
         version: 5.1.1(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6))
@@ -291,6 +300,9 @@ importers:
       '@veritas/property-engine':
         specifier: workspace:*
         version: link:../property-engine
+      '@veritas/property-testing':
+        specifier: workspace:*
+        version: link:../property-testing
       '@veritas/spec-discovery':
         specifier: workspace:*
         version: link:../spec-discovery

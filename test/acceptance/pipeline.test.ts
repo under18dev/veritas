@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -182,6 +183,45 @@ describe('discount-boundary end to end', () => {
     expect(explain.properties[0]?.status).toBe('accepted');
     const smtPath = explain.claims.find((c) => c.solverInputArtifact)?.solverInputArtifact as string;
     expect(existsSync(path.join(dir, '.veritas/runs', run.runId, smtPath))).toBe(true);
+  });
+
+  it('finds the counterexample with a recorded seed and generates a runnable property test', () => {
+    const dir = setup('discount-boundary');
+    const run = json<RunJson>(runCli(['run', '--profile', 'deep', '--include-proposed', '--json'], dir));
+    const pbt = readRunArtifact<
+      {
+        propertyId: string;
+        status: string;
+        trust: string;
+        seed: number;
+        counterexample: Record<string, string> | null;
+      }[]
+    >(dir, run.runId, 'pbt.json');
+    const failing = pbt.find((r) => r.status === 'counterexample');
+    expect(failing).toMatchObject({ trust: 'falsified', counterexample: { total: '1000' } });
+    const passing = pbt.find((r) => r.status === 'passed');
+    expect(passing?.trust).toBe('empirically_supported');
+    const again = json<RunJson>(runCli(['run', '--profile', 'deep', '--include-proposed', '--json'], dir));
+    const repeat = readRunArtifact<
+      { propertyId: string; seed: number; counterexample: Record<string, string> | null }[]
+    >(dir, again.runId, 'pbt.json');
+    expect(repeat.find((r) => r.propertyId === failing?.propertyId)).toMatchObject({
+      seed: failing?.seed,
+      counterexample: failing?.counterexample,
+    });
+
+    const gen = runCli(['test', 'generate', '--json'], dir);
+    expect(gen.status, gen.stderr).toBe(0);
+    const generated = json<{ generated: { file: string; propertyId: string }[] }>(gen).generated;
+    expect(generated.length).toBeGreaterThan(0);
+    for (const g of generated) expect(g.file.startsWith('.veritas/generated-tests/')).toBe(true);
+    const vitest = spawnSync(
+      path.join(dir, 'node_modules/.bin/vitest'),
+      ['run', '.veritas/generated-tests'],
+      { cwd: dir, encoding: 'utf8', shell: process.platform === 'win32' },
+    );
+    expect(vitest.status).not.toBe(0);
+    expect(vitest.stdout + vitest.stderr).toMatch(/Counterexample: \[\{"total":1000\}\]/);
   });
 
   it('replays a run with the same stages and records a new run', () => {
