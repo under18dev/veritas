@@ -239,12 +239,59 @@ function cacheNote(run: { cacheKey?: string }): string {
 }
 
 /**
+ * Every kind is the same query, `forall params: preconditions => body`; what differs is the IR, which encodes the
+ * relation (`thresholdProperty`, `equivalenceProperty`, `restrictToInputs`, `detectionProperty`). Refuse an IR
+ * that cannot be the relation its kind claims, so a conformance check is never labelled as something else.
+ */
+function checkKind(options: ProveOptions): void {
+  const { kind, ir, mutantId } = options;
+  const calls = new Set<string>();
+  const collect = (e: Expr): void => {
+    if (e.kind === 'call') {
+      calls.add(e.fn);
+      for (const a of e.args) collect(a);
+    } else if (e.kind === 'unary') collect(e.arg);
+    else if (e.kind === 'binary') {
+      collect(e.left);
+      collect(e.right);
+    } else if (e.kind === 'ite') {
+      collect(e.cond);
+      collect(e.whenTrue);
+      collect(e.whenFalse);
+    }
+  };
+  collect(ir.body);
+  const fail = (why: string) => {
+    throw new Error(`${kind} claim refused: ${why}`);
+  };
+  switch (kind) {
+    case 'conformance':
+      if (mutantId) fail('a conformance claim is about the implementation, not a mutant');
+      break;
+    case 'bounded_equivalence':
+    case 'distinguishability':
+    case 'property_detection':
+      if (!mutantId) fail('a mutant id is required');
+      // The body must compare two different models: the original and the mutant.
+      if (calls.size < 2) fail('the property must call both the original and the mutant model');
+      if (kind === 'distinguishability' && ir.preconditions.length === 0)
+        fail('the inputs to check must be restricted to the test inputs (restrictToInputs)');
+      if (kind === 'property_detection' && !(ir.body.kind === 'binary' && ir.body.op === 'implies'))
+        fail('the property must be property(original) implies property(mutant) (detectionProperty)');
+      break;
+    default:
+      fail('unknown claim kind');
+  }
+}
+
+/**
  * Check `forall params in domain: preconditions => body` with Z3 and validate the result against JavaScript.
  * - sat: the counterexample is replayed; disagreement between model and JavaScript gives `semantic_mismatch`.
  * - unsat: valid only within the model; the safe-integer obligation and a differential replay must pass,
  *   otherwise `semantic_mismatch` (or `unknown` if the obligation itself is undecided).
  */
 export async function proveProperty(options: ProveOptions): Promise<ProveResult> {
+  checkKind(options);
   const claimId = stableId('C', {
     kind: options.kind,
     propertyId: options.propertyId,

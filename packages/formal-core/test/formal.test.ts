@@ -396,6 +396,7 @@ describe('mutants', () => {
       root,
       bindings: [{ modelName: 'original', modulePath: path.join(root, 'src/relu.ts'), exportName: 'relu' }],
       timeoutMs: 10_000,
+      mutantId: 'M-2',
     });
     expect(claim.status).toBe('proven_within_model');
     expect(JSON.stringify(claim.scope)).toContain('"max":"10000"');
@@ -528,8 +529,106 @@ describe('solver result cache', () => {
       bindings: [],
       timeoutMs: 200,
       cache,
+      mutantId: 'M-3',
     });
     expect(['timeout', 'unknown']).toContain(claim.status);
     expect(existsSync(path.join(root, '.veritas/cache/solver'))).toBe(false);
   }, 60_000);
+});
+
+describe('distinguishability and property detection', () => {
+  const mutantOf = (root: string, replacement: string, modelName: string) => {
+    const source = readFileSync(path.join(root, 'src/pricing.ts'), 'utf8');
+    return translated(
+      translateFunction({
+        file: 'src/pricing.ts',
+        source: applyMutation(source, { line: 3, column: 7, original: 'total > 1000', replacement }),
+        exportName: 'discountAmount',
+        domain: DOMAIN,
+        modelName,
+      }),
+    );
+  };
+  const binding = (root: string, modelName: string) => ({
+    modelName,
+    modulePath: path.join(root, 'src/pricing.ts'),
+    exportName: 'discountAmount',
+  });
+
+  it('checks only the inputs a test uses: 2000 and 10 cannot tell >= 1000 from > 1000, 1000 can', async () => {
+    const root = fixture();
+    const orig = translated(translateFile(root, 'src/pricing.ts', 'discountAmount', 'original'));
+    const mutant = mutantOf(root, 'total >= 1000', 'mutant');
+    const prove = (inputs: Record<string, string>[]) =>
+      proveProperty({
+        kind: 'distinguishability',
+        propertyId: 'P-discount',
+        ir: restrictToInputs(equivalenceProperty(orig, mutant, DOMAIN), inputs),
+        root,
+        bindings: [binding(root, 'original')],
+        timeoutMs: 10_000,
+        mutantId: 'M-1',
+      });
+    expect((await prove([{ total: '2000' }, { total: '10' }])).claim.status).toBe('proven_within_model');
+    const found = (await prove([{ total: '10' }, { total: '1000' }])).claim;
+    expect(found.status).toBe('counterexample_found');
+    expect(found.counterexample).toEqual({ total: '1000' });
+    expect(() => restrictToInputs(equivalenceProperty(orig, mutant, DOMAIN), [{ total: true }])).toThrow(
+      /integer|int/,
+    );
+  }, 60_000);
+
+  it('credits a property only with inputs where the original satisfies it and the mutant does not', async () => {
+    const root = fixture();
+    const impl = translated(translateFile(root, 'src/pricing.ts', 'discountAmount'));
+    // A rule the original satisfies: totals above 1000 get 100.
+    const ir = thresholdProperty({
+      implementation: impl,
+      param: 'total',
+      operator: '>',
+      value: '1000',
+      whenTrue: '100',
+    });
+    const detect = (replacement: string) =>
+      proveProperty({
+        kind: 'property_detection',
+        propertyId: 'P-above',
+        ir: detectionProperty(ir, 'discountAmount', mutantOf(root, replacement, 'discountAmount__mutant')),
+        root,
+        bindings: [binding(root, 'discountAmount')],
+        timeoutMs: 10_000,
+        mutantId: 'M-x',
+      });
+    const detected = (await detect('total > 2000')).claim;
+    expect(detected.status).toBe('counterexample_found');
+    const t = BigInt(detected.counterexample?.total as string);
+    expect(t > 1000n && t <= 2000n).toBe(true);
+    // >= 1000 still gives 100 above 1000: the property cannot tell it apart.
+    expect((await detect('total >= 1000')).claim.status).toBe('proven_within_model');
+  }, 60_000);
+
+  it('refuses a claim whose IR cannot be the relation its kind names', async () => {
+    const root = fixture();
+    const impl = translated(translateFile(root, 'src/pricing.ts', 'discountAmount'));
+    const conformance = thresholdProperty({
+      implementation: impl,
+      param: 'total',
+      operator: '>',
+      value: '1000',
+      whenTrue: '100',
+    });
+    const base = { propertyId: 'P', root, bindings: [], timeoutMs: 1000 };
+    await expect(
+      proveProperty({ ...base, kind: 'distinguishability', ir: conformance, mutantId: 'M-1' }),
+    ).rejects.toThrow(/distinguishability claim refused/);
+    await expect(
+      proveProperty({ ...base, kind: 'property_detection', ir: conformance, mutantId: 'M-1' }),
+    ).rejects.toThrow(/property_detection claim refused/);
+    await expect(proveProperty({ ...base, kind: 'bounded_equivalence', ir: conformance })).rejects.toThrow(
+      /mutant id is required/,
+    );
+    await expect(
+      proveProperty({ ...base, kind: 'conformance', ir: conformance, mutantId: 'M-1' }),
+    ).rejects.toThrow(/not a mutant/);
+  });
 });
