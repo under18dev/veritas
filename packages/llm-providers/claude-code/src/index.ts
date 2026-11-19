@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { LLM_CLI_ENV_ALLOWLIST, runCommand } from '@under18dev/veritas-core';
+import { LLM_CLI_ENV_ALLOWLIST, resolveCommand, runCommand } from '@under18dev/veritas-core';
 import {
   jsonSchemaOf,
   type LlmProvider,
@@ -84,7 +84,16 @@ export class ClaudeCodeProvider implements LlmProvider {
         '--no-session-persistence',
         ...(this.explicitModel ? ['--model', this.explicitModel] : []),
       ];
-      const run = await runCommand(this.command, [...this.commandArgs, ...args], {
+      const resolved = resolveCommand(this.command);
+      if (!resolved)
+        return {
+          ...base,
+          status: 'unavailable',
+          data: null,
+          usage: empty,
+          error: `${this.command} is not installed, or is a batch file that cannot be run without a shell`,
+        };
+      const run = await runCommand(resolved.command, [...resolved.prefix, ...this.commandArgs, ...args], {
         cwd,
         timeoutMs: this.timeoutMs,
         envAllowlist: LLM_CLI_ENV_ALLOWLIST,
