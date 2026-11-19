@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { VeritasError } from '../exit-codes.js';
-import { hashValue, sha256 } from '../hash.js';
+import { canonicalJson, hashValue, sha256 } from '../hash.js';
 import { resolveInsideRoot } from '../paths.js';
 import { DEFAULT_ENV_ALLOWLIST } from '../process.js';
 import { redact, redactDeep } from '../redact.js';
@@ -251,8 +253,21 @@ export function listRuns(root: string): string[] {
 export class ContentCache {
   private readonly dir: string;
 
-  constructor(root: string) {
+  /**
+   * `secret` authenticates entries (HMAC-SHA256 over namespace, key and value). It is kept outside the project
+   * (see `openCache`), so an entry placed in `.veritas/cache` by anything else is a miss, not a result.
+   */
+  constructor(
+    root: string,
+    private readonly secret: Buffer,
+  ) {
     this.dir = resolveInsideRoot(root, CACHE_DIR);
+  }
+
+  private mac(namespace: string, key: string, value: unknown): string {
+    return createHmac('sha256', this.secret)
+      .update(`${namespace}\0${key}\0${canonicalJson(value)}`)
+      .digest('hex');
   }
 
   key(keyParts: Record<string, unknown>): string {
@@ -262,7 +277,14 @@ export class ContentCache {
   /** The entry for `key`, or undefined when there is none or it does not match `schema` (a miss, never an error). */
   get<S extends z.ZodType>(namespace: string, key: string, schema: S): z.output<S> | undefined {
     try {
-      const parsed = schema.safeParse(JSON.parse(readFileSync(this.file(namespace, key), 'utf8')));
+      const entry = JSON.parse(readFileSync(this.file(namespace, key), 'utf8')) as {
+        mac?: unknown;
+        value?: unknown;
+      };
+      if (typeof entry.mac !== 'string' || !/^[0-9a-f]{64}$/.test(entry.mac)) return undefined;
+      const expected = Buffer.from(this.mac(namespace, key, entry.value), 'hex');
+      if (!timingSafeEqual(Buffer.from(entry.mac, 'hex'), expected)) return undefined;
+      const parsed = schema.safeParse(entry.value);
       return parsed.success ? parsed.data : undefined;
     } catch {
       return undefined;
@@ -270,7 +292,11 @@ export class ContentCache {
   }
 
   set(namespace: string, key: string, value: unknown): void {
-    writeAtomic(this.file(namespace, key), JSON.stringify(redactDeep(value)));
+    const stored = JSON.parse(JSON.stringify(redactDeep(value))) as unknown;
+    writeAtomic(
+      this.file(namespace, key),
+      JSON.stringify({ mac: this.mac(namespace, key, stored), value: stored }),
+    );
   }
 
   private file(namespace: string, key: string): string {
@@ -293,6 +319,7 @@ export class ContentCache {
 export function openCache(
   root: string,
   config: { cache: { enabled: boolean } },
+  env: NodeJS.ProcessEnv = process.env,
 ): { cache: ContentCache | null; message: string | null } {
   if (!config.cache.enabled) return { cache: null, message: 'cache: disabled by configuration' };
   if (gitOutput(root, ['ls-files', '--', CACHE_DIR.split(path.sep).join('/')])?.trim()) {
@@ -301,7 +328,46 @@ export function openCache(
       message: 'cache: ignored because .veritas/cache is tracked by git (committed entries are not trusted)',
     };
   }
-  return { cache: new ContentCache(root), message: null };
+  const secret = cacheSecret(env);
+  if (!secret) return { cache: null, message: 'cache: disabled because no cache key could be created' };
+  return { cache: new ContentCache(root, secret), message: null };
+}
+
+/**
+ * Where the cache key lives: `VERITAS_CACHE_KEY_FILE`, else the user's cache directory (`$XDG_CACHE_HOME` or
+ * `~/.cache` on POSIX, `%LOCALAPPDATA%` on Windows) under `veritas/cache-key`. Never inside a project.
+ */
+export function cacheKeyFile(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.VERITAS_CACHE_KEY_FILE) return path.resolve(env.VERITAS_CACHE_KEY_FILE);
+  const base =
+    process.platform === 'win32'
+      ? env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local')
+      : env.XDG_CACHE_HOME || path.join(env.HOME || homedir(), '.cache');
+  return path.join(base, 'veritas', 'cache-key');
+}
+
+/** The 32-byte cache key, created (mode 0600) on first use; null when it can be neither read nor created. */
+function cacheSecret(env: NodeJS.ProcessEnv): Buffer | null {
+  const file = cacheKeyFile(env);
+  try {
+    const existing = readFileSync(file);
+    if (existing.length === 32) return existing;
+  } catch {
+    /* created below */
+  }
+  try {
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    // Exclusive create: when two processes race, both end up using the key that was written first.
+    writeFileSync(file, randomBytes(32), { mode: 0o600, flag: 'wx' });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return null;
+  }
+  try {
+    const secret = readFileSync(file);
+    return secret.length === 32 ? secret : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Output of a git command run with the allowlisted environment, or null when git fails. */

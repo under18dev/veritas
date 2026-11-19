@@ -79,7 +79,8 @@ describe('renderDocuments', () => {
 });
 
 describe('LlmClient cache', () => {
-  const tmpCache = () => new ContentCache(mkdtempSync(path.join(tmpdir(), 'veritas-llm-cache-')));
+  const tmpCache = () =>
+    new ContentCache(mkdtempSync(path.join(tmpdir(), 'veritas-llm-cache-')), Buffer.alloc(32, 1));
   const request = (text: string) => ({
     instructions: 'extract',
     documents: [{ id: 'README.md', text }],

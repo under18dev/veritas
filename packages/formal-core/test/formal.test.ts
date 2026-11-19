@@ -480,7 +480,7 @@ describe('solver result cache', () => {
 
   it('reuses a decisive result for the same query and still replays it in JavaScript', async () => {
     const root = fixture();
-    const cache = new ContentCache(root);
+    const cache = new ContentCache(root, Buffer.alloc(32, 1));
     const first = await proveDiscount(root, cache);
     expect(first.output).not.toContain('reused from cache');
     const second = await proveDiscount(root, cache);
@@ -496,7 +496,7 @@ describe('solver result cache', () => {
 
   it('misses when the implementation changes', async () => {
     const root = fixture();
-    const cache = new ContentCache(root);
+    const cache = new ContentCache(root, Buffer.alloc(32, 1));
     await proveDiscount(root, cache);
     const file = path.join(root, 'src/pricing.ts');
     writeFileSync(file, readFileSync(file, 'utf8').replace('total > 1000', 'total >= 1000'));
@@ -519,7 +519,7 @@ describe('solver result cache', () => {
         modelName: 'mutant',
       }),
     );
-    const cache = new ContentCache(root);
+    const cache = new ContentCache(root, Buffer.alloc(32, 1));
     const { claim } = await proveProperty({
       kind: 'bounded_equivalence',
       propertyId: 'P-cubes',

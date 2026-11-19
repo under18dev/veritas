@@ -37,6 +37,9 @@ import {
 } from '../src/index.js';
 
 const tmp = () => mkdtempSync(path.join(tmpdir(), 'veritas-core-'));
+const SECRET = Buffer.alloc(32, 7);
+/** openCache with a key file in a fresh directory, never the developer's own cache key. */
+const keyEnv = () => ({ VERITAS_CACHE_KEY_FILE: path.join(tmp(), 'cache-key') });
 
 describe('config', () => {
   it('rejects a configuration written for another schema version', () => {
@@ -177,7 +180,7 @@ describe('run store', () => {
     const store = new RunStore(root, 'run-test', ctx);
     store.writeText('solver.log', 'out sk-ant-abcdefghijklmnopqrst');
     expect(readFileSync(store.pathFor('solver.log'), 'utf8')).not.toContain('sk-ant-');
-    const cache = new ContentCache(root);
+    const cache = new ContentCache(root, SECRET);
     const key = cache.key({ k: 1 });
     cache.set('logs', key, { line: 'ghp_abcdefghijklmnopqrstuvwxyz' });
     expect(JSON.stringify(cache.get('logs', key, z.object({ line: z.string() })))).not.toContain('ghp_');
@@ -225,7 +228,7 @@ describe('run store', () => {
   });
 
   it('caches by content key', () => {
-    const cache = new ContentCache(tmp());
+    const cache = new ContentCache(tmp(), SECRET);
     const schema = z.object({ ok: z.boolean() });
     const key = cache.key({ source: 'a' });
     expect(cache.get('ast', key, schema)).toBeUndefined();
@@ -235,8 +238,34 @@ describe('run store', () => {
     expect(() => cache.set('../x', key, 1)).toThrow();
   });
 
+  it('ignores entries it did not write: forged, tampered or written with another key', () => {
+    const root = tmp();
+    const env = keyEnv();
+    const cache = openCache(root, { cache: { enabled: true } }, env).cache as ContentCache;
+    const schema = z.object({ verdict: z.string() });
+    const key = cache.key({ smt: '(check-sat)' });
+    const file = path.join(root, '.veritas/cache/solver', key.slice(0, 2), `${key}.json`);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({ verdict: 'unsat' }));
+    expect(cache.get('solver', key, schema)).toBeUndefined();
+    writeFileSync(file, JSON.stringify({ mac: '0'.repeat(64), value: { verdict: 'unsat' } }));
+    expect(cache.get('solver', key, schema)).toBeUndefined();
+    cache.set('solver', key, { verdict: 'sat' });
+    expect(cache.get('solver', key, schema)).toEqual({ verdict: 'sat' });
+    const entry = JSON.parse(readFileSync(file, 'utf8'));
+    writeFileSync(file, JSON.stringify({ ...entry, value: { verdict: 'unsat' } }));
+    expect(cache.get('solver', key, schema)).toBeUndefined();
+    cache.set('solver', key, { verdict: 'sat' });
+    expect(new ContentCache(root, Buffer.alloc(32, 9)).get('solver', key, schema)).toBeUndefined();
+    // The key is created once, outside the project, and reused.
+    expect(readFileSync(env.VERITAS_CACHE_KEY_FILE)).toHaveLength(32);
+    expect(openCache(root, { cache: { enabled: true } }, env).cache?.get('solver', key, schema)).toEqual({
+      verdict: 'sat',
+    });
+  });
+
   it('treats an entry that does not match its schema as a miss', () => {
-    const cache = new ContentCache(tmp());
+    const cache = new ContentCache(tmp(), SECRET);
     const key = cache.key({ source: 'a' });
     cache.set('ast', key, { ok: 'forged' });
     expect(cache.get('ast', key, z.object({ ok: z.boolean() }))).toBeUndefined();
@@ -244,17 +273,18 @@ describe('run store', () => {
 
   it('opens the cache unless it is disabled or tracked by git', () => {
     const root = tmp();
-    expect(openCache(root, { cache: { enabled: true } }).cache).toBeInstanceOf(ContentCache);
-    const disabled = openCache(root, { cache: { enabled: false } });
+    const env = keyEnv();
+    expect(openCache(root, { cache: { enabled: true } }, env).cache).toBeInstanceOf(ContentCache);
+    const disabled = openCache(root, { cache: { enabled: false } }, env);
     expect(disabled.cache).toBeNull();
     expect(disabled.message).toMatch(/disabled/);
     const git = (args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
     git(['init', '-q']);
-    const cache = new ContentCache(root);
+    const cache = new ContentCache(root, SECRET);
     cache.set('solver', cache.key({ smt: 'x' }), { verdict: 'unsat' });
-    expect(openCache(root, { cache: { enabled: true } }).cache).toBeInstanceOf(ContentCache);
+    expect(openCache(root, { cache: { enabled: true } }, env).cache).toBeInstanceOf(ContentCache);
     git(['add', '-f', '.veritas/cache']);
-    const tracked = openCache(root, { cache: { enabled: true } });
+    const tracked = openCache(root, { cache: { enabled: true } }, env);
     expect(tracked.cache).toBeNull();
     expect(tracked.message).toMatch(/tracked by git/);
   });

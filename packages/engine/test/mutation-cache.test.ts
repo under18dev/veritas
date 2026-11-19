@@ -22,7 +22,7 @@ describe('mutation cache key', () => {
 
   it('is stable for identical inputs and changes with sources, tests, config and scope', () => {
     const root = project();
-    const cache = new ContentCache(root);
+    const cache = new ContentCache(root, Buffer.alloc(32, 1));
     const key = mutationCacheKey(cache, root, selection);
     expect(key).toMatch(/^[0-9a-f]{64}$/);
     expect(mutationCacheKey(cache, root, selection)).toBe(key);
@@ -48,7 +48,7 @@ describe('mutation cache key', () => {
 
   it('ignores files excluded by .gitignore but not new untracked files', () => {
     const root = project();
-    const cache = new ContentCache(root);
+    const cache = new ContentCache(root, Buffer.alloc(32, 1));
     writeFileSync(path.join(root, '.gitignore'), 'build/\n');
     const key = mutationCacheKey(cache, root, selection);
     mkdirSync(path.join(root, 'build'));
@@ -60,8 +60,13 @@ describe('mutation cache key', () => {
 
   it('is not available without git or with a --since reference that does not resolve', () => {
     const plain = project(false);
-    expect(mutationCacheKey(new ContentCache(plain), plain, selection)).toBeNull();
+    expect(mutationCacheKey(new ContentCache(plain, Buffer.alloc(32, 1)), plain, selection)).toBeNull();
     const root = project();
-    expect(mutationCacheKey(new ContentCache(root), root, { ...selection, since: 'no-such-ref' })).toBeNull();
+    expect(
+      mutationCacheKey(new ContentCache(root, Buffer.alloc(32, 1)), root, {
+        ...selection,
+        since: 'no-such-ref',
+      }),
+    ).toBeNull();
   });
 });
