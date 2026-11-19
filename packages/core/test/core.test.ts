@@ -70,6 +70,16 @@ describe('paths', () => {
     expect(() => resolveInsideRoot(root, 'link/new-file.ts')).toThrow(/escapes/);
     expect(() => resolveInsideRoot(root, 'a\0b')).toThrow(/NUL/);
   });
+
+  it('accepts absolute paths under a root that is itself reached through a symlink', () => {
+    const real = tmp();
+    mkdirSync(path.join(real, 'src'));
+    const link = path.join(tmp(), 'proj');
+    symlinkSync(real, link);
+    expect(resolveInsideRoot(link, path.join(link, 'src/a.ts'))).toBe(path.join(link, 'src/a.ts'));
+    expect(resolveInsideRoot(link, path.join(real, 'src/a.ts'))).toBe(path.join(real, 'src/a.ts'));
+    expect(() => resolveInsideRoot(link, path.join(link, '..', 'x'))).toThrow(/escapes/);
+  });
 });
 
 describe('redaction', () => {

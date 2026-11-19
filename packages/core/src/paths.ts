@@ -11,16 +11,19 @@ export function resolveInsideRoot(root: string, candidate: string): string {
     throw new VeritasError('user', 'PATH_INVALID', 'path contains a NUL byte');
   }
   const realRoot = realpathSync(root);
-  const resolved = path.resolve(realRoot, candidate);
-  assertContained(realRoot, resolved, candidate);
-  const real = realpathOfExistingPrefix(resolved);
-  assertContained(realRoot, real, candidate);
+  const resolved = path.resolve(path.resolve(root), candidate);
+  // The real location is authoritative: it normalizes `..`, symlinked prefixes and symlinks pointing outside.
+  assertContained(realRoot, realpathOfExistingPrefix(resolved), candidate);
   return resolved;
 }
 
-function assertContained(root: string, target: string, original: string): void {
+function isContained(root: string, target: string): boolean {
   const rel = path.relative(root, target);
-  if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) return;
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function assertContained(root: string, target: string, original: string): void {
+  if (isContained(root, target)) return;
   throw new VeritasError('user', 'PATH_OUTSIDE_ROOT', `path escapes the project root: ${original}`);
 }
 
