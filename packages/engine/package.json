@@ -28,6 +28,8 @@
     "zod": "4.6.7",
     "@veritas/property-testing": "workspace:*",
     "@veritas/llm": "workspace:*",
-    "@veritas/llm-claude": "workspace:*"
+    "@veritas/llm-claude": "workspace:*",
+    "@veritas/reports": "workspace:*",
+    "@veritas/solver-lean": "workspace:*"
   }
 }

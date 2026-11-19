@@ -38,6 +38,12 @@
     },
     {
       "path": "../llm-claude"
+    },
+    {
+      "path": "../reports"
+    },
+    {
+      "path": "../solver-lean"
     }
   ]
 }

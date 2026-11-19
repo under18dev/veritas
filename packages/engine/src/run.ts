@@ -27,11 +27,13 @@ import { ClaudeProvider } from '@veritas/llm-claude';
 import { runMutation } from '@veritas/mutation-adapter';
 import { applyApprovals, buildRegistry, formalizeProperty, loadApprovals } from '@veritas/property-engine';
 import { type PbtResult, runPropertyTest } from '@veritas/property-testing';
+import { proveWithLean } from '@veritas/solver-lean';
 import { type DiscoveryResult, discoverEvidence } from '@veritas/spec-discovery';
 import { inventoryTests, type TestInventory } from '@veritas/test-inventory';
 import { ARTIFACTS } from './artifacts.js';
 import { extractWithLlm } from './llm-extract.js';
 import { defaultSeed, latestRunWith, openProject, readArtifact } from './project.js';
+import { buildReportInput, REPORT_FILES, renderReport } from './report.js';
 
 export type Profile = 'quick' | 'standard' | 'deep';
 
@@ -47,6 +49,8 @@ export interface RunOptions {
   scope?: string[];
   /** Verify proposed (not yet accepted) properties as experimental. Accepted ones are always verified. */
   includeProposed?: boolean;
+  /** Formal backend for conformance claims (mutant equivalence always uses Z3). */
+  formalEngine?: 'z3' | 'lean';
   propertyIds?: string[];
   allowCodeConfig?: boolean;
   signal?: AbortSignal;
@@ -340,6 +344,19 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       for (const p of toProve) {
         const f = spec.formalized.get(p.id);
         if (!f) continue;
+        if ((options.formalEngine ?? config.formal.backend) === 'lean') {
+          const { claim } = await proveWithLean({
+            propertyId: p.id,
+            ir: f.ir,
+            timeoutMs: Math.max(60_000, config.formal.maxSolverMs),
+            store,
+            signal,
+          });
+          claims.push(claim);
+          solverMs += claim.durationMs;
+          messages.push(`${p.id} (lean): ${claim.status} [${claim.assurance}]`);
+          continue;
+        }
         const { claim } = await proveProperty({
           kind: 'conformance',
           propertyId: p.id,
@@ -521,7 +538,8 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
   add({
     name: 'report',
     dependsOn: [],
-    run: async () => ({ status: 'succeeded', messages: ['artifacts written'] }),
+    // The report files are rendered after run.json is written (below), so they show the final verdict.
+    run: async () => ({ status: 'succeeded', messages: [`formats: ${config.reports.formats.join(', ')}`] }),
   });
 
   const results: StageResult[] = await runStages(stages, { root, config, store, signal, log });
@@ -561,6 +579,13 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
     partial: results.some((r) => r.status !== 'succeeded'),
   };
   store.write(ARTIFACTS.run.file, ARTIFACTS.run.schema, run);
+  if (wanted.has('report')) {
+    const input = buildReportInput(root, runId);
+    for (const format of config.reports.formats) {
+      if (format === 'text') continue;
+      store.writeText(REPORT_FILES[format], renderReport(input, format));
+    }
+  }
   log(`run ${runId}: ${decision.verdict}`);
   return { runId, dir: store.dir, run, findings, decision };
 }
