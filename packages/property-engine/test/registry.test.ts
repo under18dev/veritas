@@ -179,6 +179,29 @@ describe('registry from documentation and code', () => {
     }
   });
 
+  it('maps a statement onto an array length only when it talks about a count', () => {
+    const readme = source('S-readme', 'readme', 'README.md');
+    const at = (id: string, quote: string, quantity: string, value: string): StatementInput =>
+      threshold(id, 'S-readme', 3, quote, quantity, '>=', value, quote);
+    const { registry } = registryFor('order-records', {
+      sources: [readme],
+      statements: [
+        at('ST-count', 'Shipping is free when the item count is 3 or more.', 'count', '3'),
+        at('ST-plural', 'Shipping is free for 3 or more items.', 'item', '3'),
+        at('ST-element', 'Shipping is free when the second item is at least 3.', 'item', '3'),
+      ],
+      provenance: [],
+    });
+    const mapped = (id: string) => registry.mapping.find((m) => m.statementId === id);
+    expect(registry.properties.find((p) => p.statementIds.includes('ST-count'))?.predicate?.param).toBe(
+      'items.length',
+    );
+    expect(registry.properties.find((p) => p.statementIds.includes('ST-plural'))?.predicate?.param).toBe(
+      'items.length',
+    );
+    expect(mapped('ST-element')?.status).toBe('unmapped');
+  });
+
   it('keeps a superseded document in the conflict but marks it stale and suggests the newer one', () => {
     const discovery = (provenance: DiscoveryInput['provenance']): DiscoveryInput => ({
       sources: [source('S-a', 'docs', 'docs/limits.md'), source('S-b', 'docs', 'docs/limits-v2.md')],

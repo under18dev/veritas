@@ -67,6 +67,19 @@ interface Target {
   score: number;
 }
 
+/**
+ * Whether a statement is about how many elements an array has: it says count/number of/length/size, or puts
+ * the number right before the array's noun ("3 or more items", "at least 2 values") without an ordinal
+ * ("the second value" is about one element).
+ */
+function lengthStatement(quote: string, quantityWords: string[], arrayWords: string[]): boolean {
+  if (/\b(?:first|second|third|fourth|fifth|last|\d+(?:st|nd|rd|th))\s+\w+/i.test(quote)) return false;
+  if (/\b(?:count|number of|length|size|how many)\b/i.test(quote)) return true;
+  const noun = arrayWords.find((w) => quantityWords.includes(w));
+  if (!noun) return false;
+  return new RegExp(`\\d[\\d,]*\\s+(?:or\\s+(?:more|fewer|less)\\s+)?${noun}`, 'i').test(quote);
+}
+
 /** Pick the function and parameter a threshold statement talks about, or null when nothing fits clearly. */
 function mapStatement(
   statement: StatementInput,
@@ -90,9 +103,17 @@ function mapStatement(
     if (numeric.length === 0) continue;
     const nameHits = words(fn.name).filter((w) => quoteWords.has(w)).length;
     for (const p of numeric) {
+      // An array's length only when the statement talks about a count ("3 or more items", "the item count"),
+      // never about one element ("the second value") and never on the function name alone.
+      if (p.name.endsWith('.length')) {
+        const arrayWords = words(p.name.slice(0, -'.length'.length));
+        if (!lengthStatement(statement.quote, quantityWords, arrayWords)) continue;
+      }
       const paramWords = p.words;
       const paramHit =
-        quantityWords.some((w) => paramWords.includes(w)) || paramWords.some((w) => quoteWords.has(w));
+        p.name.endsWith('.length') ||
+        quantityWords.some((w) => paramWords.includes(w)) ||
+        paramWords.some((w) => quoteWords.has(w));
       const compared = fn.comparisons.some((c) => c.param === p.name);
       const score =
         (paramHit ? 2 : 0) +
