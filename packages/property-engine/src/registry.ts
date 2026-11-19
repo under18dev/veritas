@@ -32,13 +32,20 @@ export interface Registry {
   mapping: MappingNote[];
 }
 
+/** Crude singular form, so "passes", "orders" and "boxes" match "pass", "order" and "box". */
+function singular(w: string): string {
+  if (w.length > 4 && /(?:ss|sh|ch|x|z)es$/.test(w)) return w.slice(0, -2);
+  if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) return w.slice(0, -1);
+  return w;
+}
+
 const words = (text: string): string[] =>
   text
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter((w) => w.length > 2)
-    .map((w) => (w.endsWith('s') && w.length > 3 ? w.slice(0, -1) : w));
+    .map(singular);
 
 const QUALITY: Record<EvidenceSource['kind'], SourceConfidence['sourceQuality']> = {
   readme: 'primary',
