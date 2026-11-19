@@ -48,6 +48,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:acceptance
+      - name: clean install from packed tarballs
+        run: node scripts/clean-install-check.mjs
       - name: schemas are up to date
         if: matrix.os == 'ubuntu-latest'
         run: pnpm schemas && git diff --exit-code schemas

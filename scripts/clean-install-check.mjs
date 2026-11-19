@@ -1,0 +1,87 @@
+// Packs every publishable package, installs the tarballs into an empty project outside the repository and runs
+// the documented quick start there: init, doctor, a deep run on the discount example, report and explain.
+// Exits non-zero if any step fails or the expected boundary finding is missing.
+import { execFileSync, spawnSync } from 'node:child_process';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const work = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-clean-install-')));
+const tgz = path.join(work, 'tgz');
+const project = path.join(work, 'project');
+mkdirSync(tgz);
+mkdirSync(project);
+const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+const run = (cmd, args, cwd) => {
+  const result = spawnSync(cmd, args, { cwd, encoding: 'utf8', shell: process.platform === 'win32' });
+  process.stdout.write(`$ ${cmd} ${args.join(' ')} -> ${result.status}\n`);
+  if (result.status !== 0) {
+    process.stdout.write(result.stdout + result.stderr);
+    process.exit(1);
+  }
+  return result.stdout;
+};
+
+run(
+  pnpm,
+  [
+    '-r',
+    '--filter',
+    './packages/*',
+    '--filter',
+    '!@veritas/github-action',
+    'pack',
+    '--pack-destination',
+    tgz,
+  ],
+  repo,
+);
+const tarballs = Object.fromEntries(
+  readdirSync(tgz).map((f) => [
+    `@veritas/${f.replace(/^veritas-/, '').replace(/-\d+\.\d+\.\d+\.tgz$/, '')}`,
+    `file:${path.join(tgz, f).split(path.sep).join('/')}`,
+  ]),
+);
+for (const part of ['src', 'test', 'README.md'])
+  cpSync(path.join(repo, 'fixtures/discount-boundary', part), path.join(project, part), { recursive: true });
+writeFileSync(
+  path.join(project, 'package.json'),
+  JSON.stringify({
+    name: 'clean-install-check',
+    private: true,
+    type: 'module',
+    devDependencies: {
+      '@veritas/cli': tarballs['@veritas/cli'],
+      '@veritas/mcp': tarballs['@veritas/mcp'],
+      vitest: '5.1.1',
+      '@mizchi/mutator': '0.4.5',
+      'fast-check': '4.10.3',
+    },
+  }),
+);
+writeFileSync(
+  path.join(project, 'pnpm-workspace.yaml'),
+  `packages: []\nminimumReleaseAge: 0\noverrides:\n${Object.entries(tarballs)
+    .map(([k, v]) => `  '${k}': '${v}'\n`)
+    .join('')}`,
+);
+run(pnpm, ['install'], project);
+execFileSync('git', ['init', '-q'], { cwd: project });
+execFileSync('git', ['add', '-A'], { cwd: project });
+execFileSync('git', ['-c', 'user.email=ci@example.invalid', '-c', 'user.name=ci', 'commit', '-qm', 'init'], {
+  cwd: project,
+});
+const veritas = (...args) => run(pnpm, ['exec', 'veritas', ...args], project);
+veritas('init', '--yes');
+veritas('doctor');
+const output = JSON.parse(veritas('run', '--profile', 'deep', '--offline', '--include-proposed', '--json'));
+const mismatch = output.findings.find((f) => f.kind === 'spec_implementation_mismatch');
+if (!mismatch || !output.findings.some((f) => f.kind === 'survived_mutant')) {
+  console.error('expected findings missing', output.findings);
+  process.exit(1);
+}
+veritas('report', '--format', 'markdown');
+veritas('explain', mismatch.id);
+console.log(`clean install check passed in ${project}`);
