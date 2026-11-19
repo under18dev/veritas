@@ -300,6 +300,9 @@ importers:
       '@veritas/engine':
         specifier: workspace:*
         version: link:../engine
+      '@veritas/improvement':
+        specifier: workspace:*
+        version: link:../improvement
       commander:
         specifier: 15.1.0
         version: 15.1.0
@@ -450,6 +453,9 @@ importers:
       '@veritas/engine':
         specifier: workspace:*
         version: link:../engine
+      '@veritas/improvement':
+        specifier: workspace:*
+        version: link:../improvement
       zod:
         specifier: 4.6.7
         version: 4.6.7

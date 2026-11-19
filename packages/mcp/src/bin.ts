@@ -10,12 +10,14 @@ const { values } = parseArgs({
   options: {
     root: { type: 'string', default: process.cwd() },
     'max-concurrent': { type: 'string', default: '1' },
+    'allow-write': { type: 'boolean', default: false },
   },
 });
 const root = realpathSync(path.resolve(values.root as string));
 const server = createServer({
   root,
   maxConcurrent: Math.max(1, Number(values['max-concurrent'])),
+  allowWrite: Boolean(values['allow-write']),
   version: TOOL_VERSION,
 });
 await server.connect(new StdioServerTransport());

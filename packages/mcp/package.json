@@ -23,6 +23,7 @@
     "@modelcontextprotocol/sdk": "1.32.2",
     "@veritas/core": "workspace:*",
     "@veritas/engine": "workspace:*",
-    "zod": "4.6.7"
+    "zod": "4.6.7",
+    "@veritas/improvement": "workspace:*"
   }
 }

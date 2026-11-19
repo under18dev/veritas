@@ -9,6 +9,7 @@ import {
   readLatest,
   runVeritas,
 } from '@veritas/engine';
+import { applyImprovement, planImprovement } from '@veritas/improvement';
 import { z } from 'zod';
 
 export interface ServerOptions {
@@ -17,6 +18,11 @@ export interface ServerOptions {
   /** Maximum number of long-running operations at the same time. */
   maxConcurrent?: number;
   version?: string;
+  /**
+   * Register `apply_approved_improvement`. Off by default: without it the server can never change project files.
+   * Even when on, every apply needs the plan id and the approval token that the plan's owner reviewed.
+   */
+  allowWrite?: boolean;
 }
 
 const Id = (prefix: string) =>
@@ -308,6 +314,54 @@ export function createServer(options: ServerOptions): McpServer {
       }
     },
   );
+
+  server.registerTool(
+    'plan_improvement',
+    {
+      description:
+        'Plan test-only improvements from the latest run (no project files are changed). Returns the plan, spec violation candidates and the approval token a person must review before anything is applied.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async (_args, extra) => {
+      try {
+        const result = await gate.run((extra as unknown as Extra).signal, () => planImprovement({ root }));
+        return ok(result);
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  if (options.allowWrite) {
+    server.registerTool(
+      'apply_approved_improvement',
+      {
+        description:
+          'Apply a reviewed improvement plan. Requires the exact plan id and approval token; adds new test files only, after measuring the improvement in an isolated copy, and rolls back otherwise. Refused in CI.',
+        inputSchema: {
+          planId: z.string().regex(/^IP-[0-9a-f]{6,64}$/, 'expected an IP-<hex> plan id'),
+          approvalToken: z.string().regex(/^[0-9a-f]{64}$/, 'expected the 64-character approval token'),
+        },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({ planId, approvalToken }, extra) => {
+        try {
+          const attempt = await gate.run((extra as unknown as Extra).signal, () =>
+            applyImprovement({ root, planId, approvalToken, signal: (extra as unknown as Extra).signal }),
+          );
+          return ok({ attempt });
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+  }
 
   return server;
 }
