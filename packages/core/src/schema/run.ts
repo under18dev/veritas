@@ -75,6 +75,12 @@ export const Run = z.object({
       propertyIds: z.array(z.string()).optional(),
       formalEngine: z.enum(['z3', 'lean']).optional(),
       sources: z.array(z.enum(['local', 'github', 'web'])).optional(),
+      web: z
+        .object({
+          allowDomains: z.array(z.string()).optional(),
+          maxPages: z.number().int().positive().optional(),
+        })
+        .optional(),
       mutationReport: z.string().optional(),
       killMatrix: z.boolean().optional(),
       offline: z.boolean(),

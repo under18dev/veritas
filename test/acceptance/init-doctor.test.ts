@@ -130,6 +130,19 @@ describe('exit codes and output contract', () => {
     }
   });
 
+  it('records the web overrides of discover in the run options', () => {
+    const dir = copyFixture('discount-boundary');
+    expect(runCli(['init', '--yes'], dir).status).toBe(0);
+    const result = runCli(
+      ['discover', '--allow-domain', 'docs.example.com', '--max-pages', '2', '--json'],
+      dir,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const { runId } = json<{ runId: string }>(result);
+    const run = JSON.parse(readFileSync(path.join(dir, '.veritas/runs', runId, 'run.json'), 'utf8')).data;
+    expect(run.options.web).toEqual({ allowDomains: ['docs.example.com'], maxPages: 2 });
+  });
+
   it('refuses a project root that does not exist', () => {
     const dir = copyFixture('discount-boundary');
     const result = runCli(['--json', '-C', path.join(dir, 'missing'), 'doctor'], dir);

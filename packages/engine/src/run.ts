@@ -778,6 +778,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       ...(options.propertyIds ? { propertyIds: options.propertyIds } : {}),
       ...(options.formalEngine ? { formalEngine: options.formalEngine } : {}),
       ...(options.sources ? { sources: options.sources } : {}),
+      ...(options.web ? { web: options.web } : {}),
       ...(options.mutationReport ? { mutationReport: options.mutationReport } : {}),
       ...(options.killMatrix ? { killMatrix: true } : {}),
       offline: Boolean(options.offline),

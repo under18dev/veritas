@@ -172,6 +172,7 @@ export async function replayCommand(opts: Opts, args: string[]): Promise<ExitCod
     ...(run.options?.propertyIds ? { propertyIds: run.options.propertyIds } : {}),
     ...(run.options?.formalEngine ? { formalEngine: run.options.formalEngine } : {}),
     ...(run.options?.sources ? { sources: run.options.sources } : {}),
+    ...(run.options?.web ? { web: run.options.web } : {}),
     ...(run.options?.mutationReport ? { mutationReport: run.options.mutationReport } : {}),
     ...(run.options?.killMatrix ? { killMatrix: true } : {}),
     ...(run.scope.paths.length ? { scope: run.scope.paths } : {}),
