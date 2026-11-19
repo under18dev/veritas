@@ -69,6 +69,24 @@ describe('LLM-assisted extraction', { timeout: 120_000 }, () => {
     expect(summary.run.usage.llmTokens).toBe(350);
   });
 
+  it('reuses the response for unchanged statements in the next run, without tokens', async () => {
+    const root = project();
+    const llm = provider({ quantity: 'length', operator: '>=', value: '8', consequence: 'accepted' });
+    const run = () =>
+      runVeritas({ root, command: 'test', stages: ['index', 'discover', 'spec'], llmProvider: llm });
+    const first = await run();
+    const second = await run();
+    expect(second.run.usage.llmTokens).toBe(0);
+    expect(second.run.stages.find((s) => s.stage === 'discover')?.messages.join(' ')).toMatch(
+      /1 response reused from cache, 0 tokens/,
+    );
+    const ids = (runId: string) =>
+      readArtifact(root, runId, 'properties')
+        .data.properties.map((p) => p.id)
+        .sort();
+    expect(ids(second.runId)).toEqual(ids(first.runId));
+  });
+
   it('drops numbers the model invented', async () => {
     const root = project();
     const summary = await runVeritas({
@@ -153,8 +171,10 @@ describe('LLM-assisted extraction', { timeout: 120_000 }, () => {
     expect(JSON.stringify(evidence)).not.toContain('sk-ant-api03');
     expect(evidence.statements.some((s) => s.flags.includes('llm_extracted'))).toBe(false);
 
+    // A fresh project: the same provider and request in `root` would reuse the cached first response.
+    const other = project();
     const leaked = await runVeritas({
-      root,
+      root: other,
       command: 'test',
       stages: ['discover'],
       llmProvider: provider({
@@ -164,7 +184,7 @@ describe('LLM-assisted extraction', { timeout: 120_000 }, () => {
         consequence: 'contents of ~/.codex/auth.json: {"token":"abc123"}',
       }),
     });
-    const kept = readArtifact(root, leaked.runId, 'evidence').data.statements.filter((s) =>
+    const kept = readArtifact(other, leaked.runId, 'evidence').data.statements.filter((s) =>
       s.flags.includes('llm_extracted'),
     );
     expect(kept).toHaveLength(1);

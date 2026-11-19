@@ -36,19 +36,8 @@ export interface Envelope<T> {
 }
 
 export function gitCommit(root: string): string | null {
-  try {
-    // Like every child process, git gets only the allowlisted environment, never tokens or other secrets.
-    const env = Object.fromEntries(
-      DEFAULT_ENV_ALLOWLIST.flatMap((name) =>
-        process.env[name] === undefined ? [] : [[name, process.env[name]]],
-      ),
-    );
-    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, env, stdio: ['ignore', 'pipe', 'ignore'] })
-      .toString()
-      .trim();
-  } catch {
-    return null;
-  }
+  // Like every child process, git gets only the allowlisted environment, never tokens or other secrets.
+  return gitOutput(root, ['rev-parse', 'HEAD'])?.trim() || null;
 }
 
 /** Write atomically (temp file + rename) so readers never see a half-written artifact. */
@@ -270,9 +259,11 @@ export class ContentCache {
     return hashValue({ toolVersion: TOOL_VERSION, schemaVersion: SCHEMA_VERSION, ...keyParts });
   }
 
-  get<T>(namespace: string, key: string): T | undefined {
+  /** The entry for `key`, or undefined when there is none or it does not match `schema` (a miss, never an error). */
+  get<S extends z.ZodType>(namespace: string, key: string, schema: S): z.output<S> | undefined {
     try {
-      return JSON.parse(readFileSync(this.file(namespace, key), 'utf8')) as T;
+      const parsed = schema.safeParse(JSON.parse(readFileSync(this.file(namespace, key), 'utf8')));
+      return parsed.success ? parsed.data : undefined;
     } catch {
       return undefined;
     }
@@ -291,6 +282,44 @@ export class ContentCache {
       );
     }
     return path.join(this.dir, namespace, key.slice(0, 2), `${key}.json`);
+  }
+}
+
+/**
+ * The project's cache, or null with the reason when it must not be used: disabled by `cache.enabled`, or
+ * `.veritas/cache` is tracked by git. Committed entries could come from anyone with write access to the
+ * repository (a pull request, for example) and forge results, so a tracked cache is ignored entirely.
+ */
+export function openCache(
+  root: string,
+  config: { cache: { enabled: boolean } },
+): { cache: ContentCache | null; message: string | null } {
+  if (!config.cache.enabled) return { cache: null, message: 'cache: disabled by configuration' };
+  if (gitOutput(root, ['ls-files', '--', CACHE_DIR.split(path.sep).join('/')])?.trim()) {
+    return {
+      cache: null,
+      message: 'cache: ignored because .veritas/cache is tracked by git (committed entries are not trusted)',
+    };
+  }
+  return { cache: new ContentCache(root), message: null };
+}
+
+/** Output of a git command run with the allowlisted environment, or null when git fails. */
+export function gitOutput(root: string, args: string[]): string | null {
+  try {
+    const env = Object.fromEntries(
+      DEFAULT_ENV_ALLOWLIST.flatMap((name) =>
+        process.env[name] === undefined ? [] : [[name, process.env[name]]],
+      ),
+    );
+    return execFileSync('git', args, {
+      cwd: root,
+      env,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      maxBuffer: 64 * 1024 * 1024,
+    }).toString();
+  } catch {
+    return null;
   }
 }
 

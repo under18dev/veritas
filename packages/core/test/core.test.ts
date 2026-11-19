@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,6 +19,7 @@ import {
   leanToolCandidates,
   loadConfig,
   newRunId,
+  openCache,
   PropertyIR,
   PUBLIC_SCHEMAS,
   parseConfig,
@@ -178,7 +180,7 @@ describe('run store', () => {
     const cache = new ContentCache(root);
     const key = cache.key({ k: 1 });
     cache.set('logs', key, { line: 'ghp_abcdefghijklmnopqrstuvwxyz' });
-    expect(JSON.stringify(cache.get('logs', key))).not.toContain('ghp_');
+    expect(JSON.stringify(cache.get('logs', key, z.object({ line: z.string() })))).not.toContain('ghp_');
   });
 
   it('gives raw text and external-tool files the run metadata and a hash through the artifact index', () => {
@@ -224,12 +226,37 @@ describe('run store', () => {
 
   it('caches by content key', () => {
     const cache = new ContentCache(tmp());
+    const schema = z.object({ ok: z.boolean() });
     const key = cache.key({ source: 'a' });
-    expect(cache.get('ast', key)).toBeUndefined();
+    expect(cache.get('ast', key, schema)).toBeUndefined();
     cache.set('ast', key, { ok: true });
-    expect(cache.get('ast', key)).toEqual({ ok: true });
+    expect(cache.get('ast', key, schema)).toEqual({ ok: true });
     expect(cache.key({ source: 'b' })).not.toBe(key);
     expect(() => cache.set('../x', key, 1)).toThrow();
+  });
+
+  it('treats an entry that does not match its schema as a miss', () => {
+    const cache = new ContentCache(tmp());
+    const key = cache.key({ source: 'a' });
+    cache.set('ast', key, { ok: 'forged' });
+    expect(cache.get('ast', key, z.object({ ok: z.boolean() }))).toBeUndefined();
+  });
+
+  it('opens the cache unless it is disabled or tracked by git', () => {
+    const root = tmp();
+    expect(openCache(root, { cache: { enabled: true } }).cache).toBeInstanceOf(ContentCache);
+    const disabled = openCache(root, { cache: { enabled: false } });
+    expect(disabled.cache).toBeNull();
+    expect(disabled.message).toMatch(/disabled/);
+    const git = (args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+    git(['init', '-q']);
+    const cache = new ContentCache(root);
+    cache.set('solver', cache.key({ smt: 'x' }), { verdict: 'unsat' });
+    expect(openCache(root, { cache: { enabled: true } }).cache).toBeInstanceOf(ContentCache);
+    git(['add', '-f', '.veritas/cache']);
+    const tracked = openCache(root, { cache: { enabled: true } });
+    expect(tracked.cache).toBeNull();
+    expect(tracked.message).toMatch(/tracked by git/);
   });
 });
 

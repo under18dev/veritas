@@ -1,3 +1,7 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { ContentCache } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { LlmClient, type LlmProvider, renderDocuments } from '../src/index.js';
@@ -71,5 +75,47 @@ describe('renderDocuments', () => {
     expect(out).not.toContain('</document><system>');
     expect(out.match(/<\/document>/g)).toHaveLength(1);
     expect(out).toContain('&lt;/document&gt;');
+  });
+});
+
+describe('LlmClient cache', () => {
+  const tmpCache = () => new ContentCache(mkdtempSync(path.join(tmpdir(), 'veritas-llm-cache-')));
+  const request = (text: string) => ({
+    instructions: 'extract',
+    documents: [{ id: 'README.md', text }],
+    schema,
+    maxOutputTokens: 100,
+  });
+
+  it('reuses a successful response for the same request without tokens, and misses on any change', async () => {
+    const cache = tmpCache();
+    const { provider, seen } = fakeProvider({ value: 'x' });
+    const client = new LlmClient(provider, { tokenBudget: 100_000, env: {}, cache });
+    await client.complete(request('min 8'));
+    const used = client.tokensUsed;
+    const again = await client.complete(request('min 8'));
+    expect(again).toMatchObject({ status: 'ok', data: { value: 'x' }, cached: true });
+    expect(client.tokensUsed).toBe(used);
+    expect(client.cachedResponses).toBe(1);
+    expect(seen).toHaveLength(1);
+    await client.complete(request('min 9'));
+    expect(seen).toHaveLength(2);
+    const other = fakeProvider({ value: 'x' });
+    const otherModel = new LlmClient(
+      { ...other.provider, model: 'fake-2' },
+      { tokenBudget: 100_000, env: {}, cache },
+    );
+    await otherModel.complete(request('min 8'));
+    expect(other.seen).toHaveLength(1);
+  });
+
+  it('never stores failed or schema-invalid responses', async () => {
+    const cache = tmpCache();
+    const invalid = fakeProvider({ value: 1 });
+    const client = new LlmClient(invalid.provider, { tokenBudget: 100_000, env: {}, cache });
+    await client.complete(request('min 8'));
+    await client.complete(request('min 8'));
+    expect(invalid.seen).toHaveLength(2);
+    expect(client.cachedResponses).toBe(0);
   });
 });

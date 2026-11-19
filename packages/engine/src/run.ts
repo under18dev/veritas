@@ -4,12 +4,16 @@ import { assessTests, deriveFindings, linkMutants, linkTests } from '@under18dev
 import { analyzeCode, type CodeIndex, inferBehaviorCandidates } from '@under18dev/veritas-code-intelligence';
 import {
   type Capability,
+  type ContentCache,
+  detectProject,
   evaluatePolicy,
   type Finding,
   type FormalClaim,
+  gitOutput,
   hashValue,
   type Mutant,
   newRunId,
+  openCache,
   type PolicyDecision,
   type PolicyEvidence,
   type Property,
@@ -22,6 +26,7 @@ import {
   type Stage,
   type StageName,
   type StageResult,
+  sha256,
   stableId,
   toPosixRelative,
   VeritasError,
@@ -33,7 +38,7 @@ import {
   translateFunction,
 } from '@under18dev/veritas-formal-core';
 import { LlmClient, type LlmProvider } from '@under18dev/veritas-llm';
-import { runMutation } from '@under18dev/veritas-mutation-adapter';
+import { locateMutator, MutationRunResult, runMutation } from '@under18dev/veritas-mutation-adapter';
 import {
   applyApprovals,
   buildRegistry,
@@ -174,6 +179,8 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
   };
   const sourceHash = hashValue(code0.files);
   const store = new RunStore(root, runId, { configHash, sourceHash });
+  const { cache, message: cacheMessage } = openCache(root, config);
+  if (cacheMessage) log(cacheMessage);
   const signal = options.signal ?? new AbortController().signal;
   const wanted = new Set(options.stages);
   const domain = config.formal.integerDomain;
@@ -230,6 +237,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         const client = new LlmClient(provider, {
           tokenBudget: config.llm.maxTokensPerRun,
           sendFullText: config.sources.sendFullTextToLlm,
+          cache,
         });
         const extracted = await extractWithLlm(client, result, signal);
         result.statements.push(...extracted.added);
@@ -330,18 +338,28 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
     name: 'mutate',
     dependsOn: [],
     run: async () => {
-      const result = await runMutation({
-        root,
-        config,
-        reportDir: store.pathFor('mutation'),
-        signal,
-        ...(options.since ? { since: options.since } : {}),
-        ...(options.scope ? { scope: options.scope } : {}),
-      });
+      const cacheKey = cache
+        ? mutationCacheKey(cache, root, { configHash, since: options.since, scope: options.scope })
+        : null;
+      const cached = cache && cacheKey ? cache.get('mutation', cacheKey, MutationRunResult) : undefined;
+      const result =
+        cached ??
+        (await runMutation({
+          root,
+          config,
+          reportDir: store.pathFor('mutation'),
+          signal,
+          ...(options.since ? { since: options.since } : {}),
+          ...(options.scope ? { scope: options.scope } : {}),
+        }));
+      // Only a complete mutation run is reused; a failed or unsupported one is always retried.
+      if (!cached && cache && cacheKey && result.status === 'succeeded')
+        cache.set('mutation', cacheKey, result);
+      if (cached) result.rawReportPath = null;
       mutants = result.mutants;
       mutationAvailable = result.status === 'succeeded';
       // The mutator writes its own report files; index them so they carry the run metadata and a hash.
-      const external = store.recordExternal('mutation');
+      const external = cached ? [] : store.recordExternal('mutation');
       const { status, undecided } = mutationStageStatus(result, { incremental: Boolean(options.since) });
       return {
         status,
@@ -349,6 +367,8 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         artifacts: external,
         usage: { mutants: result.mutants.length },
         messages: [
+          ...(cached ? [`mutation results reused from cache ${cacheKey}`] : []),
+          ...(cacheMessage ? [cacheMessage] : []),
           `mutator ${result.backend.version ?? 'unknown'}: ${result.status}${result.detail ? ` (${result.detail})` : ''}`,
           `counts: ${JSON.stringify(Object.fromEntries(Object.entries(result.counts).filter(([, n]) => n > 0)))}`,
           ...result.warnings,
@@ -470,6 +490,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
               ? []
               : [`property ${p.id} is ${p.status}, not accepted: experimental check`],
           allowNetworkWithoutIsolation: config.sandbox.allowNetworkWithoutIsolation,
+          cache,
         });
         claims.push(claim);
         solverMs += claim.durationMs;
@@ -542,6 +563,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
           signal,
           mutantId: m.id,
           allowNetworkWithoutIsolation: config.sandbox.allowNetworkWithoutIsolation,
+          cache,
         });
         claims.push(claim);
         solverMs += claim.durationMs;
@@ -706,6 +728,51 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
   }
   log(`run ${runId}: ${decision.verdict}`);
   return { runId, dir: store.dir, run, findings, decision };
+}
+
+/**
+ * Cache key for a mutation run: every file the tests could read (tracked and untracked, not ignored, from
+ * `git ls-files`, without tool state) by content, the mutator and Vitest builds, Node.js, the configuration and
+ * the selection (`--since` resolved to a commit, scope). Without git the files cannot be listed and the cache is
+ * not used.
+ */
+export function mutationCacheKey(
+  cache: ContentCache,
+  root: string,
+  selection: { configHash: string; since?: string | undefined; scope?: string[] | undefined },
+): string | null {
+  const listed = gitOutput(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
+  if (listed === null) return null;
+  const since = selection.since
+    ? gitOutput(root, ['rev-parse', '--verify', `${selection.since}^{commit}`])
+    : null;
+  if (selection.since && since === null) return null;
+  // Tool state is not an input: Veritas runs and cache, mutator's working directory and installed dependencies
+  // (`node_modules`, where Vitest also keeps its cache; dependencies count through the lockfile and versions).
+  const files = [
+    ...new Set(
+      listed
+        .split('\0')
+        .filter((f) => f && !/^(\.veritas|\.mutator)\//.test(f) && !f.split('/').includes('node_modules')),
+    ),
+  ].sort();
+  const contents = files.map((file) => {
+    try {
+      return [file, sha256(readFileSync(resolveInsideRoot(root, file)))];
+    } catch {
+      return [file, null];
+    }
+  });
+  const mutator = locateMutator(root);
+  return cache.key({
+    mutation: contents,
+    mutator: mutator ? { version: mutator.version, origin: mutator.origin } : null,
+    vitest: detectProject(root).vitest.installedVersion,
+    node: process.versions.node,
+    configHash: selection.configHash,
+    since: since?.trim() ?? null,
+    scope: selection.scope ?? [],
+  });
 }
 
 /**

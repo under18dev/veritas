@@ -248,6 +248,29 @@ describe('discount-boundary end to end', () => {
     expect(readFileSync(edited, 'utf8')).not.toContain('// kept by the user');
   });
 
+  it('reuses mutation results from the cache until a test file changes', () => {
+    const dir = setup('discount-boundary');
+    const standard = () => json<RunJson>(runCli(['run', '--profile', 'standard', '--json'], dir));
+    const mutate = (run: RunJson) => run.stages.find((s) => s.stage === 'mutate');
+    const statuses = (run: RunJson) =>
+      readRunArtifact<{ mutants: { id: string; status: string }[] }>(dir, run.runId, 'mutation.json')
+        .mutants.map((m) => [m.id, m.status])
+        .sort();
+    const first = standard();
+    expect(mutate(first)?.status).toBe('succeeded');
+    expect(mutate(first)?.messages.join(' ')).not.toMatch(/reused from cache/);
+    const second = standard();
+    expect(mutate(second)?.messages.join(' ')).toMatch(/mutation results reused from cache [0-9a-f]{64}/);
+    expect(statuses(second)).toEqual(statuses(first));
+    expect(statuses(first).length).toBeGreaterThan(0);
+
+    const test = path.join(dir, 'test/discount-weak.test.ts');
+    writeFileSync(test, `${readFileSync(test, 'utf8')}\n// edited\n`);
+    const third = standard();
+    expect(mutate(third)?.status).toBe('succeeded');
+    expect(mutate(third)?.messages.join(' ')).not.toMatch(/reused from cache/);
+  });
+
   it('replays a run with the same stages and records a new run', () => {
     const dir = setup('discount-boundary');
     const first = json<RunJson>(runCli(['run', '--profile', 'quick', '--json'], dir));

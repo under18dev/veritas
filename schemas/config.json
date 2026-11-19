@@ -408,6 +408,17 @@
         }
       },
       "additionalProperties": false
+    },
+    "cache": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

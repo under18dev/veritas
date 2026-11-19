@@ -75,6 +75,9 @@ Only new test files are added, and only when mutation results improve in an isol
 | `policy.inconclusiveBehavior`                   | `warn`                       | `fail` turns inconclusive results into exit 4                                                                                       |
 | `policy.maxNewSurvivors`                        | unset                        | Exit 1 when more mutants survive in this run's scope (the change with `--since`); inconclusive without mutation results             |
 | `policy.minPropertyCoverage`                    | unset                        | Exit 1 when fewer accepted properties (share, 0–1) have a `meaningful_with_evidence` test; inconclusive without accepted properties |
+| `cache.enabled`                                 | `true`                       | Reuse results from `.veritas/cache/` (see below)                                                                                    |
+
+The cache keeps decisive Z3 results (`sat`/`unsat`, keyed by the SMT query, solver build and time limit), successful LLM responses (keyed by provider, model and the exact request) and complete mutation runs (keyed by the content of every file `git ls-files` lists, the mutator, Vitest and Node.js versions, the configuration and `--since`/scope). Undecided or failed results are never reused, a reused counterexample is still replayed in JavaScript, and reuse is shown in the stage messages and solver output. Without git, mutation results are not cached. Keep `.veritas/` out of version control: a cache tracked by git is ignored.
 
 ## LLM providers
 

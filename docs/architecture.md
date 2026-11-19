@@ -56,12 +56,12 @@ Packages appear as they are implemented; see the support matrix for what works t
 
 ## Storage
 
-| Path                                            | Content                                                                                           |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `.veritas/config.json` (or `veritas.config.ts`) | Configuration                                                                                     |
-| `.veritas/approvals.json`                       | Human decisions on properties: who, when, what, why                                               |
-| `.veritas/runs/<run-id>/`                       | Per-run artifacts: evidence, properties, test map, mutants, solver input/output, patches, reports |
-| `.veritas/cache/`                               | Content-addressed cache                                                                           |
+| Path                                            | Content                                                                                                        |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `.veritas/config.json` (or `veritas.config.ts`) | Configuration                                                                                                  |
+| `.veritas/approvals.json`                       | Human decisions on properties: who, when, what, why                                                            |
+| `.veritas/runs/<run-id>/`                       | Per-run artifacts: evidence, properties, test map, mutants, solver input/output, patches, reports              |
+| `.veritas/cache/`                               | Content-addressed cache of decisive solver results, LLM responses and mutation runs; ignored if tracked by git |
 
 Each JSON artifact is an envelope with `schemaVersion`, `runId`, `createdAt`, `toolVersion`, `gitCommit`, `configHash` and `sourceHash` (ADR 0002). Files that cannot hold an envelope (solver input and output, Lean sources, rendered reports, the mutator's own report files) are listed in `artifact-index.json` with their SHA-256, and that index carries the metadata; the rendered reports also show it. JSON Schemas are in `schemas/`.
 

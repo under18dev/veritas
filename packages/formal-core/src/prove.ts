@@ -1,5 +1,6 @@
 import {
   type ClaimKind,
+  type ContentCache,
   callInSandbox,
   type EncodedValue,
   type Expr,
@@ -15,6 +16,7 @@ import {
   type SolverEngine,
   type SolverRun,
   safeRangeQuery,
+  solverEngineVersion,
   solveSmtLib,
 } from '@under18dev/veritas-solver-z3';
 import { z } from 'zod';
@@ -43,6 +45,8 @@ export interface ProveOptions {
   assumptions?: string[];
   /** Replay project code even where network access cannot be blocked (sandbox.allowNetworkWithoutIsolation). */
   allowNetworkWithoutIsolation?: boolean;
+  /** Reuse decisive (sat/unsat) solver results for identical queries. JavaScript replay always runs again. */
+  cache?: ContentCache | null;
 }
 
 export interface ProveResult {
@@ -193,6 +197,47 @@ const VERDICT_STATUS: Record<SolverRun['verdict'], VerificationStatus> = {
   cancelled: 'unknown',
 };
 
+const CachedSolverRun = z.object({
+  engine: z.enum(['z3-wasm', 'z3-native']),
+  engineVersion: z.string(),
+  verdict: z.enum(['sat', 'unsat']),
+  model: z.record(z.string(), z.union([z.string(), z.boolean()])),
+  reasonUnknown: z.null(),
+  output: z.string(),
+  error: z.null(),
+  durationMs: z.number(),
+});
+
+/**
+ * Solve `smt`, reusing a cached result for the same query, solver build and time limit. Only `sat` and `unsat`
+ * are stored: an undecided result (unknown, timeout, error, cancelled) is always solved again.
+ */
+async function solve(
+  smt: string,
+  options: ProveOptions,
+  timeoutMs: number,
+): Promise<SolverRun & { cacheKey?: string }> {
+  const engine = options.engine ?? 'z3-wasm';
+  const version = options.cache ? await solverEngineVersion(engine) : null;
+  const key =
+    options.cache && version
+      ? options.cache.key({ solver: 'z3', smt, engine, engineVersion: version, timeoutMs })
+      : null;
+  if (options.cache && key) {
+    const hit = options.cache.get('solver', key, CachedSolverRun);
+    // No solver time was spent on a reused result.
+    if (hit) return { ...hit, durationMs: 0, cacheKey: key };
+  }
+  const run = await solveSmtLib(smt, { timeoutMs, engine, signal: options.signal });
+  if (options.cache && key && (run.verdict === 'sat' || run.verdict === 'unsat'))
+    options.cache.set('solver', key, run);
+  return run;
+}
+
+function cacheNote(run: { cacheKey?: string }): string {
+  return run.cacheKey ? `; result reused from cache ${run.cacheKey}\n` : '';
+}
+
 /**
  * Check `forall params in domain: preconditions => body` with Z3 and validate the result against JavaScript.
  * - sat: the counterexample is replayed; disagreement between model and JavaScript gives `semantic_mismatch`.
@@ -207,15 +252,11 @@ export async function proveProperty(options: ProveOptions): Promise<ProveResult>
     mutant: options.mutantId,
   });
   const smt = conformanceQuery(options.ir, options.timeoutMs);
-  const solver = await solveSmtLib(smt, {
-    timeoutMs: options.timeoutMs * 2 + 5_000,
-    engine: options.engine,
-    signal: options.signal,
-  });
+  const solver = await solve(smt, options, options.timeoutMs * 2 + 5_000);
   const inputArtifact = options.store?.writeText(`proofs/${claimId}.smt2`, smt);
   const outputArtifact = options.store?.writeText(
     `proofs/${claimId}.out`,
-    `; engine ${solver.engine} ${solver.engineVersion}; verdict ${solver.verdict}; ${solver.durationMs} ms\n${solver.output}${solver.error ? `\n; error: ${solver.error}\n` : ''}`,
+    `; engine ${solver.engine} ${solver.engineVersion}; verdict ${solver.verdict}; ${solver.durationMs} ms\n${cacheNote(solver)}${solver.output}${solver.error ? `\n; error: ${solver.error}\n` : ''}`,
   );
 
   let status = VERDICT_STATUS[solver.verdict];
@@ -243,15 +284,11 @@ export async function proveProperty(options: ProveOptions): Promise<ProveResult>
   if (solver.verdict === 'unsat') {
     const rangeSmt = safeRangeQuery(options.ir, options.timeoutMs);
     if (rangeSmt) {
-      const range = await solveSmtLib(rangeSmt, {
-        timeoutMs: options.timeoutMs * 2 + 5_000,
-        engine: options.engine,
-        signal: options.signal,
-      });
+      const range = await solve(rangeSmt, options, options.timeoutMs * 2 + 5_000);
       options.store?.writeText(`proofs/${claimId}.safe-range.smt2`, rangeSmt);
       options.store?.writeText(
         `proofs/${claimId}.safe-range.out`,
-        `; verdict ${range.verdict}\n${range.output}`,
+        `; verdict ${range.verdict}\n${cacheNote(range)}${range.output}`,
       );
       if (range.verdict === 'sat') {
         status = 'semantic_mismatch';

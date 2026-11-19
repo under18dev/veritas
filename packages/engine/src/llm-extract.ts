@@ -85,7 +85,9 @@ export async function extractWithLlm(
     added,
     tokens,
     messages: [
-      `llm ${result.provider}/${result.model}: ${added.length} threshold(s) from ${candidates.length} statement(s); input ${result.inputHash.slice(0, 12)} (not reproducible)`,
+      result.cached
+        ? `llm ${result.provider}/${result.model}: ${added.length} threshold(s) from ${candidates.length} statement(s); input ${result.inputHash.slice(0, 12)}; 1 response reused from cache, 0 tokens`
+        : `llm ${result.provider}/${result.model}: ${added.length} threshold(s) from ${candidates.length} statement(s); input ${result.inputHash.slice(0, 12)} (not reproducible)`,
     ],
   };
 }

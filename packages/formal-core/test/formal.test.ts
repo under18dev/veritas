@@ -1,8 +1,16 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FormalClaim, hashValue, RunStore } from '@under18dev/veritas-core';
+import { ContentCache, FormalClaim, hashValue, RunStore } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import {
   applyMutation,
@@ -434,5 +442,94 @@ describe('solver limits', () => {
     });
     expect(['timeout', 'unknown']).toContain(claim.status);
     expect(claim.assurance).toBe('none');
+  }, 60_000);
+});
+
+describe('solver result cache', () => {
+  const discountIr = (root: string) =>
+    thresholdProperty({
+      implementation: translated(translateFile(root, 'src/pricing.ts', 'discountAmount')),
+      param: 'total',
+      operator: '>=',
+      value: '1000',
+      whenTrue: '100',
+      whenFalse: '0',
+    });
+  const proveDiscount = (root: string, cache: ContentCache, timeoutMs = 10_000) => {
+    const runStore = store(root);
+    return proveProperty({
+      kind: 'conformance',
+      propertyId: 'P-discount',
+      ir: discountIr(root),
+      root,
+      bindings: [
+        {
+          modelName: 'discountAmount',
+          modulePath: path.join(root, 'src/pricing.ts'),
+          exportName: 'discountAmount',
+        },
+      ],
+      timeoutMs,
+      store: runStore,
+      cache,
+    }).then((result) => ({
+      ...result,
+      output: readFileSync(runStore.pathFor(result.claim.solverOutputArtifact as string), 'utf8'),
+    }));
+  };
+
+  it('reuses a decisive result for the same query and still replays it in JavaScript', async () => {
+    const root = fixture();
+    const cache = new ContentCache(root);
+    const first = await proveDiscount(root, cache);
+    expect(first.output).not.toContain('reused from cache');
+    const second = await proveDiscount(root, cache);
+    expect(second.output).toMatch(/; result reused from cache [0-9a-f]{64}/);
+    expect(second.claim.status).toBe('counterexample_found');
+    expect(second.claim.counterexample).toEqual(first.claim.counterexample);
+    expect(second.claim.durationMs).toBe(0);
+    expect(second.replay[0]).toMatchObject({ purpose: 'counterexample', agrees: true });
+    // Another time limit is another query.
+    const other = await proveDiscount(root, cache, 9_000);
+    expect(other.output).not.toContain('reused from cache');
+  }, 60_000);
+
+  it('misses when the implementation changes', async () => {
+    const root = fixture();
+    const cache = new ContentCache(root);
+    await proveDiscount(root, cache);
+    const file = path.join(root, 'src/pricing.ts');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('total > 1000', 'total >= 1000'));
+    const changed = await proveDiscount(root, cache);
+    expect(changed.output).not.toContain('reused from cache');
+    expect(changed.claim.status).toBe('proven_within_model');
+  }, 60_000);
+
+  it('never stores an undecided result', async () => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-formal-')));
+    cpSync(path.join(REPO, 'fixtures/solver-limits/src'), path.join(root, 'src'), { recursive: true });
+    const source = readFileSync(path.join(root, 'src/cubes.ts'), 'utf8');
+    const orig = translated(translateFile(root, 'src/cubes.ts', 'sumsTo33', 'original'));
+    const never = translated(
+      translateFunction({
+        file: 'src/cubes.ts',
+        source: source.replace(/return [^;]+;/, 'return 0;'),
+        exportName: 'sumsTo33',
+        domain: { min: '-100000000', max: '100000000' },
+        modelName: 'mutant',
+      }),
+    );
+    const cache = new ContentCache(root);
+    const { claim } = await proveProperty({
+      kind: 'bounded_equivalence',
+      propertyId: 'P-cubes',
+      ir: equivalenceProperty(orig, never, { min: '-100000000', max: '100000000' }),
+      root,
+      bindings: [],
+      timeoutMs: 200,
+      cache,
+    });
+    expect(['timeout', 'unknown']).toContain(claim.status);
+    expect(existsSync(path.join(root, '.veritas/cache/solver'))).toBe(false);
   }, 60_000);
 });

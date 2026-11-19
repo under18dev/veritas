@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { Worker } from 'node:worker_threads';
 import { runCommand } from '@under18dev/veritas-core';
 import { parseGetValue, parseSExprs, type SExpr } from './sexpr.js';
@@ -165,4 +166,21 @@ async function runNative(smt: string, options: SolveOptions): Promise<SolverRun>
 /** Run an SMT-LIB 2 script through Z3. Never infers a verdict that the solver did not print. */
 export function solveSmtLib(smt: string, options: SolveOptions): Promise<SolverRun> {
   return (options.engine ?? 'z3-wasm') === 'z3-native' ? runNative(smt, options) : runWasm(smt, options);
+}
+
+/** Version of the solver build `engine` would run, or null when it cannot be determined. */
+export async function solverEngineVersion(
+  engine: SolverEngine = 'z3-wasm',
+  nativeBinary = 'z3',
+): Promise<string | null> {
+  if (engine === 'z3-wasm') {
+    try {
+      const pkg = createRequire(import.meta.url)('z3-solver/package.json') as { version?: string };
+      return pkg.version ? `z3-solver ${pkg.version}` : null;
+    } catch {
+      return null;
+    }
+  }
+  const version = await runCommand(nativeBinary, ['--version'], { cwd: process.cwd(), timeoutMs: 10_000 });
+  return version.exitCode === 0 ? version.stdout.trim() || null : null;
 }

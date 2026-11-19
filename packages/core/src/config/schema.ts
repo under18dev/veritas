@@ -135,6 +135,13 @@ export const VeritasConfig = z
       })
       .strict()
       .prefault({}),
+    cache: z
+      .object({
+        /** Reuse decisive solver results, LLM responses and mutation results from `.veritas/cache/`. */
+        enabled: z.boolean().default(true),
+      })
+      .strict()
+      .prefault({}),
   })
   .strict();
 

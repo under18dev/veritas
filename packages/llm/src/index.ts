@@ -1,5 +1,5 @@
-import { hashValue, redact } from '@under18dev/veritas-core';
-import { toJSONSchema, type z } from 'zod';
+import { type ContentCache, hashValue, redact } from '@under18dev/veritas-core';
+import { toJSONSchema, z } from 'zod';
 
 export type LlmStatus =
   | 'ok'
@@ -24,6 +24,8 @@ export interface LlmResult<T> {
   /** Hash of the exact (redacted) request, so a result can be matched to its input. LLM output is not reproducible. */
   inputHash: string;
   error: string | null;
+  /** True when the response was reused from the cache: no request was sent and no tokens were used. */
+  cached?: boolean;
 }
 
 /** One untrusted document quoted to the model. It is data, never instructions. */
@@ -71,7 +73,14 @@ export interface ClientOptions {
   sendFullText?: boolean;
   maxDocumentChars?: number;
   env?: NodeJS.ProcessEnv;
+  /** Reuse earlier successful responses to exactly the same request from the same provider and model. */
+  cache?: ContentCache | null;
 }
+
+const CachedResponse = z.object({
+  data: z.unknown(),
+  usage: z.object({ inputTokens: z.number(), outputTokens: z.number() }),
+});
 
 /**
  * Wraps a provider with redaction, document size limits, a token budget and input hashing.
@@ -79,6 +88,7 @@ export interface ClientOptions {
  */
 export class LlmClient {
   private used = 0;
+  private reused = 0;
 
   constructor(
     private readonly provider: LlmProvider,
@@ -87,6 +97,11 @@ export class LlmClient {
 
   get tokensUsed(): number {
     return this.used;
+  }
+
+  /** Responses served from the cache so far. */
+  get cachedResponses(): number {
+    return this.reused;
   }
 
   async complete<S extends z.ZodType>(request: LlmRequest<S>): Promise<LlmResult<z.output<S>>> {
@@ -113,6 +128,21 @@ export class LlmClient {
       inputHash,
       usage: { inputTokens: 0, outputTokens: 0 },
     };
+    const cache = this.options.cache;
+    const cacheKey = cache?.key({
+      llm: inputHash,
+      preamble: SYSTEM_PREAMBLE,
+      schema: jsonSchemaOf(request.schema),
+      maxOutputTokens: request.maxOutputTokens,
+    });
+    if (cache && cacheKey) {
+      const hit = cache.get('llm', cacheKey, CachedResponse);
+      const data = hit ? request.schema.safeParse(hit.data) : null;
+      if (data?.success) {
+        this.reused += 1;
+        return { ...base, status: 'ok', data: data.data, error: null, cached: true };
+      }
+    }
     if (this.used + estimate > this.options.tokenBudget) {
       return {
         ...base,
@@ -123,6 +153,9 @@ export class LlmClient {
     }
     const result = await this.provider.complete({ ...request, instructions, documents });
     this.used += result.usage.inputTokens + result.usage.outputTokens;
+    // Only a successful response that matches the schema is reused later; failures are always retried.
+    if (cache && cacheKey && result.status === 'ok' && request.schema.safeParse(result.data).success)
+      cache.set('llm', cacheKey, { data: result.data, usage: result.usage });
     return { ...result, inputHash };
   }
 }
