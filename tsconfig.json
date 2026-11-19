@@ -54,6 +54,9 @@
     },
     {
       "path": "packages/solver-lean"
+    },
+    {
+      "path": "packages/improvement"
     }
   ]
 }

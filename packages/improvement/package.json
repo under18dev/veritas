@@ -1,0 +1,26 @@
+{
+  "name": "@veritas/improvement",
+  "version": "0.0.0",
+  "description": "Plans test-only improvements and applies them after measuring them in an isolated workspace",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@veritas/core": "workspace:*",
+    "@veritas/engine": "workspace:*",
+    "@veritas/formal-core": "workspace:*",
+    "@veritas/mutation-adapter": "workspace:*",
+    "zod": "4.6.7"
+  }
+}

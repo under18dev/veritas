@@ -397,6 +397,24 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
 
+  packages/improvement:
+    dependencies:
+      '@veritas/core':
+        specifier: workspace:*
+        version: link:../core
+      '@veritas/engine':
+        specifier: workspace:*
+        version: link:../engine
+      '@veritas/formal-core':
+        specifier: workspace:*
+        version: link:../formal-core
+      '@veritas/mutation-adapter':
+        specifier: workspace:*
+        version: link:../mutation-adapter
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+
   packages/llm:
     dependencies:
       '@veritas/core':
