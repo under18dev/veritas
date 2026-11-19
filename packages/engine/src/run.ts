@@ -83,6 +83,12 @@ function previousProperties(root: string): Property[] {
   }
 }
 
+function tally(values: string[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const v of values) out[v] = (out[v] ?? 0) + 1;
+  return out;
+}
+
 /** Run the requested stages and persist every artifact under `.veritas/runs/<run-id>/`. */
 export async function runVeritas(options: RunOptions): Promise<RunSummary> {
   const { root } = options;
@@ -186,10 +192,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         formalization,
         staleApprovals: applied.staleApprovals.map((a) => a.id),
       });
-      const counts = applied.properties.reduce<Record<string, number>>(
-        (acc, p) => ({ ...acc, [p.status]: (acc[p.status] ?? 0) + 1 }),
-        {},
-      );
+      const counts = tally(applied.properties.map((p) => p.status));
       return {
         status: 'succeeded',
         output: {
@@ -479,10 +482,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
             }),
           );
       }
-      const outcomes = assessments.reduce<Record<string, number>>(
-        (acc, a) => ({ ...acc, [a.outcome]: (acc[a.outcome] ?? 0) + 1 }),
-        {},
-      );
+      const outcomes = tally(assessments.map((a) => a.outcome));
       return {
         status: 'succeeded',
         artifacts,
