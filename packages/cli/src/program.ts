@@ -12,6 +12,7 @@ import {
   reportCommand,
   runCommandCli,
   specCommand,
+  testGenerateCommand,
 } from './commands/engine.js';
 import { initCommand } from './commands/init.js';
 import { emitJson, type GlobalOptions, log, reportError } from './output.js';
@@ -120,8 +121,15 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
     (o) => mutateCommand(o),
   );
   wire(
-    program.command('test').command('generate').option('--property <id>').option('--dry-run'),
-    notImplemented('test generate'),
+    program
+      .command('test')
+      .command('generate')
+      .description(
+        'generate fast-check property tests for formalized properties (written under .veritas/generated-tests)',
+      )
+      .option('--property <id>')
+      .option('--dry-run', 'print instead of writing'),
+    (o) => testGenerateCommand(o),
   );
   wire(
     program

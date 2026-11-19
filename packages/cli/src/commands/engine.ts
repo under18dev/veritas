@@ -3,6 +3,7 @@ import {
   decideProperty,
   diffLatest,
   explainFinding,
+  generateTests,
   listProperties,
   PROFILE_STAGES,
   type Profile,
@@ -240,4 +241,19 @@ export async function specCommand(opts: Opts, sub: string, args: string[]): Prom
     default:
       throw new VeritasError('user', 'UNKNOWN_SUBCOMMAND', `unknown spec subcommand ${sub}`);
   }
+}
+
+export async function testGenerateCommand(opts: Opts): Promise<ExitCode> {
+  const generated = await generateTests(opts.root, {
+    ...(typeof opts.property === 'string' ? { propertyId: opts.property } : {}),
+    dryRun: Boolean(opts.dryRun),
+    allowCodeConfig: Boolean(opts.allowCodeConfig),
+  });
+  if (opts.json) emitJson({ status: opts.dryRun ? 'dry_run' : 'written', generated });
+  else if (opts.dryRun) for (const g of generated) emitText(`// ${g.file}\n${g.content}`);
+  else
+    for (const g of generated)
+      emitText(`wrote ${g.file}${g.experimental ? ' (experimental: property not accepted)' : ''}`);
+  if (generated.length === 0) log('no formalized property to generate tests for');
+  return Exit.Success;
 }
