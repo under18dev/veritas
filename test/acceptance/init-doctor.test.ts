@@ -20,7 +20,7 @@ describe('init and doctor', () => {
     expect(doctor.status, doctor.stderr).toBe(0);
     const report = json<{
       configFound: boolean;
-      capabilities: { name: string; state: string }[];
+      capabilities: { name: string; state: string; detail: string }[];
       features: { feature: string; state: string }[];
     }>(doctor);
     expect(report.configFound).toBe(true);
@@ -30,6 +30,10 @@ describe('init and doctor', () => {
     // Dependencies were not installed in the copied fixture: mutation must be reported as disabled, not enabled.
     expect(report.features.find((f) => f.feature === 'mutate')?.state).toBe('disabled');
     expect(report.capabilities.find((c) => c.name === 'llm')?.state).toBe('disabled');
+    const sandbox = report.capabilities.find((c) => c.name === 'sandbox');
+    const major = Number(process.versions.node.split('.')[0]);
+    expect(sandbox?.state).toBe(major >= 25 ? 'available' : 'degraded');
+    expect(sandbox?.detail).toMatch(/permission-model sandbox/);
   });
 
   it('refuses to overwrite an existing configuration without --force', () => {

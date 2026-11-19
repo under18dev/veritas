@@ -178,10 +178,15 @@ export async function runDoctor(
   } catch {
     sandboxOk = false;
   }
+  const netIsolated = sandboxBlocksNetwork();
   add(
     'sandbox',
-    sandboxOk ? 'available' : 'unavailable',
-    sandboxOk ? 'temporary workspaces can be created' : 'cannot create temporary workspaces',
+    !sandboxOk ? 'unavailable' : netIsolated ? 'available' : 'degraded',
+    !sandboxOk
+      ? 'cannot create temporary workspaces'
+      : netIsolated
+        ? 'permission-model sandbox: no writes, child processes or network'
+        : 'permission-model sandbox without network isolation (requires Node.js 25+)',
   );
 
   const stateOf = new Map(caps.map((c) => [c.name, c.state]));
