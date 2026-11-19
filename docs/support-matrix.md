@@ -42,4 +42,4 @@ What works in the current build. Planned items are listed separately and are not
 
 ## Planned
 
-Lean 4 backend, `improve` (test-only improvement loop), HTML/Markdown/SARIF reports, MCP write tools with approval, GitHub Action, LLM-assisted extraction (Claude adapter).
+MCP tools for planning and applying approved improvements, npm publication under a final package name (ADR 0008).
