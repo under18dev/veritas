@@ -139,7 +139,9 @@ function collectLiterals(expr: Expr, out: Set<bigint>): void {
     collectLiterals(expr.cond, out);
     collectLiterals(expr.whenTrue, out);
     collectLiterals(expr.whenFalse, out);
-  } else if (expr.kind === 'call') expr.args.forEach((a) => collectLiterals(a, out));
+  } else if (expr.kind === 'call') {
+    for (const a of expr.args) collectLiterals(a, out);
+  }
 }
 
 /** Boundary samples per parameter: domain ends, 0, ±1 and every literal ±1, clipped to the domain. */

@@ -283,7 +283,7 @@ function arithmeticTerms(expr: Expr, out: Expr[] = []): Expr[] {
     arithmeticTerms(expr.whenTrue, out);
     arithmeticTerms(expr.whenFalse, out);
   } else if (expr.kind === 'call') {
-    expr.args.forEach((a) => arithmeticTerms(a, out));
+    for (const a of expr.args) arithmeticTerms(a, out);
   }
   return out;
 }
