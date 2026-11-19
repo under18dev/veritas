@@ -1,0 +1,13 @@
+{
+  "name": "fixture-solver-limits",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@mizchi/mutator": "0.4.5",
+    "fast-check": "4.10.3",
+    "vitest": "5.1.1"
+  }
+}

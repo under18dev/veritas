@@ -121,3 +121,38 @@ describe('JavaScript numbers versus the integer model', () => {
     expect(json<{ status: string }>(strict).status).toBe('inconclusive');
   });
 });
+
+describe('solver time limits', () => {
+  it('reports queries the solver cannot finish as timeout, keeps the mutants survived and never passes them', () => {
+    const dir = setup('solver-limits');
+    const configPath = path.join(dir, '.veritas/config.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.formal.maxSolverMs = 2000;
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const result = runCli(['run', '--profile', 'deep', '--json'], dir);
+    const run = json<{ runId: string; status: string; reasons: string[] }>(result);
+    const claims = artifact<
+      { id: string; kind: string; status: string; mutantId?: string; assurance: string }[]
+    >(dir, run.runId, 'claims.json');
+    const timedOut = claims.filter((c) => c.status === 'timeout');
+    expect(timedOut.length).toBeGreaterThan(0);
+    for (const c of timedOut) expect(c.assurance).toBe('none');
+    const mutants = artifact<{ mutants: { id: string; status: string }[] }>(
+      dir,
+      run.runId,
+      'mutation.json',
+    ).mutants;
+    for (const c of timedOut) expect(mutants.find((m) => m.id === c.mutantId)?.status).toBe('survived');
+    expect(mutants.some((m) => m.status === 'equivalent_proven')).toBe(false);
+    expect(result.status).toBe(0);
+    expect(run.status).toBe('pass_with_warnings');
+    expect(run.reasons.join(' ')).toMatch(/=timeout/);
+
+    config.policy.inconclusiveBehavior = 'fail';
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+    const strict = runCli(['run', '--profile', 'deep', '--json'], dir);
+    expect(strict.status).toBe(4);
+    expect(json<{ status: string }>(strict).status).toBe('inconclusive');
+  }, 300_000);
+});
