@@ -2,7 +2,7 @@ import { appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { detectProject, loadConfig, redact, runCommand, runDoctor } from '@veritas/core';
 import { PROFILE_STAGES, type Profile, runVeritas } from '@veritas/engine';
-import { planFromEvent } from './event.js';
+import { planFromEvent, type RunPlan } from './event.js';
 
 const input = (name: string, fallback: string): string =>
   process.env[`INPUT_${name.toUpperCase().replaceAll('-', '_')}`] || fallback;
@@ -48,12 +48,18 @@ function degraded(reason: string, behavior: string): number {
 }
 export async function main(): Promise<number> {
   const root = path.resolve(input('working-directory', '.'));
-  const event = planFromEvent({
-    eventName: process.env.GITHUB_EVENT_NAME,
-    eventPath: process.env.GITHUB_EVENT_PATH,
-    repository: process.env.GITHUB_REPOSITORY,
-    baseRef: process.env.GITHUB_BASE_REF,
-  });
+  let event: RunPlan;
+  try {
+    event = planFromEvent({
+      eventName: process.env.GITHUB_EVENT_NAME,
+      eventPath: process.env.GITHUB_EVENT_PATH,
+      repository: process.env.GITHUB_REPOSITORY,
+      baseRef: process.env.GITHUB_BASE_REF,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('refusing privileged GitHub event')) return 2;
+    throw error;
+  }
   const since = input('since', '') || event.since;
   const files = await changedFiles(root, since);
   if (files && docsOnly(files)) {
