@@ -27,6 +27,8 @@ function git(cwd: string, ...args: string[]): string {
 function linkPackages(source: string, target: string): void {
   mkdirSync(target, { recursive: true });
   for (const name of readdirSync(source)) {
+    // Tool caches (.vite) and shims (.bin) are not packages; linking the cache lets git race with other tests.
+    if (name.startsWith('.')) continue;
     const sourcePath = path.join(source, name);
     const targetPath = path.join(target, name);
     mkdirSync(path.dirname(targetPath), { recursive: true });

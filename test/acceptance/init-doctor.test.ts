@@ -31,9 +31,11 @@ describe('init and doctor', () => {
     expect(report.features.find((f) => f.feature === 'mutate')?.state).toBe('disabled');
     expect(report.capabilities.find((c) => c.name === 'llm')?.state).toBe('disabled');
     const sandbox = report.capabilities.find((c) => c.name === 'sandbox');
-    const major = Number(process.versions.node.split('.')[0]);
-    expect(sandbox?.state).toBe(major >= 25 ? 'available' : 'degraded');
-    expect(sandbox?.detail).toMatch(/permission-model sandbox/);
+    // Project code runs only under a Node.js that blocks network access: this one (25+) or the one CI names.
+    const isolated =
+      Number(process.versions.node.split('.')[0]) >= 25 || Boolean(process.env.VERITAS_SANDBOX_NODE);
+    expect(sandbox?.state).toBe(isolated ? 'available' : 'unavailable');
+    expect(sandbox?.detail).toMatch(isolated ? /permission-model sandbox/ : /cannot block network access/);
   });
 
   it('refuses to overwrite an existing configuration without --force', () => {
