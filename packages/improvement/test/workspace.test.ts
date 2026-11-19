@@ -13,7 +13,7 @@ import {
 import { project } from './helpers.js';
 
 describe('workspace and repository writes', () => {
-  it('copies the project without tool state and links node_modules', () => {
+  it('copies the project without tool state and links each installed package', () => {
     const root = project({ 'src/a.ts': 'x', '.veritas/runs/r/x.json': '{}', '.git/HEAD': 'ref' });
     mkdirSync(path.join(root, 'node_modules/dep'), { recursive: true });
     const ws = createWorkspace(root);
@@ -21,7 +21,11 @@ describe('workspace and repository writes', () => {
       expect(readFileSync(path.join(ws, 'src/a.ts'), 'utf8')).toBe('x');
       expect(existsSync(path.join(ws, '.veritas'))).toBe(false);
       expect(existsSync(path.join(ws, '.git'))).toBe(false);
-      expect(lstatSync(path.join(ws, 'node_modules')).isSymbolicLink()).toBe(true);
+      // node_modules is a real directory, so caches written there stay in the workspace; packages are links.
+      expect(lstatSync(path.join(ws, 'node_modules')).isSymbolicLink()).toBe(false);
+      expect(lstatSync(path.join(ws, 'node_modules/dep')).isSymbolicLink()).toBe(true);
+      writeFileSync(path.join(ws, 'node_modules/.cache-marker'), 'x');
+      expect(existsSync(path.join(root, 'node_modules/.cache-marker'))).toBe(false);
       writeFileSync(path.join(ws, 'src/a.ts'), 'changed');
       expect(readFileSync(path.join(root, 'src/a.ts'), 'utf8')).toBe('x');
     } finally {

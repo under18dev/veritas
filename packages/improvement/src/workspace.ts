@@ -74,7 +74,7 @@ export function createWorkspace(root: string): string {
     },
   });
   const modules = path.join(realRoot, 'node_modules');
-  if (existsSync(modules)) symlinkSync(realpathSync(modules), path.join(dir, 'node_modules'), 'junction');
+  if (existsSync(modules)) linkPackages(modules, path.join(dir, 'node_modules'));
   return dir;
 }
 
@@ -134,4 +134,22 @@ export function undoWrites(record: WriteRecord): string[] {
   record.files = [];
   record.dirs = [];
   return failed;
+}
+
+/**
+ * Link each installed package (and `.bin`) individually into a real `node_modules` directory of the workspace.
+ * Tools write caches into `node_modules` (`.vite`, `.vitest-cache`); with a real directory those writes stay in
+ * the workspace instead of reaching the project through a link.
+ */
+function linkPackages(from: string, to: string): void {
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from)) {
+    if (entry.startsWith('.') && entry !== '.bin') continue;
+    const source = path.join(from, entry);
+    if (entry.startsWith('@')) {
+      linkPackages(source, path.join(to, entry));
+      continue;
+    }
+    symlinkSync(realpathSync(source), path.join(to, entry), 'junction');
+  }
 }
