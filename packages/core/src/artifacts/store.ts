@@ -5,6 +5,7 @@ import type { z } from 'zod';
 import { VeritasError } from '../exit-codes.js';
 import { hashValue, sha256 } from '../hash.js';
 import { resolveInsideRoot } from '../paths.js';
+import { DEFAULT_ENV_ALLOWLIST } from '../process.js';
 import { redact, redactDeep } from '../redact.js';
 import { ArtifactMeta, SCHEMA_VERSION } from '../schema/common.js';
 import { TOOL_VERSION } from '../version.js';
@@ -19,7 +20,13 @@ export interface Envelope<T> {
 
 export function gitCommit(root: string): string | null {
   try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] })
+    // Like every child process, git gets only the allowlisted environment, never tokens or other secrets.
+    const env = Object.fromEntries(
+      DEFAULT_ENV_ALLOWLIST.flatMap((name) =>
+        process.env[name] === undefined ? [] : [[name, process.env[name]]],
+      ),
+    );
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, env, stdio: ['ignore', 'pipe', 'ignore'] })
       .toString()
       .trim();
   } catch {
