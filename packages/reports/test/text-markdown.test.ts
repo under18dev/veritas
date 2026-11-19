@@ -50,6 +50,13 @@ describe('text and markdown reports', () => {
     expect(output).toContain('property property-2 is inferred (not a specification)');
   });
 
+  it('shows the replay command in the run metadata of text and markdown', () => {
+    const input = fixture();
+    input.run.replay = 'veritas replay run-1';
+    for (const output of [renderText(input), renderMarkdown(input)])
+      expect(output).toContain('replay with `veritas replay run-1`');
+  });
+
   it('renders finding id, certainty, and severity in text', () => {
     expect(renderText(fixture())).toContain('finding-confirmed [confirmed, high]');
     expect(renderText(fixture())).toContain('confirmed');
