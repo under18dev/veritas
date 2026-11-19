@@ -1,0 +1,174 @@
+import type { FunctionInfo } from '@veritas/code-intelligence';
+import type {
+  EvidenceVector,
+  FormalClaim,
+  Mutant,
+  Property,
+  TestAssessment,
+  TestCase,
+  TestPropertyEdge,
+} from '@veritas/core';
+
+/** Integer points that decide a threshold: both sides of `x op v`. */
+export function boundaryPoints(predicate: NonNullable<Property['predicate']>): string[] {
+  const v = BigInt(predicate.value);
+  switch (predicate.operator) {
+    case '>':
+      return [v.toString(), (v + 1n).toString()];
+    case '>=':
+      return [(v - 1n).toString(), v.toString()];
+    case '<':
+      return [(v - 1n).toString(), v.toString()];
+    case '<=':
+      return [v.toString(), (v + 1n).toString()];
+    case '==':
+      return [(v - 1n).toString(), v.toString(), (v + 1n).toString()];
+  }
+}
+
+export interface AssessInput {
+  tests: TestCase[];
+  edges: TestPropertyEdge[];
+  properties: Property[];
+  mutants: Mutant[];
+  claims: FormalClaim[];
+  functions: FunctionInfo[];
+  /** Whether mutation results exist for this run; without them detection power is unknown. */
+  mutationAvailable: boolean;
+}
+
+/**
+ * Assess each test from an evidence vector. Outcomes:
+ * - tautological_or_disconnected: no assertion on a project call (constant assertions, no call, no assertion);
+ * - spec_conflict: a linked property is conflicted;
+ * - weak_or_incomplete: a relevant mutant it covers survived, or a decisive boundary is not exercised;
+ * - meaningful_with_evidence: asserts a project call, kills relevant mutants, no relevant survivors it covers,
+ *   and exercises the boundary of every linked threshold property;
+ * - inconclusive: anything that cannot be decided (e.g. no mutation data, no linked property).
+ */
+export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
+  const edges = input.edges.filter((e) => e.testId === test.id);
+  const propertyIds = [...new Set(edges.map((e) => e.propertyId).filter((id): id is string => id !== null))];
+  const properties = input.properties.filter((p) => propertyIds.includes(p.id));
+  const killed = input.mutants.filter((m) => m.killedBy.includes(test.id));
+  const covered = input.mutants.filter((m) => m.coveredBy.includes(test.id));
+  const survived = covered.filter((m) => m.status === 'survived');
+  const relevantKilled = killed.filter((m) => m.relevance === 'spec_relevant');
+  const relevantSurvived = survived.filter(
+    (m) => m.relevance === 'spec_relevant' && m.propertyIds.some((id) => propertyIds.includes(id)),
+  );
+  const other = covered.filter((m) => m.status !== 'survived' && m.status !== 'killed');
+  const assertedArgs = new Set(
+    test.targetCalls.filter((c) => c.asserted).flatMap((c) => c.args.filter((a): a is string => a !== null)),
+  );
+  const assertedCall = test.targetCalls.some((c) => c.asserted);
+
+  const boundaryCoverage: EvidenceVector['boundaryCoverage'] = [];
+  for (const p of properties) {
+    if (!p.predicate) continue;
+    const points = boundaryPoints(p.predicate);
+    const hit = points.filter((pt) => assertedArgs.has(pt));
+    // One test usually checks one side of a boundary; whether both sides are covered is a property-level question.
+    boundaryCoverage.push({
+      boundary: `${p.predicate.param} ${p.predicate.operator} ${p.predicate.value} (decisive inputs ${points.join(', ')}; asserted: ${hit.join(', ') || 'none'})`,
+      exercised: hit.length > 0 ? 'yes' : 'no',
+    });
+  }
+  const claims = input.claims.filter((c) => propertyIds.includes(c.propertyId));
+  const unknowns: string[] = [];
+  if (!input.mutationAvailable)
+    unknowns.push('no mutation results for this run; detection power not measured');
+  if (test.granularity === 'suite') unknowns.push('analysed at suite level only');
+  if (test.nondeterminism.length > 0)
+    unknowns.push(`non-deterministic inputs: ${test.nondeterminism.join(', ')}`);
+  if (test.usesMocks) unknowns.push('uses mocks; observed behaviour may not be the real implementation');
+  for (const c of claims)
+    if (c.status !== 'proven_within_model' && c.status !== 'counterexample_found')
+      unknowns.push(`formal claim ${c.id} is ${c.status}`);
+
+  const vector: EvidenceVector = {
+    specificationRelevance: properties.map((p) => ({ propertyId: p.id, status: p.status })),
+    assertionRelevance: assertedCall ? 'checks_result' : test.assertionCount > 0 ? 'weak' : 'none',
+    mutationDetection: {
+      killed: killed.map((m) => m.id),
+      survived: survived.map((m) => m.id),
+      other: other.map((m) => m.id),
+    },
+    boundaryCoverage,
+    formalEvidence: claims.map((c) => c.id),
+    sourceConfidence: properties.map(
+      (p) =>
+        `${p.id}: ${p.confidence.sourceQuality} source, ${p.confidence.independence}, ${p.confidence.freshness}, agreement ${p.confidence.agreement}`,
+    ),
+    unknowns,
+  };
+
+  const rationale: string[] = [];
+  let outcome: TestAssessment['outcome'];
+  const disconnected =
+    test.suspicions.includes('tautological_assertion') ||
+    test.suspicions.includes('target_not_called') ||
+    test.suspicions.includes('no_assertion') ||
+    !assertedCall;
+  if (disconnected) {
+    outcome = 'tautological_or_disconnected';
+    if (test.suspicions.length) rationale.push(`static analysis: ${test.suspicions.join(', ')}`);
+    if (!assertedCall) rationale.push('no assertion checks the result of a project function');
+    if (input.mutationAvailable && killed.length === 0) rationale.push('killed no mutant');
+  } else if (properties.some((p) => p.status === 'conflicted')) {
+    outcome = 'spec_conflict';
+    rationale.push(
+      `linked property is conflicted: ${properties
+        .filter((p) => p.status === 'conflicted')
+        .map((p) => p.id)
+        .join(', ')}`,
+    );
+  } else if (relevantSurvived.length > 0 || boundaryCoverage.some((b) => b.exercised === 'no')) {
+    outcome = 'weak_or_incomplete';
+    if (relevantSurvived.length > 0) {
+      rationale.push(
+        `${relevantSurvived.length} specification-relevant mutant(s) it runs survived: ${relevantSurvived.map((m) => `${m.location.file}:${m.location.range?.start} ${m.original} -> ${m.replacement}`).join('; ')}`,
+      );
+    }
+    for (const b of boundaryCoverage.filter((b) => b.exercised === 'no'))
+      rationale.push(`boundary not exercised: ${b.boundary}`);
+  } else if (!input.mutationAvailable) {
+    outcome = 'inconclusive';
+    rationale.push('asserts a project result, but detection power was not measured (no mutation results)');
+  } else if (properties.length === 0) {
+    outcome = 'inconclusive';
+    rationale.push('asserts a project result, but no property is linked to the functions it calls');
+  } else if (relevantKilled.length > 0 && boundaryCoverage.every((b) => b.exercised === 'yes')) {
+    outcome = 'meaningful_with_evidence';
+    rationale.push(
+      `kills ${relevantKilled.length} specification-relevant mutant(s) and survivors it covers: none`,
+    );
+    if (boundaryCoverage.length)
+      rationale.push(`exercises decisive inputs: ${boundaryCoverage.map((b) => b.boundary).join('; ')}`);
+  } else {
+    outcome = 'inconclusive';
+    rationale.push(
+      'linked to properties but killed no specification-relevant mutant or boundary coverage is partial',
+    );
+  }
+
+  const limitations = [...unknowns];
+  if (properties.some((p) => p.status !== 'accepted'))
+    limitations.push('linked properties are not accepted; relevance is to proposed specifications');
+  return {
+    testId: test.id,
+    propertyIds,
+    evidenceIds: [...new Set(properties.flatMap((p) => p.sourceIds))],
+    killedMutantIds: killed.map((m) => m.id),
+    survivedMutantIds: survived.map((m) => m.id),
+    formalClaimIds: claims.map((c) => c.id),
+    vector,
+    outcome,
+    limitations,
+    rationale,
+  };
+}
+
+export function assessTests(input: AssessInput): TestAssessment[] {
+  return input.tests.map((t) => assessTest(t, input));
+}

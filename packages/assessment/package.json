@@ -1,0 +1,25 @@
+{
+  "name": "@veritas/assessment",
+  "version": "0.0.0",
+  "description": "Evidence-vector assessment of tests and findings for Veritas",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@veritas/code-intelligence": "workspace:*",
+    "@veritas/core": "workspace:*",
+    "@veritas/property-engine": "workspace:*",
+    "zod": "4.6.7"
+  }
+}
