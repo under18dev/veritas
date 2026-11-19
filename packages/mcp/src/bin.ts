@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -32,10 +32,23 @@ if (values.help) {
   process.stdout.write(USAGE);
   process.exit(0);
 }
-const root = realpathSync(path.resolve(values.root as string));
+const fail = (message: string): never => {
+  process.stderr.write(`${message}\n\n${USAGE}`);
+  process.exit(2);
+};
+const maxConcurrent = Number(values['max-concurrent']);
+if (!/^\d+$/.test(values['max-concurrent'] ?? '') || maxConcurrent < 1 || maxConcurrent > 16)
+  fail('--max-concurrent must be an integer from 1 to 16');
+let root = '';
+try {
+  root = realpathSync(path.resolve(values.root as string));
+} catch {
+  fail(`--root is not an existing directory: ${values.root}`);
+}
+if (!statSync(root).isDirectory()) fail(`--root is not a directory: ${values.root}`);
 const server = createServer({
   root,
-  maxConcurrent: Math.max(1, Number(values['max-concurrent'])),
+  maxConcurrent,
   allowWrite: Boolean(values['allow-write']),
   version: TOOL_VERSION,
 });

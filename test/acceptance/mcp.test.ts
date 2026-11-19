@@ -53,6 +53,18 @@ afterEach(async () => {
 });
 
 describe('MCP server', () => {
+  it('refuses a concurrency limit it cannot enforce and a root that does not exist', () => {
+    for (const args of [
+      ['--max-concurrent', 'abc'],
+      ['--max-concurrent', '0'],
+      ['--root', path.join(REPO_ROOT, 'no-such-dir')],
+    ]) {
+      const result = spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', input: '' });
+      expect(result.status, args.join(' ')).toBe(2);
+      expect(result.stderr).toMatch(/max-concurrent must be|not an existing directory/);
+    }
+  });
+
   it('imports an existing mutation report through run_mutation like the CLI', async () => {
     const dir = copyFixture('discount-boundary', { git: true, linkDeps: true });
     expect(runCli(['init', '--yes'], dir).status).toBe(0);
