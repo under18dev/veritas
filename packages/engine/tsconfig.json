@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
+  "include": ["src"],
+  "references": [
+    { "path": "../core" },
+    { "path": "../assessment" },
+    { "path": "../code-intelligence" },
+    { "path": "../formal-core" },
+    { "path": "../mutation-adapter" },
+    { "path": "../property-engine" },
+    { "path": "../spec-discovery" },
+    { "path": "../test-inventory" }
+  ]
+}
