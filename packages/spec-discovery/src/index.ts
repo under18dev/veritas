@@ -56,18 +56,27 @@ type SourceInput = {
 };
 const thresholdPatterns: Array<{ re: RegExp; operator: '<' | '<=' | '>' | '>=' }> = [
   {
-    re: /(?:of|is|at|=|:|に)\s*(\d[\d,]*)\s*(?:or more|or above|or greater|at least|no less than|minimum of|以上)/i,
+    re: /(?:of|is|at|=|:|に)\s*(\d[\d,]*)\s*(?:or more|or above|or greater|or older|or later|or higher|at least|no less than|minimum of|以上)/i,
     operator: '>=',
   },
   { re: /(?:at least|no less than|minimum of)\s*(\d[\d,]*)/i, operator: '>=' },
-  { re: /(?:of|is|at|=|:|に)\s*(\d[\d,]*)\s*(?:or less|at most|up to|以下)/i, operator: '<=' },
+  {
+    re: /(?:of|is|at|=|:|に)\s*(\d[\d,]*)\s*(?:or less|or fewer|or younger|or lower|or earlier|at most|up to|以下)/i,
+    operator: '<=',
+  },
   { re: /(?:at most|up to|no more than|maximum of)\s*(\d[\d,]*)/i, operator: '<=' },
   { re: /(?:more than|over|above|greater than|exceeds|超|より大きい)\s*(\d[\d,]*)/i, operator: '>' },
   { re: /(?:less than|fewer than|below|under|未満)\s*(\d[\d,]*)/i, operator: '<' },
   { re: /(\d[\d,]*)\s*(?:超|より大きい)/i, operator: '>' },
   { re: /(\d[\d,]*)\s*未満/i, operator: '<' },
-  { re: /(\d[\d,]*)\s*(?:or more|or above|at least|以上)/i, operator: '>=' },
-  { re: /(\d[\d,]*)\s*(?:or less|at most|up to|以下)/i, operator: '<=' },
+  {
+    re: /(\d[\d,]*)\s*(?:or more|or above|or greater|or older|or later|or higher|at least|以上)/i,
+    operator: '>=',
+  },
+  {
+    re: /(\d[\d,]*)\s*(?:or less|or fewer|or younger|or lower|or earlier|at most|up to|以下)/i,
+    operator: '<=',
+  },
 ];
 function lineRange(text: string, start: number, end: number): SourceRange {
   const line = (n: number) => text.slice(0, n).split('\n').length;

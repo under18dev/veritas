@@ -71,3 +71,17 @@ describe('statement extraction', () => {
     ).toHaveLength(1);
   });
 });
+
+describe('age and ordering phrases', () => {
+  it.each([
+    ['Visitors aged 65 or older are seniors.', '>=', '65'],
+    ['Children aged 12 or younger travel free.', '<=', '12'],
+    ['Versions 3 or later are supported.', '>=', '3'],
+    ['Scores of 40 or lower fail.', '<=', '40'],
+  ])('reads "%s" as %s %s', async (text, operator, value) => {
+    const root = tempProject();
+    writeProjectFile(root, 'README.md', `# x\n\n${text}\n`);
+    const result = await discoverEvidence({ root, config: config(), offline: true });
+    expect(result.statements[0]?.relation).toMatchObject({ kind: 'threshold', operator, value });
+  });
+});
