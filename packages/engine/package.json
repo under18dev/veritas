@@ -26,6 +26,8 @@
     "@veritas/spec-discovery": "workspace:*",
     "@veritas/test-inventory": "workspace:*",
     "zod": "4.6.7",
-    "@veritas/property-testing": "workspace:*"
+    "@veritas/property-testing": "workspace:*",
+    "@veritas/llm": "workspace:*",
+    "@veritas/llm-claude": "workspace:*"
   }
 }

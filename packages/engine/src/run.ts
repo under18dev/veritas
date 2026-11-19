@@ -22,12 +22,15 @@ import {
   stableId,
 } from '@veritas/core';
 import { applyMutation, equivalenceProperty, proveProperty, translateFunction } from '@veritas/formal-core';
+import { LlmClient, type LlmProvider } from '@veritas/llm';
+import { ClaudeProvider } from '@veritas/llm-claude';
 import { runMutation } from '@veritas/mutation-adapter';
 import { applyApprovals, buildRegistry, formalizeProperty, loadApprovals } from '@veritas/property-engine';
 import { type PbtResult, runPropertyTest } from '@veritas/property-testing';
 import { type DiscoveryResult, discoverEvidence } from '@veritas/spec-discovery';
 import { inventoryTests, type TestInventory } from '@veritas/test-inventory';
 import { ARTIFACTS } from './artifacts.js';
+import { extractWithLlm } from './llm-extract.js';
 import { defaultSeed, latestRunWith, openProject, readArtifact } from './project.js';
 
 export type Profile = 'quick' | 'standard' | 'deep';
@@ -48,6 +51,8 @@ export interface RunOptions {
   allowCodeConfig?: boolean;
   signal?: AbortSignal;
   log?: (message: string) => void;
+  /** Injected LLM provider (tests). By default Claude is used only when configured and a key is present. */
+  llmProvider?: LlmProvider | null;
 }
 
 export interface RunSummary {
@@ -132,7 +137,29 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
     dependsOn: [],
     run: async () => {
       const result = await discoverEvidence({ root, config, offline: options.offline ?? false });
+      let llmTokens = 0;
+      const llmMessages: string[] = [];
+      const provider =
+        options.llmProvider !== undefined
+          ? options.llmProvider
+          : config.llm.provider === 'claude' && process.env.ANTHROPIC_API_KEY
+            ? new ClaudeProvider({ ...(config.llm.model ? { model: config.llm.model } : {}) })
+            : null;
+      if (provider && options.offline) llmMessages.push('llm: skipped because the run is offline');
+      else if (provider) {
+        const client = new LlmClient(provider, {
+          tokenBudget: config.llm.maxTokensPerRun,
+          sendFullText: config.sources.sendFullTextToLlm,
+        });
+        const extracted = await extractWithLlm(client, result, signal);
+        result.statements.push(...extracted.added);
+        llmTokens = extracted.tokens;
+        llmMessages.push(...extracted.messages);
+      } else if (config.llm.provider !== 'none') {
+        llmMessages.push(`llm: ${config.llm.provider} configured but no API key; rule-based results only`);
+      }
       const messages = [
+        ...llmMessages,
         `${result.sources.length} source(s), ${result.statements.length} statement(s), ${result.networkRequests} network request(s)`,
       ];
       for (const s of result.skipped) messages.push(`skipped ${s.source}: ${s.reason}`);
@@ -140,6 +167,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         status: 'succeeded',
         output: result,
         artifacts: [store.write(ARTIFACTS.evidence.file, ARTIFACTS.evidence.schema, result)],
+        usage: { llmTokens },
         messages,
       };
     },

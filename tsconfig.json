@@ -45,6 +45,12 @@
     },
     {
       "path": "packages/github-action"
+    },
+    {
+      "path": "packages/llm"
+    },
+    {
+      "path": "packages/llm-claude"
     }
   ]
 }
