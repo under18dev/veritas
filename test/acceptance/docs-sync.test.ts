@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CLI, REPO_ROOT } from './helpers.js';
 
@@ -36,7 +37,11 @@ function parseHelp(text: string): Help {
     for (const flag of entry.matchAll(/(?:^|[\s,])(--[a-z][a-z-]*)/g)) flags.add(flag[1] as string);
     const declared = /^\s+(?:-\w, )?(--[a-z][a-z-]*)/.exec(entry)?.[1];
     const values = /\(choices: ([^)]*?)(?:, default:|\))/.exec(entry)?.[1];
-    if (declared && values) choices.set(declared, [...values.matchAll(/"([^"]+)"/g)].map((m) => m[1] as string));
+    if (declared && values)
+      choices.set(
+        declared,
+        [...values.matchAll(/"([^"]+)"/g)].map((m) => m[1] as string),
+      );
   }
   return { flags, choices, subcommands };
 }
@@ -73,6 +78,44 @@ function invocations(markdown: string, top: Help): Invocation[] {
   return out;
 }
 
+describe('the README quick start matches the CLI and the clean install check', () => {
+  const load = async () =>
+    (await import(pathToFileURL(path.join(REPO_ROOT, 'scripts/readme-quick-start.mjs')).href)) as {
+      readmeQuickStart: (repo: string) => string[][];
+      quickStartCommands: (markdown: string) => string[][];
+    };
+
+  it('lists commands and options the CLI accepts', async () => {
+    const commands = (await load()).readmeQuickStart(REPO_ROOT);
+    expect(commands.map((args) => args[0])).toEqual(['init', 'doctor', 'run', 'report', 'explain']);
+    const top = help(CLI, []);
+    for (const [name, ...rest] of commands) {
+      expect(top.subcommands).toContain(name);
+      const accepted = help(CLI, [name as string]);
+      for (const flag of rest.filter((arg) => arg.startsWith('--')))
+        expect(accepted.flags.has(flag) || top.flags.has(flag), `${name} ${flag}`).toBe(true);
+    }
+  });
+
+  it('is what the clean install check runs, in order', async () => {
+    const { quickStartCommands } = await load();
+    const script = readFileSync(path.join(REPO_ROOT, 'scripts/clean-install-check.mjs'), 'utf8');
+    expect(script).toMatch(/from '\.\/readme-quick-start\.mjs'/);
+    expect(script).toMatch(/for \(const command of readmeQuickStart\(repo\)\)/);
+    // Only steps beyond the quick start are spelled out in the script.
+    expect([...script.matchAll(/veritas\('([a-z]+)'/g)].map((m) => m[1])).toEqual(['report']);
+    // The parser follows the README rather than a fixed list.
+    expect(
+      quickStartCommands(
+        '# x\n\n## Quick start (demo)\n\n```bash\npnpm build\nnpx veritas init --yes\nnode a/packages/cli/dist/bin.js run --offline # note\n```\n\n## Other\n\n```bash\nveritas doctor\n```\n',
+      ),
+    ).toEqual([
+      ['init', '--yes'],
+      ['run', '--offline'],
+    ]);
+  });
+});
+
 describe('the Agent Skill matches the CLI', () => {
   const skill = readFileSync(path.join(REPO_ROOT, 'skills/veritas/SKILL.md'), 'utf8');
   const top = help(CLI, []);
@@ -81,7 +124,16 @@ describe('the Agent Skill matches the CLI', () => {
     const found = invocations(skill, top);
     // Sanity check that the parser sees the documented workflow.
     expect(found.map((i) => i.command.join(' '))).toEqual(
-      expect.arrayContaining(['init', 'doctor', 'run', 'report', 'explain', 'spec list', 'improve', 'spec accept']),
+      expect.arrayContaining([
+        'init',
+        'doctor',
+        'run',
+        'report',
+        'explain',
+        'spec list',
+        'improve',
+        'spec accept',
+      ]),
     );
     for (const invocation of found) {
       const accepted = help(CLI, invocation.command);
