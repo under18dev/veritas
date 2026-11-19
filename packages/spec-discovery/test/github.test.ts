@@ -76,4 +76,41 @@ describe('GitHub collector', () => {
     expect(calls).toBe(0);
     expect(DiscoveryResult.parse(offline)).toEqual(offline);
   });
+
+  it('accepts only owner/name repositories, so the token never reaches another API path', () => {
+    for (const repo of ['acme/app', 'acme-co/app.js', 'a/b_c'])
+      expect(VeritasConfig.safeParse({ sources: { github: { repo } } }).success, repo).toBe(true);
+    for (const repo of [
+      '../../user/repos?',
+      'acme/app/issues',
+      'acme/..',
+      'acme',
+      'acme/app#x',
+      'acme/app?x=1',
+    ])
+      expect(VeritasConfig.safeParse({ sources: { github: { repo } } }).success, repo).toBe(false);
+  });
+
+  it('bounds the issues request in time and never follows a redirect', async () => {
+    const root = tempProject('github-bounds');
+    const seen: RequestInit[] = [];
+    const result = await discoverEvidence({
+      root,
+      config: VeritasConfig.parse({
+        sources: { github: { enabled: true, repo: 'acme/app' }, web: { timeoutMs: 20 } },
+      }),
+      sources: ['github'],
+      fetch: async (_input, init) => {
+        seen.push(init ?? {});
+        await new Promise<void>((_resolve, reject) =>
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('timed out', 'TimeoutError')),
+          ),
+        );
+        return Response.json([]);
+      },
+    });
+    expect(seen[0]?.redirect).toBe('error');
+    expect(result.skipped).toContainEqual({ source: 'github', reason: 'fetch failed' });
+  });
 });

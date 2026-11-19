@@ -22,7 +22,14 @@ export const VeritasConfig = z
       .object({
         local: z.boolean().default(true),
         github: z
-          .object({ enabled: z.boolean().default(false), repo: z.string().optional() })
+          .object({
+            enabled: z.boolean().default(false),
+            // Exactly `owner/name`: anything else could point the token-bearing API request elsewhere.
+            repo: z
+              .string()
+              .regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/, 'expected owner/name')
+              .optional(),
+          })
           .strict()
           .default({ enabled: false }),
         web: z

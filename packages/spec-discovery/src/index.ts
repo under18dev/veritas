@@ -572,6 +572,9 @@ async function collectWeb(
     skipped.push({ source: 'web', reason: 'character budget exhausted' });
   return requests;
 }
+/** Upper bound for one GitHub issues response (50 issues with long bodies). */
+const GITHUB_MAX_BYTES = 5_000_000;
+
 /** The response body as text, reading no more than `maxBytes`; the rest is discarded unread. */
 async function readLimited(response: Response, maxBytes: number): Promise<string> {
   if (!response.body) return (await response.text()).slice(0, maxBytes);
@@ -672,11 +675,15 @@ export async function discoverEvidence(options: {
               accept: 'application/vnd.github+json',
               ...(process.env.GITHUB_TOKEN ? { authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
             },
+            redirect: 'error',
+            signal: AbortSignal.timeout(options.config.sources.web.timeoutMs),
           },
         );
         if (!response.ok) skipped.push({ source: 'github', reason: `fetch failed (${response.status})` });
         else
-          for (const item of (await response.json()) as Array<Record<string, unknown>>)
+          for (const item of JSON.parse(await readLimited(response, GITHUB_MAX_BYTES)) as Array<
+            Record<string, unknown>
+          >)
             inputs.push({
               kind: item.pull_request ? 'pr' : 'issue',
               locator: typeof item.html_url === 'string' ? item.html_url : `github:${repo}`,
