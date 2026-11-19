@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { copyFixture, json, runCli } from './helpers.js';
@@ -235,6 +235,17 @@ describe('discount-boundary end to end', () => {
     );
     expect(vitest.status).not.toBe(0);
     expect(vitest.stdout + vitest.stderr).toMatch(/Counterexample: \[\{"total":1000\}\]/);
+
+    // Regenerating leaves unchanged files alone, and never replaces an edited one without --force.
+    expect(runCli(['test', 'generate', '--json'], dir).status).toBe(0);
+    const edited = path.join(dir, generated[0]?.file as string);
+    writeFileSync(edited, `${readFileSync(edited, 'utf8')}\n// kept by the user\n`);
+    const refused = runCli(['test', 'generate', '--json'], dir);
+    expect(refused.status).toBe(2);
+    expect(refused.stdout + refused.stderr).toMatch(/GENERATED_TEST_CHANGED/);
+    expect(readFileSync(edited, 'utf8')).toContain('// kept by the user');
+    expect(runCli(['test', 'generate', '--force', '--json'], dir).status).toBe(0);
+    expect(readFileSync(edited, 'utf8')).not.toContain('// kept by the user');
   });
 
   it('replays a run with the same stages and records a new run', () => {

@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseSymbolId, resolveInsideRoot, VeritasError } from '@under18dev/veritas-core';
 import { generateVitestFile } from '@under18dev/veritas-property-testing';
@@ -19,7 +19,7 @@ export interface GeneratedTest {
  */
 export async function generateTests(
   root: string,
-  options: { propertyId?: string; dryRun?: boolean; allowCodeConfig?: boolean } = {},
+  options: { propertyId?: string; dryRun?: boolean; force?: boolean; allowCodeConfig?: boolean } = {},
 ): Promise<GeneratedTest[]> {
   const { config } = await openProject(root, { allowCodeConfig: options.allowCodeConfig });
   const { properties } = listProperties(root);
@@ -35,7 +35,7 @@ export async function generateTests(
     );
   }
   const outDir = path.join('.veritas', 'generated-tests');
-  return selected.map((p) => {
+  const generated = selected.map((p) => {
     const { file, name } = parseSymbolId(p.targetSymbols[0] as string);
     const target = path.posix.join(outDir.split(path.sep).join('/'), `${p.id}.test.ts`);
     const importPath = path.posix.relative(path.posix.dirname(target), file).replace(/^(?!\.)/, './');
@@ -49,11 +49,26 @@ export async function generateTests(
       numRuns: config.pbt.numRuns,
       experimental,
     });
-    if (!options.dryRun) {
-      const abs = resolveInsideRoot(root, target);
-      mkdirSync(path.dirname(abs), { recursive: true });
-      writeFileSync(abs, content);
-    }
     return { propertyId: p.id, file: target, content, experimental };
   });
+  if (options.dryRun) return generated;
+  // A file someone changed after it was generated is never replaced without --force; nothing is written then.
+  const changed = generated.filter((g) => {
+    const abs = resolveInsideRoot(root, g.file);
+    return existsSync(abs) && readFileSync(abs, 'utf8') !== g.content;
+  });
+  if (changed.length > 0 && !options.force) {
+    throw new VeritasError(
+      'user',
+      'GENERATED_TEST_CHANGED',
+      `generated test file(s) differ from what would be written: ${changed.map((g) => g.file).join(', ')}`,
+      'keep your changes elsewhere, or rerun with --force to replace them',
+    );
+  }
+  for (const g of generated) {
+    const abs = resolveInsideRoot(root, g.file);
+    mkdirSync(path.dirname(abs), { recursive: true });
+    writeFileSync(abs, g.content);
+  }
+  return generated;
 }

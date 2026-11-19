@@ -238,6 +238,7 @@ export async function testGenerateCommand(opts: Opts): Promise<ExitCode> {
   const generated = await generateTests(opts.root, {
     ...(typeof opts.property === 'string' ? { propertyId: opts.property } : {}),
     dryRun: Boolean(opts.dryRun),
+    force: Boolean(opts.force),
     allowCodeConfig: Boolean(opts.allowCodeConfig),
   });
   if (opts.json) emitJson({ status: opts.dryRun ? 'dry_run' : 'written', generated });
