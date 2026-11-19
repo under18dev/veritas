@@ -67,6 +67,12 @@ export function formalizeProperty(options: {
       whenTrue = false;
       whenFalse = true;
     }
+    // `isSenior` + "... are seniors": the predicate named by the function is what the statement defines.
+    const named = /^(?:is|has|can|should|allows?)([A-Z]\w*)$/.exec(name)?.[1]?.toLowerCase();
+    if (whenTrue === undefined && named && new RegExp(`\\b${named}s?\\b`, 'i').test(predicate.consequence)) {
+      whenTrue = !NEGATIVE.test(predicate.consequence);
+      whenFalse = !whenTrue;
+    }
     if (whenTrue !== undefined) {
       assumptions.push(
         `formalized as: ${name} returns ${whenTrue} exactly when ${predicate.param} ${predicate.operator} ${predicate.value}`,
