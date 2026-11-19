@@ -27,6 +27,7 @@
         "partial",
         "skipped",
         "unsupported",
+        "timeout",
         "error",
         "cancelled"
       ]

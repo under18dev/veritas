@@ -64,6 +64,7 @@
         "partial",
         "skipped",
         "unsupported",
+        "timeout",
         "error",
         "cancelled"
       ]
@@ -102,6 +103,7 @@
               "partial",
               "skipped",
               "unsupported",
+              "timeout",
               "error",
               "cancelled"
             ]
