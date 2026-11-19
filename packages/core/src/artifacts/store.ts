@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { z } from 'zod';
+import { z } from 'zod';
 import { VeritasError } from '../exit-codes.js';
 import { hashValue, sha256 } from '../hash.js';
 import { resolveInsideRoot } from '../paths.js';
@@ -11,6 +11,23 @@ import { ArtifactMeta, SCHEMA_VERSION } from '../schema/common.js';
 import { TOOL_VERSION } from '../version.js';
 
 export const RUNS_DIR = path.join('.veritas', 'runs');
+/** Run-relative name of the index that gives raw (non-envelope) artifacts their metadata and content hash. */
+export const ARTIFACT_INDEX_FILE = 'artifact-index.json';
+
+/**
+ * Raw artifacts (solver input/output, Lean sources, rendered reports, files written by external tools) cannot hold
+ * an envelope themselves. Each is listed here with its SHA-256, and the index's envelope carries the run metadata.
+ */
+export const ArtifactIndex = z.array(
+  z.object({
+    path: z.string().min(1),
+    kind: z.enum(['text', 'external']),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    bytes: z.number().int().nonnegative(),
+    createdAt: z.iso.datetime({ offset: true }),
+  }),
+);
+export type ArtifactIndex = z.infer<typeof ArtifactIndex>;
 export const CACHE_DIR = path.join('.veritas', 'cache');
 
 export interface Envelope<T> {
@@ -46,6 +63,7 @@ function writeAtomic(file: string, content: string): void {
 export class RunStore {
   readonly dir: string;
   private readonly baseMeta: Omit<ArtifactMeta, 'createdAt'>;
+  private readonly rawArtifacts = new Map<string, ArtifactIndex[number]>();
 
   constructor(
     readonly root: string,
@@ -89,8 +107,62 @@ export class RunStore {
   /** Raw text artifacts such as solver input/output or logs. Secrets are always redacted. */
   writeText(name: string, content: string): string {
     const file = this.pathFor(name);
-    writeAtomic(file, redact(content));
-    return path.relative(this.dir, file).split(path.sep).join('/');
+    const redacted = redact(content);
+    writeAtomic(file, redacted);
+    const relative = path.relative(this.dir, file).split(path.sep).join('/');
+    this.index(relative, 'text', Buffer.from(redacted));
+    return relative;
+  }
+
+  /**
+   * Record files that an external tool wrote under `dir` (run-relative) in the artifact index, so they carry the
+   * run metadata and a content hash like every other artifact. Returns the run-relative paths recorded.
+   */
+  recordExternal(dir: string): string[] {
+    const base = this.pathFor(dir);
+    const recorded: string[] = [];
+    const walk = (current: string) => {
+      let entries: import('node:fs').Dirent[];
+      try {
+        entries = readdirSync(current, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const abs = path.join(current, entry.name);
+        if (entry.isDirectory()) walk(abs);
+        else if (entry.isFile()) {
+          const relative = path.relative(this.dir, abs).split(path.sep).join('/');
+          this.rawArtifacts.set(relative, {
+            path: relative,
+            kind: 'external',
+            sha256: sha256(readFileSync(abs)),
+            bytes: statSync(abs).size,
+            createdAt: new Date().toISOString(),
+          });
+          recorded.push(relative);
+        }
+      }
+    };
+    walk(base);
+    if (recorded.length) this.writeIndex();
+    return recorded.sort();
+  }
+
+  private index(relative: string, kind: 'text' | 'external', content: Buffer): void {
+    this.rawArtifacts.set(relative, {
+      path: relative,
+      kind,
+      sha256: sha256(content),
+      bytes: content.length,
+      createdAt: new Date().toISOString(),
+    });
+    this.writeIndex();
+  }
+
+  private writeIndex(): void {
+    const entries = [...this.rawArtifacts.values()].sort((a, b) => a.path.localeCompare(b.path));
+    this.write(ARTIFACT_INDEX_FILE, ArtifactIndex, entries);
   }
 
   read<S extends z.ZodType>(name: string, schema: S): Envelope<z.output<S>> {

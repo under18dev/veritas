@@ -151,15 +151,13 @@ export async function runDoctor(
     fc.version,
   );
 
+  // `prove` runs the z3-solver WebAssembly build; a native z3 executable alone does not make it available.
   const z3wasm = packageVersion(root, 'z3-solver');
-  const z3native = await versionOf('z3', ['--version'], root);
   add(
     'z3',
-    z3wasm.version || z3native ? 'available' : 'unavailable',
-    [z3wasm.version ? `z3-solver (wasm) ${z3wasm.version}` : null, z3native ? `native ${z3native}` : null]
-      .filter(Boolean)
-      .join('; ') || 'neither z3-solver nor a z3 executable found',
-    z3wasm.version ?? z3native,
+    z3wasm.version ? 'available' : 'unavailable',
+    z3wasm.version ? `z3-solver (wasm) resolved from ${z3wasm.from}` : 'z3-solver (wasm) not installed',
+    z3wasm.version,
   );
 
   const lean = await firstVersion(leanToolCandidates('lean', env), ['--version'], root);

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { CODE_CONFIGS, JSON_CONFIG } from '../config/load.js';
 import { VeritasConfig as ConfigSchema, type VeritasConfig } from '../config/schema.js';
 import { VeritasError } from '../exit-codes.js';
+import { resolveInsideRoot } from '../paths.js';
 import { detectProject, type ProjectInfo } from './detect.js';
 
 export interface InitOptions {
@@ -46,7 +47,8 @@ export function initProject(root: string, options: InitOptions = {}): InitResult
       `install it with \`${project.packageManager === 'unknown' ? 'npm' : project.packageManager} add -D vitest\` and rerun \`veritas init\``,
     );
   }
-  const file = path.join(root, JSON_CONFIG);
+  // Refuse a `.veritas` (or config.json) symlink that points outside the project instead of writing through it.
+  const file = resolveInsideRoot(root, JSON_CONFIG);
   const codeConfigs = CODE_CONFIGS.filter((f) => existsSync(path.join(root, f)));
   if (codeConfigs.length > 0) {
     throw new VeritasError(
@@ -71,6 +73,6 @@ export function initProject(root: string, options: InitOptions = {}): InitResult
   if (!project.git) nextSteps.push('initialise git to enable --since and reproducible run metadata');
   if (options.dryRun) return { project, config, file, written: false, nextSteps };
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+  writeFileSync(resolveInsideRoot(root, JSON_CONFIG), `${JSON.stringify(config, null, 2)}\n`);
   return { project, config, file, written: true, nextSteps };
 }

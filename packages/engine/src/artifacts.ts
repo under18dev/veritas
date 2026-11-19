@@ -1,5 +1,14 @@
 import { CodeIndex } from '@under18dev/veritas-code-intelligence';
-import { Finding, FormalClaim, Mutant, Property, Run, TestAssessment } from '@under18dev/veritas-core';
+import {
+  ARTIFACT_INDEX_FILE,
+  ArtifactIndex,
+  Finding,
+  FormalClaim,
+  Mutant,
+  Property,
+  Run,
+  TestAssessment,
+} from '@under18dev/veritas-core';
 import { MutationRunResult } from '@under18dev/veritas-mutation-adapter';
 import { PbtResult } from '@under18dev/veritas-property-testing';
 import { DiscoveryResult } from '@under18dev/veritas-spec-discovery';
@@ -52,6 +61,7 @@ export const ARTIFACTS = {
   pbt: { file: 'pbt.json', schema: z.array(PbtResult) },
   assessments: { file: 'assessments.json', schema: z.array(TestAssessment) },
   findings: { file: 'findings.json', schema: z.array(Finding) },
+  artifactIndex: { file: ARTIFACT_INDEX_FILE, schema: ArtifactIndex },
 } as const;
 
 export type ArtifactName = keyof typeof ARTIFACTS;

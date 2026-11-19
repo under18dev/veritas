@@ -1,9 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  ARTIFACT_INDEX_FILE,
+  ArtifactIndex,
   ContentCache,
   canonicalJson,
   ExitCode,
@@ -11,7 +14,9 @@ import {
   type Finding,
   type FormalClaim,
   hashValue,
+  initProject,
   leanToolCandidates,
+  loadConfig,
   newRunId,
   PropertyIR,
   PUBLIC_SCHEMAS,
@@ -32,6 +37,25 @@ import {
 const tmp = () => mkdtempSync(path.join(tmpdir(), 'veritas-core-'));
 
 describe('config', () => {
+  it('rejects a configuration written for another schema version', () => {
+    expect(() => parseConfig({ schemaVersion: '999.0.0' }, null)).toThrow(/schema version/);
+    expect(parseConfig({ schemaVersion: '1.0.0' }, null).schemaVersion).toBe('1.0.0');
+  });
+
+  it('neither writes nor reads the configuration through a .veritas symlink that leaves the project', async () => {
+    const root = tmp();
+    const outside = tmp();
+    writeFileSync(
+      path.join(root, 'package.json'),
+      JSON.stringify({ name: 'p', devDependencies: { vitest: '5.1.1' } }),
+    );
+    symlinkSync(outside, path.join(root, '.veritas'), process.platform === 'win32' ? 'junction' : 'dir');
+    expect(() => initProject(root, { force: true })).toThrow(/escapes the project root/);
+    expect(existsSync(path.join(outside, 'config.json'))).toBe(false);
+    writeFileSync(path.join(outside, 'config.json'), 'secret-token-value');
+    await expect(loadConfig(root)).rejects.toThrow(/escapes the project root/);
+  });
+
   it('fills safe defaults: network sources off, no auto-apply, z3 bounded domain', () => {
     const config = parseConfig({}, null);
     expect(config.sources.web.enabled).toBe(false);
@@ -155,6 +179,21 @@ describe('run store', () => {
     const key = cache.key({ k: 1 });
     cache.set('logs', key, { line: 'ghp_abcdefghijklmnopqrstuvwxyz' });
     expect(JSON.stringify(cache.get('logs', key))).not.toContain('ghp_');
+  });
+
+  it('gives raw text and external-tool files the run metadata and a hash through the artifact index', () => {
+    const root = tmp();
+    const store = new RunStore(root, 'run-test', ctx);
+    store.writeText('proofs/c.smt2', '(check-sat)\n');
+    mkdirSync(store.pathFor('mutation/sub'), { recursive: true });
+    writeFileSync(store.pathFor('mutation/sub/report.json'), '{"x":1}');
+    expect(store.recordExternal('mutation')).toEqual(['mutation/sub/report.json']);
+    const index = store.read(ARTIFACT_INDEX_FILE, ArtifactIndex);
+    expect(index.meta.runId).toBe('run-test');
+    expect(index.data.map((e) => [e.path, e.kind, e.sha256])).toEqual([
+      ['mutation/sub/report.json', 'external', createHash('sha256').update('{"x":1}').digest('hex')],
+      ['proofs/c.smt2', 'text', createHash('sha256').update('(check-sat)\n').digest('hex')],
+    ]);
   });
 
   it('rejects artifacts with incomplete metadata', () => {

@@ -6,7 +6,11 @@ const Domain = z.string().regex(/^[a-z0-9.-]+$/i, 'expected a bare domain name s
 export const VeritasConfig = z
   .object({
     $schema: z.string().optional(),
-    schemaVersion: z.string().default('1.0.0'),
+    schemaVersion: z
+      .literal('1.0.0', {
+        error: 'unsupported configuration schema version; this version of Veritas reads 1.0.0',
+      })
+      .default('1.0.0'),
     project: z
       .object({
         packageManager: z.enum(['pnpm', 'npm', 'yarn', 'bun', 'unknown']).default('unknown'),

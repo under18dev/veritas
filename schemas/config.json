@@ -8,7 +8,8 @@
     },
     "schemaVersion": {
       "default": "1.0.0",
-      "type": "string"
+      "type": "string",
+      "const": "1.0.0"
     },
     "project": {
       "default": {

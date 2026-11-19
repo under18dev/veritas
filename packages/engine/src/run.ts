@@ -315,10 +315,13 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       });
       mutants = result.mutants;
       mutationAvailable = result.status === 'succeeded';
+      // The mutator writes its own report files; index them so they carry the run metadata and a hash.
+      const external = store.recordExternal('mutation');
       const { status, undecided } = mutationStageStatus(result, { incremental: Boolean(options.since) });
       return {
         status,
         output: result,
+        artifacts: external,
         usage: { mutants: result.mutants.length },
         messages: [
           `mutator ${result.backend.version ?? 'unknown'}: ${result.status}${result.detail ? ` (${result.detail})` : ''}`,

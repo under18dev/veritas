@@ -63,7 +63,7 @@ Packages appear as they are implemented; see the support matrix for what works t
 | `.veritas/runs/<run-id>/`                       | Per-run artifacts: evidence, properties, test map, mutants, solver input/output, patches, reports |
 | `.veritas/cache/`                               | Content-addressed cache                                                                           |
 
-Each artifact is an envelope with `schemaVersion`, `runId`, `createdAt`, `toolVersion`, `gitCommit`, `configHash` and `sourceHash` (ADR 0002). JSON Schemas are in `schemas/`.
+Each JSON artifact is an envelope with `schemaVersion`, `runId`, `createdAt`, `toolVersion`, `gitCommit`, `configHash` and `sourceHash` (ADR 0002). Files that cannot hold an envelope (solver input and output, Lean sources, rendered reports, the mutator's own report files) are listed in `artifact-index.json` with their SHA-256, and that index carries the metadata; the rendered reports also show it. JSON Schemas are in `schemas/`.
 
 ## Exit codes
 

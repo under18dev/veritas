@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import type { z } from 'zod';
 import { VeritasError } from '../exit-codes.js';
 import { hashValue } from '../hash.js';
+import { resolveInsideRoot } from '../paths.js';
 import { VeritasConfig } from './schema.js';
 
 export const CONFIG_DIR = '.veritas';
@@ -43,8 +44,9 @@ export async function loadConfig(
   root: string,
   options: { allowCodeConfig?: boolean } = {},
 ): Promise<LoadedConfig> {
-  const jsonPath = path.join(root, JSON_CONFIG);
-  const codePath = CODE_CONFIGS.map((f) => path.join(root, f)).find((f) => existsSync(f));
+  // Configuration files must be inside the project: a symlink pointing elsewhere is refused, not followed.
+  const jsonPath = resolveInsideRoot(root, JSON_CONFIG);
+  const codePath = CODE_CONFIGS.map((f) => resolveInsideRoot(root, f)).find((f) => existsSync(f));
   if (existsSync(jsonPath) && codePath) {
     throw new VeritasError(
       'user',
