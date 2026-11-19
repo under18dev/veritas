@@ -101,7 +101,9 @@ export const VeritasConfig = z
       .prefault({}),
     reports: z
       .object({
-        formats: z.array(z.enum(['text', 'json', 'markdown', 'html', 'sarif'])).default(['json', 'markdown']),
+        formats: z
+          .array(z.enum(['text', 'json', 'markdown', 'html', 'sarif']))
+          .default(['json', 'markdown', 'html', 'sarif']),
       })
       .strict()
       .prefault({}),
