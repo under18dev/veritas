@@ -41,6 +41,15 @@ describe('init and doctor', () => {
     expect(runCli(['init', '--yes', '--force'], dir).status).toBe(0);
   });
 
+  it('does not create a second, conflicting config when a code config exists', () => {
+    const dir = copyFixture('discount-boundary');
+    writeFileSync(path.join(dir, 'veritas.config.ts'), 'export default {};\n');
+    const result = runCli(['init', '--yes', '--force', '--json'], dir);
+    expect(result.status).toBe(2);
+    expect(json(result).code).toBe('CODE_CONFIG_EXISTS');
+    expect(existsSync(path.join(dir, '.veritas/config.json'))).toBe(false);
+  });
+
   it('requires --yes when not interactive and writes nothing', () => {
     const dir = copyFixture('discount-boundary');
     const result = runCli(['init', '--json'], dir);

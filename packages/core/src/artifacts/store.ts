@@ -5,8 +5,8 @@ import type { z } from 'zod';
 import { VeritasError } from '../exit-codes.js';
 import { hashValue, sha256 } from '../hash.js';
 import { resolveInsideRoot } from '../paths.js';
-import { redactDeep } from '../redact.js';
-import { type ArtifactMeta, SCHEMA_VERSION } from '../schema/common.js';
+import { redact, redactDeep } from '../redact.js';
+import { ArtifactMeta, SCHEMA_VERSION } from '../schema/common.js';
 import { TOOL_VERSION } from '../version.js';
 
 export const RUNS_DIR = path.join('.veritas', 'runs');
@@ -79,10 +79,10 @@ export class RunStore {
     return path.relative(this.dir, file).split(path.sep).join('/');
   }
 
-  /** Raw text artifacts such as solver input/output or logs; secrets are redacted by the caller's choice. */
+  /** Raw text artifacts such as solver input/output or logs. Secrets are always redacted. */
   writeText(name: string, content: string): string {
     const file = this.pathFor(name);
-    writeAtomic(file, content);
+    writeAtomic(file, redact(content));
     return path.relative(this.dir, file).split(path.sep).join('/');
   }
 
@@ -95,8 +95,25 @@ export class RunStore {
   }
 }
 
-export function readEnvelope<S extends z.ZodType>(file: string, schema: S): Envelope<z.output<S>> {
-  let raw: { meta?: unknown; data?: unknown };
+/** Upgrades an envelope written with an older schema version by exactly one version step. */
+export interface Migration {
+  from: string;
+  to: string;
+  migrate(envelope: { meta: Record<string, unknown>; data: unknown }): {
+    meta: Record<string, unknown>;
+    data: unknown;
+  };
+}
+
+/** Registered migrations, oldest first. Empty while only one schema version exists. */
+export const MIGRATIONS: Migration[] = [];
+
+export function readEnvelope<S extends z.ZodType>(
+  file: string,
+  schema: S,
+  migrations: Migration[] = MIGRATIONS,
+): Envelope<z.output<S>> {
+  let raw: { meta?: Record<string, unknown>; data?: unknown };
   try {
     raw = JSON.parse(readFileSync(file, 'utf8'));
   } catch (error) {
@@ -106,16 +123,34 @@ export function readEnvelope<S extends z.ZodType>(file: string, schema: S): Enve
       `cannot read artifact ${file}: ${(error as Error).message}`,
     );
   }
-  const meta = raw.meta as ArtifactMeta | undefined;
-  if (!meta || meta.schemaVersion !== SCHEMA_VERSION) {
+  let envelope = { meta: raw.meta ?? {}, data: raw.data };
+  const seen = new Set<string>();
+  while (envelope.meta.schemaVersion !== SCHEMA_VERSION) {
+    const version = String(envelope.meta.schemaVersion ?? 'none');
+    const step = migrations.find((m) => m.from === version);
+    if (!step || seen.has(version)) {
+      throw new VeritasError(
+        'user',
+        'ARTIFACT_SCHEMA_VERSION',
+        `artifact ${file} has schema version ${version}, expected ${SCHEMA_VERSION}, and no migration is available`,
+        'rerun the stage that produced it',
+      );
+    }
+    seen.add(version);
+    envelope = step.migrate(envelope);
+    envelope.meta = { ...envelope.meta, schemaVersion: step.to };
+  }
+  const meta = ArtifactMeta.safeParse(envelope.meta);
+  if (!meta.success) {
     throw new VeritasError(
-      'user',
-      'ARTIFACT_SCHEMA_VERSION',
-      `artifact ${file} has schema version ${meta?.schemaVersion ?? 'none'}, expected ${SCHEMA_VERSION}`,
-      'rerun the stage that produced it',
+      'tool',
+      'ARTIFACT_META_INVALID',
+      `artifact ${file} has incomplete metadata`,
+      undefined,
+      meta.error.issues,
     );
   }
-  const parsed = schema.safeParse(raw.data);
+  const parsed = schema.safeParse(envelope.data);
   if (!parsed.success) {
     throw new VeritasError(
       'tool',
@@ -125,7 +160,7 @@ export function readEnvelope<S extends z.ZodType>(file: string, schema: S): Enve
       parsed.error.issues,
     );
   }
-  return { meta, data: parsed.data };
+  return { meta: meta.data, data: parsed.data };
 }
 
 /** Run IDs under `.veritas/runs`, newest first. */
@@ -165,7 +200,7 @@ export class ContentCache {
   }
 
   set(namespace: string, key: string, value: unknown): void {
-    writeAtomic(this.file(namespace, key), JSON.stringify(value));
+    writeAtomic(this.file(namespace, key), JSON.stringify(redactDeep(value)));
   }
 
   private file(namespace: string, key: string): string {

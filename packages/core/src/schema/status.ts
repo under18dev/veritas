@@ -79,13 +79,17 @@ export type TrustLevel = z.infer<typeof TrustLevel>;
 export const CapabilityState = z.enum(['available', 'degraded', 'unavailable', 'disabled']);
 export type CapabilityState = z.infer<typeof CapabilityState>;
 
-/** Outcome of one pipeline stage. `unsupported` and `skipped` are not successes. */
+/**
+ * Outcome of one pipeline stage. Only `succeeded` is a success. `failed` means the stage ran but could not
+ * produce its result; `partial`, `skipped`, `unsupported`, `timeout` and `cancelled` are inconclusive.
+ */
 export const StageStatus = z.enum([
   'succeeded',
   'failed',
   'partial',
   'skipped',
   'unsupported',
+  'timeout',
   'error',
   'cancelled',
 ]);

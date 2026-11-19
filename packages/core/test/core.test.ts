@@ -9,6 +9,7 @@ import {
   ExitCode,
   evaluatePolicy,
   type Finding,
+  type FormalClaim,
   hashValue,
   PropertyIR,
   PUBLIC_SCHEMAS,
@@ -18,6 +19,7 @@ import {
   redact,
   resolveInsideRoot,
   runStages,
+  SCHEMA_VERSION,
   type Stage,
   type StageResult,
   stableId,
@@ -121,6 +123,43 @@ describe('run store', () => {
     expect(readFileSync(store.pathFor('s.json'), 'utf8')).not.toContain('sk-ant-');
   });
 
+  it('redacts raw text artifacts and cache entries', () => {
+    const root = tmp();
+    const store = new RunStore(root, 'run-test', ctx);
+    store.writeText('solver.log', 'out sk-ant-abcdefghijklmnopqrst');
+    expect(readFileSync(store.pathFor('solver.log'), 'utf8')).not.toContain('sk-ant-');
+    const cache = new ContentCache(root);
+    const key = cache.key({ k: 1 });
+    cache.set('logs', key, { line: 'ghp_abcdefghijklmnopqrstuvwxyz' });
+    expect(JSON.stringify(cache.get('logs', key))).not.toContain('ghp_');
+  });
+
+  it('rejects artifacts with incomplete metadata', () => {
+    const root = tmp();
+    const store = new RunStore(root, 'run-test', ctx);
+    const file = store.pathFor('forged.json');
+    writeFileSync(file, JSON.stringify({ meta: { schemaVersion: SCHEMA_VERSION }, data: {} }));
+    expect(() => readEnvelope(file, z.object({}))).toThrow(/metadata/);
+  });
+
+  it('applies registered migrations to older artifacts', () => {
+    const root = tmp();
+    const store = new RunStore(root, 'run-test', ctx);
+    const file = store.pathFor('old.json');
+    const meta = { ...store.meta(), schemaVersion: '0.9.0' };
+    writeFileSync(file, JSON.stringify({ meta, data: { count: '3' } }));
+    const migration = {
+      from: '0.9.0',
+      to: SCHEMA_VERSION,
+      migrate: (e: { meta: Record<string, unknown>; data: unknown }) => ({
+        meta: e.meta,
+        data: { n: Number((e.data as { count: string }).count) },
+      }),
+    };
+    expect(readEnvelope(file, z.object({ n: z.number() }), [migration]).data).toEqual({ n: 3 });
+    expect(() => readEnvelope(file, z.object({ n: z.number() }), [])).toThrow(/no migration/);
+  });
+
   it('caches by content key', () => {
     const cache = new ContentCache(tmp());
     const key = cache.key({ source: 'a' });
@@ -220,10 +259,56 @@ describe('policy', () => {
     );
   });
 
-  it('never treats an unsupported or timed-out stage as success when policy says fail', () => {
-    const strict = { ...policy, inconclusiveBehavior: 'fail' as const };
-    expect(evaluatePolicy(strict, [], [stage('unsupported')]).exitCode).toBe(ExitCode.Inconclusive);
-    expect(evaluatePolicy(policy, [], [stage('error')]).exitCode).toBe(ExitCode.ToolError);
+  it.each(['partial', 'skipped', 'unsupported', 'timeout', 'cancelled'] as const)(
+    'never reports a %s stage as a clean pass',
+    (status) => {
+      const warn = evaluatePolicy(policy, [], [stage(status)]);
+      expect(warn.verdict).toBe('pass_with_warnings');
+      expect(warn.reasons.join(' ')).toContain(status);
+      const strict = evaluatePolicy({ ...policy, inconclusiveBehavior: 'fail' }, [], [stage(status)]);
+      expect(strict.exitCode).toBe(ExitCode.Inconclusive);
+    },
+  );
+
+  it.each(['error', 'failed'] as const)('treats a %s stage as a tool error', (status) => {
+    expect(evaluatePolicy(policy, [], [stage(status)]).exitCode).toBe(ExitCode.ToolError);
+  });
+
+  it.each(['unknown', 'timeout', 'unsupported', 'semantic_mismatch', 'error'] as const)(
+    'treats a %s formal claim as inconclusive, not proven',
+    (status) => {
+      const claim: FormalClaim = {
+        id: 'C-1',
+        propertyId: 'P-1',
+        kind: 'conformance',
+        status,
+        engine: 'z3',
+        engineVersion: '4',
+        assurance: 'none',
+        modelId: 'm',
+        assumptions: [],
+        scope: {},
+        semanticGaps: [],
+        semanticValidation: 'not_attempted',
+        durationMs: 0,
+      };
+      const strict = evaluatePolicy(
+        { ...policy, inconclusiveBehavior: 'fail' },
+        [],
+        [stage('succeeded')],
+        [claim],
+      );
+      expect(strict.exitCode).toBe(ExitCode.Inconclusive);
+      expect(evaluatePolicy(policy, [], [stage('succeeded')], [claim]).verdict).toBe('pass_with_warnings');
+    },
+  );
+
+  it('passes cleanly only when everything succeeded', () => {
+    expect(evaluatePolicy(policy, [], [stage('succeeded')])).toEqual({
+      exitCode: 0,
+      verdict: 'pass',
+      reasons: [],
+    });
   });
 });
 

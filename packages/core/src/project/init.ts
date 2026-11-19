@@ -47,6 +47,15 @@ export function initProject(root: string, options: InitOptions = {}): InitResult
     );
   }
   const file = path.join(root, JSON_CONFIG);
+  const codeConfigs = CODE_CONFIGS.filter((f) => existsSync(path.join(root, f)));
+  if (codeConfigs.length > 0) {
+    throw new VeritasError(
+      'user',
+      'CODE_CONFIG_EXISTS',
+      `a code configuration already exists: ${codeConfigs.join(', ')}; init only writes ${JSON_CONFIG}`,
+      'keep using the existing file, or remove it yourself before running `veritas init`',
+    );
+  }
   const existing = [file, ...CODE_CONFIGS.map((f) => path.join(root, f))].filter((f) => existsSync(f));
   if (existing.length > 0 && !options.force) {
     throw new VeritasError(

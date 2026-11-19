@@ -53,7 +53,7 @@ export async function runStages(stages: Stage[], ctx: Omit<StageContext, 'output
     let outcome: StageOutcome;
     const blocked = stage.dependsOn.filter((d) => {
       const s = statusOf.get(d);
-      return s === undefined || s === 'error' || s === 'cancelled' || s === 'failed';
+      return s === undefined || s === 'error' || s === 'cancelled' || s === 'failed' || s === 'timeout';
     });
     if (ctx.signal.aborted) {
       outcome = { status: 'cancelled', messages: ['run cancelled before this stage started'] };
