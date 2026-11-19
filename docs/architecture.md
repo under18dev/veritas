@@ -41,7 +41,7 @@ Evidence collectors  Code intelligence  Test inventory
 | `solver-z3`, `solver-lean` | Solver backends                                                                                                                                         |
 | `assessment`               | Evidence vectors and test outcomes                                                                                                                      |
 | `improvement`              | Plans, approved patches in isolated workspaces, rollback                                                                                                |
-| `llm`, `llm-claude`        | Provider-neutral LLM interface and the Claude adapter                                                                                                   |
+| `llm`, `llm-providers/*`   | Provider-neutral LLM interface and one adapter per provider (`llm-providers/claude`)                                                                    |
 | `reports`                  | Text, JSON, Markdown, HTML, SARIF                                                                                                                       |
 | `mcp`                      | MCP server                                                                                                                                              |
 | `github-action`            | CI integration                                                                                                                                          |
