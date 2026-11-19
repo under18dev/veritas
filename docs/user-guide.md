@@ -87,7 +87,9 @@ An LLM is optional. It only reads free-text statements the rule-based extractor 
 
 `llm.model` picks the model (for the CLIs, any value their `--model` accepts). `veritas doctor` shows whether the provider is ready; it reads only the login state of a CLI, not account details. Veritas never handles CLI credentials, and does not pass API keys to the CLIs, so they always use their own login.
 
-The CLIs run with no tools (Claude Code: `--tools ""`, no MCP servers or settings; Codex: read-only sandbox, ephemeral session) in an empty temporary directory, so they see only the quoted text Veritas sends. Usage counts toward your plan's limits.
+The CLIs run with as little as possible (Claude Code: no tools, MCP servers or settings; Codex: read-only sandbox, ephemeral session, no user config, browser, apps or web search) in an empty temporary directory, so they see only the quoted text Veritas sends. Usage counts toward your plan's limits.
+
+Codex keeps a read-only shell that Veritas cannot switch off; anything a model returns is kept only when it comes from the quoted statement. On Windows, `.exe` installs and npm/pnpm `.cmd` shims are supported (the shim's Node.js script is run directly, without a shell).
 
 ## Troubleshooting
 
