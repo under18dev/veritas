@@ -19,6 +19,7 @@ import {
   VeritasError,
 } from '@veritas/core';
 import { type ArtifactData, type ArtifactName, latestRunWith, readArtifact } from '@veritas/engine';
+import { applyApprovals, loadApprovals } from '@veritas/property-engine';
 import { expectedFromSpec, type SpecClause } from './oracle.js';
 import { callText, literal, renderTestFile, unifiedDiff } from './render.js';
 import {
@@ -45,7 +46,14 @@ export interface PlanOptions {
   maxIterations?: number;
   allowCodeConfig?: boolean;
   signal?: AbortSignal;
+  /**
+   * Also use proposed (not yet accepted) properties as the oracle. Off by default: without an explicit opt-in,
+   * only accepted specifications may supply expected values.
+   */
+  includeProposed?: boolean;
 }
+
+const UNACCEPTED = 'not accepted';
 
 type Conflict = ArtifactData<'properties'>['conflicts'][number];
 
@@ -150,7 +158,10 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
   };
 
   const propertiesArtifact = readArtifact(root, runId, 'properties');
-  const { properties, conflicts, mapping } = propertiesArtifact.data;
+  const { conflicts, mapping } = propertiesArtifact.data;
+  // Review status comes from the current approval ledger, not from the status recorded when the run happened.
+  const properties = applyApprovals(propertiesArtifact.data.properties, loadApprovals(root)).properties;
+  const includeProposed = Boolean(options.includeProposed);
   const claims = optional(root, runId, 'claims') ?? [];
   const mutation = optional(root, runId, 'mutation');
   const testMap = optional(root, runId, 'testMap');
@@ -167,6 +178,9 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
   const ineligible = (p: Property): string | null => {
     if (!p.ir) return 'the property has no formal model';
     if (p.status === 'rejected' || p.status === 'superseded') return `the property is ${p.status}`;
+    if (p.status !== 'accepted' && p.status !== 'conflicted' && !includeProposed) {
+      return `${UNACCEPTED}: the property is ${p.status}; accept it with \`veritas spec accept ${p.id}\` or pass --include-proposed`;
+    }
     if (p.origin === 'inferred' || p.origin === 'observed') {
       return `the property is ${p.origin} from the implementation; it cannot supply expected values`;
     }
@@ -264,9 +278,14 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
     runId,
     budget,
     projectHash: projectHash(root),
+    includeProposed,
     configHash: loaded.hash,
     runSourceHash: propertiesArtifact.meta.sourceHash,
   };
+  const unaccepted = skipped.filter((x) => x.reason.startsWith(UNACCEPTED));
+  if (usable.length === 0 && unaccepted.length > 0) {
+    stops.push(...[...new Set(unaccepted.map((x) => x.reason))]);
+  }
   if (stops.length > 0) {
     return finish(root, context, {
       ...budgetedDoc,

@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { recordDecision } from '@veritas/property-engine';
 import { describe, expect, it } from 'vitest';
 import { applyImprovement, approvalTokenFor, planImprovement, projectHash, readPlan } from '../src/index.js';
 import {
@@ -70,7 +71,7 @@ describe('planImprovement', () => {
     expect(doc.files[0]?.content).toContain('expect(isSenior(65)).toBe(true);');
     expect(result.plan?.patchPreview).toContain(`+++ b/test/veritas-${property.id}.test.ts`);
     expect(result.plan?.touchesProductionCode).toBe(false);
-    expect(result.plan?.risks.join()).toMatch(/not accepted/);
+    expect(result.plan?.risks.join()).not.toMatch(/not accepted/);
     // The dry run writes only under .veritas/improvements.
     expect(projectHash(root)).toBe(before);
     expect(existsSync(path.join(root, doc.files[0]?.path ?? 'x'))).toBe(false);
@@ -218,6 +219,24 @@ describe('planImprovement', () => {
   });
 });
 
+describe('only accepted specifications are an oracle', () => {
+  it('stops with needs_spec_decision for a proposed property', async () => {
+    const { root } = seniorProject({ status: 'proposed' });
+    const result = await planImprovement({ root });
+    expect(result.outcome).toBe('needs_spec_decision');
+    expect(result.plan).toBeNull();
+    expect(result.approvalToken).toBeNull();
+    expect(result.reasons.join('\n')).toMatch(/not accepted/);
+  });
+
+  it('plans from a proposed property only with an explicit opt-in, and apply still checks it', async () => {
+    const { root } = seniorProject({ status: 'proposed' });
+    const result = await planImprovement({ root, includeProposed: true });
+    expect(result.outcome).toBe('planned');
+    expect(readPlan(root, result.planId).includeProposed).toBe(true);
+  });
+});
+
 describe('applyImprovement refusals', () => {
   async function planned() {
     const ctx = seniorProject();
@@ -268,6 +287,20 @@ describe('applyImprovement refusals', () => {
     await expect(
       applyImprovement({ root, planId: result.planId, approvalToken: result.approvalToken ?? '', env: {} }),
     ).rejects.toMatchObject({ code: 'PLAN_STALE' });
+  });
+
+  it('blocks a plan whose property was rejected after planning', async () => {
+    const { root, result, property, hash } = await planned();
+    recordDecision(root, property, 'reject', 'reviewer', 'the README rule is wrong');
+    const attempt = await applyImprovement({
+      root,
+      planId: result.planId,
+      approvalToken: result.approvalToken ?? '',
+      env: {},
+    });
+    expect(attempt.outcome).toBe('blocked');
+    expect(attempt.reasons.join('\n')).toMatch(/is rejected/);
+    expect(projectHash(root)).toBe(hash);
   });
 
   it('blocks a re-approved plan whose expected value was changed away from the specification', async () => {

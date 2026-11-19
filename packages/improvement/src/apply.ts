@@ -15,6 +15,7 @@ import {
 } from '@veritas/core';
 import { readArtifact } from '@veritas/engine';
 import { type MutationRunResult, runMutation } from '@veritas/mutation-adapter';
+import { applyApprovals, loadApprovals } from '@veritas/property-engine';
 import { expectedFromSpec } from './oracle.js';
 import { renderTestFile } from './render.js';
 import type { PlanDocument } from './schema.js';
@@ -75,7 +76,9 @@ function planProblems(root: string, doc: PlanDocument, config: VeritasConfig): s
   // Every expected value must still be the one the specification model documents.
   let properties: Map<string, Property>;
   try {
-    properties = new Map(readArtifact(root, doc.runId, 'properties').data.properties.map((p) => [p.id, p]));
+    // Apply the approval ledger as it is now: a property rejected after planning invalidates the plan.
+    const recorded = readArtifact(root, doc.runId, 'properties').data.properties;
+    properties = new Map(applyApprovals(recorded, loadApprovals(root)).properties.map((p) => [p.id, p]));
   } catch (error) {
     return [...problems, `cannot re-read the specification of run ${doc.runId}: ${(error as Error).message}`];
   }
@@ -87,6 +90,8 @@ function planProblems(root: string, doc: PlanDocument, config: VeritasConfig): s
     }
     if (p.status === 'conflicted' || p.status === 'rejected' || p.status === 'superseded') {
       problems.push(`test ${t.id}: property ${t.propertyId} is ${p.status}`);
+    } else if (p.status !== 'accepted' && !doc.includeProposed) {
+      problems.push(`test ${t.id}: property ${t.propertyId} is ${p.status}, not accepted`);
     }
     const assumedNegative = p.assumptions.some((a) => /^assumed:/i.test(a));
     const e = expectedFromSpec(p.ir, t.input, {

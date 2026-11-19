@@ -76,7 +76,7 @@ export function thresholdPropertyOf(options: {
     description: `${options.param} ${options.operator} ${options.value}`,
     template: 'boundary',
     targetSymbols: [`${options.file}#${options.exportName}`],
-    status: 'proposed',
+    status: 'accepted',
     origin: 'normative',
     sourceIds: ['S-readme'],
     assumptions: options.assumptions ?? [],

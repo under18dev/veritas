@@ -92,6 +92,8 @@ export const PlanDocument = z.object({
   budget: ImprovementBudget,
   /** Hash of every project file (excluding node_modules, .git, .veritas, .mutator) when the plan was made. */
   projectHash: Sha256,
+  /** Whether proposed (not accepted) properties were explicitly allowed as the oracle. */
+  includeProposed: z.boolean().default(false),
   configHash: Sha256,
   /** The run artifacts' source hash, for traceability. */
   runSourceHash: Sha256,
