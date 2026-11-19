@@ -41,9 +41,12 @@ export function linkMutants(mutants: Mutant[], properties: Property[], functions
   });
 }
 
+/** Evidence that can never link a test to a property on its own. */
+const GUESSES = new Set(['name_similarity', 'llm_hypothesis']);
+
 /**
  * Attach property ids to test-symbol edges. Evidence kinds come from the inventory (static call, direct assertion)
- * plus mutation evidence when the test killed a mutant relevant to the property. Names alone never link.
+ * plus mutation evidence when the test killed a mutant relevant to the property. Names or LLM guesses alone never link.
  */
 export function linkTests(
   tests: TestCase[],
@@ -54,7 +57,9 @@ export function linkTests(
   const out: TestPropertyEdge[] = [];
   const testsById = new Map(tests.map((t) => [t.id, t]));
   for (const edge of edges) {
-    const targeted = properties.filter((p) => p.targetSymbols.includes(edge.symbol));
+    const targeted = edge.evidence.some((e) => !GUESSES.has(e.kind))
+      ? properties.filter((p) => p.targetSymbols.includes(edge.symbol))
+      : [];
     if (targeted.length === 0) {
       out.push(edge);
       continue;

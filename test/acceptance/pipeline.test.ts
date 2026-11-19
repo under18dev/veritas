@@ -331,12 +331,34 @@ describe('specification sources', () => {
       'properties.json',
     );
     expect(properties.some((p) => p.status === 'accepted')).toBe(false);
-    const evidence = readRunArtifact<{ networkRequests: number; statements: { flags: string[] }[] }>(
-      dir,
-      run.runId,
-      'evidence.json',
-    );
+    const evidence = readRunArtifact<{
+      networkRequests: number;
+      sources: { id: string; locator: string }[];
+      statements: { sourceId: string; quote: string; modality: string; flags: string[] }[];
+    }>(dir, run.runId, 'evidence.json');
     expect(evidence.networkRequests).toBe(0);
     expect(evidence.statements.some((s) => s.flags.includes('instruction_like'))).toBe(true);
+    // Ordinary normative statements next to the injected text are specification evidence, not instructions.
+    const ordinary = evidence.statements.filter((s) => /at least 0|limited to the range/.test(s.quote));
+    expect(ordinary.map((s) => s.quote).sort()).toEqual([
+      'The clamp function must return a value of at least 0.',
+      '`clamp(x)` returns x limited to the range 0 to 10, inclusive.',
+    ]);
+    for (const s of ordinary) expect(s.flags).not.toContain('instruction_like');
+    expect(ordinary.find((s) => /must return/.test(s.quote))?.modality).toBe('must');
+  });
+
+  it('does not flag the ordinary rules of a README as instruction-like', () => {
+    const dir = setup('discount-boundary');
+    const run = json<RunJson>(runCli(['run', '--profile', 'quick', '--json'], dir));
+    const evidence = readRunArtifact<{
+      sources: { id: string; locator: string }[];
+      statements: { sourceId: string; quote: string; range: { start: number }; flags: string[] }[];
+    }>(dir, run.runId, 'evidence.json');
+    const readme = evidence.sources.find((s) => s.locator === 'README.md');
+    const statements = evidence.statements.filter((s) => s.sourceId === readme?.id);
+    expect(statements.map((s) => s.range.start).sort((a, b) => a - b)).toEqual([7, 11, 11]);
+    expect(statements.filter((s) => s.flags.includes('instruction_like'))).toEqual([]);
+    expect(evidence.statements.some((s) => s.flags.includes('instruction_like'))).toBe(false);
   });
 });

@@ -21,5 +21,8 @@
     "@under18dev/veritas-core": "workspace:*",
     "@under18dev/veritas-property-engine": "workspace:*",
     "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@under18dev/veritas-test-inventory": "workspace:*"
   }
 }

@@ -36,7 +36,8 @@ export function deriveFindings(input: FindingInput): Finding[] {
     input.claims.filter((c) => c.propertyId === propertyId && c.kind === 'conformance');
 
   for (const p of input.properties) {
-    if (p.origin !== 'normative') continue;
+    // A rejected or superseded reading is no longer a specification, so it cannot be violated.
+    if (p.origin !== 'normative' || p.status === 'rejected' || p.status === 'superseded') continue;
     const claims = claimsFor(p.id);
     const cex = claims.find(
       (c) => c.status === 'counterexample_found' && c.semanticValidation === 'confirmed',
