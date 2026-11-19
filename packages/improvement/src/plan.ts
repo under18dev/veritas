@@ -193,6 +193,8 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
       return 'every source statement of the property is marked stale';
     }
     if (p.targetSymbols.length !== 1) return 'the property does not target exactly one function';
+    if (p.ir.functions.some((f) => f.jsParams?.some((j) => j.kind !== 'scalar')))
+      return 'the function takes a record or array; generated tests cover integer and boolean parameters only';
     return null;
   };
 

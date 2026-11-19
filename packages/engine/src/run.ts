@@ -46,6 +46,7 @@ import {
   equivalenceProperty,
   proveProperty,
   restrictToInputs,
+  shapeInput,
   type TranslationResult,
   translateFunction,
 } from '@under18dev/veritas-formal-core';
@@ -341,7 +342,14 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         const fn = index.code.functions.find((f) => f.symbol === p.targetSymbols[0]);
         if (!fn) continue;
         const quote = discovery.statements.find((s) => p.statementIds.includes(s.id))?.quote;
-        const result = formalizeProperty({ root, property: p, fn, domain, ...(quote ? { quote } : {}) });
+        const result = formalizeProperty({
+          root,
+          property: p,
+          fn,
+          domain,
+          maxArrayLength: config.formal.maxArrayLength,
+          ...(quote ? { quote } : {}),
+        });
         if (result.status === 'formalized') {
           formalized.set(p.id, result);
           p.ir = result.ir;
@@ -631,6 +639,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
           source,
           exportName: fn.name,
           domain,
+          maxArrayLength: config.formal.maxArrayLength,
           modelName: 'original',
         });
         const mut = translateFunction({
@@ -638,6 +647,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
           source: mutated,
           exportName: fn.name,
           domain,
+          maxArrayLength: config.formal.maxArrayLength,
           modelName: 'mutant',
         });
         if (orig.status !== 'translated' || mut.status !== 'translated') {
@@ -687,6 +697,12 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       // Relation 2: can the inputs a test already uses tell a surviving mutant from the original?
       const inventory = ctx.outputs.get('map') as TestInventory | undefined;
       for (const [mutantId, { fn, orig, mut, propertyId }] of pairs) {
+        if (orig.model.jsParams) {
+          messages.push(
+            `mutant ${mutantId}: test inputs are only compared for integer and boolean parameters`,
+          );
+          continue;
+        }
         const byInputs = new Map<string, { inputs: Record<string, string | boolean>[]; testIds: string[] }>();
         for (const test of inventory?.tests ?? []) {
           const inputs = test.targetCalls
@@ -748,6 +764,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
             source: found.mutated,
             exportName: found.fn.name,
             domain,
+            maxArrayLength: config.formal.maxArrayLength,
             modelName: `${f.exportName}__mutant`,
           });
           let ir: PropertyIR;
@@ -835,7 +852,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         findings.push({
           id: stableId('F', { kind: 'counterexample', pbt: r.id }),
           kind: 'counterexample',
-          title: `property-based test found ${JSON.stringify(r.counterexample)} violating "${p?.formalExpression ?? r.propertyId}"`,
+          title: `property-based test found ${JSON.stringify(p?.ir && r.counterexample ? shapeInput(p.ir, r.counterexample) : r.counterexample)} violating "${p?.formalExpression ?? r.propertyId}"`,
           severity: 'high',
           certainty: p?.status === 'accepted' ? 'confirmed' : 'suspected',
           locations: [],

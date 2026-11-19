@@ -507,6 +507,15 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
       ? decl.name.text
       : null;
   };
+  /** A parameter, or a field of one (`order.total`, `xs.length`), as `param` / `param.field`. */
+  const paramPath = (expr: ts.Expression): string | null => {
+    const e = skipParens(expr);
+    if (ts.isPropertyAccessExpression(e) && !e.questionDotToken && ts.isIdentifier(e.name)) {
+      const base = isOwnParam(e.expression);
+      return base ? `${base}.${e.name.text}` : null;
+    }
+    return isOwnParam(e);
+  };
   const isLocal = (decl: ts.Declaration) =>
     decl.getSourceFile() === sf && decl.pos >= node.pos && decl.end <= node.end;
 
@@ -715,7 +724,7 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
           left: text(n.left),
           right: text(n.right),
           literal,
-          param: isOwnParam(n.left) ?? isOwnParam(n.right),
+          param: paramPath(n.left) ?? paramPath(n.right),
         };
         if (!nestedFunction) info.comparisons.push(record);
       }

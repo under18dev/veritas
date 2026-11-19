@@ -8,7 +8,7 @@ import {
   parseSymbolId,
   resolveInsideRoot,
 } from '@under18dev/veritas-core';
-import { thresholdProperty, translateFunction } from '@under18dev/veritas-formal-core';
+import { FLAT_SEPARATOR, thresholdProperty, translateFunction } from '@under18dev/veritas-formal-core';
 
 export type Formalization =
   | { status: 'formalized'; ir: PropertyIR; assumptions: string[]; file: string; exportName: string }
@@ -39,6 +39,8 @@ export function formalizeProperty(options: {
   fn: FunctionInfo;
   domain: IntDomain;
   quote?: string;
+  /** Element slots modelled per array parameter (formal.maxArrayLength). */
+  maxArrayLength?: number;
 }): Formalization {
   const { property, fn } = options;
   const predicate = property.predicate;
@@ -47,7 +49,13 @@ export function formalizeProperty(options: {
     return { status: 'not_formalizable', reason: `${fn.symbol} is ${fn.purity}, not pure` };
   const { file, name } = parseSymbolId(fn.symbol);
   const source = readFileSync(resolveInsideRoot(options.root, file), 'utf8');
-  const translated = translateFunction({ file, source, exportName: name, domain: options.domain });
+  const translated = translateFunction({
+    file,
+    source,
+    exportName: name,
+    domain: options.domain,
+    ...(options.maxArrayLength !== undefined ? { maxArrayLength: options.maxArrayLength } : {}),
+  });
   if (translated.status !== 'translated') {
     const reason =
       translated.status === 'unsupported'
@@ -111,9 +119,13 @@ export function formalizeProperty(options: {
       reason: `cannot read the expected result of ${name} from "${predicate.consequence}"`,
     };
   }
+  // A record field (`order.total`) is the flattened model parameter `order__total`.
+  const param = predicate.param.split('.').join(FLAT_SEPARATOR);
+  if (!translated.params.some((p) => p.name === param && p.sort === 'int'))
+    return { status: 'not_formalizable', reason: `${predicate.param} is not an integer input of ${name}` };
   const ir = thresholdProperty({
     implementation: translated,
-    param: predicate.param,
+    param,
     operator: predicate.operator,
     value: predicate.value,
     whenTrue,

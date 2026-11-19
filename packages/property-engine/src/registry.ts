@@ -78,11 +78,19 @@ function mapStatement(
   const scored: Target[] = [];
   for (const fn of index.functions) {
     if (!fn.exported) continue;
-    const numeric = fn.params.filter((p) => /\bnumber\b/.test(p.type));
+    // Number parameters, and fields of record parameters the function compares (`order.total`).
+    const numeric = [
+      ...fn.params
+        .filter((p) => /\bnumber\b/.test(p.type) && !/\[\]|Array</.test(p.type))
+        .map((p) => ({ name: p.name, words: words(p.name) })),
+      ...[
+        ...new Set(fn.comparisons.map((c) => c.param).filter((n): n is string => n?.includes('.') ?? false)),
+      ].map((name) => ({ name, words: words(name.slice(name.indexOf('.') + 1)) })),
+    ];
     if (numeric.length === 0) continue;
     const nameHits = words(fn.name).filter((w) => quoteWords.has(w)).length;
     for (const p of numeric) {
-      const paramWords = words(p.name);
+      const paramWords = p.words;
       const paramHit =
         quantityWords.some((w) => paramWords.includes(w)) || paramWords.some((w) => quoteWords.has(w));
       const compared = fn.comparisons.some((c) => c.param === p.name);

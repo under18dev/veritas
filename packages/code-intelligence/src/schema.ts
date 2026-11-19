@@ -25,7 +25,7 @@ export const Comparison = z.object({
   right: z.string(),
   /** The integer literal side in decimal, e.g. `0x10` becomes `16`; null when neither side is one. */
   literal: z.string().nullable(),
-  /** The parameter compared, when one side is a bare parameter of this function. */
+  /** The parameter compared (`total`), or a field of one (`order.total`, `xs.length`); null otherwise. */
   param: z.string().nullable(),
 });
 export type Comparison = z.infer<typeof Comparison>;

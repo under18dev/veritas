@@ -815,3 +815,14 @@ export function tax(total: number): number {
       expect(c.basis).not.toContain('git_diff');
   });
 });
+
+describe('comparisons on record fields', () => {
+  it('records a comparison on a field of a parameter as param.field', () => {
+    const root = project({
+      'src/order.ts':
+        'export function pay(order: { total: number }, xs: number[]): number {\n  if (xs.length > 2) return 1;\n  return order.total >= 1000 ? 100 : 0;\n}\n',
+    });
+    const params = fn(analyze(root), 'src/order.ts#pay').comparisons.map((c) => c.param);
+    expect(params).toEqual(['xs.length', 'order.total']);
+  });
+});

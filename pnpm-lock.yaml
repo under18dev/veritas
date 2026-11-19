@@ -280,6 +280,18 @@ importers:
         specifier: 5.1.1
         version: 5.1.1(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.8.3))
 
+  fixtures/order-records:
+    devDependencies:
+      '@mizchi/mutator':
+        specifier: 0.4.5
+        version: 0.4.5(vite@8.3.8(@types/node@26.6.6)(yaml@2.8.3))(vitest@5.1.1(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.8.3)))
+      fast-check:
+        specifier: 4.10.3
+        version: 4.10.3
+      vitest:
+        specifier: 5.1.1
+        version: 5.1.1(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.8.3))
+
   fixtures/security:
     devDependencies:
       vitest:
