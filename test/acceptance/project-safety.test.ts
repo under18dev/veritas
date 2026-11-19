@@ -1,5 +1,14 @@
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PROFILE_STAGES, runVeritas } from '@under18dev/veritas-engine';
 import { describe, expect, it } from 'vitest';
@@ -102,7 +111,9 @@ describe('tool errors', () => {
 describe('Node API', () => {
   it('gives the same findings as the CLI for the same project and options', async () => {
     const cliDir = setup('discount-boundary');
-    const apiDir = setup('discount-boundary');
+    // Evidence ids include the git revision of each source, so the second copy clones the same commit.
+    const apiDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-discount-boundary-api-')));
+    cpSync(cliDir, apiDir, { recursive: true, verbatimSymlinks: true });
     const cli = json<RunJson>(runCli(['run', '--profile', 'deep', '--include-proposed', '--json'], cliDir));
     const api = await runVeritas({
       root: apiDir,
