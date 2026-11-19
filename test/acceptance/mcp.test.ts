@@ -1,7 +1,18 @@
 import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import {
+  EvidenceSource,
+  Finding,
+  FormalClaim,
+  Mutant,
+  Property,
+  Run,
+  TestAssessment,
+  TestCase,
+} from '@under18dev/veritas-core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { copyFixture, REPO_ROOT, runCli } from './helpers.js';
 
@@ -174,6 +185,117 @@ describe('MCP server', () => {
     expect(added).toHaveLength(1);
     expect(added[0]).toMatch(/^\?\? test\/veritas-.*\.test\.ts$/);
   }, 600_000);
+
+  it('reports a cancelled tool call as cancelled, records the run as not successful and stays usable', async () => {
+    const dir = copyFixture('discount-boundary', { git: true, linkDeps: true });
+    expect(runCli(['init', '--yes'], dir).status).toBe(0);
+    const client = await connect(dir);
+    const runsDir = path.join(dir, '.veritas/runs');
+    const controller = new AbortController();
+    // Cancel once mutator has been started (its report directory is created right before it is spawned).
+    const poll = setInterval(() => {
+      if (!existsSync(runsDir)) return;
+      if (readdirSync(runsDir).some((r) => existsSync(path.join(runsDir, r, 'mutation')))) {
+        clearInterval(poll);
+        controller.abort('cancelled by the acceptance test');
+      }
+    }, 20);
+    const call = client.callTool({ name: 'run_mutation', arguments: {} }, undefined, {
+      signal: controller.signal,
+      timeout: 240_000,
+    });
+    await expect(call).rejects.toThrow(/cancelled by the acceptance test/);
+    clearInterval(poll);
+    expect(controller.signal.aborted).toBe(true);
+
+    // The server is still usable: a long tool runs once the cancelled one has released its slot.
+    const analyzed = data(await client.callTool({ name: 'analyze_tests', arguments: {} }));
+    expect(analyzed.verdict).not.toBe('tool_error');
+    expect((analyzed.assessments as unknown[]).length).toBe(5);
+
+    const runs = readdirSync(runsDir).map(
+      (id) =>
+        JSON.parse(readFileSync(path.join(runsDir, id, 'run.json'), 'utf8')).data as {
+          command: string;
+          status: string;
+          verdict: string;
+          stages: { stage: string; status: string }[];
+        },
+    );
+    const cancelled = runs.find((r) => r.command === 'mcp:run_mutation');
+    expect(cancelled?.stages.find((s) => s.stage === 'mutate')?.status).toBe('cancelled');
+    expect(cancelled?.status).not.toBe('succeeded');
+    expect(cancelled?.verdict).not.toBe('pass');
+    const status = data(await client.callTool({ name: 'get_run_status', arguments: {} }));
+    expect((status.run as { command: string }).command).toBe('mcp:analyze_tests');
+  }, 300_000);
+
+  it('returns read-tool results that validate against the core schemas and carry their provenance', async () => {
+    const dir = copyFixture('discount-boundary', { git: true, linkDeps: true });
+    expect(runCli(['init', '--yes'], dir).status).toBe(0);
+    const client = await connect(dir);
+    const expectValid = (
+      schema: { safeParse: (v: unknown) => { success: boolean; error?: unknown } },
+      v: unknown,
+    ) => {
+      const parsed = schema.safeParse(v);
+      expect(parsed.success, JSON.stringify(parsed.error)).toBe(true);
+    };
+
+    const discovered = data(await client.callTool({ name: 'discover_specs', arguments: {} }));
+    const sources = discovered.sources as Record<string, unknown>[];
+    expect(sources.length).toBeGreaterThan(0);
+    for (const s of sources)
+      expectValid(
+        EvidenceSource.pick({ id: true, kind: true, locator: true, summary: true, trust: true }),
+        s,
+      );
+
+    const verified = data(
+      await client.callTool({ name: 'verify_property', arguments: { includeProposed: true } }),
+    );
+    for (const c of verified.claims as unknown[]) expectValid(FormalClaim, c);
+    const finding = (verified.findings as { id: string; kind: string }[]).find(
+      (f) => f.kind === 'spec_implementation_mismatch',
+    );
+
+    const listed = data(await client.callTool({ name: 'list_properties', arguments: {} }));
+    const properties = (listed.properties as unknown[]).map((p) => Property.parse(p));
+    const normative = properties.filter((p) => p.origin === 'normative');
+    expect(normative.length).toBeGreaterThan(0);
+    for (const p of normative) {
+      expect(p.sourceIds.length).toBeGreaterThan(0);
+      expect(p.citations.length).toBeGreaterThan(0);
+      for (const c of p.citations) expect(c).toMatch(/^README\.md:\d+$/);
+    }
+
+    // get_evidence reads the latest run: the verification run above.
+    const evidence = data(
+      await client.callTool({ name: 'get_evidence', arguments: { findingId: finding?.id } }),
+    );
+    const f = Finding.parse(evidence.finding);
+    expect(f.id).toBe(finding?.id);
+    expect(f.sourceIds.length).toBeGreaterThan(0);
+    for (const p of evidence.properties as unknown[]) expectValid(Property, p);
+    const evidenceSources = (evidence.sources as unknown[]).map((s) => EvidenceSource.parse(s));
+    expect(evidenceSources.map((s) => s.id)).toEqual(expect.arrayContaining(f.sourceIds));
+    expect(evidenceSources.find((s) => s.locator === 'README.md')?.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    const statements = evidence.statements as { sourceId: string; quote: string; range: { start: number } }[];
+    expect(statements.some((s) => s.range.start === 7 && /1000 or more/.test(s.quote))).toBe(true);
+    for (const s of statements) expect(evidenceSources.map((x) => x.id)).toContain(s.sourceId);
+    for (const t of evidence.tests as unknown[]) expectValid(TestCase, t);
+    for (const m of evidence.mutants as unknown[]) expectValid(Mutant, m);
+    for (const c of evidence.claims as unknown[]) expectValid(FormalClaim, c);
+    expect((evidence.claims as unknown[]).length).toBeGreaterThan(0);
+    for (const a of evidence.assessments as unknown[]) expectValid(TestAssessment, a);
+
+    const analyzed = data(await client.callTool({ name: 'analyze_tests', arguments: {} }));
+    expect((analyzed.assessments as unknown[]).length).toBe(5);
+    for (const a of analyzed.assessments as unknown[]) expectValid(TestAssessment, a);
+
+    const status = data(await client.callTool({ name: 'get_run_status', arguments: {} }));
+    expectValid(Run, status.run);
+  }, 300_000);
 
   it('prints usage for --help and rejects unknown options with exit code 2', () => {
     const help = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
