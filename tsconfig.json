@@ -36,6 +36,9 @@
     },
     {
       "path": "packages/property-testing"
+    },
+    {
+      "path": "packages/reports"
     }
   ]
 }
