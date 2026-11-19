@@ -80,6 +80,8 @@ interface SpecOutput {
     { ir: import('@veritas/core').PropertyIR; assumptions: string[]; file: string; exportName: string }
   >;
   conflicts: import('@veritas/property-engine').ConflictGroup[];
+  /** Properties with a predicate that could not be formalized, with the reason. */
+  notFormalized: Map<string, string>;
 }
 
 function previousProperties(root: string): Property[] {
@@ -193,6 +195,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       });
       const applied = applyApprovals(registry.properties, loadApprovals(root));
       const formalized: SpecOutput['formalized'] = new Map();
+      const notFormalized: SpecOutput['notFormalized'] = new Map();
       const formalization: {
         propertyId: string;
         status: 'formalized' | 'not_formalizable';
@@ -215,6 +218,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
           });
         } else {
           formalization.push({ propertyId: p.id, status: 'not_formalizable', detail: result.reason });
+          notFormalized.set(p.id, result.reason);
         }
       }
       const artifact = store.write(ARTIFACTS.properties.file, ARTIFACTS.properties.schema, {
@@ -230,6 +234,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
         output: {
           properties: applied.properties,
           formalized,
+          notFormalized,
           conflicts: registry.conflicts,
         } satisfies SpecOutput,
         artifacts: [artifact],
@@ -281,15 +286,13 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       };
     },
   });
+  const wantedStatus = (p: Property) =>
+    (options.propertyIds ? options.propertyIds.includes(p.id) : true) &&
+    (p.status === 'accepted' ||
+      (Boolean(options.includeProposed) &&
+        (p.status === 'proposed' || p.status === 'reviewed' || p.status === 'conflicted')));
   const eligible = (spec: SpecOutput) =>
-    spec.properties.filter(
-      (p) =>
-        spec.formalized.has(p.id) &&
-        (options.propertyIds ? options.propertyIds.includes(p.id) : true) &&
-        (p.status === 'accepted' ||
-          (options.includeProposed &&
-            (p.status === 'proposed' || p.status === 'reviewed' || p.status === 'conflicted'))),
-    );
+    spec.properties.filter((p) => spec.formalized.has(p.id) && wantedStatus(p));
   add({
     name: 'pbt',
     dependsOn: ['spec'],
@@ -341,6 +344,26 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       const messages: string[] = [];
       let solverMs = 0;
       const toProve = eligible(spec);
+      // Properties selected for verification that fall outside the formal subset are reported, not skipped silently.
+      for (const p of spec.properties.filter((x) => spec.notFormalized.has(x.id) && wantedStatus(x))) {
+        const reason = spec.notFormalized.get(p.id) as string;
+        claims.push({
+          id: stableId('C', { kind: 'conformance', propertyId: p.id, unsupported: reason }),
+          propertyId: p.id,
+          kind: 'conformance',
+          status: 'unsupported',
+          engine: 'none',
+          engineVersion: 'n/a',
+          assurance: 'none',
+          modelId: 'none',
+          assumptions: [],
+          scope: {},
+          semanticGaps: [reason],
+          semanticValidation: 'not_attempted',
+          durationMs: 0,
+        });
+        messages.push(`${p.id}: unsupported (${reason})`);
+      }
       for (const p of toProve) {
         const f = spec.formalized.get(p.id);
         if (!f) continue;
@@ -385,14 +408,19 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
           `${skipped.length} formalized propert(y/ies) not verified: not accepted (use --include-proposed)`,
         );
       // Survived mutants in translatable functions: bounded equivalence or a distinguishing input.
+      const functions =
+        (ctx.outputs.get('index') as { code: CodeIndex } | undefined)?.code.functions ?? code0.functions;
       for (const m of mutants.filter((m) => m.status === 'survived')) {
-        const relevant = spec.properties.filter(
-          (p) => spec.formalized.has(p.id) && m.location.file === spec.formalized.get(p.id)?.file,
-        );
-        const target = relevant[0] ? spec.formalized.get(relevant[0].id) : undefined;
         const line = m.location.range?.start;
-        if (!target || line === undefined) continue;
-        const source = readFileSync(path.join(root, target.file), 'utf8');
+        const fn = functions.find(
+          (f) =>
+            f.file === m.location.file &&
+            line !== undefined &&
+            line >= (f.location.range?.start ?? 0) &&
+            line <= (f.location.range?.end ?? 0),
+        );
+        if (!fn || line === undefined || !fn.exported) continue;
+        const source = readFileSync(path.join(root, fn.file), 'utf8');
         const column = (source.split('\n')[line - 1] ?? '').indexOf(m.original) + 1;
         if (column <= 0) continue;
         let mutated: string;
@@ -402,20 +430,26 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
           continue;
         }
         const orig = translateFunction({
-          file: target.file,
+          file: fn.file,
           source,
-          exportName: target.exportName,
+          exportName: fn.name,
           domain,
           modelName: 'original',
         });
         const mut = translateFunction({
-          file: target.file,
+          file: fn.file,
           source: mutated,
-          exportName: target.exportName,
+          exportName: fn.name,
           domain,
           modelName: 'mutant',
         });
-        if (orig.status !== 'translated' || mut.status !== 'translated') continue;
+        if (orig.status !== 'translated' || mut.status !== 'translated') {
+          messages.push(`mutant ${m.id}: equivalence not checked (outside the formal subset)`);
+          continue;
+        }
+        const related = spec.properties.find((p) => p.targetSymbols.includes(fn.symbol));
+        const target = { file: fn.file, exportName: fn.name };
+        const relevant = [{ id: related?.id ?? stableId('P', { mutantsOf: fn.symbol }) }];
         const { claim } = await proveProperty({
           kind: 'bounded_equivalence',
           propertyId: relevant[0]?.id as string,
