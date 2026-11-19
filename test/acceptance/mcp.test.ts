@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -174,4 +174,14 @@ describe('MCP server', () => {
     expect(added).toHaveLength(1);
     expect(added[0]).toMatch(/^\?\? test\/veritas-.*\.test\.ts$/);
   }, 600_000);
+
+  it('prints usage for --help and rejects unknown options with exit code 2', () => {
+    const help = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain('--allow-write');
+    const bad = spawnSync(process.execPath, [BIN, '--bogus'], { encoding: 'utf8' });
+    expect(bad.status).toBe(2);
+    expect(bad.stderr).toContain("Unknown option '--bogus'");
+    expect(bad.stderr).not.toContain('at parseArgs');
+  });
 });
