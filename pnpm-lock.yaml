@@ -368,7 +368,7 @@ importers:
         version: link:../llm
       '@under18dev/veritas-llm-claude':
         specifier: workspace:*
-        version: link:../llm-claude
+        version: link:../llm-providers/claude
       '@under18dev/veritas-mutation-adapter':
         specifier: workspace:*
         version: link:../mutation-adapter
@@ -454,17 +454,17 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
 
-  packages/llm-claude:
+  packages/llm-providers/claude:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: 1.10.0
         version: 1.10.0(zod@4.6.7)
       '@under18dev/veritas-core':
         specifier: workspace:*
-        version: link:../core
+        version: link:../../core
       '@under18dev/veritas-llm':
         specifier: workspace:*
-        version: link:../llm
+        version: link:../../llm
       zod:
         specifier: 4.6.7
         version: 4.6.7

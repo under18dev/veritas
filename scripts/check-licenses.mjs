@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { workspacePackages } from './workspace-packages.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -53,18 +54,17 @@ for (const [pkg, license] of seen) {
 }
 
 const rootLicense = readFileSync(path.join(repo, 'LICENSE'), 'utf8');
-for (const dir of readdirSync(path.join(repo, 'packages'))) {
-  const manifest = JSON.parse(readFileSync(path.join(repo, 'packages', dir, 'package.json'), 'utf8'));
+for (const { dir, manifest } of workspacePackages(repo)) {
   if (manifest.license !== 'Apache-2.0') problems.push(`${manifest.name}: license field must be Apache-2.0`);
   if (manifest.private) continue;
   let copy;
   try {
-    copy = readFileSync(path.join(repo, 'packages', dir, 'LICENSE'), 'utf8');
+    copy = readFileSync(path.join(repo, dir, 'LICENSE'), 'utf8');
   } catch {
     copy = undefined;
   }
   if (copy !== rootLicense)
-    problems.push(`${manifest.name}: packages/${dir}/LICENSE must be a copy of the root LICENSE`);
+    problems.push(`${manifest.name}: ${dir}/LICENSE must be a copy of the root LICENSE`);
 }
 
 if (problems.length > 0) {

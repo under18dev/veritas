@@ -14,6 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { workspacePackages } from './workspace-packages.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const work = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-clean-install-')));
@@ -39,6 +40,8 @@ run(
     '--filter',
     './packages/*',
     '--filter',
+    './packages/llm-providers/*',
+    '--filter',
     '!@under18dev/veritas-github-action',
     'pack',
     '--pack-destination',
@@ -48,8 +51,7 @@ run(
 );
 // pnpm names a tarball after the package: `@scope/name@1.2.3` becomes `scope-name-1.2.3.tgz`.
 const tarballs = {};
-for (const dir of readdirSync(path.join(repo, 'packages'))) {
-  const manifest = JSON.parse(readFileSync(path.join(repo, 'packages', dir, 'package.json'), 'utf8'));
+for (const { manifest } of workspacePackages(repo)) {
   if (manifest.private) continue;
   const file = `${manifest.name.replace(/^@/, '').replace('/', '-')}-${manifest.version}.tgz`;
   if (!readdirSync(tgz).includes(file)) throw new Error(`missing tarball ${file} for ${manifest.name}`);

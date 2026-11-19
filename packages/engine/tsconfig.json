@@ -37,7 +37,7 @@
       "path": "../llm"
     },
     {
-      "path": "../llm-claude"
+      "path": "../llm-providers/claude"
     },
     {
       "path": "../reports"

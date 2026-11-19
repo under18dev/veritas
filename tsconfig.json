@@ -50,7 +50,7 @@
       "path": "packages/llm"
     },
     {
-      "path": "packages/llm-claude"
+      "path": "packages/llm-providers/claude"
     },
     {
       "path": "packages/solver-lean"

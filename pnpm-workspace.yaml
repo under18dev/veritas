@@ -1,5 +1,6 @@
 packages:
   - packages/*
+  - packages/llm-providers/*
   - fixtures/*
 minimumReleaseAgeExclude:
   - "@mizchi/mutator-core@0.4.5"
