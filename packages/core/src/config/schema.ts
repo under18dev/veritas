@@ -27,7 +27,10 @@ export const VeritasConfig = z
             // Exactly `owner/name`: anything else could point the token-bearing API request elsewhere.
             repo: z
               .string()
-              .regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/, 'expected owner/name')
+              .regex(
+                /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/,
+                'expected owner/name',
+              )
               .optional(),
           })
           .strict()
