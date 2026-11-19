@@ -152,3 +152,25 @@ export function main(x: number) { return first(second(x)); }
     expect(fn(index, 'src/m.ts#main').calls).toEqual(['inc']);
   });
 });
+
+describe('tsconfig extends', () => {
+  it('never reads a base configuration outside the project root', () => {
+    const parent = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-ci-extends-')));
+    writeFileSync(
+      path.join(parent, 'outside-base.json'),
+      JSON.stringify({ compilerOptions: { target: 'secret-marker-target' } }),
+    );
+    const root = path.join(parent, 'project');
+    mkdirSync(path.join(root, 'src'), { recursive: true });
+    writeFileSync(path.join(root, 'src/a.ts'), 'export function f(x: number): number { return x; }\n');
+    writeFileSync(path.join(root, 'tsconfig.json'), JSON.stringify({ extends: '../outside-base.json' }));
+    const index = analyzeCode({
+      root,
+      config: parseConfig({ project: { tsconfig: 'tsconfig.json' } }, null),
+    });
+    const messages = index.diagnostics.map((d) => d.message).join('\n');
+    expect(messages).not.toContain('secret-marker-target');
+    expect(messages).toMatch(/outside-base\.json/);
+    expect(index.functions.map((f) => f.name)).toEqual(['f']);
+  });
+});

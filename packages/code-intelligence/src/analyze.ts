@@ -219,7 +219,29 @@ function loadCompilerOptions(
     diagnostics.push({ file: tsconfig, message: `tsconfig not usable, using defaults: ${text}` });
     return DEFAULT_OPTIONS;
   }
-  const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(file), undefined, file);
+  // `extends` chains are followed through this host, so a base config outside the root is never read.
+  const inside = (name: string) => {
+    try {
+      resolveInsideRoot(root, name);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const outside = new Set<string>();
+  const host: ts.ParseConfigHost = {
+    useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
+    readDirectory: (dir, ...rest) => (inside(dir) ? ts.sys.readDirectory(dir, ...rest) : []),
+    fileExists: (name) => inside(name) && ts.sys.fileExists(name),
+    readFile: (name) => {
+      if (inside(name)) return ts.sys.readFile(name);
+      outside.add(name);
+      return undefined;
+    },
+  };
+  const parsed = ts.parseJsonConfigFileContent(read.config, host, path.dirname(file), undefined, file);
+  for (const name of outside)
+    diagnostics.push({ file: tsconfig, message: `config outside the project root not read: ${name}` });
   for (const error of parsed.errors) {
     if (error.code === 18003) continue; // "no inputs found": we supply our own root files
     diagnostics.push({ file: tsconfig, message: ts.flattenDiagnosticMessageText(error.messageText, ' ') });
