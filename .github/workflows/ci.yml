@@ -43,6 +43,8 @@ jobs:
           Invoke-WebRequest -Uri https://raw.githubusercontent.com/leanprover/elan/master/elan-init.ps1 -OutFile elan-init.ps1
           ./elan-init.ps1 -NoPrompt 1 -DefaultToolchain stable
           echo "$env:USERPROFILE\.elan\bin" >> $env:GITHUB_PATH
+      - name: Download the Lean toolchain
+        run: lean --version && lake --version
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
