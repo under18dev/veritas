@@ -21,6 +21,9 @@
     },
     {
       "path": "packages/solver-z3"
+    },
+    {
+      "path": "packages/formal-core"
     }
   ]
 }
