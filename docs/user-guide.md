@@ -64,15 +64,30 @@ Only new test files are added, and only when mutation results improve in an isol
 
 `.veritas/config.json` is validated against `schemas/config.json`. Important settings:
 
-| Setting                                         | Default                      | Meaning                                                           |
-| ----------------------------------------------- | ---------------------------- | ----------------------------------------------------------------- |
-| `sources.web.enabled`, `sources.github.enabled` | `false`                      | Network sources; the web also needs `allowDomains`                |
-| `formal.integerDomain`                          | `[-10000, 10000]`            | Bounds for formal checks                                          |
-| `formal.maxSolverMs`                            | `30000`                      | Solver time limit per query                                       |
-| `pbt.numRuns`, `pbt.seed`                       | `1000`, derived per property | Property-based testing                                            |
-| `llm.provider`                                  | `none`                       | `claude` enables LLM-assisted extraction with `ANTHROPIC_API_KEY` |
-| `policy.confirmedViolation`                     | `fail`                       | Exit 1 on confirmed violations                                    |
-| `policy.inconclusiveBehavior`                   | `warn`                       | `fail` turns inconclusive results into exit 4                     |
+| Setting                                         | Default                      | Meaning                                                      |
+| ----------------------------------------------- | ---------------------------- | ------------------------------------------------------------ |
+| `sources.web.enabled`, `sources.github.enabled` | `false`                      | Network sources; the web also needs `allowDomains`           |
+| `formal.integerDomain`                          | `[-10000, 10000]`            | Bounds for formal checks                                     |
+| `formal.maxSolverMs`                            | `30000`                      | Solver time limit per query                                  |
+| `pbt.numRuns`, `pbt.seed`                       | `1000`, derived per property | Property-based testing                                       |
+| `llm.provider`                                  | `none`                       | LLM-assisted extraction; see [LLM providers](#llm-providers) |
+| `policy.confirmedViolation`                     | `fail`                       | Exit 1 on confirmed violations                               |
+| `policy.inconclusiveBehavior`                   | `warn`                       | `fail` turns inconclusive results into exit 4                |
+
+## LLM providers
+
+An LLM is optional. It only reads free-text statements the rule-based extractor could not interpret; what it finds becomes experimental, proposed properties, never accepted ones. LLM requests are never made with `--offline`.
+
+| `llm.provider` | Uses                                                    | Needs                                    |
+| -------------- | ------------------------------------------------------- | ---------------------------------------- |
+| `claude-code`  | The Claude Code CLI with your own login (Pro/Max plans) | `claude` on PATH and `claude auth login` |
+| `codex`        | The Codex CLI with your own login (ChatGPT plans)       | `codex` on PATH and `codex login`        |
+| `claude`       | The Anthropic API                                       | `ANTHROPIC_API_KEY`                      |
+| `openai`       | The OpenAI API (Responses, `store: false`)              | `OPENAI_API_KEY`                         |
+
+`llm.model` picks the model (for the CLIs, any value their `--model` accepts). `veritas doctor` shows whether the provider is ready; it reads only the login state of a CLI, not account details. Veritas never handles CLI credentials, and does not pass API keys to the CLIs, so they always use their own login.
+
+The CLIs run with no tools (Claude Code: `--tools ""`, no MCP servers or settings; Codex: read-only sandbox, ephemeral session) in an empty temporary directory, so they see only the quoted text Veritas sends. Usage counts toward your plan's limits.
 
 ## Troubleshooting
 
