@@ -152,8 +152,13 @@ describe('Node API', () => {
     const artifact = (dir: string, runId: string, name: string) => {
       const file = path.join(dir, '.veritas/runs', runId, name);
       // The two copies live in different directories; reproduction commands name them.
+      // Durations differ between any two runs.
       return statSync(file, { throwIfNoEntry: false })
-        ? JSON.parse(readFileSync(file, 'utf8').replaceAll(JSON.stringify(dir).slice(1, -1), '<root>')).data
+        ? JSON.parse(
+            readFileSync(file, 'utf8')
+              .replaceAll(JSON.stringify(dir).slice(1, -1), '<root>')
+              .replace(/"durationMs": \d+/g, '"durationMs": 0'),
+          ).data
         : null;
     };
     for (const [args, call] of commands) {
@@ -169,10 +174,24 @@ describe('Node API', () => {
       const files = (dir: string, runId: string) =>
         readdirSync(path.join(dir, '.veritas/runs', runId)).sort();
       expect(files(apiDir, api.runId), label).toEqual(files(cliDir, cli.runId));
-      for (const name of ['findings.json', 'properties.json', 'assessments.json'])
+      for (const name of ['findings.json', 'properties.json', 'assessments.json', 'claims.json'])
         expect(artifact(apiDir, api.runId, name), `${label} ${name}`).toEqual(
           artifact(cliDir, cli.runId, name),
         );
+      // Evidence and mutation results without their timestamps and durations, which differ between any two runs.
+      const evidence = (dir: string, runId: string) => {
+        const data = artifact(dir, runId, 'evidence.json');
+        return (
+          data && { statements: data.statements, sources: data.sources.map((x: { id: string }) => x.id) }
+        );
+      };
+      expect(evidence(apiDir, api.runId), `${label} evidence`).toEqual(evidence(cliDir, cli.runId));
+      const mutants = (dir: string, runId: string) =>
+        artifact(dir, runId, 'mutation.json')?.mutants.map((m: { id: string; status: string }) => [
+          m.id,
+          m.status,
+        ]) ?? null;
+      expect(mutants(apiDir, api.runId), `${label} mutants`).toEqual(mutants(cliDir, cli.runId));
     }
   }, 600_000);
 });

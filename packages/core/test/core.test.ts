@@ -1,6 +1,15 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -262,6 +271,14 @@ describe('run store', () => {
     expect(openCache(root, { cache: { enabled: true } }, env).cache?.get('solver', key, schema)).toEqual({
       verdict: 'sat',
     });
+  });
+
+  it('tightens a cache key that others can read to 0600 (POSIX modes)', () => {
+    const env = keyEnv();
+    writeFileSync(env.VERITAS_CACHE_KEY_FILE, Buffer.alloc(32, 3), { mode: 0o644 });
+    chmodSync(env.VERITAS_CACHE_KEY_FILE, 0o644);
+    expect(openCache(tmp(), { cache: { enabled: true } }, env).cache).toBeInstanceOf(ContentCache);
+    if (process.platform !== 'win32') expect(statSync(env.VERITAS_CACHE_KEY_FILE).mode & 0o777).toBe(0o600);
   });
 
   it('treats an entry that does not match its schema as a miss', () => {

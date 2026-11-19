@@ -1,6 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
@@ -350,12 +358,6 @@ export function cacheKeyFile(env: NodeJS.ProcessEnv = process.env): string {
 function cacheSecret(env: NodeJS.ProcessEnv): Buffer | null {
   const file = cacheKeyFile(env);
   try {
-    const existing = readFileSync(file);
-    if (existing.length === 32) return existing;
-  } catch {
-    /* created below */
-  }
-  try {
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     // Exclusive create: when two processes race, both end up using the key that was written first.
     writeFileSync(file, randomBytes(32), { mode: 0o600, flag: 'wx' });
@@ -363,6 +365,9 @@ function cacheSecret(env: NodeJS.ProcessEnv): Buffer | null {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return null;
   }
   try {
+    // A key others can read could sign forged entries: tighten it to 0600, or do without a cache.
+    if (process.platform !== 'win32' && (statSync(file).mode & 0o077) !== 0) chmodSync(file, 0o600);
+    if (process.platform !== 'win32' && (statSync(file).mode & 0o077) !== 0) return null;
     const secret = readFileSync(file);
     return secret.length === 32 ? secret : null;
   } catch {
