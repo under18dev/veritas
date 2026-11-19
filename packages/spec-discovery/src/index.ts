@@ -632,13 +632,37 @@ function derivedAndSuperseded(
   const add = (edge: DiscoveryResult['provenance'][number]) => {
     if (edge.from !== edge.to) edges.set(`${edge.from}>${edge.to}>${edge.relation}`, edge);
   };
-  const firstQuote = new Map<string, string>();
+  // The original of a copied statement is the most authoritative source that has it (README before docs before
+  // issues and the web), then the first by locator: never the order files happened to be read in.
+  const order = [
+    'human',
+    'standard',
+    'readme',
+    'docs',
+    'code',
+    'test',
+    'issue',
+    'pr',
+    'git',
+    'web',
+    'runtime',
+  ];
+  const rank = (id: string) => {
+    const source = sources.find((s) => s.id === id);
+    return [order.indexOf(source?.kind ?? 'runtime'), source?.locator ?? id] as const;
+  };
+  const byQuote = new Map<string, Set<string>>();
   for (const st of statements) {
     const key = st.quote.replace(/\s+/g, ' ').trim().toLowerCase();
-    if (key.length < 30) continue;
-    const earlier = firstQuote.get(key);
-    if (earlier === undefined) firstQuote.set(key, st.sourceId);
-    else if (earlier !== st.sourceId) add({ from: st.sourceId, to: earlier, relation: 'derived_from' });
+    if (key.length >= 30) byQuote.set(key, (byQuote.get(key) ?? new Set()).add(st.sourceId));
+  }
+  for (const ids of byQuote.values()) {
+    const [original, ...copies] = [...ids].sort((a, b) => {
+      const [ra, la] = rank(a);
+      const [rb, lb] = rank(b);
+      return ra - rb || la.localeCompare(lb);
+    });
+    if (original) for (const copy of copies) add({ from: copy, to: original, relation: 'derived_from' });
   }
   for (const input of inputs) {
     const source = sourceByInput.get(input);
