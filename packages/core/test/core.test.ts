@@ -51,6 +51,15 @@ const SECRET = Buffer.alloc(32, 7);
 const keyEnv = () => ({ VERITAS_CACHE_KEY_FILE: path.join(tmp(), 'cache-key') });
 
 describe('config', () => {
+  it('bounds the modelled array length', () => {
+    expect(parseConfig({}, null).formal.maxArrayLength).toBe(3);
+    expect(parseConfig({ formal: { maxArrayLength: 8 } }, null).formal.maxArrayLength).toBe(8);
+    for (const maxArrayLength of [0, 9, 2.5])
+      expect(() => parseConfig({ formal: { maxArrayLength } }, null), String(maxArrayLength)).toThrow(
+        /maxArrayLength/,
+      );
+  });
+
   it('rejects a configuration written for another schema version', () => {
     expect(() => parseConfig({ schemaVersion: '999.0.0' }, null)).toThrow(/schema version/);
     expect(parseConfig({ schemaVersion: '1.0.0' }, null).schemaVersion).toBe('1.0.0');

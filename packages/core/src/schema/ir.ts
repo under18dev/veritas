@@ -64,6 +64,28 @@ export const Param = z.discriminatedUnion('sort', [
 ]);
 export type Param = z.infer<typeof Param>;
 
+/**
+ * How the JavaScript parameters of a function map onto the scalar model parameters. Records and bounded
+ * arrays are flattened: a record field becomes one parameter, an array becomes a length parameter in
+ * [0, maxArrayLength] and one parameter per element slot (slots at or beyond the length are not part of the
+ * JavaScript value). Without `jsParams` every JavaScript parameter is the model parameter of the same position.
+ */
+export const JsParam = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('scalar'), name: z.string().min(1), param: z.string().min(1) }),
+  z.object({
+    kind: z.literal('record'),
+    name: z.string().min(1),
+    fields: z.array(z.object({ key: z.string().min(1), param: z.string().min(1) })).min(1),
+  }),
+  z.object({
+    kind: z.literal('array'),
+    name: z.string().min(1),
+    length: z.string().min(1),
+    elements: z.array(z.string().min(1)).min(1),
+  }),
+]);
+export type JsParam = z.infer<typeof JsParam>;
+
 /** A pure function model referenced by `call` expressions. `body` is null when the function is opaque. */
 export const FunctionModel = z.object({
   name: z.string().min(1),
@@ -71,6 +93,12 @@ export const FunctionModel = z.object({
   params: z.array(z.object({ name: z.string().min(1), sort: Sort })),
   returns: Sort,
   body: Expr.nullable(),
+  jsParams: z.array(JsParam).optional(),
+  /**
+   * Conditions over the model parameters under which the function reads an array element at or beyond the
+   * array's length (`undefined` in JavaScript). A result is only valid where none of them can hold.
+   */
+  outOfBounds: z.array(Expr).optional(),
 });
 export type FunctionModel = z.infer<typeof FunctionModel>;
 

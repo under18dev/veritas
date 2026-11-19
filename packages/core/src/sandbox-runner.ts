@@ -10,7 +10,9 @@ type Encoded =
   | { t: 'undefined' }
   | { t: 'null' }
   | { t: 'other'; v: string }
-  | { t: 'throw'; v: string };
+  | { t: 'throw'; v: string }
+  | { t: 'object'; v: Record<string, Encoded> }
+  | { t: 'array'; v: Encoded[] };
 
 function encode(value: unknown): Encoded {
   if (typeof value === 'number') return { t: 'number', v: Object.is(value, -0) ? '-0' : String(value) };
@@ -33,6 +35,11 @@ function decode(arg: Encoded): unknown {
       return BigInt(arg.v);
     case 'null':
       return null;
+    case 'object':
+      // fromEntries defines own properties, so a key such as __proto__ cannot change the prototype.
+      return Object.fromEntries(Object.entries(arg.v).map(([k, v]) => [k, decode(v)]));
+    case 'array':
+      return arg.v.map(decode);
     default:
       return undefined;
   }

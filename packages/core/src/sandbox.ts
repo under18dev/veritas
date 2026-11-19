@@ -12,7 +12,10 @@ export type EncodedValue =
   | { t: 'undefined' }
   | { t: 'null' }
   | { t: 'other'; v: string }
-  | { t: 'throw'; v: string };
+  | { t: 'throw'; v: string }
+  /** Arguments only: a plain object or array built from encoded members (records and bounded arrays). */
+  | { t: 'object'; v: Record<string, EncodedValue> }
+  | { t: 'array'; v: EncodedValue[] };
 
 export interface SandboxResult {
   status: 'ok' | 'error' | 'timeout';

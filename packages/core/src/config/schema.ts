@@ -94,6 +94,8 @@ export const VeritasConfig = z
           .strict()
           .default({ min: '-10000', max: '10000' }),
         maxSolverMs: z.number().int().positive().default(30_000),
+        /** Arrays are modelled with a length in [0, maxArrayLength] and one parameter per element slot. */
+        maxArrayLength: z.number().int().min(1).max(8).default(3),
         rejectUnsupportedSemantics: z.literal(true).default(true),
       })
       .strict()
