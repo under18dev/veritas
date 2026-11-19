@@ -44,20 +44,21 @@ node /path/to/veritas/packages/cli/dist/bin.js explain <finding-id>
 
 ## Commands
 
-| Command                                                     | Purpose                                                                      |
-| ----------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `veritas init [--yes] [--force] [--dry-run]`                | Detect the project and write `.veritas/config.json`                          |
-| `veritas doctor [--json]`                                   | Report available tools and which features are enabled, degraded or disabled  |
-| `veritas discover [--offline] [--sources local,github,web]` | Collect specification evidence                                               |
-| `veritas spec list\|show\|accept\|reject\|diff\|export`     | Review properties; `accept`/`reject` record who decided and why              |
-| `veritas analyze [path]`                                    | Map tests to properties and assess them (no project code executed)           |
-| `veritas mutate [--since <ref>] [--scope <glob>]`           | Mutation testing with [`@mizchi/mutator`](https://github.com/mizchi/mutator) |
-| `veritas test generate [--property <id>] [--dry-run]`       | Generate fast-check property tests                                           |
-| `veritas prove [--property <id>] [--include-proposed]`      | Bounded checks with Z3                                                       |
-| `veritas run [--profile quick\|standard\|deep] [--offline]` | The whole pipeline                                                           |
-| `veritas report [--format text\|json]`                      | Print the latest results                                                     |
-| `veritas explain <finding-id>`                              | Evidence chain of a finding                                                  |
-| `veritas replay <run-id>`                                   | Re-run a previous run with the same stages and options                       |
+| Command                                                                | Purpose                                                                      |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `veritas init [--yes] [--force] [--dry-run]`                           | Detect the project and write `.veritas/config.json`                          |
+| `veritas doctor [--json]`                                              | Report available tools and which features are enabled, degraded or disabled  |
+| `veritas discover [--offline] [--sources local,github,web]`            | Collect specification evidence                                               |
+| `veritas spec list\|show\|accept\|reject\|diff\|export`                | Review properties; `accept`/`reject` record who decided and why              |
+| `veritas analyze [path]`                                               | Map tests to properties and assess them (no project code executed)           |
+| `veritas mutate [--since <ref>] [--scope <glob>]`                      | Mutation testing with [`@mizchi/mutator`](https://github.com/mizchi/mutator) |
+| `veritas test generate [--property <id>] [--dry-run]`                  | Generate fast-check property tests                                           |
+| `veritas prove [--engine z3\|lean] [--property <id>]`                  | Bounded checks with Z3, or kernel-checked proofs with Lean 4                 |
+| `veritas run [--profile quick\|standard\|deep] [--offline]`            | The whole pipeline                                                           |
+| `veritas report [--format text\|json\|markdown\|html\|sarif]`          | Print the latest results                                                     |
+| `veritas explain <finding-id>`                                         | Evidence chain of a finding                                                  |
+| `veritas improve [--dry-run \| --apply --plan <id> --approve <token>]` | Plan test-only improvements; apply an approved plan in an isolated copy      |
+| `veritas replay <run-id>`                                              | Re-run a previous run with the same stages and options                       |
 
 Exit codes: `0` success, `1` confirmed policy failure, `2` invalid configuration or usage, `3` tool or infrastructure error, `4` inconclusive under the configured policy. With `--json`, stdout contains only JSON.
 
@@ -73,11 +74,12 @@ See the [support matrix](docs/support-matrix.md) for what is available in the cu
 ## Agents and MCP
 
 - Agent Skill: [`skills/veritas/SKILL.md`](skills/veritas/SKILL.md)
-- MCP server: `veritas-mcp --root <project>` (read-only analysis tools)
+- MCP server: `veritas-mcp --root <project>` (read-only analysis tools; `--allow-write` adds the tool that applies an approved improvement plan)
+- GitHub Action: [docs/github-action.md](docs/github-action.md)
 
 ## Documentation
 
-[Architecture](docs/architecture.md) · [Semantics](docs/semantics.md) · [Threat model](docs/threat-model.md) · [Support matrix](docs/support-matrix.md) · [ADRs](docs/adr/README.md)
+[User guide](docs/user-guide.md) · [Architecture](docs/architecture.md) · [Semantics](docs/semantics.md) · [Threat model](docs/threat-model.md) · [Support matrix](docs/support-matrix.md) · [ADRs](docs/adr/README.md)
 
 ## Development
 

@@ -1,24 +1,28 @@
 # Support matrix
 
-What works in the current build. Planned items are listed separately and are not available yet.
+What works in the current build.
 
 ## Available
 
-| Area                            | Status     | Notes                                                                                                                                                                                        |
-| ------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `init`, `doctor`, configuration | Available  | `.veritas/config.json`; `veritas.config.ts/js` only with `--allow-code-config`                                                                                                               |
-| Evidence discovery              | Available  | README, `docs/**/*.md`, JSDoc, OpenAPI/JSON Schema bounds, git log, exported issues/PRs (`.veritas-sources/`), CHANGELOG; GitHub API and web only when enabled in config and not `--offline` |
-| Statement extraction            | Rule-based | English and Japanese threshold phrases; everything else is kept as free text                                                                                                                 |
-| Code intelligence               | Available  | TypeScript Compiler API; static only                                                                                                                                                         |
-| Property registry               | Available  | proposed / reviewed / accepted / rejected / conflicted / superseded, append-only approvals                                                                                                   |
-| Test inventory                  | Available  | Vitest `it`/`test`/`describe` incl. modifiers, assertions, mocks, snapshots                                                                                                                  |
-| Mutation testing                | Available  | `@mizchi/mutator` 0.4.x                                                                                                                                                                      |
-| Property-based testing          | Available  | fast-check, in a permission-model sandbox, fixed seeds                                                                                                                                       |
-| Z3 checks                       | Available  | Bounded integer/boolean subset (see below)                                                                                                                                                   |
-| Assessment and findings         | Available  | Evidence vectors; no single score                                                                                                                                                            |
-| CLI                             | Available  | All commands except `improve`                                                                                                                                                                |
-| MCP server                      | Available  | Read-only tools                                                                                                                                                                              |
-| Agent Skill                     | Available  | `skills/veritas/SKILL.md`                                                                                                                                                                    |
+| Area                            | Notes                                                                                                                                                                                        |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `init`, `doctor`, configuration | `.veritas/config.json`; `veritas.config.ts/js` only with `--allow-code-config`                                                                                                               |
+| Evidence discovery              | README, `docs/**/*.md`, JSDoc, OpenAPI/JSON Schema bounds, git log, exported issues/PRs (`.veritas-sources/`), CHANGELOG; GitHub API and web only when enabled in config and not `--offline` |
+| Statement extraction            | Rule-based English and Japanese threshold phrases; optional LLM-assisted extraction with the Claude adapter (`llm.provider: claude`)                                                         |
+| Code intelligence               | TypeScript Compiler API; static only                                                                                                                                                         |
+| Property registry               | proposed / reviewed / accepted / rejected / conflicted / superseded, append-only approvals                                                                                                   |
+| Test inventory                  | Vitest `it`/`test`/`describe` incl. modifiers, assertions, mocks, snapshots                                                                                                                  |
+| Mutation testing                | `@mizchi/mutator` 0.4.x                                                                                                                                                                      |
+| Property-based testing          | fast-check, in a permission-model sandbox, fixed seeds                                                                                                                                       |
+| Z3 checks                       | Bounded integer/boolean subset (see below), `z3-solver` (WASM)                                                                                                                               |
+| Lean checks                     | Lean 4 with Lake when installed; proofs using `sorry`, `admit`, `native_decide` or extra axioms are rejected                                                                                 |
+| Assessment and findings         | Evidence vectors; no single score                                                                                                                                                            |
+| Improvement                     | `improve` plans new test files only; applying needs the plan id and approval token, runs in an isolated copy and rolls back unless mutation results improve; refused in CI                   |
+| Reports                         | text, JSON, Markdown, self-contained HTML and SARIF 2.1.0                                                                                                                                    |
+| CLI                             | All commands                                                                                                                                                                                 |
+| MCP server                      | Read-only tools; applying an approved improvement plan only with `--allow-write`                                                                                                             |
+| GitHub Action                   | Offline engine for `pull_request`, incremental with `since`; see [github-action.md](github-action.md)                                                                                        |
+| Agent Skill                     | `skills/veritas/SKILL.md`                                                                                                                                                                    |
 
 ## Formal subset
 
@@ -26,7 +30,7 @@ What works in the current build. Planned items are listed separately and are not
 | --------------------------------------------------------------------------- | ------------------ |
 | Parameters/results of type `number` (as bounded safe integers) or `boolean` | Yes                |
 | `if`/`else`, ternary, `return`, `const`                                     | Yes                |
-| `+ - *`, comparisons, `=== !==`, `&&                                        |                    | !`, unary `-` | Yes |
+| `+ - *`, comparisons, `=== !==`, `&&`, `\|\|`, `!`, unary `-`               | Yes                |
 | Calls to other supported functions in the same file                         | Yes (no recursion) |
 | `/`, `%`, `**`, floats, `NaN`, `Infinity`, `==`, `??`, casts                | Unsupported        |
 | Loops, `let`/`var`, side effects, async, generators, `this`, external state | Unsupported        |
@@ -40,6 +44,15 @@ What works in the current build. Planned items are listed separately and are not
 | Test runner | Vitest                                        |
 | Languages   | TypeScript, JavaScript (ESM)                  |
 
-## Planned
+## External tools and licenses
 
-npm publication under a final package name (ADR 0008).
+Veritas is licensed under Apache-2.0. `pnpm licenses:check` fails when an installed dependency uses a license outside the allowlist in `scripts/check-licenses.mjs`.
+
+| Tool                          | License    | How it is used                                       |
+| ----------------------------- | ---------- | ---------------------------------------------------- |
+| `@mizchi/mutator`             | MIT        | npm dependency, run as a separate process            |
+| `z3-solver` (Z3)              | MIT        | npm dependency, WASM build                           |
+| fast-check                    | MIT        | npm dependency, run in a sandboxed process           |
+| Lean 4 and Lake               | Apache-2.0 | Installed separately by the user (elan); not bundled |
+| `@anthropic-ai/sdk`           | Apache-2.0 | npm dependency of the optional Claude adapter        |
+| lightningcss (through Vitest) | MPL-2.0    | Unmodified transitive dependency; never bundled      |
