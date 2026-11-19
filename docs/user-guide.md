@@ -58,7 +58,7 @@ veritas improve --dry-run
 veritas improve --apply --plan <plan-id> --approve <token>
 ```
 
-Only new test files are added, and only when mutation results improve in an isolated copy. Expected values come from the specification, never from the implementation. Tests that would fail against the current code are reported as possible specification violations instead of being added.
+Only new test files are added, and only when mutation results improve in an isolated copy. Expected values come from accepted specifications, never from the implementation (`--include-proposed` explicitly allows proposed ones). Rejecting a property after planning invalidates the plan. Tests that would fail against the current code are reported as possible specification violations instead of being added.
 
 ## Configuration
 

@@ -133,6 +133,7 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
         'plan test-only improvements (dry run, the default) or apply an approved plan in an isolated copy; ' +
           'exit 0 plan ready/improved, 4 no safe improvement or spec decision needed, 1 blocked, 2 bad token or CI, 3 tool error',
       )
+      .option('--include-proposed', 'also use proposed (not yet accepted) properties as the oracle')
       .option('--dry-run', 'plan and print the plan and its approval token; never writes project files')
       .option('--apply', 'apply an approved plan (needs --plan and --approve; refused in CI)')
       .option('--plan <id>', 'plan id printed by the dry run')

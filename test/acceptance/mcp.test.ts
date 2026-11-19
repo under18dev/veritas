@@ -117,6 +117,14 @@ describe('MCP server', () => {
     const dir = copyFixture('agent-loop', { git: true, linkDeps: true });
     expect(runCli(['init', '--yes'], dir).status).toBe(0);
     expect(runCli(['run', '--profile', 'deep', '--include-proposed'], dir).status).toBe(0);
+    const listed = JSON.parse(runCli(['spec', 'list', '--json'], dir).stdout) as {
+      properties: { id: string; origin: string }[];
+    };
+    const rule = listed.properties.find((p) => p.origin === 'normative');
+    expect(
+      runCli(['spec', 'accept', rule?.id as string, '--reason', 'README rule', '--actor', 'reviewer'], dir)
+        .status,
+    ).toBe(0);
     const status = () =>
       execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: dir, encoding: 'utf8' })
         .split('\n')

@@ -101,6 +101,7 @@ export async function improveCommand(opts: Opts): Promise<ExitCode> {
       ...(opts.run ? { runId: String(opts.run) } : {}),
       ...(opts.maxIterations !== undefined ? { maxIterations: parseIterations(opts.maxIterations) } : {}),
       allowCodeConfig: Boolean(opts.allowCodeConfig),
+      includeProposed: Boolean(opts.includeProposed),
     });
     const exitCode = improveExitCode(result.outcome);
     if (opts.json) emitJson({ status: result.outcome, exitCode, ...result });

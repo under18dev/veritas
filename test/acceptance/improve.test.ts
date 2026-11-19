@@ -44,13 +44,28 @@ function gitStatus(dir: string): string {
   return spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout;
 }
 
-/** Copy a fixture, initialise it and run the deep pipeline including proposed properties. */
-function analyzed(name: string): string {
+/**
+ * Copy a fixture, initialise it and run the deep pipeline including proposed properties. Unless `accept` is
+ * false, a reviewer then accepts every normative proposed property (conflicted ones need a real decision).
+ */
+function analyzed(name: string, accept = true): string {
   const dir = copyFixture(name, { git: true, linkDeps: true });
   const init = runCli(['init', '--yes'], dir);
   if (init.status !== 0) throw new Error(init.stderr);
   const run = runCli(['run', '--profile', 'deep', '--include-proposed', '--json'], dir);
-  if (run.status !== 0) throw new Error(run.stderr);
+  if (run.status !== 0 && run.status !== 1) throw new Error(run.stderr);
+  if (accept) {
+    const list = JSON.parse(runCli(['spec', 'list', '--json'], dir).stdout) as {
+      properties: { id: string; origin: string; status: string }[];
+    };
+    for (const p of list.properties.filter((x) => x.origin === 'normative' && x.status === 'proposed')) {
+      const decided = runCli(
+        ['spec', 'accept', p.id, '--reason', 'matches the README', '--actor', 'reviewer'],
+        dir,
+      );
+      if (decided.status !== 0) throw new Error(decided.stderr);
+    }
+  }
   return dir;
 }
 
@@ -242,4 +257,24 @@ describe('improve stops instead of adapting expectations', () => {
     },
     LONG,
   );
+});
+
+describe('improve without an accepted specification', () => {
+  it('stops with needs_spec_decision and does not plan from a proposed property', () => {
+    const dir = analyzed('agent-loop', false);
+    const result = runCli(['improve', '--dry-run', '--json'], dir);
+    expect(result.status).toBe(4);
+    const body = JSON.parse(result.stdout) as {
+      status: string;
+      approvalToken: string | null;
+      reasons: string[];
+    };
+    expect(body.status).toBe('needs_spec_decision');
+    expect(body.approvalToken).toBeNull();
+    expect(body.reasons.join('\n')).toMatch(/not accepted/);
+    const optIn = JSON.parse(
+      runCli(['improve', '--dry-run', '--include-proposed', '--json'], dir).stdout,
+    ) as { status: string };
+    expect(optIn.status).toBe('planned');
+  }, 600_000);
 });

@@ -55,10 +55,11 @@ Profiles: `quick` (no project code executed: discovery, analysis, assessment), `
 ## Improving tests
 
 ```bash
-npx veritas improve --dry-run          # plan: new test files only, expected values from the specification, plus an approval token
+npx veritas improve --dry-run          # plan: new test files only, expected values from accepted specifications, plus an approval token
 npx veritas improve --apply --plan <plan-id> --approve <token>   # only after the user approves this exact plan
 ```
 
+- Only accepted properties supply expected values. If the plan stops with `needs_spec_decision` because properties are not accepted, ask the user to review them; use `--include-proposed` only when the user explicitly asks for it.
 - Show the plan, including any `spec_violation_candidate` tests (they would fail against the current code; they are proposals for the user, not patches).
 - Apply only with the user's explicit approval of that plan and token. `--apply` is refused in CI.
 - Veritas measures the change in an isolated copy and writes only new test files, and only if mutation results improve. Otherwise it rolls back and the repository stays unchanged.
