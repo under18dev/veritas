@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/mcp",
+  "name": "@under18dev/veritas-mcp",
   "version": "0.0.0",
   "description": "MCP server exposing Veritas to agents",
   "license": "MIT",
@@ -21,9 +21,9 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
-    "@veritas/core": "workspace:*",
-    "@veritas/engine": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
+    "@under18dev/veritas-engine": "workspace:*",
     "zod": "4.6.7",
-    "@veritas/improvement": "workspace:*"
+    "@under18dev/veritas-improvement": "workspace:*"
   }
 }

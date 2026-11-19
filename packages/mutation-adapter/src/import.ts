@@ -7,7 +7,7 @@ import {
   stableId,
   toPosixRelative,
   VeritasError,
-} from '@veritas/core';
+} from '@under18dev/veritas-core';
 import { z } from 'zod';
 
 export type ReportSource = 'mutator' | 'stryker' | 'mutation-testing-elements';

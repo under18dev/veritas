@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline/promises';
-import { ExitCode, initProject, VeritasError } from '@veritas/core';
+import { ExitCode, initProject, VeritasError } from '@under18dev/veritas-core';
 import { emitJson, emitText, type GlobalOptions, log } from '../output.js';
 
 export async function initCommand(

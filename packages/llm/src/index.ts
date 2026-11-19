@@ -1,4 +1,4 @@
-import { hashValue, redact } from '@veritas/core';
+import { hashValue, redact } from '@under18dev/veritas-core';
 import type { z } from 'zod';
 
 export type LlmStatus =

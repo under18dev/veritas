@@ -1,4 +1,10 @@
-import { ExitCode as Exit, type ExitCode, redact, type StageName, VeritasError } from '@veritas/core';
+import {
+  ExitCode as Exit,
+  type ExitCode,
+  redact,
+  type StageName,
+  VeritasError,
+} from '@under18dev/veritas-core';
 import {
   buildReportInput,
   decideProperty,
@@ -15,7 +21,7 @@ import {
   renderReport,
   runVeritas,
   showProperty,
-} from '@veritas/engine';
+} from '@under18dev/veritas-engine';
 import { emitJson, emitText, type GlobalOptions, log } from '../output.js';
 import { formatRunText } from '../text.js';
 

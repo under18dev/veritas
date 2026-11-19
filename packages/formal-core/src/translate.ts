@@ -5,7 +5,7 @@ import {
   type Param,
   type Sort,
   symbolId,
-} from '@veritas/core';
+} from '@under18dev/veritas-core';
 import ts from 'typescript';
 
 export interface UnsupportedReason {

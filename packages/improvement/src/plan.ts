@@ -17,9 +17,14 @@ import {
   stableId,
   type TestCase,
   VeritasError,
-} from '@veritas/core';
-import { type ArtifactData, type ArtifactName, latestRunWith, readArtifact } from '@veritas/engine';
-import { applyApprovals, loadApprovals } from '@veritas/property-engine';
+} from '@under18dev/veritas-core';
+import {
+  type ArtifactData,
+  type ArtifactName,
+  latestRunWith,
+  readArtifact,
+} from '@under18dev/veritas-engine';
+import { applyApprovals, loadApprovals } from '@under18dev/veritas-property-engine';
 import { expectedFromSpec, type SpecClause } from './oracle.js';
 import { callText, literal, renderTestFile, unifiedDiff } from './render.js';
 import {

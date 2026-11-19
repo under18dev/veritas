@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/solver-lean",
+  "name": "@under18dev/veritas-solver-lean",
   "version": "0.0.0",
   "description": "Lean 4 translation and kernel checking for Veritas properties",
   "license": "MIT",
@@ -17,9 +17,9 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@veritas/core": "workspace:*",
-    "@veritas/formal-core": "workspace:*",
-    "@veritas/solver-z3": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
+    "@under18dev/veritas-formal-core": "workspace:*",
+    "@under18dev/veritas-solver-z3": "workspace:*",
     "zod": "4.6.7"
   }
 }

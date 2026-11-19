@@ -1,6 +1,6 @@
-import { stableId } from '@veritas/core';
-import type { LlmClient } from '@veritas/llm';
-import type { DiscoveryResult } from '@veritas/spec-discovery';
+import { stableId } from '@under18dev/veritas-core';
+import type { LlmClient } from '@under18dev/veritas-llm';
+import type { DiscoveryResult } from '@under18dev/veritas-spec-discovery';
 import { z } from 'zod';
 
 const Extraction = z.object({

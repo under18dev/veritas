@@ -1,5 +1,5 @@
-import type { Expr, PropertyIR } from '@veritas/core';
-import { evaluate, type IRValue } from '@veritas/formal-core';
+import type { Expr, PropertyIR } from '@under18dev/veritas-core';
+import { evaluate, type IRValue } from '@under18dev/veritas-formal-core';
 import type { ScalarValue } from './schema.js';
 
 /**

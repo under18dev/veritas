@@ -1,6 +1,13 @@
-import type { Finding, FormalClaim, Mutant, Property, TestAssessment, TestCase } from '@veritas/core';
-import { VeritasError } from '@veritas/core';
-import type { DiscoveryResult } from '@veritas/spec-discovery';
+import type {
+  Finding,
+  FormalClaim,
+  Mutant,
+  Property,
+  TestAssessment,
+  TestCase,
+} from '@under18dev/veritas-core';
+import { VeritasError } from '@under18dev/veritas-core';
+import type { DiscoveryResult } from '@under18dev/veritas-spec-discovery';
 import { readArtifact, readLatest } from './project.js';
 
 export interface Explanation {

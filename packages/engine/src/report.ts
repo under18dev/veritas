@@ -1,4 +1,4 @@
-import { VeritasError } from '@veritas/core';
+import { VeritasError } from '@under18dev/veritas-core';
 import {
   type ReportInput,
   renderCiSummary,
@@ -7,7 +7,7 @@ import {
   renderMarkdown,
   renderSarif,
   renderText,
-} from '@veritas/reports';
+} from '@under18dev/veritas-reports';
 import type { ArtifactName } from './artifacts.js';
 import { latestRunWith, readArtifact } from './project.js';
 

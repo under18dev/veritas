@@ -1,4 +1,4 @@
-import type { FunctionInfo } from '@veritas/code-intelligence';
+import type { FunctionInfo } from '@under18dev/veritas-code-intelligence';
 import type {
   EvidenceVector,
   FormalClaim,
@@ -7,7 +7,7 @@ import type {
   TestAssessment,
   TestCase,
   TestPropertyEdge,
-} from '@veritas/core';
+} from '@under18dev/veritas-core';
 
 /** Integer points that decide a threshold: both sides of `x op v`. */
 export function boundaryPoints(predicate: NonNullable<Property['predicate']>): string[] {

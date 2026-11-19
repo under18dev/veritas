@@ -2,7 +2,7 @@ import { cpSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseConfig, type VeritasConfig } from '@veritas/core';
+import { parseConfig, type VeritasConfig } from '@under18dev/veritas-core';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const FIXTURE = path.join(REPO_ROOT, 'fixtures', 'discount-boundary');

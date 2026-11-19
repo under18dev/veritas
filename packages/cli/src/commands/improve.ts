@@ -1,5 +1,10 @@
-import { ExitCode, type ImprovementOutcome, type PatchAttempt, VeritasError } from '@veritas/core';
-import { applyImprovement, type PlanOutcome, type PlanResult, planImprovement } from '@veritas/improvement';
+import { ExitCode, type ImprovementOutcome, type PatchAttempt, VeritasError } from '@under18dev/veritas-core';
+import {
+  applyImprovement,
+  type PlanOutcome,
+  type PlanResult,
+  planImprovement,
+} from '@under18dev/veritas-improvement';
 import { emitJson, emitText, type GlobalOptions } from '../output.js';
 
 type Opts = GlobalOptions & Record<string, unknown>;

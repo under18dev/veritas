@@ -1,6 +1,6 @@
 import { lstatSync } from 'node:fs';
 import path from 'node:path';
-import { resolveInsideRoot } from '@veritas/core';
+import { resolveInsideRoot } from '@under18dev/veritas-core';
 import type { PatchFile } from './schema.js';
 
 export interface PatchRules {

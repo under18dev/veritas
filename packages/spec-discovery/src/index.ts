@@ -11,7 +11,7 @@ import {
   sha256,
   stableId,
   type VeritasConfig,
-} from '@veritas/core';
+} from '@under18dev/veritas-core';
 import { z } from 'zod';
 
 const ThresholdRelation = z.object({

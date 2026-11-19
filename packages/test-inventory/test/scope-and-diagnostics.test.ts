@@ -1,4 +1,4 @@
-import { VeritasConfig } from '@veritas/core';
+import { VeritasConfig } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import { inventoryTests } from '../src/index.js';
 import { tempProject } from './helpers.js';

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { ExitCode, TOOL_VERSION } from '@veritas/core';
+import { ExitCode, TOOL_VERSION } from '@under18dev/veritas-core';
 import { Command, CommanderError, Option } from 'commander';
 import { doctorCommand } from './commands/doctor.js';
 import {

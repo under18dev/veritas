@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/code-intelligence",
+  "name": "@under18dev/veritas-code-intelligence",
   "version": "0.0.0",
   "description": "Static TypeScript analysis for Veritas",
   "license": "MIT",
@@ -17,7 +17,7 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@veritas/core": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
     "typescript": "6.0.3",
     "zod": "4.6.7"
   }

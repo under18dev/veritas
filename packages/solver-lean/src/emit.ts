@@ -1,5 +1,5 @@
-import { type Expr, type FunctionModel, type PropertyIR, VeritasError } from '@veritas/core';
-import { checkIR } from '@veritas/solver-z3';
+import { type Expr, type FunctionModel, type PropertyIR, VeritasError } from '@under18dev/veritas-core';
+import { checkIR } from '@under18dev/veritas-solver-z3';
 
 /** The IR identifier rule (same as the SMT-LIB backend). Anything else could break out of a Lean identifier. */
 const IR_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;

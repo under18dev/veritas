@@ -1,11 +1,11 @@
-import type { BehaviorCandidate, CodeIndex, FunctionInfo } from '@veritas/code-intelligence';
+import type { BehaviorCandidate, CodeIndex, FunctionInfo } from '@under18dev/veritas-code-intelligence';
 import {
   type EvidenceSource,
   hashValue,
   type Property,
   type SourceConfidence,
   stableId,
-} from '@veritas/core';
+} from '@under18dev/veritas-core';
 import type { DiscoveryInput, StatementInput, ThresholdRelation } from './inputs.js';
 import { complement, normalizeComparison, type Op, sameInterval, toInterval } from './predicates.js';
 

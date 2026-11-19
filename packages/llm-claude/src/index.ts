@@ -6,7 +6,7 @@ import {
   type LlmResult,
   renderDocuments,
   SYSTEM_PREAMBLE,
-} from '@veritas/llm';
+} from '@under18dev/veritas-llm';
 import type { z } from 'zod';
 
 export const DEFAULT_MODEL = 'claude-opus-5-5';

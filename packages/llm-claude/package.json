@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/llm-claude",
+  "name": "@under18dev/veritas-llm-claude",
   "version": "0.0.0",
   "description": "Claude adapter for the Veritas LLM interface",
   "license": "MIT",
@@ -18,8 +18,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.10.0",
-    "@veritas/core": "workspace:*",
-    "@veritas/llm": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
+    "@under18dev/veritas-llm": "workspace:*",
     "zod": "4.6.7"
   }
 }

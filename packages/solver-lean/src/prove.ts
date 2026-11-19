@@ -8,8 +8,8 @@ import {
   stableId,
   type VerificationStatus,
   VeritasError,
-} from '@veritas/core';
-import { SEMANTIC_GAPS } from '@veritas/formal-core';
+} from '@under18dev/veritas-core';
+import { SEMANTIC_GAPS } from '@under18dev/veritas-formal-core';
 import { z } from 'zod';
 import { checkLeanProject, LeanCheck, LeanCheckStatus } from './check.js';
 import { detectLean, type LeanToolOptions } from './detect.js';

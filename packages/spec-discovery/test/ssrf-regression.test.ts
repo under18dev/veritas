@@ -1,5 +1,5 @@
 import { writeFileSync } from 'node:fs';
-import { VeritasConfig } from '@veritas/core';
+import { VeritasConfig } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import { discoverEvidence, isUnsafeHost } from '../src/index.js';
 import { config, tempProject } from './helpers.js';

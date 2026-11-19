@@ -1,5 +1,5 @@
 import { Worker } from 'node:worker_threads';
-import { runCommand } from '@veritas/core';
+import { runCommand } from '@under18dev/veritas-core';
 import { parseGetValue, parseSExprs, type SExpr } from './sexpr.js';
 
 export type SolverEngine = 'z3-wasm' | 'z3-native';

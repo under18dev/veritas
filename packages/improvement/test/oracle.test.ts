@@ -1,4 +1,4 @@
-import { equivalenceProperty, translateFunction } from '@veritas/formal-core';
+import { equivalenceProperty, translateFunction } from '@under18dev/veritas-formal-core';
 import { describe, expect, it } from 'vitest';
 import {
   boundaryValues,

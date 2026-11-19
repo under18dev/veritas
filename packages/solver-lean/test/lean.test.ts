@@ -1,8 +1,8 @@
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { type Expr, FormalClaim, type PropertyIR, RunStore, VeritasError } from '@veritas/core';
-import { thresholdProperty, translateFunction } from '@veritas/formal-core';
+import { type Expr, FormalClaim, type PropertyIR, RunStore, VeritasError } from '@under18dev/veritas-core';
+import { thresholdProperty, translateFunction } from '@under18dev/veritas-formal-core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   ALLOWED_AXIOMS,

@@ -1,4 +1,4 @@
-import { EvidenceSource } from '@veritas/core';
+import { EvidenceSource } from '@under18dev/veritas-core';
 import { z } from 'zod';
 
 /** Structural copy of the discovery output this engine consumes (kept local to avoid coupling to its internals). */

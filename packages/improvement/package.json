@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/improvement",
+  "name": "@under18dev/veritas-improvement",
   "version": "0.0.0",
   "description": "Plans test-only improvements and applies them after measuring them in an isolated workspace",
   "license": "MIT",
@@ -17,11 +17,11 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@veritas/core": "workspace:*",
-    "@veritas/engine": "workspace:*",
-    "@veritas/formal-core": "workspace:*",
-    "@veritas/mutation-adapter": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
+    "@under18dev/veritas-engine": "workspace:*",
+    "@under18dev/veritas-formal-core": "workspace:*",
+    "@under18dev/veritas-mutation-adapter": "workspace:*",
     "zod": "4.6.7",
-    "@veritas/property-engine": "workspace:*"
+    "@under18dev/veritas-property-engine": "workspace:*"
   }
 }

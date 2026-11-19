@@ -184,7 +184,7 @@ importers:
       '@types/node':
         specifier: 26.6.6
         version: 26.6.6
-      '@veritas/reports':
+      '@under18dev/veritas-reports':
         specifier: workspace:*
         version: link:packages/reports
       dependency-cruiser:
@@ -279,13 +279,13 @@ importers:
 
   packages/assessment:
     dependencies:
-      '@veritas/code-intelligence':
+      '@under18dev/veritas-code-intelligence':
         specifier: workspace:*
         version: link:../code-intelligence
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
-      '@veritas/property-engine':
+      '@under18dev/veritas-property-engine':
         specifier: workspace:*
         version: link:../property-engine
       zod:
@@ -294,13 +294,13 @@ importers:
 
   packages/cli:
     dependencies:
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
-      '@veritas/engine':
+      '@under18dev/veritas-engine':
         specifier: workspace:*
         version: link:../engine
-      '@veritas/improvement':
+      '@under18dev/veritas-improvement':
         specifier: workspace:*
         version: link:../improvement
       commander:
@@ -309,7 +309,7 @@ importers:
 
   packages/code-intelligence:
     dependencies:
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
       typescript:
@@ -327,43 +327,43 @@ importers:
 
   packages/engine:
     dependencies:
-      '@veritas/assessment':
+      '@under18dev/veritas-assessment':
         specifier: workspace:*
         version: link:../assessment
-      '@veritas/code-intelligence':
+      '@under18dev/veritas-code-intelligence':
         specifier: workspace:*
         version: link:../code-intelligence
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
-      '@veritas/formal-core':
+      '@under18dev/veritas-formal-core':
         specifier: workspace:*
         version: link:../formal-core
-      '@veritas/llm':
+      '@under18dev/veritas-llm':
         specifier: workspace:*
         version: link:../llm
-      '@veritas/llm-claude':
+      '@under18dev/veritas-llm-claude':
         specifier: workspace:*
         version: link:../llm-claude
-      '@veritas/mutation-adapter':
+      '@under18dev/veritas-mutation-adapter':
         specifier: workspace:*
         version: link:../mutation-adapter
-      '@veritas/property-engine':
+      '@under18dev/veritas-property-engine':
         specifier: workspace:*
         version: link:../property-engine
-      '@veritas/property-testing':
+      '@under18dev/veritas-property-testing':
         specifier: workspace:*
         version: link:../property-testing
-      '@veritas/reports':
+      '@under18dev/veritas-reports':
         specifier: workspace:*
         version: link:../reports
-      '@veritas/solver-lean':
+      '@under18dev/veritas-solver-lean':
         specifier: workspace:*
         version: link:../solver-lean
-      '@veritas/spec-discovery':
+      '@under18dev/veritas-spec-discovery':
         specifier: workspace:*
         version: link:../spec-discovery
-      '@veritas/test-inventory':
+      '@under18dev/veritas-test-inventory':
         specifier: workspace:*
         version: link:../test-inventory
       zod:
@@ -372,10 +372,10 @@ importers:
 
   packages/formal-core:
     dependencies:
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
-      '@veritas/solver-z3':
+      '@under18dev/veritas-solver-z3':
         specifier: workspace:*
         version: link:../solver-z3
       typescript:
@@ -387,10 +387,10 @@ importers:
 
   packages/github-action:
     dependencies:
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
-      '@veritas/engine':
+      '@under18dev/veritas-engine':
         specifier: workspace:*
         version: link:../engine
       yaml:
@@ -402,19 +402,19 @@ importers:
 
   packages/improvement:
     dependencies:
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
-      '@veritas/engine':
+      '@under18dev/veritas-engine':
         specifier: workspace:*
         version: link:../engine
-      '@veritas/formal-core':
+      '@under18dev/veritas-formal-core':
         specifier: workspace:*
         version: link:../formal-core
-      '@veritas/mutation-adapter':
+      '@under18dev/veritas-mutation-adapter':
         specifier: workspace:*
         version: link:../mutation-adapter
-      '@veritas/property-engine':
+      '@under18dev/veritas-property-engine':
         specifier: workspace:*
         version: link:../property-engine
       zod:
@@ -423,7 +423,7 @@ importers:
 
   packages/llm:
     dependencies:
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
       zod:
@@ -435,10 +435,10 @@ importers:
       '@anthropic-ai/sdk':
         specifier: 1.10.0
         version: 1.10.0(zod@4.6.7)
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
-      '@veritas/llm':
+      '@under18dev/veritas-llm':
         specifier: workspace:*
         version: link:../llm
       zod:
@@ -450,13 +450,13 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.32.2
         version: 1.32.2(supports-color@7.2.0)(zod@4.6.7)
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
-      '@veritas/engine':
+      '@under18dev/veritas-engine':
         specifier: workspace:*
         version: link:../engine
-      '@veritas/improvement':
+      '@under18dev/veritas-improvement':
         specifier: workspace:*
         version: link:../improvement
       zod:
@@ -468,7 +468,7 @@ importers:
       '@mizchi/mutator':
         specifier: 0.4.5
         version: 0.4.5(vite@8.3.8(@types/node@26.6.6)(yaml@2.8.3))(vitest@5.1.1(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.8.3)))
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
       zod:
@@ -477,13 +477,13 @@ importers:
 
   packages/property-engine:
     dependencies:
-      '@veritas/code-intelligence':
+      '@under18dev/veritas-code-intelligence':
         specifier: workspace:*
         version: link:../code-intelligence
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
-      '@veritas/formal-core':
+      '@under18dev/veritas-formal-core':
         specifier: workspace:*
         version: link:../formal-core
       zod:
@@ -492,10 +492,10 @@ importers:
 
   packages/property-testing:
     dependencies:
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
-      '@veritas/formal-core':
+      '@under18dev/veritas-formal-core':
         specifier: workspace:*
         version: link:../formal-core
       fast-check:
@@ -507,7 +507,7 @@ importers:
 
   packages/reports:
     dependencies:
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
       ajv:
@@ -522,13 +522,13 @@ importers:
 
   packages/solver-lean:
     dependencies:
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
-      '@veritas/formal-core':
+      '@under18dev/veritas-formal-core':
         specifier: workspace:*
         version: link:../formal-core
-      '@veritas/solver-z3':
+      '@under18dev/veritas-solver-z3':
         specifier: workspace:*
         version: link:../solver-z3
       zod:
@@ -537,7 +537,7 @@ importers:
 
   packages/solver-z3:
     dependencies:
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
       z3-solver:
@@ -549,7 +549,7 @@ importers:
 
   packages/spec-discovery:
     dependencies:
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
       zod:
@@ -558,7 +558,7 @@ importers:
 
   packages/test-inventory:
     dependencies:
-      '@veritas/core':
+      '@under18dev/veritas-core':
         specifier: workspace:*
         version: link:../core
       typescript:

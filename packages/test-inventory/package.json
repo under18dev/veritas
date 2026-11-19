@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/test-inventory",
+  "name": "@under18dev/veritas-test-inventory",
   "version": "0.0.0",
   "description": "Vitest test discovery and assertion analysis for Veritas",
   "license": "MIT",
@@ -17,7 +17,7 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@veritas/core": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
     "typescript": "6.0.3",
     "zod": "4.6.7"
   }

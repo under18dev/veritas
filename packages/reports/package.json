@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/reports",
+  "name": "@under18dev/veritas-reports",
   "version": "0.0.0",
   "description": "Text, JSON, Markdown, HTML and SARIF reports for Veritas runs",
   "license": "MIT",
@@ -18,7 +18,7 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@veritas/core": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
     "ajv": "8.20.0",
     "ajv-draft-04": "1.0.0",
     "zod": "4.6.7"

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { leanToolCandidates, runCommand } from '@veritas/core';
+import { leanToolCandidates, runCommand } from '@under18dev/veritas-core';
 
 export interface LeanInstallation {
   available: boolean;

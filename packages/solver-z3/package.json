@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/solver-z3",
+  "name": "@under18dev/veritas-solver-z3",
   "version": "0.0.0",
   "description": "SMT-LIB generation and Z3 execution for Veritas",
   "license": "MIT",
@@ -17,7 +17,7 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@veritas/core": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
     "z3-solver": "5.4.1",
     "zod": "4.6.7"
   }

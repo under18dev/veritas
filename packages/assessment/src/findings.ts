@@ -1,4 +1,4 @@
-import type { FunctionInfo } from '@veritas/code-intelligence';
+import type { FunctionInfo } from '@under18dev/veritas-code-intelligence';
 import {
   type Finding,
   type FormalClaim,
@@ -8,8 +8,8 @@ import {
   stableId,
   type TestAssessment,
   type TestCase,
-} from '@veritas/core';
-import type { ConflictGroup } from '@veritas/property-engine';
+} from '@under18dev/veritas-core';
+import type { ConflictGroup } from '@under18dev/veritas-property-engine';
 
 export interface FindingInput {
   properties: Property[];

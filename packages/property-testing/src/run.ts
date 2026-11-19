@@ -2,8 +2,15 @@ import { randomBytes, randomInt } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type Expr, PropertyIR, type RunStore, resolveInsideRoot, runCommand, stableId } from '@veritas/core';
-import { type Binding, differentialInputs } from '@veritas/formal-core';
+import {
+  type Expr,
+  PropertyIR,
+  type RunStore,
+  resolveInsideRoot,
+  runCommand,
+  stableId,
+} from '@under18dev/veritas-core';
+import { type Binding, differentialInputs } from '@under18dev/veritas-formal-core';
 import { type PbtFailure, type PbtInput, PbtResult, type PbtStatus, type PbtTrust } from './schema.js';
 
 export interface RunPropertyTestOptions {
@@ -60,7 +67,7 @@ let toolchain: Toolchain | undefined;
 function locateToolchain(): Toolchain {
   if (toolchain) return toolchain;
   const fastCheck = findPackage('fast-check', here);
-  if (!fastCheck) throw new Error('fast-check is not installed next to @veritas/property-testing');
+  if (!fastCheck) throw new Error('fast-check is not installed next to @under18dev/veritas-property-testing');
   const manifest = JSON.parse(readFileSync(path.join(fastCheck.real, 'package.json'), 'utf8')) as {
     exports?: { '.'?: { import?: { default?: string } } };
     dependencies?: Record<string, string>;
@@ -87,10 +94,12 @@ function locateToolchain(): Toolchain {
       }
     }
   }
-  const formalCore = findPackage('@veritas/formal-core', here);
+  const formalCore = findPackage('@under18dev/veritas-formal-core', here);
   const interpret = formalCore ? path.join(formalCore.real, 'dist', 'interpret.js') : null;
   if (!interpret || !existsSync(interpret)) {
-    throw new Error('cannot locate the @veritas/formal-core interpreter (dist/interpret.js); build it first');
+    throw new Error(
+      'cannot locate the @under18dev/veritas-formal-core interpreter (dist/interpret.js); build it first',
+    );
   }
   toolchain = { fastCheckEntry: path.join(fastCheck.real, entry), interpret, readPaths: [...readPaths] };
   return toolchain;

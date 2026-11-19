@@ -10,7 +10,7 @@ import {
   stableId,
   type VeritasConfig,
   VeritasError,
-} from '@veritas/core';
+} from '@under18dev/veritas-core';
 import { ARTIFACTS, type ArtifactData, type ArtifactName } from './artifacts.js';
 
 export interface OpenOptions {

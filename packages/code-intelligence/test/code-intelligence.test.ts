@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseConfig, sha256, type VeritasConfigInput, VeritasError } from '@veritas/core';
+import { parseConfig, sha256, type VeritasConfigInput, VeritasError } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import {
   analyzeCode,

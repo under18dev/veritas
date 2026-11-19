@@ -1,4 +1,4 @@
-import { type Expr, type FunctionModel, PropertyIR } from '@veritas/core';
+import { type Expr, type FunctionModel, PropertyIR } from '@under18dev/veritas-core';
 import { boundaryValues } from './run.js';
 
 export interface GenerateVitestOptions {

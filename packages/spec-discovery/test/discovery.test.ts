@@ -1,7 +1,7 @@
 import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { VeritasConfig } from '@veritas/core';
+import { VeritasConfig } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import { discoverEvidence } from '../src/index.js';
 import { publicLookup } from './helpers.js';

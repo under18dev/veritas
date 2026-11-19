@@ -9,14 +9,14 @@ import {
   type RunStore,
   stableId,
   type VerificationStatus,
-} from '@veritas/core';
+} from '@under18dev/veritas-core';
 import {
   conformanceQuery,
   type SolverEngine,
   type SolverRun,
   safeRangeQuery,
   solveSmtLib,
-} from '@veritas/solver-z3';
+} from '@under18dev/veritas-solver-z3';
 import { z } from 'zod';
 import { callModel, type IRValue } from './interpret.js';
 

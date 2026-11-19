@@ -1,9 +1,9 @@
-import { CodeIndex } from '@veritas/code-intelligence';
-import { Finding, FormalClaim, Mutant, Property, Run, TestAssessment } from '@veritas/core';
-import { MutationRunResult } from '@veritas/mutation-adapter';
-import { PbtResult } from '@veritas/property-testing';
-import { DiscoveryResult } from '@veritas/spec-discovery';
-import { TestInventory } from '@veritas/test-inventory';
+import { CodeIndex } from '@under18dev/veritas-code-intelligence';
+import { Finding, FormalClaim, Mutant, Property, Run, TestAssessment } from '@under18dev/veritas-core';
+import { MutationRunResult } from '@under18dev/veritas-mutation-adapter';
+import { PbtResult } from '@under18dev/veritas-property-testing';
+import { DiscoveryResult } from '@under18dev/veritas-spec-discovery';
+import { TestInventory } from '@under18dev/veritas-test-inventory';
 import { z } from 'zod';
 
 /** File names and schemas of every artifact a run can contain. Stages and entry points share this table. */

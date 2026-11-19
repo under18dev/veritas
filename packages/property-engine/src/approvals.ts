@@ -8,7 +8,7 @@ import {
   SCHEMA_VERSION,
   stableId,
   VeritasError,
-} from '@veritas/core';
+} from '@under18dev/veritas-core';
 
 export const APPROVALS_FILE = path.join('.veritas', 'approvals.json');
 

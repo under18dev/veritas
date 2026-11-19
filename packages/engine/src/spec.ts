@@ -1,13 +1,20 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { type Approval, listRuns, type Property, RUNS_DIR, runCommand, VeritasError } from '@veritas/core';
+import {
+  type Approval,
+  listRuns,
+  type Property,
+  RUNS_DIR,
+  runCommand,
+  VeritasError,
+} from '@under18dev/veritas-core';
 import {
   applyApprovals,
   diffRegistries,
   loadApprovals,
   type RegistryDiff,
   recordDecision,
-} from '@veritas/property-engine';
+} from '@under18dev/veritas-property-engine';
 import { ARTIFACTS } from './artifacts.js';
 import { readArtifact, readLatest } from './project.js';
 

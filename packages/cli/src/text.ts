@@ -1,4 +1,4 @@
-import type { RunSummary } from '@veritas/engine';
+import type { RunSummary } from '@under18dev/veritas-engine';
 
 /** Plain-text run summary. Proven-within-model results and inferred items are labelled as such. */
 export function formatRunText(summary: RunSummary): string {

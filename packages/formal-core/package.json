@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/formal-core",
+  "name": "@under18dev/veritas-formal-core",
   "version": "0.0.0",
   "description": "TypeScript-subset translation, formal claims and semantic validation for Veritas",
   "license": "MIT",
@@ -17,8 +17,8 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@veritas/core": "workspace:*",
-    "@veritas/solver-z3": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
+    "@under18dev/veritas-solver-z3": "workspace:*",
     "typescript": "6.0.3",
     "zod": "4.6.7"
   }

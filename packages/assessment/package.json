@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/assessment",
+  "name": "@under18dev/veritas-assessment",
   "version": "0.0.0",
   "description": "Evidence-vector assessment of tests and findings for Veritas",
   "license": "MIT",
@@ -17,9 +17,9 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@veritas/code-intelligence": "workspace:*",
-    "@veritas/core": "workspace:*",
-    "@veritas/property-engine": "workspace:*",
+    "@under18dev/veritas-code-intelligence": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
+    "@under18dev/veritas-property-engine": "workspace:*",
     "zod": "4.6.7"
   }
 }

@@ -1,6 +1,6 @@
 import { globSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { resolveInsideRoot, type VeritasConfig, VeritasError } from '@veritas/core';
+import { resolveInsideRoot, type VeritasConfig, VeritasError } from '@under18dev/veritas-core';
 
 export interface SelectedFile {
   /** POSIX path relative to the project root. */

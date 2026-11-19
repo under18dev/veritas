@@ -12,8 +12,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { initProject } from '@veritas/core';
-import { decideProperty, listProperties } from '@veritas/engine';
+import { initProject } from '@under18dev/veritas-core';
+import { decideProperty, listProperties } from '@under18dev/veritas-engine';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { main } from '../src/main.js';
 

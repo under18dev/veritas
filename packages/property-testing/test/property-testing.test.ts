@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { hashValue, RunStore } from '@veritas/core';
+import { hashValue, RunStore } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import { PbtResult, replayPropertyTest, runPropertyTest } from '../src/index.js';
 import { discountProperty, fixture, opaqueProperty } from './helpers.js';

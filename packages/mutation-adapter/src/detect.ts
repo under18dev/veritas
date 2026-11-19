@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { runCommand } from '@veritas/core';
+import { runCommand } from '@under18dev/veritas-core';
 import type { MutatorDetection, MutatorOrigin } from './schema.js';
 
 /** The mutator version this adapter is built and tested against. Others run with a warning. */
@@ -111,7 +111,7 @@ export async function detectMutator(root: string, options: DetectOptions = {}): 
       detail:
         options.binPath !== undefined
           ? `mutator CLI not found at ${options.binPath}`
-          : `@mizchi/mutator is not installed in ${root} or its parents${options.fallbackToAdapter === false ? '' : ', nor next to @veritas/mutation-adapter'}`,
+          : `@mizchi/mutator is not installed in ${root} or its parents${options.fallbackToAdapter === false ? '' : ', nor next to @under18dev/veritas-mutation-adapter'}`,
     };
   }
   const help = await runCommand(process.execPath, [located.binPath, '--help'], {

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
-import { redact, runCommand } from '@veritas/core';
+import { redact, runCommand } from '@under18dev/veritas-core';
 
 export type TestStatus = 'passed' | 'failed' | 'skipped';
 

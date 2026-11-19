@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/engine",
+  "name": "@under18dev/veritas-engine",
   "version": "0.0.0",
   "description": "Orchestrates Veritas stages and persists run artifacts (the Node API)",
   "license": "MIT",
@@ -17,19 +17,19 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@veritas/assessment": "workspace:*",
-    "@veritas/code-intelligence": "workspace:*",
-    "@veritas/core": "workspace:*",
-    "@veritas/formal-core": "workspace:*",
-    "@veritas/mutation-adapter": "workspace:*",
-    "@veritas/property-engine": "workspace:*",
-    "@veritas/spec-discovery": "workspace:*",
-    "@veritas/test-inventory": "workspace:*",
+    "@under18dev/veritas-assessment": "workspace:*",
+    "@under18dev/veritas-code-intelligence": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
+    "@under18dev/veritas-formal-core": "workspace:*",
+    "@under18dev/veritas-mutation-adapter": "workspace:*",
+    "@under18dev/veritas-property-engine": "workspace:*",
+    "@under18dev/veritas-spec-discovery": "workspace:*",
+    "@under18dev/veritas-test-inventory": "workspace:*",
     "zod": "4.6.7",
-    "@veritas/property-testing": "workspace:*",
-    "@veritas/llm": "workspace:*",
-    "@veritas/llm-claude": "workspace:*",
-    "@veritas/reports": "workspace:*",
-    "@veritas/solver-lean": "workspace:*"
+    "@under18dev/veritas-property-testing": "workspace:*",
+    "@under18dev/veritas-llm": "workspace:*",
+    "@under18dev/veritas-llm-claude": "workspace:*",
+    "@under18dev/veritas-reports": "workspace:*",
+    "@under18dev/veritas-solver-lean": "workspace:*"
   }
 }

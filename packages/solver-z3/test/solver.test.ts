@@ -1,4 +1,4 @@
-import type { Expr, PropertyIR } from '@veritas/core';
+import type { Expr, PropertyIR } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import { conformanceQuery, interpretOutput, safeRangeQuery, solveSmtLib } from '../src/index.js';
 

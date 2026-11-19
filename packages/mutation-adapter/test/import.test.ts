@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { Mutant, stableId } from '@veritas/core';
+import { Mutant, stableId } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import { importMutationReport, mutatorTestId, mutatorTestRef, shellQuote } from '../src/index.js';
 import { tempDir } from './helpers.js';

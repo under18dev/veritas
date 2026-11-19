@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/core",
+  "name": "@under18dev/veritas-core",
   "version": "0.0.0",
   "description": "Domain model, schemas, artifact store and orchestration core for Veritas",
   "license": "MIT",

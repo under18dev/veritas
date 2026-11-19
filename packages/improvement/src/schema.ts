@@ -1,4 +1,4 @@
-import { Id, ImprovementBudget, ImprovementOutcome, ImprovementPlan, Sha256 } from '@veritas/core';
+import { Id, ImprovementBudget, ImprovementOutcome, ImprovementPlan, Sha256 } from '@under18dev/veritas-core';
 import { z } from 'zod';
 
 /** A planner outcome: `planned` when a plan is ready for approval, otherwise why the loop stopped. */

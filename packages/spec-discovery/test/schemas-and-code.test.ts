@@ -1,4 +1,4 @@
-import { EvidenceSource } from '@veritas/core';
+import { EvidenceSource } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import { DiscoveryResult, discoverEvidence } from '../src/index.js';
 import { config, tempProject, writeProjectFile } from './helpers.js';

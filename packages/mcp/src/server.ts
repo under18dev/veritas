@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { redact, type StageName, VeritasError } from '@veritas/core';
+import { redact, type StageName, VeritasError } from '@under18dev/veritas-core';
 import {
   explainFinding,
   listProperties,
@@ -8,8 +8,8 @@ import {
   readArtifact,
   readLatest,
   runVeritas,
-} from '@veritas/engine';
-import { applyImprovement, planImprovement } from '@veritas/improvement';
+} from '@under18dev/veritas-engine';
+import { applyImprovement, planImprovement } from '@under18dev/veritas-improvement';
 import { z } from 'zod';
 
 export interface ServerOptions {

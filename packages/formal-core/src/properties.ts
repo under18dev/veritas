@@ -1,4 +1,4 @@
-import type { Expr, FunctionModel, IntDomain, Param, PropertyIR } from '@veritas/core';
+import type { Expr, FunctionModel, IntDomain, Param, PropertyIR } from '@under18dev/veritas-core';
 
 type Translated = { model: FunctionModel; params: Param[]; dependencies: FunctionModel[] };
 type Comparison = '<' | '<=' | '>' | '>=' | '==';

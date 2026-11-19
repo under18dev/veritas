@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/mutation-adapter",
+  "name": "@under18dev/veritas-mutation-adapter",
   "version": "0.0.0",
   "description": "Mutation testing adapter (@mizchi/mutator) for Veritas",
   "license": "MIT",
@@ -17,7 +17,7 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@veritas/core": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
     "@mizchi/mutator": "0.4.5",
     "zod": "4.6.7"
   }

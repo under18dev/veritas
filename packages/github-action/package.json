@@ -1,5 +1,5 @@
 {
-  "name": "@veritas/github-action",
+  "name": "@under18dev/veritas-github-action",
   "version": "0.0.0",
   "private": true,
   "description": "GitHub Action running Veritas on pull requests",
@@ -19,8 +19,8 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@veritas/core": "workspace:*",
-    "@veritas/engine": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
+    "@under18dev/veritas-engine": "workspace:*",
     "yaml": "2.8.3",
     "zod": "4.6.7"
   }

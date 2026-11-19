@@ -1,6 +1,6 @@
-import type { FunctionInfo } from '@veritas/code-intelligence';
-import type { Mutant, Property, TestCase, TestPropertyEdge } from '@veritas/core';
-import { stableId } from '@veritas/core';
+import type { FunctionInfo } from '@under18dev/veritas-code-intelligence';
+import type { Mutant, Property, TestCase, TestPropertyEdge } from '@under18dev/veritas-core';
+import { stableId } from '@under18dev/veritas-core';
 
 function inRange(line: number, fn: FunctionInfo): boolean {
   const range = fn.location.range;

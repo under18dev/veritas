@@ -1,4 +1,4 @@
-import { Mutant, MutantStatus, StageStatus } from '@veritas/core';
+import { Mutant, MutantStatus, StageStatus } from '@under18dev/veritas-core';
 import { z } from 'zod';
 
 /** Where the mutator binary was found: the analysed project first, then this adapter's own dependency. */

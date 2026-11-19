@@ -2,7 +2,15 @@
 // the documented quick start there: init, doctor, a deep run on the discount example, report and explain.
 // Exits non-zero if any step fails or the expected boundary finding is missing.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,19 +39,22 @@ run(
     '--filter',
     './packages/*',
     '--filter',
-    '!@veritas/github-action',
+    '!@under18dev/veritas-github-action',
     'pack',
     '--pack-destination',
     tgz,
   ],
   repo,
 );
-const tarballs = Object.fromEntries(
-  readdirSync(tgz).map((f) => [
-    `@veritas/${f.replace(/^veritas-/, '').replace(/-\d+\.\d+\.\d+\.tgz$/, '')}`,
-    `file:${path.join(tgz, f).split(path.sep).join('/')}`,
-  ]),
-);
+// pnpm names a tarball after the package: `@scope/name@1.2.3` becomes `scope-name-1.2.3.tgz`.
+const tarballs = {};
+for (const dir of readdirSync(path.join(repo, 'packages'))) {
+  const manifest = JSON.parse(readFileSync(path.join(repo, 'packages', dir, 'package.json'), 'utf8'));
+  if (manifest.private) continue;
+  const file = `${manifest.name.replace(/^@/, '').replace('/', '-')}-${manifest.version}.tgz`;
+  if (!readdirSync(tgz).includes(file)) throw new Error(`missing tarball ${file} for ${manifest.name}`);
+  tarballs[manifest.name] = `file:${path.join(tgz, file).split(path.sep).join('/')}`;
+}
 for (const part of ['src', 'test', 'README.md'])
   cpSync(path.join(repo, 'fixtures/discount-boundary', part), path.join(project, part), { recursive: true });
 writeFileSync(
@@ -53,8 +64,8 @@ writeFileSync(
     private: true,
     type: 'module',
     devDependencies: {
-      '@veritas/cli': tarballs['@veritas/cli'],
-      '@veritas/mcp': tarballs['@veritas/mcp'],
+      '@under18dev/veritas': tarballs['@under18dev/veritas'],
+      '@under18dev/veritas-mcp': tarballs['@under18dev/veritas-mcp'],
       vitest: '5.1.1',
       '@mizchi/mutator': '0.4.5',
       'fast-check': '4.10.3',

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { assessTests, deriveFindings, linkMutants, linkTests } from '@veritas/assessment';
-import { analyzeCode, type CodeIndex, inferBehaviorCandidates } from '@veritas/code-intelligence';
+import { assessTests, deriveFindings, linkMutants, linkTests } from '@under18dev/veritas-assessment';
+import { analyzeCode, type CodeIndex, inferBehaviorCandidates } from '@under18dev/veritas-code-intelligence';
 import {
   type Capability,
   evaluatePolicy,
@@ -23,16 +23,26 @@ import {
   stableId,
   toPosixRelative,
   VeritasError,
-} from '@veritas/core';
-import { applyMutation, equivalenceProperty, proveProperty, translateFunction } from '@veritas/formal-core';
-import { LlmClient, type LlmProvider } from '@veritas/llm';
-import { ClaudeProvider } from '@veritas/llm-claude';
-import { runMutation } from '@veritas/mutation-adapter';
-import { applyApprovals, buildRegistry, formalizeProperty, loadApprovals } from '@veritas/property-engine';
-import { type PbtResult, runPropertyTest } from '@veritas/property-testing';
-import { proveWithLean } from '@veritas/solver-lean';
-import { type DiscoveryResult, discoverEvidence } from '@veritas/spec-discovery';
-import { inventoryTests, type TestInventory } from '@veritas/test-inventory';
+} from '@under18dev/veritas-core';
+import {
+  applyMutation,
+  equivalenceProperty,
+  proveProperty,
+  translateFunction,
+} from '@under18dev/veritas-formal-core';
+import { LlmClient, type LlmProvider } from '@under18dev/veritas-llm';
+import { ClaudeProvider } from '@under18dev/veritas-llm-claude';
+import { runMutation } from '@under18dev/veritas-mutation-adapter';
+import {
+  applyApprovals,
+  buildRegistry,
+  formalizeProperty,
+  loadApprovals,
+} from '@under18dev/veritas-property-engine';
+import { type PbtResult, runPropertyTest } from '@under18dev/veritas-property-testing';
+import { proveWithLean } from '@under18dev/veritas-solver-lean';
+import { type DiscoveryResult, discoverEvidence } from '@under18dev/veritas-spec-discovery';
+import { inventoryTests, type TestInventory } from '@under18dev/veritas-test-inventory';
 import { ARTIFACTS } from './artifacts.js';
 import { extractWithLlm } from './llm-extract.js';
 import { defaultSeed, latestRunWith, openProject, readArtifact } from './project.js';
@@ -80,9 +90,14 @@ interface SpecOutput {
   properties: Property[];
   formalized: Map<
     string,
-    { ir: import('@veritas/core').PropertyIR; assumptions: string[]; file: string; exportName: string }
+    {
+      ir: import('@under18dev/veritas-core').PropertyIR;
+      assumptions: string[];
+      file: string;
+      exportName: string;
+    }
   >;
-  conflicts: import('@veritas/property-engine').ConflictGroup[];
+  conflicts: import('@under18dev/veritas-property-engine').ConflictGroup[];
   /** Properties with a predicate that could not be formalized, with the reason. */
   notFormalized: Map<string, string>;
 }
@@ -572,7 +587,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
       ];
       if (wanted.has('mutate')) {
         const mutation = ctx.outputs.get('mutate') as
-          | import('@veritas/mutation-adapter').MutationRunResult
+          | import('@under18dev/veritas-mutation-adapter').MutationRunResult
           | undefined;
         if (mutation)
           artifacts.push(

@@ -2,7 +2,7 @@
 // Reads a JSON job from stdin, imports fast-check, the IR interpreter and the bound modules, checks the
 // property with fast-check and prints one marked JSON line. Must stay erasable TypeScript (type stripping).
 import { pathToFileURL } from 'node:url';
-import type { Expr, FunctionModel, PropertyIR } from '@veritas/core';
+import type { Expr, FunctionModel, PropertyIR } from '@under18dev/veritas-core';
 import type * as FastCheck from 'fast-check';
 
 type IRValue = bigint | boolean;

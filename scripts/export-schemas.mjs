@@ -1,4 +1,4 @@
-// Regenerates schemas/*.json from the Zod definitions in @veritas/core. Run via `pnpm schemas`.
+// Regenerates schemas/*.json from the Zod definitions in @under18dev/veritas-core. Run via `pnpm schemas`.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -1,4 +1,4 @@
-import { Param } from '@veritas/core';
+import { Param } from '@under18dev/veritas-core';
 import { z } from 'zod';
 
 export const PbtStatus = z.enum(['passed', 'counterexample', 'error', 'timeout', 'cancelled']);

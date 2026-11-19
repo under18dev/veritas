@@ -9,7 +9,7 @@ import {
   SCHEMA_VERSION,
   TOOL_VERSION,
   VeritasError,
-} from '@veritas/core';
+} from '@under18dev/veritas-core';
 import type { z } from 'zod';
 import { PlanDocument } from './schema.js';
 

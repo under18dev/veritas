@@ -1,4 +1,4 @@
-import type { Property } from '@veritas/core';
+import type { Property } from '@under18dev/veritas-core';
 import { contentHash } from './registry.js';
 
 export interface RegistryDiff {

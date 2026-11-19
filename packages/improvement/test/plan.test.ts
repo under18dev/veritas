@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { recordDecision } from '@veritas/property-engine';
+import { recordDecision } from '@under18dev/veritas-property-engine';
 import { describe, expect, it } from 'vitest';
 import { applyImprovement, approvalTokenFor, planImprovement, projectHash, readPlan } from '../src/index.js';
 import {

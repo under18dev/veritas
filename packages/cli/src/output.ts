@@ -1,4 +1,4 @@
-import { ExitCode, exitCodeFor, redact, VeritasError } from '@veritas/core';
+import { ExitCode, exitCodeFor, redact, VeritasError } from '@under18dev/veritas-core';
 
 export interface GlobalOptions {
   json?: boolean;

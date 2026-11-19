@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { stableId } from '@veritas/core';
+import { stableId } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import {
   buildMutatorArgs,

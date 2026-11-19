@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
-import { type Location, sha256, symbolId, type VeritasConfig } from '@veritas/core';
+import { type Location, sha256, symbolId, type VeritasConfig } from '@under18dev/veritas-core';
 import ts from 'typescript';
 import { type SelectedFile, selectFiles } from './files.js';
 import type { CodeIndex, Comparison, ComparisonOperator, FunctionInfo, NumericKind } from './schema.js';

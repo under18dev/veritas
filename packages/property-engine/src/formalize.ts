@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import type { FunctionInfo } from '@veritas/code-intelligence';
+import type { FunctionInfo } from '@under18dev/veritas-code-intelligence';
 import {
   type Expr,
   type IntDomain,
@@ -7,8 +7,8 @@ import {
   type PropertyIR,
   parseSymbolId,
   resolveInsideRoot,
-} from '@veritas/core';
-import { thresholdProperty, translateFunction } from '@veritas/formal-core';
+} from '@under18dev/veritas-core';
+import { thresholdProperty, translateFunction } from '@under18dev/veritas-formal-core';
 
 export type Formalization =
   | { status: 'formalized'; ir: PropertyIR; assumptions: string[]; file: string; exportName: string }

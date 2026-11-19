@@ -11,7 +11,7 @@ import {
   type TestPropertyEdge as TestPropertyEdgeType,
   toPosixRelative,
   type VeritasConfig,
-} from '@veritas/core';
+} from '@under18dev/veritas-core';
 import ts from 'typescript';
 import { z } from 'zod';
 

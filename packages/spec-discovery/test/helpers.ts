@@ -1,7 +1,7 @@
 import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { VeritasConfig } from '@veritas/core';
+import { VeritasConfig } from '@under18dev/veritas-core';
 
 export const repoRoot = path.resolve(import.meta.dirname, '../../../');
 export function tempProject(name = 'project'): string {

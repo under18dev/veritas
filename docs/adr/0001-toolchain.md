@@ -11,7 +11,7 @@ Veritas is a set of cooperating modules (core, CLI, collectors, engines, adapter
 - Node.js 24 or later, matching `@mizchi/mutator`'s requirement.
 - Vitest for our own tests: `unit` project (`packages/*/test`) and `acceptance` project (`test/acceptance`, runs the built CLI against copies of `fixtures/`).
 - Biome for lint and format. `noFocusedTests` and `noSkippedTests` are errors.
-- dependency-cruiser forbids cycles and any dependency from `@veritas/core` on other workspace packages, CLI frameworks or LLM SDKs.
+- dependency-cruiser forbids cycles and any dependency from `@under18dev/veritas-core` on other workspace packages, CLI frameworks or LLM SDKs.
 
 ## Consequences
 

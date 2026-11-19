@@ -11,7 +11,7 @@ import {
   TestAssessment,
   TestCase,
   TestPropertyEdge,
-} from '@veritas/core';
+} from '@under18dev/veritas-core';
 import addDraft4 from 'ajv-draft-04';
 import { toJSONSchema, z } from 'zod';
 

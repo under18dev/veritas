@@ -4,7 +4,7 @@ Veritas checks what your tests actually guarantee. It reads the specification yo
 
 It does not claim that code is correct. Every result states what was checked, under which model and bounds, and what remains unknown.
 
-> Status: under active development and not yet published to npm. Package names (`@veritas/*`) are placeholders; see [ADR 0008](docs/adr/0008-package-name.md).
+> Status: not yet published to npm. Packages will be published as `@under18dev/veritas` (CLI) and `@under18dev/veritas-*`; see [ADR 0008](docs/adr/0008-package-name.md). Until then, install from a checkout as shown below.
 
 ## What it finds
 

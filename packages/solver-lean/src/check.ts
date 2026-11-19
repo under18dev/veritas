@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { type CommandResult, runCommand } from '@veritas/core';
+import { type CommandResult, runCommand } from '@under18dev/veritas-core';
 import { z } from 'zod';
 import { detectLean, type LeanInstallation, type LeanToolOptions } from './detect.js';
 

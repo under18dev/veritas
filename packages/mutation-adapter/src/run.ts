@@ -8,7 +8,7 @@ import {
   runCommand,
   type VeritasConfig,
   VeritasError,
-} from '@veritas/core';
+} from '@under18dev/veritas-core';
 import { detectMutator, PINNED_MUTATOR_VERSION, summarize } from './detect.js';
 import { importMutationReport } from './import.js';
 import { countMutants, emptyCounts, type MutationRunResult, type MutationRunStatus } from './schema.js';

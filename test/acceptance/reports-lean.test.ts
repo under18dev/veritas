@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { validateSarif } from '@veritas/reports';
+import { validateSarif } from '@under18dev/veritas-reports';
 import { describe, expect, it } from 'vitest';
 import { copyFixture, json, runCli } from './helpers.js';
 

@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { initProject } from '@veritas/core';
-import type { LlmProvider } from '@veritas/llm';
+import { initProject } from '@under18dev/veritas-core';
+import type { LlmProvider } from '@under18dev/veritas-llm';
 import { describe, expect, it } from 'vitest';
 import { readArtifact, runVeritas } from '../src/index.js';
 

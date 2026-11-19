@@ -1,4 +1,4 @@
-import { stableId } from '@veritas/core';
+import { stableId } from '@under18dev/veritas-core';
 import type {
   BehaviorCandidate,
   CandidateBasis,

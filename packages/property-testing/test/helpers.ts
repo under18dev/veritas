@@ -2,8 +2,8 @@ import { cpSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from '
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { FunctionModel, PropertyIR, Sort } from '@veritas/core';
-import { type Binding, thresholdProperty, translateFunction } from '@veritas/formal-core';
+import type { FunctionModel, PropertyIR, Sort } from '@under18dev/veritas-core';
+import { type Binding, thresholdProperty, translateFunction } from '@under18dev/veritas-formal-core';
 
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 export const DOMAIN = { min: '-10000', max: '10000' };

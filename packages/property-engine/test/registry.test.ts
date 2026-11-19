@@ -2,8 +2,8 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { analyzeCode, inferBehaviorCandidates } from '@veritas/code-intelligence';
-import { type EvidenceSource, Property, sha256, VeritasConfig } from '@veritas/core';
+import { analyzeCode, inferBehaviorCandidates } from '@under18dev/veritas-code-intelligence';
+import { type EvidenceSource, Property, sha256, VeritasConfig } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import {
   APPROVALS_FILE,

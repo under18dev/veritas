@@ -9,6 +9,6 @@
 | [0005](0005-lean-backend.md)          | Lean backend and proof acceptance             | Accepted |
 | [0006](0006-mutation-backend.md)      | Mutation backend                              | Accepted |
 | [0007](0007-llm-adapters.md)          | LLM adapters                                  | Accepted |
-| [0008](0008-package-name.md)          | npm package name                              | Proposed |
+| [0008](0008-package-name.md)          | npm package name                              | Accepted |
 
 New ADRs use the next number and the sections Context, Decision, Consequences.

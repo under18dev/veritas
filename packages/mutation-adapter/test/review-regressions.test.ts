@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { VeritasError } from '@veritas/core';
+import { VeritasError } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import { importMutationReport, mutatorTestRef, runMutation, shellQuote } from '../src/index.js';
 import { config, tempDir } from './helpers.js';

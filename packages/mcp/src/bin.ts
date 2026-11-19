@@ -3,7 +3,7 @@ import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { TOOL_VERSION } from '@veritas/core';
+import { TOOL_VERSION } from '@under18dev/veritas-core';
 import { createServer } from './server.js';
 
 const { values } = parseArgs({

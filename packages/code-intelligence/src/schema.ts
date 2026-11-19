@@ -1,4 +1,4 @@
-import { Id, Location, PropertyTemplate, Sha256 } from '@veritas/core';
+import { Id, Location, PropertyTemplate, Sha256 } from '@under18dev/veritas-core';
 import { z } from 'zod';
 
 export const ComparisonOperator = z.enum(['<', '<=', '>', '>=', '===', '!==', '==', '!=']);

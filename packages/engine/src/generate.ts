@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { parseSymbolId, resolveInsideRoot, VeritasError } from '@veritas/core';
-import { generateVitestFile } from '@veritas/property-testing';
+import { parseSymbolId, resolveInsideRoot, VeritasError } from '@under18dev/veritas-core';
+import { generateVitestFile } from '@under18dev/veritas-property-testing';
 import { defaultSeed, openProject } from './project.js';
 import { listProperties } from './spec.js';
 

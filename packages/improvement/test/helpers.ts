@@ -8,10 +8,10 @@ import {
   RunStore,
   stableId,
   type TestCase,
-} from '@veritas/core';
-import { ARTIFACTS } from '@veritas/engine';
-import { thresholdProperty, translateFunction } from '@veritas/formal-core';
-import { emptyCounts } from '@veritas/mutation-adapter';
+} from '@under18dev/veritas-core';
+import { ARTIFACTS } from '@under18dev/veritas-engine';
+import { thresholdProperty, translateFunction } from '@under18dev/veritas-formal-core';
+import { emptyCounts } from '@under18dev/veritas-mutation-adapter';
 
 export const DOMAIN = { min: '-10000', max: '10000' };
 export const HASH = 'a'.repeat(64);

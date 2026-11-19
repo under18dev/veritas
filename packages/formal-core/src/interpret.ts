@@ -1,4 +1,4 @@
-import type { Expr, FunctionModel } from '@veritas/core';
+import type { Expr, FunctionModel } from '@under18dev/veritas-core';
 
 export type IRValue = bigint | boolean;
 

@@ -2,7 +2,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FormalClaim, hashValue, RunStore } from '@veritas/core';
+import { FormalClaim, hashValue, RunStore } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import {
   applyMutation,

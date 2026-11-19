@@ -12,10 +12,10 @@ import {
   stableId,
   type VeritasConfig,
   VeritasError,
-} from '@veritas/core';
-import { readArtifact } from '@veritas/engine';
-import { type MutationRunResult, runMutation } from '@veritas/mutation-adapter';
-import { applyApprovals, loadApprovals } from '@veritas/property-engine';
+} from '@under18dev/veritas-core';
+import { readArtifact } from '@under18dev/veritas-engine';
+import { type MutationRunResult, runMutation } from '@under18dev/veritas-mutation-adapter';
+import { applyApprovals, loadApprovals } from '@under18dev/veritas-property-engine';
 import { expectedFromSpec } from './oracle.js';
 import { renderTestFile } from './render.js';
 import type { PlanDocument } from './schema.js';

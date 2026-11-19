@@ -1,4 +1,4 @@
-import { TestCase, VeritasConfig } from '@veritas/core';
+import { TestCase, VeritasConfig } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import { inventoryTests } from '../src/index.js';
 import { copyFixture } from './helpers.js';

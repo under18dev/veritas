@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { parseConfig, symbolId } from '@veritas/core';
+import { parseConfig, symbolId } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import { analyzeCode, CodeIndex, type FunctionInfo } from '../src/index.js';
 

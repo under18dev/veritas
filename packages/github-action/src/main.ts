@@ -1,7 +1,7 @@
 import { appendFileSync } from 'node:fs';
 import path from 'node:path';
-import { detectProject, loadConfig, redact, runCommand, runDoctor } from '@veritas/core';
-import { PROFILE_STAGES, type Profile, runVeritas } from '@veritas/engine';
+import { detectProject, loadConfig, redact, runCommand, runDoctor } from '@under18dev/veritas-core';
+import { PROFILE_STAGES, type Profile, runVeritas } from '@under18dev/veritas-engine';
 import { planFromEvent, type RunPlan } from './event.js';
 
 const input = (name: string, fallback: string): string =>

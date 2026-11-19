@@ -1,4 +1,4 @@
-import { ExitCode, loadConfig, runDoctor, type VeritasConfig, VeritasError } from '@veritas/core';
+import { ExitCode, loadConfig, runDoctor, type VeritasConfig, VeritasError } from '@under18dev/veritas-core';
 import { emitJson, emitText, type GlobalOptions, log } from '../output.js';
 
 export async function doctorCommand(opts: GlobalOptions): Promise<ExitCode> {

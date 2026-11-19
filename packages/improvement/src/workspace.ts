@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { hashValue, resolveInsideRoot, sha256 } from '@veritas/core';
+import { hashValue, resolveInsideRoot, sha256 } from '@under18dev/veritas-core';
 import type { PatchFile } from './schema.js';
 
 /** Directories that are tool state or dependencies, not project content. */

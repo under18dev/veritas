@@ -1,4 +1,10 @@
-import { type Expr, type FunctionModel, type PropertyIR, type Sort, VeritasError } from '@veritas/core';
+import {
+  type Expr,
+  type FunctionModel,
+  type PropertyIR,
+  type Sort,
+  VeritasError,
+} from '@under18dev/veritas-core';
 
 export const SAFE_MAX = 9007199254740991n;
 export const SAFE_MIN = -9007199254740991n;
