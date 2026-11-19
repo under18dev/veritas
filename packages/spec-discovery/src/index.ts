@@ -484,7 +484,13 @@ async function collectWeb(
   const seen = new Set<string>();
   let requests = 0;
   let chars = 0;
+  const deadline = Date.now() + config.sources.web.maxDurationMs;
+  let outOfTime = false;
   while (queue.length && requests < config.sources.web.maxPages && chars < config.sources.web.maxChars) {
+    if (Date.now() >= deadline) {
+      outOfTime = true;
+      break;
+    }
     const next = queue.shift();
     if (!next || seen.has(next.url)) continue;
     seen.add(next.url);
@@ -509,11 +515,14 @@ async function collectWeb(
       continue;
     }
     requests++;
+    // The per-page timeout (capped by the crawl deadline) covers the whole response, body included.
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      Math.max(1, Math.min(config.sources.web.timeoutMs, deadline - Date.now())),
+    );
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), config.sources.web.timeoutMs);
       const response = await fetcher(url, { signal: controller.signal, redirect: 'manual' });
-      clearTimeout(timer);
       const destination = response.url ? new URL(response.url) : url;
       if (
         (response.status >= 300 && response.status < 400) ||
@@ -524,7 +533,8 @@ async function collectWeb(
         skipped.push({ source: next.url, reason: 'redirect refused by allowlist or SSRF policy' });
         continue;
       }
-      const html = await response.text();
+      // Read at most what the character budget can still use (4 bytes per character covers UTF-8).
+      const html = await readLimited(response, Math.max(4096, (config.sources.web.maxChars - chars) * 4));
       const text = redact(
         html
           .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, '')
@@ -551,14 +561,36 @@ async function collectWeb(
         source: next.url,
         reason: error instanceof Error && error.name === 'AbortError' ? 'fetch timeout' : 'fetch failed',
       });
+    } finally {
+      clearTimeout(timer);
     }
   }
+  if (outOfTime) skipped.push({ source: 'web', reason: 'time budget exhausted' });
   if (queue.length && requests >= config.sources.web.maxPages)
     skipped.push({ source: 'web', reason: 'page budget exhausted' });
   if (chars >= config.sources.web.maxChars)
     skipped.push({ source: 'web', reason: 'character budget exhausted' });
   return requests;
 }
+/** The response body as text, reading no more than `maxBytes`; the rest is discarded unread. */
+async function readLimited(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return (await response.text()).slice(0, maxBytes);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(value.subarray(0, maxBytes - total));
+      total += Math.min(value.length, maxBytes - total);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
 /**
  * Provenance beyond whole-document duplicates: a source that repeats a statement of an earlier source word for
  * word is `derived_from` it (a copy is not independent evidence), and a source that calls another one outdated

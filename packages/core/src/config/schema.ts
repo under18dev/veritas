@@ -33,6 +33,8 @@ export const VeritasConfig = z
             maxDepth: z.number().int().nonnegative().max(5).default(1),
             maxChars: z.number().int().positive().default(200_000),
             timeoutMs: z.number().int().positive().default(30_000),
+            /** Total time for the whole crawl; pages not fetched by then are reported as skipped. */
+            maxDurationMs: z.number().int().positive().default(120_000),
           })
           .strict()
           .default({
@@ -42,6 +44,7 @@ export const VeritasConfig = z
             maxDepth: 1,
             maxChars: 200_000,
             timeoutMs: 30_000,
+            maxDurationMs: 120_000,
           }),
         sendFullTextToLlm: z.boolean().default(false),
       })

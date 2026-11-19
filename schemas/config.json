@@ -70,7 +70,8 @@
             "maxPages": 30,
             "maxDepth": 1,
             "maxChars": 200000,
-            "timeoutMs": 30000
+            "timeoutMs": 30000,
+            "maxDurationMs": 120000
           },
           "type": "object",
           "properties": {
@@ -106,6 +107,12 @@
             },
             "timeoutMs": {
               "default": 30000,
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "maxDurationMs": {
+              "default": 120000,
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991

@@ -108,3 +108,61 @@ describe('web safety and budgets', () => {
     expect(readdirSync(timeoutRoot).sort()).toEqual(['README.md']);
   });
 });
+
+describe('web crawl limits', () => {
+  it('times out a page whose body never finishes and reads no more of a body than the budget needs', async () => {
+    const root = tempProject('web-body');
+    seed(root, 'https://docs.example.test/slow https://docs.example.test/huge');
+    let pulled = 0;
+    const result = await discoverEvidence({
+      root,
+      lookup: publicLookup,
+      config: webConfig({ maxDepth: 0, maxChars: 1000, timeoutMs: 50 }),
+      fetch: async (input, init) => {
+        if (String(input).endsWith('/slow'))
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode('<p>partial</p>'));
+                init?.signal?.addEventListener('abort', () =>
+                  controller.error(new DOMException('aborted', 'AbortError')),
+                );
+              },
+            }),
+          );
+        return new Response(
+          new ReadableStream({
+            pull(controller) {
+              pulled++;
+              controller.enqueue(new TextEncoder().encode('x'.repeat(1024)));
+            },
+          }),
+        );
+      },
+    });
+    expect(result.skipped).toContainEqual({
+      source: 'https://docs.example.test/slow',
+      reason: 'fetch timeout',
+    });
+    expect(result.sources.find((s) => s.locator.endsWith('/huge'))).toBeTruthy();
+    expect(pulled).toBeLessThan(20);
+  });
+
+  it('stops the crawl when the total time budget is spent', async () => {
+    const root = tempProject('web-deadline');
+    seed(root, 'https://docs.example.test/a https://docs.example.test/b https://docs.example.test/c');
+    const requested: string[] = [];
+    const result = await discoverEvidence({
+      root,
+      lookup: publicLookup,
+      config: webConfig({ maxDepth: 0, maxDurationMs: 30 }),
+      fetch: async (input) => {
+        requested.push(String(input));
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return new Response('<p>page</p>');
+      },
+    });
+    expect(requested.length).toBeLessThan(3);
+    expect(result.skipped).toContainEqual({ source: 'web', reason: 'time budget exhausted' });
+  });
+});
