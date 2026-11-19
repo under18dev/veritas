@@ -68,6 +68,7 @@ writeFileSync(
     .join('')}`,
 );
 run(pnpm, ['install'], project);
+writeFileSync(path.join(project, '.gitignore'), 'node_modules/\n.veritas/\n.mutator/\n');
 execFileSync('git', ['init', '-q'], { cwd: project });
 execFileSync('git', ['add', '-A'], { cwd: project });
 execFileSync('git', ['-c', 'user.email=ci@example.invalid', '-c', 'user.name=ci', 'commit', '-qm', 'init'], {
