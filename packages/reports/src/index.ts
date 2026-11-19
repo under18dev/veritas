@@ -5,6 +5,7 @@ import {
   EvidenceSource,
   Finding,
   FormalClaim,
+  MeasurementSnapshot,
   Mutant,
   Property,
   Run,
@@ -24,6 +25,26 @@ const Statement = z.object({
   modality: z.string(),
   flags: z.array(z.string()),
 });
+/** An improvement plan made from this run, with its apply attempts (before/after measurements). */
+const Improvement = z.object({
+  planId: z.string().min(1),
+  outcome: z.string(),
+  goal: z.string().nullable(),
+  proposedTests: z.array(z.string()),
+  patchPreview: z.string(),
+  reasons: z.array(z.string()),
+  attempts: z.array(
+    z.object({
+      id: z.string().min(1),
+      outcome: z.string(),
+      rolledBack: z.boolean(),
+      before: MeasurementSnapshot.nullable(),
+      after: MeasurementSnapshot.nullable(),
+      reasons: z.array(z.string()),
+    }),
+  ),
+});
+export type ReportImprovement = z.infer<typeof Improvement>;
 const Conflict = z.object({
   id: z.string().min(1),
   symbol: z.string(),
@@ -47,6 +68,7 @@ export const ReportInput = z.object({
   mutants: z.array(Mutant),
   claims: z.array(FormalClaim),
   findings: z.array(Finding),
+  improvements: z.array(Improvement).default([]),
   artifactBase: z.string(),
 });
 export type ReportInput = z.infer<typeof ReportInput>;
@@ -75,6 +97,7 @@ const ReportDocument = z.object({
   mutants: z.array(Mutant),
   claims: z.array(FormalClaim),
   findings: z.array(Finding),
+  improvements: z.array(Improvement),
   artifactBase: z.string(),
 });
 
@@ -94,6 +117,7 @@ function safe(input: ReportInput): ReportInput {
     mutants: byId(parsed.mutants),
     claims: byId(parsed.claims),
     findings: byId(parsed.findings),
+    improvements: [...parsed.improvements].sort((a, b) => a.planId.localeCompare(b.planId)),
     run: { ...parsed.run, stages: [...parsed.run.stages].sort((a, b) => a.stage.localeCompare(b.stage)) },
   };
 }
@@ -113,6 +137,45 @@ function claimText(claim: FormalClaim, artifactBase: string): string {
     ? `, solver input ${artifactBase.replace(/\/$/, '')}/${claim.solverInputArtifact}`
     : '';
   return `${claim.kind}: ${statusText(claim.status)}${domain}; assurance ${claim.assurance}; scope ${scope}; assumptions ${claim.assumptions.join('; ') || 'none'}; semantic gaps ${claim.semanticGaps.join('; ') || 'none'}; counterexample ${claim.counterexample ? JSON.stringify(claim.counterexample) : 'none'}${artifact}; reproduction ${claim.reproduction ?? 'none'}`;
+}
+
+function snapshot(m: z.infer<typeof MeasurementSnapshot> | null): string {
+  return m
+    ? `tests ${m.testsPassed} passed/${m.testsFailed} failed, mutants ${m.mutantsKilled} killed/${m.mutantsSurvived} survived`
+    : 'not measured';
+}
+
+function improvementText(i: ReportImprovement): string {
+  return [
+    `${i.planId} (${i.outcome}): ${i.goal ?? 'no plan'}`,
+    ...i.proposedTests.map((t) => `  proposed test: ${t}`),
+    ...i.reasons.map((r) => `  reason: ${r}`),
+    ...i.attempts.map(
+      (a) =>
+        `  attempt ${a.id}: ${a.outcome}${a.rolledBack ? ' (rolled back)' : ''}; before: ${snapshot(a.before)}; after: ${snapshot(a.after)}${a.reasons.length ? `; ${a.reasons.join('; ')}` : ''}`,
+    ),
+    ...(i.patchPreview ? ['  patch preview:', ...i.patchPreview.split('\n').map((l) => `    ${l}`)] : []),
+  ].join('\n');
+}
+
+/**
+ * The evidence behind one property, with the static comparison of the code and what running it showed kept
+ * apart: tests linked to it, mutants of its code, formal claims and property-based counterexamples.
+ */
+function propertyEvidence(i: ReportInput, p: Property): string {
+  const tests = i.edges.filter((e) => e.propertyId === p.id);
+  const mutants = i.mutants.filter((m) => m.propertyIds.includes(p.id));
+  const killed = mutants.filter((m) => m.status === 'killed').length;
+  const survived = mutants.filter((m) => m.status === 'survived').length;
+  const claims = i.claims.filter((c) => c.propertyId === p.id && c.kind === 'conformance');
+  const observedCounterexamples = i.findings.filter(
+    (f) => f.kind === 'counterexample' && f.propertyIds.includes(p.id),
+  );
+  const observed = [
+    ...claims.map((c) => `${c.id} ${statusText(c.status)}`),
+    ...observedCounterexamples.map((f) => `${f.id} counterexample`),
+  ];
+  return `${p.id} [${p.status}, ${p.origin}]: static comparison with the code ${p.implementationAgreement}; observed ${observed.join(', ') || 'not run'}; tests ${tests.map((e) => `${e.testId} (${e.evidence.map((x) => x.kind).join('+') || 'none'})`).join(', ') || 'none'}; mutants ${killed} killed, ${survived} survived of ${mutants.length}`;
 }
 
 function sections(input: ReportInput): string[] {
@@ -156,7 +219,10 @@ function sections(input: ReportInput): string[] {
       props(['reviewed', 'rejected', 'superseded'])
         .map((p) => `${p.id} (${p.status}, ${p.origin})`)
         .join(', ') || 'none'
-    }`,
+    }${i.properties
+      .filter((p) => p.status !== 'rejected' && p.status !== 'superseded')
+      .map((p) => `\n${propertyEvidence(i, p)}`)
+      .join('')}`,
     `4. Specification vs implementation mismatches\n${
       i.findings
         .filter((f) => f.kind === 'spec_implementation_mismatch')
@@ -181,8 +247,18 @@ function sections(input: ReportInput): string[] {
     }`,
     `6. Mutation outcomes\n${mutationGroups.join('\n')}`,
     `7. Formal claims\n${i.claims.map((c) => `${c.id}: ${claimText(c, i.artifactBase)}`).join('\n') || 'none'}`,
-    `8. Test assessments\n${i.assessments.map((a) => `${a.testId}: ${a.outcome}; rationale ${a.rationale.join('; ')}; unknowns ${a.vector.unknowns.join('; ') || 'none'}`).join('\n') || 'none'}`,
-    `9. Improvement proposals\nnone in this run`,
+    `8. Test assessments\n${
+      i.assessments
+        .map((a) => {
+          const formal = a.vector.formalEvidence.map((id) => {
+            const c = i.claims.find((x) => x.id === id);
+            return c ? `${id} ${statusText(c.status)} (${c.kind}, assurance ${c.assurance})` : id;
+          });
+          return `${a.testId}: ${a.outcome}; rationale ${a.rationale.join('; ')}; formal evidence ${formal.join(', ') || 'none'}; unknowns ${a.vector.unknowns.join('; ') || 'none'}`;
+        })
+        .join('\n') || 'none'
+    }`,
+    `9. Improvement proposals\n${i.improvements.map(improvementText).join('\n') || 'none for this run (see `veritas improve --dry-run`)'}`,
     `10. Limitations\n${[...run.stages.filter((s) => s.status !== 'succeeded').map((s) => `stage ${s.stage} was ${s.status}`), ...i.claims.filter((c) => ['unsupported', 'semantic_mismatch', 'timeout', 'unknown'].includes(c.status)).map((c) => `claim ${c.id} is ${c.status}`), ...i.properties.filter((p) => p.origin === 'inferred').map((p) => `property ${p.id} is inferred (not a specification)`)].join('; ') || 'none'}`,
   ];
 }
@@ -319,7 +395,7 @@ export function renderHtml(input: ReportInput): string {
   const limitations = reportSections[9] ?? '';
   const section = (heading: string, body: string, content: string) =>
     `<section><h2>${heading}</h2><pre>${htmlEscape(body)}</pre>${content}</section>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Veritas report ${htmlEscape(i.run.id)}</title><style>body{font-family:system-ui,sans-serif;line-height:1.45;max-width:1100px;margin:2rem auto;padding:0 1rem}article{border:1px solid #bbb;padding:.75rem;margin:.75rem 0}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:.4rem;text-align:left}blockquote{white-space:pre-wrap}pre{white-space:pre-wrap}</style></head><body><h1>Veritas report</h1>${section('1. Run metadata/environment/scope', metadata, `<p>${htmlEscape(i.run.id)} — ${htmlEscape(i.run.verdict ?? 'none')} — ${htmlEscape(i.run.environment.os)} — Node ${htmlEscape(i.run.environment.node)}</p>`)}${section('2. Collected evidence with provenance', evidence, sources || '<p>none</p>')}${section('3. Property ledger', propertyLedger, properties || '<p>none</p>')}${section('4. Specification vs implementation mismatches', mismatches, findingBlocks || '<p>none</p>')}${section('5. Tests x properties matrix', matrix, `${table}${tests || '<p>none</p>'}`)}${section('6. Mutation outcomes', mutation, mutants || '<p>none</p>')}${section('7. Formal claims', formal, claims || '<p>none</p>')}${section('8. Test assessments', assessments, `<p>${htmlEscape(i.assessments.map((assessment) => `${assessment.testId}: ${assessment.outcome}; ${assessment.rationale.join('; ')}`).join('\n') || 'none')}</p>`)}${section('9. Improvement proposals', improvements, '<p>none in this run</p>')}${section('10. Limitations', limitations, `<p>${htmlEscape(limitations.replace(/^10\. Limitations\n/, ''))}</p>`)}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Veritas report ${htmlEscape(i.run.id)}</title><style>body{font-family:system-ui,sans-serif;line-height:1.45;max-width:1100px;margin:2rem auto;padding:0 1rem}article{border:1px solid #bbb;padding:.75rem;margin:.75rem 0}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:.4rem;text-align:left}blockquote{white-space:pre-wrap}pre{white-space:pre-wrap}</style></head><body><h1>Veritas report</h1>${section('1. Run metadata/environment/scope', metadata, `<p>${htmlEscape(i.run.id)} — ${htmlEscape(i.run.verdict ?? 'none')} — ${htmlEscape(i.run.environment.os)} — Node ${htmlEscape(i.run.environment.node)}</p>`)}${section('2. Collected evidence with provenance', evidence, sources || '<p>none</p>')}${section('3. Property ledger', propertyLedger, properties || '<p>none</p>')}${section('4. Specification vs implementation mismatches', mismatches, findingBlocks || '<p>none</p>')}${section('5. Tests x properties matrix', matrix, `${table}${tests || '<p>none</p>'}`)}${section('6. Mutation outcomes', mutation, mutants || '<p>none</p>')}${section('7. Formal claims', formal, claims || '<p>none</p>')}${section('8. Test assessments', assessments, `<p>${htmlEscape(i.assessments.map((assessment) => `${assessment.testId}: ${assessment.outcome}; ${assessment.rationale.join('; ')}`).join('\n') || 'none')}</p>`)}${section('9. Improvement proposals', improvements, i.improvements.map((imp) => `<article>${anchor(imp.planId)}<h3>${htmlEscape(imp.planId)} — ${htmlEscape(imp.outcome)}</h3><p>${htmlEscape(imp.goal ?? 'no plan')}</p></article>`).join('') || '<p>none</p>')}${section('10. Limitations', limitations, `<p>${htmlEscape(limitations.replace(/^10\. Limitations\n/, ''))}</p>`)}</body></html>`;
 }
 
 function sarifLevel(f: Finding): 'error' | 'warning' | 'note' {

@@ -203,6 +203,13 @@ describe('improve on agent-loop', () => {
       );
       expect(again.status).toBe(2);
       expect(json(again)).toMatchObject({ code: 'PLAN_STALE' });
+      // The report of the run the plan was made from shows the plan and its before/after measurements.
+      const report = runCli(['report', '--format', 'markdown'], dir);
+      expect(report.status, report.stderr).toBe(0);
+      const section = report.stdout.slice(report.stdout.indexOf('## 9. Improvement proposals'));
+      expect(section).toContain(`${plan.planId} (planned)`);
+      expect(section).toContain('isSenior(65) is true');
+      expect(section).toMatch(/attempt [^:]+: improved; before: tests \d+ passed/);
     },
     LONG,
   );

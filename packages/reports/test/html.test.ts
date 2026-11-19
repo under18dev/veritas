@@ -75,7 +75,7 @@ describe('HTML report', () => {
 
   it('renders status text and the empty improvement note', () => {
     expect(html()).toContain('counterexample_found');
-    expect(html()).toContain('none in this run');
+    expect(html()).toContain('none for this run');
   });
 
   it('does not use standalone verification claims', () => {

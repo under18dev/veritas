@@ -37,7 +37,68 @@ describe('text and markdown reports', () => {
   });
 
   it('renders the empty improvement section explicitly', () => {
-    expect(renderText(fixture())).toContain('9. Improvement proposals\nnone in this run');
+    expect(renderText(fixture())).toContain('9. Improvement proposals\nnone for this run');
+  });
+
+  it('lists improvement plans of the run with their before and after measurements', () => {
+    const input = fixture();
+    input.improvements = [
+      {
+        planId: 'IP-0123456789ab',
+        outcome: 'improved',
+        goal: 'kill the boundary mutant of discountAmount',
+        proposedTests: ['test/pricing.test.ts: total of exactly 1000 gets the discount'],
+        patchPreview: '+  expect(discountAmount(1000)).toBe(100);',
+        reasons: [],
+        attempts: [
+          {
+            id: 'A-1',
+            outcome: 'improved',
+            rolledBack: false,
+            before: {
+              testsPassed: 3,
+              testsFailed: 0,
+              mutantsKilled: 4,
+              mutantsSurvived: 1,
+              claimStatuses: {},
+            },
+            after: {
+              testsPassed: 4,
+              testsFailed: 0,
+              mutantsKilled: 5,
+              mutantsSurvived: 0,
+              claimStatuses: {},
+            },
+            reasons: [],
+          },
+        ],
+      },
+    ];
+    const text = renderText(input);
+    expect(text).toContain('IP-0123456789ab (improved): kill the boundary mutant of discountAmount');
+    expect(text).toContain('proposed test: test/pricing.test.ts: total of exactly 1000 gets the discount');
+    expect(text).toContain(
+      'attempt A-1: improved; before: tests 3 passed/0 failed, mutants 4 killed/1 survived; after: tests 4 passed/0 failed, mutants 5 killed/0 survived',
+    );
+    expect(text).toContain('+  expect(discountAmount(1000)).toBe(100);');
+  });
+
+  it('keeps the static comparison and the observed results of each property apart', () => {
+    const text = renderText(fixture());
+    expect(text).toMatch(
+      /property-1 \[accepted, normative\]: static comparison with the code \w+; observed [^;]+;/,
+    );
+    expect(text).toContain(
+      'property-2 [proposed, inferred]: static comparison with the code agree; observed claim-3 unsupported',
+    );
+  });
+
+  it('names the formal claims behind each test assessment', () => {
+    const input = fixture();
+    const first = input.assessments[0];
+    if (!first) throw new Error('fixture has no assessment');
+    first.vector.formalEvidence = ['claim-1'];
+    expect(renderText(input)).toMatch(/formal evidence claim-1 [^(]+\(conformance, assurance \w+\)/);
   });
 
   it('lists incomplete stages, claim limitations, and inferred properties', () => {
