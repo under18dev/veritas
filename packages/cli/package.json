@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@veritas/core": "workspace:*",
-    "commander": "15.1.0"
+    "commander": "15.1.0",
+    "@veritas/engine": "workspace:*"
   }
 }

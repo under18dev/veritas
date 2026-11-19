@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, realpathSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,9 +8,17 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 export const CLI = path.join(REPO_ROOT, 'packages/cli/dist/bin.js');
 
 /** Copy a fixture outside the monorepo so its dependency resolution is not influenced by ours. */
-export function copyFixture(name: string, options: { git?: boolean } = {}): string {
+export function copyFixture(name: string, options: { git?: boolean; linkDeps?: boolean } = {}): string {
   const dir = realpathSync(mkdtempSync(path.join(tmpdir(), `veritas-${name}-`)));
-  cpSync(path.join(REPO_ROOT, 'fixtures', name), dir, { recursive: true });
+  const source = path.join(REPO_ROOT, 'fixtures', name);
+  cpSync(source, dir, {
+    recursive: true,
+    filter: (src) => !src.includes('node_modules') && !src.includes('.mutator'),
+  });
+  // Fixture dependencies (vitest, mutator) are installed in the workspace; link them instead of reinstalling.
+  if (options.linkDeps && existsSync(path.join(source, 'node_modules'))) {
+    symlinkSync(path.join(source, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
+  }
   if (options.git) {
     const git = (...args: string[]) => spawnSync('git', args, { cwd: dir, stdio: 'ignore' });
     git('init', '-q');

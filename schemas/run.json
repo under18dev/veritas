@@ -74,6 +74,23 @@
       "minimum": 0,
       "maximum": 4
     },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "pass_with_warnings",
+        "policy_failure",
+        "tool_error",
+        "inconclusive"
+      ]
+    },
+    "policyReasons": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "stages": {
       "type": "array",
       "items": {

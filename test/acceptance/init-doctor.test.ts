@@ -87,7 +87,7 @@ describe('init and doctor', () => {
 describe('exit codes and output contract', () => {
   it('keeps stdout pure JSON and reports unimplemented commands as tool errors, never success', () => {
     const dir = copyFixture('discount-boundary');
-    const result = runCli(['prove', '--json'], dir);
+    const result = runCli(['improve', '--json'], dir);
     expect(result.status).toBe(3);
     expect(json(result).status).toBe('unsupported');
   });

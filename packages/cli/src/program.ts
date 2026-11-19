@@ -2,6 +2,17 @@ import path from 'node:path';
 import { ExitCode, TOOL_VERSION } from '@veritas/core';
 import { Command, CommanderError, Option } from 'commander';
 import { doctorCommand } from './commands/doctor.js';
+import {
+  analyzeCommand,
+  discoverCommand,
+  explainCommand,
+  mutateCommand,
+  proveCommand,
+  replayCommand,
+  reportCommand,
+  runCommandCli,
+  specCommand,
+} from './commands/engine.js';
 import { initCommand } from './commands/init.js';
 import { emitJson, type GlobalOptions, log, reportError } from './output.js';
 
@@ -66,16 +77,48 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
       .description('collect specification evidence')
       .option('--offline', 'never access the network')
       .addOption(new Option('--sources <list>', 'comma-separated: local,github,web,all').default('local'))
-      .option('--allow-domain <domain...>', 'allow a web domain')
+      .option('--allow-domain <domain...>', 'allow a web domain (also needs sources.web.enabled in config)')
       .option('--max-pages <n>', 'web page budget'),
-    notImplemented('discover'),
+    (o) => discoverCommand(o),
   );
   const spec = program.command('spec').description('review the property registry');
-  for (const sub of ['list', 'show <id>', 'accept <id>', 'reject <id>', 'diff', 'export']) {
-    wire(spec.command(sub), notImplemented(`spec ${sub.split(' ')[0]}`));
-  }
-  wire(program.command('analyze [path]').option('--since <ref>'), notImplemented('analyze'));
-  wire(program.command('mutate').option('--since <ref>').option('--scope <glob>'), notImplemented('mutate'));
+  wire(spec.command('list').description('list properties of the latest run'), (o) =>
+    specCommand(o, 'list', []),
+  );
+  wire(spec.command('show <id>'), (o, a) => specCommand(o, 'show', a));
+  wire(
+    spec
+      .command('accept <id>')
+      .requiredOption('--reason <text>', 'why')
+      .option('--actor <name>', 'who decides (default: git user.name)'),
+    (o, a) => specCommand(o, 'accept', a),
+  );
+  wire(
+    spec
+      .command('reject <id>')
+      .requiredOption('--reason <text>', 'why')
+      .option('--actor <name>', 'who decides (default: git user.name)'),
+    (o, a) => specCommand(o, 'reject', a),
+  );
+  wire(spec.command('diff').description('compare properties of the last two runs'), (o) =>
+    specCommand(o, 'diff', []),
+  );
+  wire(spec.command('export').description('print the registry as JSON'), (o) => specCommand(o, 'export', []));
+  wire(
+    program
+      .command('analyze [path]')
+      .description('index code and tests, map them to properties and assess tests')
+      .option('--since <ref>'),
+    (o, a) => analyzeCommand(o, a),
+  );
+  wire(
+    program
+      .command('mutate')
+      .description('run mutation testing and relate mutants to properties')
+      .option('--since <ref>')
+      .option('--scope <glob>'),
+    (o) => mutateCommand(o),
+  );
   wire(
     program.command('test').command('generate').option('--property <id>').option('--dry-run'),
     notImplemented('test generate'),
@@ -83,9 +126,11 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
   wire(
     program
       .command('prove')
+      .description('verify formalized properties with an SMT solver (bounded)')
       .option('--property <id>')
-      .addOption(new Option('--engine <engine>').choices(['z3', 'lean'])),
-    notImplemented('prove'),
+      .option('--include-proposed', 'also check properties that are not accepted (experimental)')
+      .addOption(new Option('--engine <engine>').choices(['z3', 'lean']).default('z3')),
+    (o) => proveCommand(o),
   );
   wire(
     program.command('improve').option('--dry-run').option('--apply').option('--max-iterations <n>'),
@@ -94,18 +139,27 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
   wire(
     program
       .command('report')
+      .description('print the latest results')
       .addOption(new Option('--format <format>').choices(['text', 'json', 'markdown', 'html', 'sarif'])),
-    notImplemented('report'),
+    (o) => reportCommand(o),
   );
   wire(
     program
       .command('run')
-      .addOption(new Option('--profile <profile>').choices(['quick', 'standard', 'deep']))
-      .option('--offline'),
-    notImplemented('run'),
+      .description('run the full pipeline')
+      .addOption(new Option('--profile <profile>').choices(['quick', 'standard', 'deep']).default('standard'))
+      .option('--offline', 'never access the network')
+      .option('--since <ref>')
+      .option('--include-proposed', 'also verify properties that are not accepted (experimental)'),
+    (o) => runCommandCli(o),
   );
-  wire(program.command('replay <run-id>'), notImplemented('replay'));
-  wire(program.command('explain <finding-id>'), notImplemented('explain'));
+  wire(
+    program.command('replay <run-id>').description('re-run a previous run with the same stages and options'),
+    (o, a) => replayCommand(o, a),
+  );
+  wire(program.command('explain <finding-id>').description('show the evidence chain of a finding'), (o, a) =>
+    explainCommand(o, a),
+  );
   return program;
 }
 

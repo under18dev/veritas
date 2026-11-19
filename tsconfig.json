@@ -27,6 +27,12 @@
     },
     {
       "path": "packages/property-engine"
+    },
+    {
+      "path": "packages/assessment"
+    },
+    {
+      "path": "packages/engine"
     }
   ]
 }
