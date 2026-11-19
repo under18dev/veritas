@@ -1,0 +1,24 @@
+name: veritas
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile
+      - uses: veritas/github-action@v1
+        with:
+          profile: standard
+      - uses: actions/upload-artifact@v4
+        with:
+          name: veritas-runs
+          path: .veritas/runs
+          retention-days: 14

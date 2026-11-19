@@ -1,0 +1,17 @@
+name: Veritas
+description: Run offline Veritas verification in GitHub Actions
+inputs:
+  profile: { description: Verification profile, default: standard }
+  working-directory: { description: Project directory, default: . }
+  since: { description: Base SHA, default: "" }
+  inconclusive: { description: Policy for inconclusive results, default: warn }
+  summary: { description: Write a step summary, default: "true" }
+outputs:
+  verdict: { description: Policy verdict }
+  exit-code: { description: Veritas exit code }
+  run-id: { description: Run identifier }
+  confirmed-findings: { description: Number of confirmed findings }
+  report-path: { description: Path to the run report }
+runs:
+  using: node24
+  main: dist/main.js
