@@ -2,7 +2,7 @@
 
 The Veritas action runs the same offline engine used by the CLI. A recommended workflow is in `packages/github-action/examples/pull-request.yml`.
 
-Inputs are `profile` (`quick`, `standard`, or `deep`), `working-directory`, `since`, `inconclusive` (`warn`, `fail`, or `ignore`), and `summary`. The pull request base SHA is used for `since` when it is not supplied. Outputs are `verdict`, `exit-code`, `run-id`, `confirmed-findings`, and `report-path`.
+Inputs are `profile` (`quick`, `standard`, or `deep`), `working-directory`, `since`, `inconclusive` (`warn`, `fail`, or `ignore`), and `summary`. The pull request base SHA is used for `since` when it is not supplied. Outputs are `verdict`, `exit-code`, `run-id`, `confirmed-findings`, `report-path`, and `from-fork` (`true` for a pull request from a fork, also noted in the step summary).
 
 Exit code 0 is a passing result, including warnings and degraded unsupported projects; 1 is a confirmed policy failure; 2 is an invalid or unsafe invocation; 3 is a tool error; and 4 is inconclusive when the policy is `fail`. Verdicts distinguish `pass`, `pass_with_warnings`, `policy_failure`, `tool_error`, and `inconclusive`.
 

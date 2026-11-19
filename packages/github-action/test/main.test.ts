@@ -139,7 +139,9 @@ describe('main end to end', { timeout: 300_000 }, () => {
     expect(values['run-id']).toBeTruthy();
     expect(values['confirmed-findings']).toBe('0');
     expect(values['report-path']).toContain('.veritas/runs');
+    expect(values['from-fork']).toBe('false');
     const summary = readFileSync(files.summary, 'utf8');
+    expect(summary).not.toContain('from a fork');
     expect(summary).toContain('pass_with_warnings');
     expect(summary).toMatch(/F[A-Z0-9_-]+/);
     expect(
