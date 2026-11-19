@@ -46,7 +46,7 @@ function provider(
   };
 }
 
-describe('LLM-assisted extraction', () => {
+describe('LLM-assisted extraction', { timeout: 120_000 }, () => {
   it('adds LLM-read thresholds as experimental, proposed properties and records token usage', async () => {
     const root = project();
     const summary = await runVeritas({

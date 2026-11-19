@@ -100,7 +100,8 @@ export async function main(): Promise<number> {
     behavior === 'fail' && summary.decision.reasons.some((reason) => reason.includes('inconclusive'))
       ? { ...summary.decision, verdict: 'inconclusive' as const, exitCode: 4 as const }
       : summary.decision;
-  const reportPath = path.join(summary.dir, 'run.json');
+  // Workspace-relative POSIX path, the same on every runner OS and usable in later workflow steps.
+  const reportPath = path.relative(root, path.join(summary.dir, 'run.json')).split(path.sep).join('/');
   writeOutput({
     verdict: decision.verdict,
     'exit-code': String(decision.exitCode),

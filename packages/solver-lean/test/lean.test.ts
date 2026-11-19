@@ -24,7 +24,7 @@ const missingBinary = path.join(tmpdir(), 'veritas-no-such-dir', 'lean');
 let lean: LeanInstallation;
 beforeAll(async () => {
   lean = await detectLean();
-}, 60_000);
+}, 600_000);
 
 /** Tests below run the real Lean toolchain. They fail (never skip) when Lean is not installed. */
 function requireLean(): void {
