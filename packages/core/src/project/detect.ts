@@ -1,5 +1,4 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 
 export type PackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun' | 'unknown';
@@ -40,14 +39,24 @@ function readPackageJson(root: string): Record<string, unknown> | null {
   }
 }
 
-/** Version of a package resolvable from the project root, or null. Never executes the package. */
+/**
+ * Version of a package installed for the project root, or null. Never executes the package. Looks the package up
+ * in `node_modules` directories from `root` upwards, because some packages do not export their `package.json`.
+ */
 export function resolvePackageVersion(root: string, name: string): string | null {
-  try {
-    const require = createRequire(path.join(root, 'package.json'));
-    const file = require.resolve(`${name}/package.json`);
-    return (JSON.parse(readFileSync(file, 'utf8')) as { version?: string }).version ?? null;
-  } catch {
-    return null;
+  let dir = path.resolve(root);
+  for (;;) {
+    const manifest = path.join(dir, 'node_modules', ...name.split('/'), 'package.json');
+    if (existsSync(manifest)) {
+      try {
+        return (JSON.parse(readFileSync(manifest, 'utf8')) as { version?: string }).version ?? null;
+      } catch {
+        return null;
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
   }
 }
 
