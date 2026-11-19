@@ -2,7 +2,7 @@
   "name": "@under18dev/veritas-spec-discovery",
   "version": "0.0.0",
   "description": "Evidence collection and normative statement extraction for Veritas",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": {

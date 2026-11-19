@@ -2,7 +2,7 @@
   "name": "@under18dev/veritas-assessment",
   "version": "0.0.0",
   "description": "Evidence-vector assessment of tests and findings for Veritas",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": {

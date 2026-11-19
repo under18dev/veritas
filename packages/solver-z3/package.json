@@ -2,7 +2,7 @@
   "name": "@under18dev/veritas-solver-z3",
   "version": "0.0.0",
   "description": "SMT-LIB generation and Z3 execution for Veritas",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": {

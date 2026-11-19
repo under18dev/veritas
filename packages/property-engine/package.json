@@ -2,7 +2,7 @@
   "name": "@under18dev/veritas-property-engine",
   "version": "0.0.0",
   "description": "Property registry, conflicts, review state and formalization for Veritas",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": {

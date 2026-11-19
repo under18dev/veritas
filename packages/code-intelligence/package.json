@@ -2,7 +2,7 @@
   "name": "@under18dev/veritas-code-intelligence",
   "version": "0.0.0",
   "description": "Static TypeScript analysis for Veritas",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": {

@@ -2,7 +2,7 @@
   "name": "@under18dev/veritas-engine",
   "version": "0.0.0",
   "description": "Orchestrates Veritas stages and persists run artifacts (the Node API)",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": {

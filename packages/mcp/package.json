@@ -2,7 +2,7 @@
   "name": "@under18dev/veritas-mcp",
   "version": "0.0.0",
   "description": "MCP server exposing Veritas to agents",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "veritas-mcp": "./dist/bin.js"

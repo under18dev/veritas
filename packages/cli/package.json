@@ -2,7 +2,7 @@
   "name": "@under18dev/veritas",
   "version": "0.0.0",
   "description": "Command-line interface for Veritas",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "veritas": "./dist/bin.js"

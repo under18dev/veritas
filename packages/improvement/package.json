@@ -2,7 +2,7 @@
   "name": "@under18dev/veritas-improvement",
   "version": "0.0.0",
   "description": "Plans test-only improvements and applies them after measuring them in an isolated workspace",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": {

@@ -2,7 +2,7 @@
   "name": "@under18dev/veritas-mutation-adapter",
   "version": "0.0.0",
   "description": "Mutation testing adapter (@mizchi/mutator) for Veritas",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": {

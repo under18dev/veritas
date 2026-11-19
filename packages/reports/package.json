@@ -2,7 +2,7 @@
   "name": "@under18dev/veritas-reports",
   "version": "0.0.0",
   "description": "Text, JSON, Markdown, HTML and SARIF reports for Veritas runs",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": {
