@@ -1,3 +1,4 @@
+import path from 'node:path';
 import {
   type ClaimKind,
   type ContentCache,
@@ -291,15 +292,30 @@ function checkKind(options: ProveOptions): void {
       if (calls.size < 2) fail('the property must call both the original and the mutant model');
       if (kind === 'distinguishability' && ir.preconditions.length === 0)
         fail('the inputs to check must be restricted to the test inputs (restrictToInputs)');
-      if (
-        kind === 'property_detection' &&
-        !isDetection(ir.body, new Set(options.bindings.map((b) => b.modelName)))
-      )
+      if (kind === 'property_detection' && !isDetection(ir.body, boundModels(options)))
         fail('the property must be property(original) implies property(mutant) (detectionProperty)');
       break;
     default:
       fail('unknown claim kind');
   }
+}
+
+/**
+ * Models that really are the bound JavaScript export: the binding names the model, and the model's symbol
+ * (`file#name`) is that module and export. A binding that points a model at some other export does not count.
+ */
+function boundModels(options: ProveOptions): Set<string> {
+  const out = new Set<string>();
+  for (const b of options.bindings) {
+    const model = options.ir.functions.find((f) => f.name === b.modelName);
+    const hash = model?.symbol.lastIndexOf('#') ?? -1;
+    if (!model || hash <= 0) continue;
+    const file = model.symbol.slice(0, hash);
+    const name = model.symbol.slice(hash + 1);
+    if (name === b.exportName && path.resolve(options.root, file) === path.resolve(b.modulePath))
+      out.add(b.modelName);
+  }
+  return out;
 }
 
 /** Calls in `e`. */

@@ -647,6 +647,16 @@ describe('distinguishability and property detection', () => {
           mutantId: 'M-1',
         }),
       ).rejects.toThrow(/property_detection claim refused/);
+    // A binding that points the "original" model at another export does not make it the original.
+    await expect(
+      proveProperty({
+        ...base,
+        bindings: [{ ...binding(root, 'discountAmount'), exportName: 'shippingFee' }],
+        kind: 'property_detection',
+        ir: detection,
+        mutantId: 'M-1',
+      }),
+    ).rejects.toThrow(/property_detection claim refused/);
     await expect(proveProperty({ ...base, kind: 'bounded_equivalence', ir: conformance })).rejects.toThrow(
       /mutant id is required/,
     );
