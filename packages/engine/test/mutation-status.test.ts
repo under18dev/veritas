@@ -33,4 +33,17 @@ describe('mutationStageStatus', () => {
       'unsupported',
     );
   });
+
+  it('accepts pending mutants outside the change of an incremental run, but never unknown ones', () => {
+    const mutants = [mutant('killed'), mutant('pending')];
+    expect(mutationStageStatus({ status: 'succeeded', mutants }, { incremental: true }).status).toBe(
+      'succeeded',
+    );
+    expect(
+      mutationStageStatus(
+        { status: 'succeeded', mutants: [...mutants, mutant('unknown')] },
+        { incremental: true },
+      ),
+    ).toEqual({ status: 'partial', undecided: 1 });
+  });
 });

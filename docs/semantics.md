@@ -34,7 +34,7 @@ The model uses mathematical integers. JavaScript uses IEEE-754 doubles. They agr
 - `suspected_equivalent`: no difference observed; equivalence not shown.
 - `equivalent_proven`: no input in the stated bounded domain distinguishes it (a `bounded_equivalence` claim); the bounds are part of the result.
 - `timeout`: the test run did not finish under the mutant (usually a mutated loop). Counted as detected, as in other mutation tools, but never credited to a specific test as a kill.
-- `pending`, `unknown`: the mutant was not run, or the backend reported a status Veritas does not recognize. Any such mutant makes the mutation stage `partial`, so the run cannot `pass`.
+- `pending`, `unknown`: the mutant was not run, or the backend reported a status Veritas does not recognize. An `unknown` mutant makes the mutation stage `partial`, so the run cannot `pass`; so does a `pending` one, except in an incremental run (`--since`), where mutants outside the change are left out on purpose.
 
 ## Specifications
 
