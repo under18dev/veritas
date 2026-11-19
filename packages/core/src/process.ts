@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { redact } from './redact.js';
@@ -66,11 +66,16 @@ export function runCommand(
       env,
       shell: false,
       windowsHide: true,
+      // Its own process group (POSIX), so a timeout or cancellation can end every process it started.
+      detached: process.platform !== 'win32',
       stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
+    installExitHook();
+    running.add(child);
     const finish = (result: Partial<CommandResult>) => {
       if (settled) return;
       settled = true;
+      running.delete(child);
       clearTimeout(timer);
       options.signal?.removeEventListener('abort', onAbort);
       resolve({
@@ -87,9 +92,9 @@ export function runCommand(
     };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      killTree(child);
     }, options.timeoutMs);
-    const onAbort = () => child.kill('SIGKILL');
+    const onAbort = () => killTree(child);
     options.signal?.addEventListener('abort', onAbort, { once: true });
     child.stdout?.on('data', (d: Buffer) => {
       if (stdout.length < max) stdout += d.toString();
@@ -101,6 +106,38 @@ export function runCommand(
     child.on('error', (error) => finish({ spawnError: error.message }));
     child.on('close', (exitCode, signal) => finish({ exitCode, signal }));
   });
+}
+
+/** Children in their own process group do not get the terminal's signals; end them when Veritas exits. */
+const running = new Set<ChildProcess>();
+let exitHookInstalled = false;
+function installExitHook(): void {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.once('exit', () => {
+    for (const child of running) killTree(child);
+  });
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.once(signal, () => {
+      for (const child of running) killTree(child);
+      process.kill(process.pid, signal);
+    });
+  }
+}
+
+/** Kill a child and everything it started: its process group on POSIX, `taskkill /T` on Windows. */
+function killTree(child: ChildProcess): void {
+  if (child.pid === undefined) return;
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    } else {
+      process.kill(-child.pid, 'SIGKILL');
+    }
+  } catch {
+    // already gone
+  }
+  child.kill('SIGKILL');
 }
 
 /** How to start a command found on PATH, without a shell. */
