@@ -1,0 +1,207 @@
+{
+  "$id": "https://veritas.invalid/schemas/test-assessment.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "testId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "propertyIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "evidenceIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "killedMutantIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "survivedMutantIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "formalClaimIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "vector": {
+      "type": "object",
+      "properties": {
+        "specificationRelevance": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "propertyId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "propertyId",
+              "status"
+            ]
+          }
+        },
+        "assertionRelevance": {
+          "type": "string",
+          "enum": [
+            "checks_result",
+            "weak",
+            "none",
+            "unknown"
+          ]
+        },
+        "mutationDetection": {
+          "type": "object",
+          "properties": {
+            "killed": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "survived": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "other": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          },
+          "required": [
+            "killed",
+            "survived",
+            "other"
+          ]
+        },
+        "boundaryCoverage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "boundary": {
+                "type": "string"
+              },
+              "exercised": {
+                "type": "string",
+                "enum": [
+                  "yes",
+                  "no",
+                  "unknown"
+                ]
+              }
+            },
+            "required": [
+              "boundary",
+              "exercised"
+            ]
+          }
+        },
+        "formalEvidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "sourceConfidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unknowns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "specificationRelevance",
+        "assertionRelevance",
+        "mutationDetection",
+        "boundaryCoverage",
+        "formalEvidence",
+        "sourceConfidence",
+        "unknowns"
+      ]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "meaningful_with_evidence",
+        "weak_or_incomplete",
+        "tautological_or_disconnected",
+        "spec_conflict",
+        "inconclusive"
+      ]
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rationale": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "testId",
+    "propertyIds",
+    "evidenceIds",
+    "killedMutantIds",
+    "survivedMutantIds",
+    "formalClaimIds",
+    "vector",
+    "outcome",
+    "limitations",
+    "rationale"
+  ]
+}

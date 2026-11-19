@@ -1,0 +1,122 @@
+{
+  "$id": "https://veritas.invalid/schemas/formal-claim.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "propertyId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "conformance",
+        "distinguishability",
+        "bounded_equivalence",
+        "property_detection"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "proven_within_model",
+        "counterexample_found",
+        "unknown",
+        "unsupported",
+        "timeout",
+        "semantic_mismatch",
+        "error"
+      ]
+    },
+    "engine": {
+      "type": "string"
+    },
+    "engineVersion": {
+      "type": "string"
+    },
+    "assurance": {
+      "type": "string",
+      "enum": [
+        "smt_bounded",
+        "kernel_checked",
+        "none"
+      ]
+    },
+    "modelId": {
+      "type": "string"
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "scope": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "semanticGaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "solverInputArtifact": {
+      "type": "string"
+    },
+    "solverOutputArtifact": {
+      "type": "string"
+    },
+    "counterexample": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "reproduction": {
+      "type": "string"
+    },
+    "semanticValidation": {
+      "type": "string",
+      "enum": [
+        "confirmed",
+        "mismatch",
+        "not_attempted"
+      ]
+    },
+    "durationMs": {
+      "type": "number",
+      "minimum": 0
+    },
+    "mutantId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    }
+  },
+  "required": [
+    "id",
+    "propertyId",
+    "kind",
+    "status",
+    "engine",
+    "engineVersion",
+    "assurance",
+    "modelId",
+    "assumptions",
+    "scope",
+    "semanticGaps",
+    "semanticValidation",
+    "durationMs"
+  ]
+}

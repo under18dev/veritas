@@ -1,0 +1,124 @@
+{
+  "$id": "https://veritas.invalid/schemas/test-case.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "file": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "suitePath": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "location": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "range": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "end": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ]
+        }
+      },
+      "required": [
+        "file"
+      ]
+    },
+    "modifiers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "skip",
+          "only",
+          "todo",
+          "concurrent",
+          "each"
+        ]
+      }
+    },
+    "assertionCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "calledSymbols": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "usesMocks": {
+      "type": "boolean"
+    },
+    "usesSnapshots": {
+      "type": "boolean"
+    },
+    "nondeterminism": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "suspicions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "no_assertion",
+          "tautological_assertion",
+          "target_not_called",
+          "unconditional_mock"
+        ]
+      }
+    },
+    "granularity": {
+      "type": "string",
+      "enum": [
+        "test",
+        "suite"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "file",
+    "name",
+    "suitePath",
+    "location",
+    "modifiers",
+    "assertionCount",
+    "calledSymbols",
+    "usesMocks",
+    "usesSnapshots",
+    "nondeterminism",
+    "suspicions",
+    "granularity"
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "$id": "https://veritas.invalid/schemas/test-property-edge.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "testId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "symbol": {
+      "type": "string"
+    },
+    "propertyId": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "direct_assertion",
+              "mutation_evidence",
+              "execution_trace",
+              "static_call",
+              "llm_hypothesis",
+              "name_similarity"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "artifactIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "detail",
+          "artifactIds"
+        ]
+      }
+    }
+  },
+  "required": [
+    "id",
+    "testId",
+    "symbol",
+    "propertyId",
+    "evidence"
+  ]
+}

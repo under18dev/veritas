@@ -1,0 +1,148 @@
+{
+  "$id": "https://veritas.invalid/schemas/finding.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "spec_implementation_mismatch",
+        "spec_conflict",
+        "test_gap",
+        "tautological_test",
+        "survived_mutant",
+        "counterexample",
+        "spec_violation_candidate",
+        "unsupported_semantics",
+        "stage_failure"
+      ]
+    },
+    "title": {
+      "type": "string"
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ]
+    },
+    "certainty": {
+      "type": "string",
+      "enum": [
+        "confirmed",
+        "suspected",
+        "informational"
+      ]
+    },
+    "locations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "range": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "end": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          }
+        },
+        "required": [
+          "file"
+        ]
+      }
+    },
+    "propertyIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "sourceIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "testIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "mutantIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "claimIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "explanation": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "nextActions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "title",
+    "severity",
+    "certainty",
+    "locations",
+    "propertyIds",
+    "sourceIds",
+    "testIds",
+    "mutantIds",
+    "claimIds",
+    "explanation",
+    "nextActions"
+  ]
+}

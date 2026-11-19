@@ -1,0 +1,398 @@
+{
+  "$id": "https://veritas.invalid/schemas/config.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "default": "1.0.0",
+      "type": "string"
+    },
+    "project": {
+      "default": {
+        "packageManager": "unknown",
+        "tsconfig": null
+      },
+      "type": "object",
+      "properties": {
+        "packageManager": {
+          "default": "unknown",
+          "type": "string",
+          "enum": [
+            "pnpm",
+            "npm",
+            "yarn",
+            "bun",
+            "unknown"
+          ]
+        },
+        "tsconfig": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "sources": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "local": {
+          "default": true,
+          "type": "boolean"
+        },
+        "github": {
+          "default": {
+            "enabled": false
+          },
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "repo": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "web": {
+          "default": {
+            "enabled": false,
+            "allowDomains": [],
+            "maxPages": 30,
+            "maxDepth": 1,
+            "maxChars": 200000,
+            "timeoutMs": 30000
+          },
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "allowDomains": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9.-]+$"
+              }
+            },
+            "maxPages": {
+              "default": 30,
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 1000
+            },
+            "maxDepth": {
+              "default": 1,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5
+            },
+            "maxChars": {
+              "default": 200000,
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "timeoutMs": {
+              "default": 30000,
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
+        "sendFullTextToLlm": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "analysis": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "include": {
+          "default": [
+            "src/**/*.{ts,tsx,js,mjs}"
+          ],
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exclude": {
+          "default": [
+            "**/*.generated.*",
+            "**/node_modules/**",
+            "**/dist/**"
+          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "testInclude": {
+          "default": [
+            "**/*.{test,spec}.{ts,tsx,js,mjs}"
+          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "testFramework": {
+          "default": "vitest",
+          "type": "string",
+          "const": "vitest"
+        },
+        "inferSpecsFromCode": {
+          "default": true,
+          "type": "boolean"
+        },
+        "requireApprovalForNormativeClaims": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "mutation": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "backend": {
+          "default": "mizchi",
+          "type": "string",
+          "const": "mizchi"
+        },
+        "mode": {
+          "default": "diff",
+          "type": "string",
+          "enum": [
+            "diff",
+            "full"
+          ]
+        },
+        "timeoutMs": {
+          "default": 120000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "maxMutants": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "pbt": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "numRuns": {
+          "default": 1000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 1000000
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "formal": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "backend": {
+          "default": "z3",
+          "type": "string",
+          "enum": [
+            "z3",
+            "lean"
+          ]
+        },
+        "integerDomain": {
+          "default": {
+            "min": "-10000",
+            "max": "10000"
+          },
+          "type": "object",
+          "properties": {
+            "min": {
+              "type": "string",
+              "pattern": "^-?\\d+$"
+            },
+            "max": {
+              "type": "string",
+              "pattern": "^-?\\d+$"
+            }
+          },
+          "required": [
+            "min",
+            "max"
+          ],
+          "additionalProperties": false
+        },
+        "maxSolverMs": {
+          "default": 30000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "rejectUnsupportedSemantics": {
+          "default": true,
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "llm": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "provider": {
+          "default": "none",
+          "type": "string",
+          "enum": [
+            "none",
+            "claude"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "maxTokensPerRun": {
+          "default": 200000,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "improvement": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "autoApply": {
+          "default": false,
+          "type": "boolean",
+          "const": false
+        },
+        "testFilesOnly": {
+          "default": true,
+          "type": "boolean"
+        },
+        "maxIterations": {
+          "default": 3,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 20
+        },
+        "maxPatchFiles": {
+          "default": 5,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 50
+        }
+      },
+      "additionalProperties": false
+    },
+    "reports": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "formats": {
+          "default": [
+            "json",
+            "markdown"
+          ],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json",
+              "markdown",
+              "html",
+              "sarif"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "policy": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "confirmedViolation": {
+          "default": "fail",
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn"
+          ]
+        },
+        "inconclusiveBehavior": {
+          "default": "warn",
+          "type": "string",
+          "enum": [
+            "fail",
+            "warn",
+            "ignore"
+          ]
+        },
+        "maxNewSurvivors": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "minPropertyCoverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "storage": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "retainRuns": {
+          "default": 20,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "storePrompts": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

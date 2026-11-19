@@ -1,0 +1,316 @@
+{
+  "$id": "https://veritas.invalid/schemas/property-ir.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "irVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "params": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sort": {
+                "type": "string",
+                "const": "int"
+              },
+              "domain": {
+                "type": "object",
+                "properties": {
+                  "min": {
+                    "type": "string",
+                    "pattern": "^-?\\d+$"
+                  },
+                  "max": {
+                    "type": "string",
+                    "pattern": "^-?\\d+$"
+                  }
+                },
+                "required": [
+                  "min",
+                  "max"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "sort",
+              "domain"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sort": {
+                "type": "string",
+                "const": "bool"
+              }
+            },
+            "required": [
+              "name",
+              "sort"
+            ]
+          }
+        ]
+      }
+    },
+    "preconditions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema0"
+      }
+    },
+    "body": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "functions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "params": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sort": {
+                  "type": "string",
+                  "enum": [
+                    "int",
+                    "bool"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "sort"
+              ]
+            }
+          },
+          "returns": {
+            "type": "string",
+            "enum": [
+              "int",
+              "bool"
+            ]
+          },
+          "body": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/__schema0"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "symbol",
+          "params",
+          "returns",
+          "body"
+        ]
+      }
+    }
+  },
+  "required": [
+    "irVersion",
+    "params",
+    "preconditions",
+    "body",
+    "functions"
+  ],
+  "$defs": {
+    "__schema0": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "var"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "int"
+            },
+            "value": {
+              "type": "string",
+              "pattern": "^-?\\d+$"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "bool"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "unary"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "not",
+                "neg"
+              ]
+            },
+            "arg": {
+              "$ref": "#/$defs/__schema0"
+            }
+          },
+          "required": [
+            "kind",
+            "op",
+            "arg"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "binary"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "+",
+                "-",
+                "*",
+                "div",
+                "mod",
+                "<",
+                "<=",
+                ">",
+                ">=",
+                "==",
+                "!=",
+                "and",
+                "or",
+                "implies"
+              ]
+            },
+            "left": {
+              "$ref": "#/$defs/__schema0"
+            },
+            "right": {
+              "$ref": "#/$defs/__schema0"
+            }
+          },
+          "required": [
+            "kind",
+            "op",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ite"
+            },
+            "cond": {
+              "$ref": "#/$defs/__schema0"
+            },
+            "whenTrue": {
+              "$ref": "#/$defs/__schema0"
+            },
+            "whenFalse": {
+              "$ref": "#/$defs/__schema0"
+            }
+          },
+          "required": [
+            "kind",
+            "cond",
+            "whenTrue",
+            "whenFalse"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "call"
+            },
+            "fn": {
+              "type": "string",
+              "minLength": 1
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema0"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "fn",
+            "args"
+          ]
+        }
+      ]
+    }
+  }
+}

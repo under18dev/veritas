@@ -1,0 +1,313 @@
+{
+  "$id": "https://veritas.invalid/schemas/run.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "command": {
+      "type": "string"
+    },
+    "args": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "profile": {
+      "type": "string",
+      "enum": [
+        "quick",
+        "standard",
+        "deep"
+      ]
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "since": {
+          "type": "string"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "root",
+        "paths"
+      ]
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "finishedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "succeeded",
+        "failed",
+        "partial",
+        "skipped",
+        "unsupported",
+        "error",
+        "cancelled"
+      ]
+    },
+    "exitCode": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4
+    },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "index",
+              "discover",
+              "analyze",
+              "spec",
+              "map",
+              "mutate",
+              "pbt",
+              "prove",
+              "assess",
+              "improve",
+              "report"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "failed",
+              "partial",
+              "skipped",
+              "unsupported",
+              "error",
+              "cancelled"
+            ]
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "durationMs": {
+            "type": "number",
+            "minimum": 0
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "llmTokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "solverMs": {
+                "type": "number",
+                "minimum": 0
+              },
+              "mutants": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "testRuns": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "llmTokens",
+              "solverMs",
+              "mutants",
+              "testRuns"
+            ]
+          }
+        },
+        "required": [
+          "stage",
+          "status",
+          "startedAt",
+          "finishedAt",
+          "durationMs",
+          "artifacts",
+          "messages",
+          "usage"
+        ]
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "node",
+              "git",
+              "package_manager",
+              "typescript",
+              "vitest",
+              "mutator",
+              "fast_check",
+              "z3",
+              "lean",
+              "llm",
+              "network",
+              "sandbox"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "available",
+              "degraded",
+              "unavailable",
+              "disabled"
+            ]
+          },
+          "version": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "affects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "state",
+          "detail",
+          "affects"
+        ]
+      }
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "os": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "node": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "os",
+        "arch",
+        "node"
+      ]
+    },
+    "seeds": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": [
+          "number",
+          "string"
+        ]
+      }
+    },
+    "usage": {
+      "type": "object",
+      "properties": {
+        "llmTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "solverMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "mutants": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "testRuns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "llmTokens",
+        "solverMs",
+        "mutants",
+        "testRuns"
+      ]
+    },
+    "replay": {
+      "type": "string"
+    },
+    "partial": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "id",
+    "command",
+    "args",
+    "scope",
+    "startedAt",
+    "status",
+    "stages",
+    "capabilities",
+    "environment",
+    "seeds",
+    "usage",
+    "replay",
+    "partial"
+  ]
+}

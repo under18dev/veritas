@@ -1,0 +1,51 @@
+{
+  "$id": "https://veritas.invalid/schemas/capability.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "enum": [
+        "node",
+        "git",
+        "package_manager",
+        "typescript",
+        "vitest",
+        "mutator",
+        "fast_check",
+        "z3",
+        "lean",
+        "llm",
+        "network",
+        "sandbox"
+      ]
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "available",
+        "degraded",
+        "unavailable",
+        "disabled"
+      ]
+    },
+    "version": {
+      "type": "string"
+    },
+    "detail": {
+      "type": "string"
+    },
+    "affects": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "name",
+    "state",
+    "detail",
+    "affects"
+  ]
+}

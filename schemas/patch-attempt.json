@@ -1,0 +1,167 @@
+{
+  "$id": "https://veritas.invalid/schemas/patch-attempt.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "planId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "approvalId": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "workspace": {
+      "type": "string"
+    },
+    "patch": {
+      "type": "string"
+    },
+    "before": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "testsPassed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "testsFailed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "mutantsKilled": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "mutantsSurvived": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "claimStatuses": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "testsPassed",
+            "testsFailed",
+            "mutantsKilled",
+            "mutantsSurvived",
+            "claimStatuses"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "after": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "testsPassed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "testsFailed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "mutantsKilled": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "mutantsSurvived": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "claimStatuses": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "testsPassed",
+            "testsFailed",
+            "mutantsKilled",
+            "mutantsSurvived",
+            "claimStatuses"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rolledBack": {
+      "type": "boolean"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "improved",
+        "no_safe_improvement",
+        "needs_spec_decision",
+        "blocked",
+        "error"
+      ]
+    },
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "implementationFixProposalId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    }
+  },
+  "required": [
+    "id",
+    "planId",
+    "approvalId",
+    "workspace",
+    "patch",
+    "before",
+    "after",
+    "rolledBack",
+    "outcome",
+    "reasons"
+  ]
+}

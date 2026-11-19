@@ -1,0 +1,126 @@
+{
+  "$id": "https://veritas.invalid/schemas/mutant.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "backendKey": {
+      "type": "string"
+    },
+    "location": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "range": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "end": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ]
+        }
+      },
+      "required": [
+        "file"
+      ]
+    },
+    "operator": {
+      "type": "string"
+    },
+    "original": {
+      "type": "string"
+    },
+    "replacement": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "killed",
+        "survived",
+        "timeout",
+        "compile_error",
+        "runtime_error",
+        "ignored",
+        "no_coverage",
+        "pending",
+        "unknown",
+        "suspected_equivalent",
+        "equivalent_proven"
+      ]
+    },
+    "statusReason": {
+      "type": "string"
+    },
+    "killedBy": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "coveredBy": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "propertyIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "relevance": {
+      "type": "string",
+      "enum": [
+        "spec_relevant",
+        "unrelated",
+        "unknown"
+      ]
+    },
+    "durationMs": {
+      "type": "number",
+      "minimum": 0
+    },
+    "reproduction": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "backendKey",
+    "location",
+    "operator",
+    "original",
+    "replacement",
+    "status",
+    "killedBy",
+    "coveredBy",
+    "propertyIds",
+    "relevance",
+    "reproduction"
+  ]
+}
