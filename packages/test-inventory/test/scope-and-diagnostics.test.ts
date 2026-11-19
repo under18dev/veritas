@@ -1,4 +1,8 @@
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { VeritasConfig } from '@under18dev/veritas-core';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { inventoryTests } from '../src/index.js';
 import { tempProject } from './helpers.js';
@@ -32,5 +36,33 @@ describe('scope and diagnostics', () => {
 
     expect(testCase.calledSymbols).toEqual([]);
     expect(testCase.targetCalls).toEqual([]);
+  });
+});
+
+describe('tsconfig containment', () => {
+  it('reads no configuration outside the project root', () => {
+    const parent = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-inventory-parent-')));
+    writeFileSync(path.join(parent, 'tsconfig.json'), '{ "compilerOptions": {} }');
+    writeFileSync(path.join(parent, 'base.json'), '{ "compilerOptions": {} }');
+    const root = path.join(parent, 'project');
+    mkdirSync(path.join(root, 'test'), { recursive: true });
+    writeFileSync(path.join(root, 'test/a.test.ts'), "import { it } from 'vitest';\nit('a', () => {});\n");
+    const read: string[] = [];
+    const original = ts.sys.readFile;
+    ts.sys.readFile = (name, encoding) => {
+      read.push(path.resolve(name));
+      return original(name, encoding);
+    };
+    try {
+      // No tsconfig in the root: the parent's must not be picked up.
+      inventoryTests({ root, config: VeritasConfig.parse({}) });
+      writeFileSync(path.join(root, 'tsconfig.json'), JSON.stringify({ extends: '../base.json' }));
+      inventoryTests({ root, config: VeritasConfig.parse({ project: { tsconfig: 'tsconfig.json' } }) });
+      inventoryTests({ root, config: VeritasConfig.parse({ project: { tsconfig: '../tsconfig.json' } }) });
+    } finally {
+      ts.sys.readFile = original;
+    }
+    expect(read.filter((f) => f.startsWith(parent + path.sep) && !f.startsWith(root + path.sep))).toEqual([]);
+    expect(read).toContain(path.join(root, 'tsconfig.json'));
   });
 });

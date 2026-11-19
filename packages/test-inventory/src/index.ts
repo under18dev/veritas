@@ -707,24 +707,35 @@ function expandBraces(pattern: string): string[] {
     .split(',')
     .flatMap((part) => expandBraces(`${pattern.slice(0, start)}${part}${pattern.slice(end + 1)}`));
 }
+const DEFAULT_COMPILER_OPTIONS: ts.CompilerOptions = {
+  module: ts.ModuleKind.NodeNext,
+  moduleResolution: ts.ModuleResolutionKind.NodeNext,
+  target: ts.ScriptTarget.ES2024,
+  allowJs: true,
+};
+
+/**
+ * Compiler options from the project's tsconfig. Only files inside the root are read: a configured tsconfig
+ * outside it (or behind a link leaving it), an `extends` base outside it and parent directories are ignored.
+ */
 function readCompilerOptions(root: string, config: VeritasConfig): ts.CompilerOptions {
-  const configFile = config.project.tsconfig
-    ? path.resolve(root, config.project.tsconfig)
-    : ts.findConfigFile(root, ts.sys.fileExists, 'tsconfig.json');
-  if (!configFile)
-    return {
-      module: ts.ModuleKind.NodeNext,
-      moduleResolution: ts.ModuleResolutionKind.NodeNext,
-      target: ts.ScriptTarget.ES2024,
-      allowJs: true,
-    };
+  const inside = (name: string) => {
+    try {
+      resolveInsideRoot(root, name);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const configFile = path.resolve(root, config.project.tsconfig ?? 'tsconfig.json');
+  if (!inside(configFile) || !ts.sys.fileExists(configFile)) return DEFAULT_COMPILER_OPTIONS;
   const parsed = ts.readConfigFile(configFile, ts.sys.readFile);
-  if (parsed.error)
-    return {
-      module: ts.ModuleKind.NodeNext,
-      moduleResolution: ts.ModuleResolutionKind.NodeNext,
-      target: ts.ScriptTarget.ES2024,
-      allowJs: true,
-    };
-  return ts.parseJsonConfigFileContent(parsed.config, ts.sys, path.dirname(configFile)).options;
+  if (parsed.error) return DEFAULT_COMPILER_OPTIONS;
+  const host: ts.ParseConfigHost = {
+    useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
+    readDirectory: (dir, ...rest) => (inside(dir) ? ts.sys.readDirectory(dir, ...rest) : []),
+    fileExists: (name) => inside(name) && ts.sys.fileExists(name),
+    readFile: (name) => (inside(name) ? ts.sys.readFile(name) : undefined),
+  };
+  return ts.parseJsonConfigFileContent(parsed.config, host, path.dirname(configFile)).options;
 }
