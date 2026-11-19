@@ -20,7 +20,8 @@ import {
   solveSmtLib,
 } from '@under18dev/veritas-solver-z3';
 import { z } from 'zod';
-import { callModel, type IRValue } from './interpret.js';
+import { callModel, type IRValue, shapeArguments } from './interpret.js';
+import { outOfBoundsProperty, shapeInput } from './shapes.js';
 
 /** Connects an IR function model to the real JavaScript export it models, so results can be replayed. */
 export interface Binding {
@@ -103,11 +104,24 @@ async function replay(
     const argLists = inputs.map((input) => model.params.map((p) => input[p.name] ?? null));
     const runnable = argLists.filter((args) => args.every((a) => a !== null)) as (string | boolean)[][];
     if (runnable.length === 0) continue;
+    // Records and arrays are rebuilt from their flattened model parameters.
+    const jsCall = (args: (string | boolean)[]): EncodedValue[] =>
+      shapeArguments(
+        model,
+        new Map(model.params.map((p, j) => [p.name, args[j] as string | boolean])),
+        encodeInput,
+        (v) => Number(v),
+      ).map((a, j): EncodedValue => {
+        const kind = model.jsParams?.[j]?.kind ?? 'scalar';
+        if (kind === 'array') return { t: 'array', v: a as EncodedValue[] };
+        if (kind === 'record') return { t: 'object', v: a as Record<string, EncodedValue> };
+        return a as EncodedValue;
+      });
     const sandbox = await callInSandbox({
       root: options.root,
       modulePath: binding.modulePath,
       exportName: binding.exportName,
-      calls: runnable.map((args) => args.map(encodeInput)),
+      calls: runnable.map(jsCall),
       timeoutMs: Math.max(5_000, options.timeoutMs),
       signal: options.signal,
       allowNetworkWithoutIsolation: options.allowNetworkWithoutIsolation ?? false,
@@ -349,6 +363,29 @@ export async function proveProperty(options: ProveOptions): Promise<ProveResult>
         assumptions.push('every intermediate integer stays in the safe-integer range (checked by solver)');
       }
     }
+    const bounds = status === 'proven_within_model' ? outOfBoundsProperty(options.ir) : null;
+    if (bounds) {
+      // Reading an element at or beyond an array's length gives undefined in JavaScript, which the model does
+      // not describe: the result only holds if no input in the domain can do that.
+      const boundsSmt = conformanceQuery(bounds, options.timeoutMs);
+      const run = await solve(boundsSmt, options, options.timeoutMs * 2 + 5_000);
+      options.store?.writeText(`proofs/${claimId}.bounds.smt2`, boundsSmt);
+      options.store?.writeText(
+        `proofs/${claimId}.bounds.out`,
+        `; verdict ${run.verdict}\n${cacheNote(run)}${run.output}`,
+      );
+      if (run.verdict === 'sat') {
+        status = 'unsupported';
+        semanticGaps.push(
+          `an array element can be read at or beyond the array's length (undefined in JavaScript) for input ${JSON.stringify(shapeInput(options.ir, run.model))}`,
+        );
+      } else if (run.verdict !== 'unsat') {
+        status = 'unknown';
+        semanticGaps.push(`the array bounds obligation was not decided (${run.verdict})`);
+      } else {
+        assumptions.push('no array element is read at or beyond the array length (checked by solver)');
+      }
+    }
     if (status === 'proven_within_model') {
       replays.push(...(await replay('differential', differentialInputs(options.ir), options)));
       const checked = replays.filter((r) => r.agrees !== null);
@@ -370,7 +407,7 @@ export async function proveProperty(options: ProveOptions): Promise<ProveResult>
 
   const counterexample =
     status === 'counterexample_found' || (status === 'semantic_mismatch' && solver.verdict === 'sat')
-      ? solver.model
+      ? shapeInput(options.ir, solver.model)
       : undefined;
   const claim: FormalClaim = {
     id: claimId,

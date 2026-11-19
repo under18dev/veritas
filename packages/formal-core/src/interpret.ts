@@ -90,3 +90,29 @@ export function callModel(model: FunctionModel, args: IRValue[], functions: Func
 export function toLiteral(v: IRValue): Expr {
   return typeof v === 'bigint' ? { kind: 'int', value: v.toString() } : { kind: 'bool', value: v };
 }
+
+/**
+ * Rebuild the JavaScript arguments of `model` from its flattened parameter values: records become objects,
+ * arrays become arrays of their modelled length (slots at or beyond it are dropped). Leaves are passed through
+ * `leaf`; `length` reads an array length value. Models without `jsParams` take their parameters in order.
+ */
+export function shapeArguments<T, L>(
+  model: FunctionModel,
+  values: Map<string, T>,
+  leaf: (value: T) => L,
+  length: (value: T) => number,
+): (L | Record<string, L> | L[])[] {
+  const get = (name: string): T => {
+    if (!values.has(name)) throw new Error(`no value for ${name}`);
+    return values.get(name) as T;
+  };
+  if (!model.jsParams) return model.params.map((p) => leaf(get(p.name)));
+  return model.jsParams.map((p) => {
+    if (p.kind === 'scalar') return leaf(get(p.param));
+    if (p.kind === 'record') return Object.fromEntries(p.fields.map((f) => [f.key, leaf(get(f.param))]));
+    const n = length(get(p.length));
+    if (!Number.isInteger(n) || n < 0 || n > p.elements.length)
+      throw new Error(`invalid length ${n} for ${p.name}`);
+    return p.elements.slice(0, n).map((e) => leaf(get(e)));
+  });
+}

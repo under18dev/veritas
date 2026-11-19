@@ -2,6 +2,7 @@ import {
   type Expr,
   type FunctionModel,
   type IntDomain,
+  type JsParam,
   type Param,
   type Sort,
   symbolId,
@@ -28,7 +29,12 @@ export interface TranslateOptions {
   domain: IntDomain;
   /** Name given to the model in the IR (defaults to the export name). */
   modelName?: string;
+  /** Element slots modelled for an array parameter (its length ranges over [0, maxArrayLength]). Default 3. */
+  maxArrayLength?: number;
 }
+
+/** Separator between a record or array parameter and its field or slot in the flattened model parameters. */
+export const FLAT_SEPARATOR = '__';
 
 class Unsupported extends Error {
   constructor(
@@ -72,6 +78,83 @@ function sortOfType(node: ts.TypeNode | undefined, what: string, owner: ts.Node)
   throw new Unsupported(node ?? owner, 'type', `${what} must be annotated as number or boolean`);
 }
 
+type ParamShape =
+  | { kind: 'scalar'; sort: Sort }
+  | { kind: 'record'; fields: { key: string; sort: Sort }[] }
+  | { kind: 'array'; sort: Sort };
+
+/** Members of an object type literal or interface; every member must be a number or boolean property. */
+function recordFields(
+  members: ts.NodeArray<ts.TypeElement>,
+  what: string,
+  owner: ts.Node,
+): { key: string; sort: Sort }[] {
+  const fields = members.map((m) => {
+    if (!ts.isPropertySignature(m) || !m.name || !(ts.isIdentifier(m.name) || ts.isStringLiteral(m.name)))
+      throw new Unsupported(m, 'record', `${what}: only named number or boolean properties are supported`);
+    if (m.questionToken)
+      throw new Unsupported(m, 'record', `${what}: optional property ${m.name.text} can be undefined`);
+    if (!/^[A-Za-z_$][\w$]*$/.test(m.name.text))
+      throw new Unsupported(m, 'record', `${what}: property name ${m.name.text} is not a plain identifier`);
+    return { key: m.name.text, sort: sortOfType(m.type, `${what}.${m.name.text}`, m) };
+  });
+  if (fields.length === 0) throw new Unsupported(owner, 'record', `${what} has no properties`);
+  return fields;
+}
+
+/**
+ * The shape of a parameter type: number, boolean, a record of number/boolean properties (type literal, or an
+ * interface or type alias declared in the same file) or an array of numbers or booleans.
+ */
+function shapeOfType(
+  node: ts.TypeNode | undefined,
+  what: string,
+  owner: ts.Node,
+  sf: ts.SourceFile,
+): ParamShape {
+  if (!node) throw new Unsupported(owner, 'type', `${what} must have a type annotation`);
+  if (node.kind === ts.SyntaxKind.NumberKeyword) return { kind: 'scalar', sort: 'int' };
+  if (node.kind === ts.SyntaxKind.BooleanKeyword) return { kind: 'scalar', sort: 'bool' };
+  if (ts.isParenthesizedTypeNode(node)) return shapeOfType(node.type, what, owner, sf);
+  if (ts.isTypeOperatorNode(node) && node.operator === ts.SyntaxKind.ReadonlyKeyword)
+    return shapeOfType(node.type, what, owner, sf);
+  if (ts.isArrayTypeNode(node))
+    return { kind: 'array', sort: sortOfType(node.elementType, `elements of ${what}`, node) };
+  if (ts.isTypeLiteralNode(node)) return { kind: 'record', fields: recordFields(node.members, what, node) };
+  if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
+    const name = node.typeName.text;
+    if ((name === 'Array' || name === 'ReadonlyArray') && node.typeArguments?.length === 1)
+      return { kind: 'array', sort: sortOfType(node.typeArguments[0], `elements of ${what}`, node) };
+    if (name === 'Readonly' && node.typeArguments?.length === 1)
+      return shapeOfType(node.typeArguments[0], what, owner, sf);
+    if (!node.typeArguments) {
+      for (const stmt of sf.statements) {
+        if (ts.isInterfaceDeclaration(stmt) && stmt.name.text === name) {
+          if (stmt.heritageClauses?.length || stmt.typeParameters?.length)
+            throw new Unsupported(stmt, 'record', `interface ${name} extends or is generic`);
+          return { kind: 'record', fields: recordFields(stmt.members, what, stmt) };
+        }
+        if (ts.isTypeAliasDeclaration(stmt) && stmt.name.text === name && !stmt.typeParameters) {
+          return shapeOfType(stmt.type, what, stmt, sf);
+        }
+      }
+    }
+  }
+  throw new Unsupported(
+    node,
+    'type',
+    `${what} must be number, boolean, a record of number/boolean properties or an array of numbers or booleans`,
+  );
+}
+
+/** A record or array parameter: what its fields, length and element slots are called in the model. */
+type Aggregate =
+  | { kind: 'record'; name: string; fields: Map<string, { param: string; sort: Sort }> }
+  | { kind: 'array'; name: string; length: string; elements: string[]; sort: Sort };
+
+const and = (left: Expr, right: Expr): Expr => ({ kind: 'binary', op: 'and', left, right });
+const not = (arg: Expr): Expr => ({ kind: 'unary', op: 'not', arg });
+
 /** Find an exported function declaration or exported `const name = (...) => ...`. */
 function findFunction(sf: ts.SourceFile, name: string): ts.FunctionLikeDeclaration | null {
   for (const stmt of sf.statements) {
@@ -95,6 +178,20 @@ interface Scope {
   paramSorts: Map<string, Sort>;
   functions: Map<string, FunctionModel>;
   translateCallee: (name: string) => FunctionModel;
+  /** Record and array parameters still visible (not shadowed by a local constant). */
+  aggregates: Map<string, Aggregate>;
+  /** Conditions known to hold where the expression is evaluated (if/ternary branches, `&&`/`||` operands). */
+  path: Expr[];
+  /** Collects, per element read, the condition under which it reads at or beyond the array's length. */
+  outOfBounds: Expr[];
+}
+
+function pathCondition(path: Expr[]): Expr {
+  return path.reduce((a, b) => and(a, b), { kind: 'bool', value: true } as Expr);
+}
+
+function aggregateOf(node: ts.Expression, scope: Scope): Aggregate | undefined {
+  return ts.isIdentifier(node) ? scope.aggregates.get(node.text) : undefined;
 }
 
 function expr(node: ts.Expression, scope: Scope): Expr {
@@ -115,6 +212,12 @@ function expr(node: ts.Expression, scope: Scope): Expr {
     if (node.text === 'NaN' || node.text === 'Infinity' || node.text === 'undefined') {
       throw new Unsupported(node, node.text, `${node.text} is not an integer or boolean`);
     }
+    if (scope.aggregates.has(node.text))
+      throw new Unsupported(
+        node,
+        'record/array',
+        `${node.text} can only be read by property, .length or a literal index (passing, returning or copying it is not supported)`,
+      );
     const bound = scope.vars.get(node.text);
     if (!bound)
       throw new Unsupported(
@@ -151,14 +254,19 @@ function expr(node: ts.Expression, scope: Scope): Expr {
         ts.tokenToString(kind) ?? 'operator',
         'operator is not supported (assignment or bitwise)',
       );
-    return { kind: 'binary', op, left: expr(node.left, scope), right: expr(node.right, scope) };
+    const left = expr(node.left, scope);
+    // The right operand of && / || is only evaluated when the left one is true / false.
+    const rightPath =
+      op === 'and' ? [...scope.path, left] : op === 'or' ? [...scope.path, not(left)] : scope.path;
+    return { kind: 'binary', op, left, right: expr(node.right, { ...scope, path: rightPath }) };
   }
   if (ts.isConditionalExpression(node)) {
+    const cond = expr(node.condition, scope);
     return {
       kind: 'ite',
-      cond: expr(node.condition, scope),
-      whenTrue: expr(node.whenTrue, scope),
-      whenFalse: expr(node.whenFalse, scope),
+      cond,
+      whenTrue: expr(node.whenTrue, { ...scope, path: [...scope.path, cond] }),
+      whenFalse: expr(node.whenFalse, { ...scope, path: [...scope.path, not(cond)] }),
     };
   }
   if (ts.isCallExpression(node)) {
@@ -170,14 +278,53 @@ function expr(node: ts.Expression, scope: Scope): Expr {
       );
     }
     const callee = scope.translateCallee(node.expression.text);
+    if (callee.jsParams?.some((p) => p.kind !== 'scalar'))
+      throw new Unsupported(
+        node,
+        'call',
+        `${node.expression.text} takes a record or array parameter; such calls are not supported`,
+      );
     return { kind: 'call', fn: callee.name, args: node.arguments.map((a) => expr(a, scope)) };
   }
   if (ts.isAwaitExpression(node)) throw new Unsupported(node, 'await', 'asynchronous code is not supported');
+  if (ts.isPropertyAccessExpression(node) && !node.questionDotToken) {
+    const target = aggregateOf(node.expression, scope);
+    const key = node.name.text;
+    if (target?.kind === 'record') {
+      const field = target.fields.get(key);
+      if (field) return { kind: 'var', name: field.param };
+    }
+    if (target?.kind === 'array' && key === 'length') return { kind: 'var', name: target.length };
+  }
+  if (ts.isElementAccessExpression(node) && !node.questionDotToken) {
+    const target = aggregateOf(node.expression, scope);
+    const index = node.argumentExpression;
+    if (target?.kind === 'array' && ts.isNumericLiteral(index) && /^\d+$/.test(index.text)) {
+      const k = Number(index.text);
+      const slot = target.elements[k];
+      if (slot === undefined)
+        throw new Unsupported(
+          node,
+          'element access',
+          `index ${k} is beyond the ${target.elements.length} element slot(s) modelled for ${target.name} (formal.maxArrayLength)`,
+        );
+      // Reading at or beyond the length gives undefined in JavaScript: record where that can happen.
+      scope.outOfBounds.push(
+        and(pathCondition(scope.path), {
+          kind: 'binary',
+          op: '<=',
+          left: { kind: 'var', name: target.length },
+          right: { kind: 'int', value: String(k) },
+        }),
+      );
+      return { kind: 'var', name: slot };
+    }
+  }
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
     throw new Unsupported(
       node,
       'property access',
-      `${node.getText(scope.sf)} is outside the supported subset`,
+      `${node.getText(scope.sf)} is outside the supported subset (only fields of record parameters, .length and literal indexes of array parameters)`,
     );
   }
   throw new Unsupported(
@@ -199,6 +346,7 @@ function statements(stmts: readonly ts.Statement[], scope: Scope, owner: ts.Node
   if (ts.isBlock(first)) return statements([...first.statements, ...rest], scope, owner);
   if (ts.isIfStatement(first)) {
     const cond = expr(first.expression, scope);
+    const negated = not(cond);
     const thenStmts = ts.isBlock(first.thenStatement)
       ? [...first.thenStatement.statements]
       : [first.thenStatement];
@@ -210,8 +358,16 @@ function statements(stmts: readonly ts.Statement[], scope: Scope, owner: ts.Node
     return {
       kind: 'ite',
       cond,
-      whenTrue: statements([...thenStmts, ...rest], { ...scope, vars: new Map(scope.vars) }, first),
-      whenFalse: statements([...elseStmts, ...rest], { ...scope, vars: new Map(scope.vars) }, first),
+      whenTrue: statements(
+        [...thenStmts, ...rest],
+        { ...scope, vars: new Map(scope.vars), path: [...scope.path, cond] },
+        first,
+      ),
+      whenFalse: statements(
+        [...elseStmts, ...rest],
+        { ...scope, vars: new Map(scope.vars), path: [...scope.path, negated] },
+        first,
+      ),
     };
   }
   if (ts.isVariableStatement(first)) {
@@ -219,12 +375,15 @@ function statements(stmts: readonly ts.Statement[], scope: Scope, owner: ts.Node
       throw new Unsupported(first, 'let/var', 'mutable variables are not supported; use const');
     }
     const vars = new Map(scope.vars);
+    const aggregates = new Map(scope.aggregates);
     for (const decl of first.declarationList.declarations) {
       if (!ts.isIdentifier(decl.name) || !decl.initializer)
         throw new Unsupported(decl, 'declaration', 'destructuring or uninitialised const');
-      vars.set(decl.name.text, expr(decl.initializer, { ...scope, vars }));
+      vars.set(decl.name.text, expr(decl.initializer, { ...scope, vars, aggregates }));
+      // A local constant shadows a record or array parameter of the same name.
+      aggregates.delete(decl.name.text);
     }
-    return statements(rest, { ...scope, vars }, owner);
+    return statements(rest, { ...scope, vars, aggregates }, owner);
   }
   if (ts.isEmptyStatement(first)) return statements(rest, scope, owner);
   const construct = ts.SyntaxKind[first.kind];
@@ -252,6 +411,11 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
   const models = new Map<string, FunctionModel>();
   const inProgress = new Set<string>();
   const rootModel = options.modelName ?? options.exportName;
+  const maxArrayLength = options.maxArrayLength ?? 3;
+  if (!Number.isInteger(maxArrayLength) || maxArrayLength < 1 || maxArrayLength > 8)
+    throw new RangeError('maxArrayLength must be an integer from 1 to 8');
+  /** Array length parameters: their domain is [0, maxArrayLength], not the integer domain. */
+  const lengths = new Set<string>();
   const line = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
 
   const translateNamed = (name: string, modelName: string): FunctionModel => {
@@ -266,18 +430,58 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
     inProgress.add(name);
     const paramSorts = new Map<string, Sort>();
     const vars = new Map<string, Expr>();
-    const params = fn.parameters.map((p) => {
+    const aggregates = new Map<string, Aggregate>();
+    const params: { name: string; sort: Sort }[] = [];
+    const jsParams: JsParam[] = [];
+    const jsNames = new Set(fn.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : '')));
+    const flat = (owner: ts.Node, base: string, part: string) => {
+      const flatName = `${base}${FLAT_SEPARATOR}${part}`;
+      if (jsNames.has(flatName) || params.some((q) => q.name === flatName))
+        throw new Unsupported(
+          owner,
+          'parameter',
+          `parameter name ${flatName} collides with a flattened field`,
+        );
+      return flatName;
+    };
+    for (const p of fn.parameters) {
       if (!ts.isIdentifier(p.name))
         throw new Unsupported(p, 'destructuring', 'destructured parameters are not supported');
       if (p.questionToken || p.initializer || p.dotDotDotToken) {
         throw new Unsupported(p, 'parameter', 'optional, default and rest parameters can be undefined');
       }
-      const sort = sortOfType(p.type, `parameter ${p.name.text}`, p);
-      paramSorts.set(p.name.text, sort);
-      vars.set(p.name.text, { kind: 'var', name: p.name.text });
-      return { name: p.name.text, sort };
-    });
+      const pname = p.name.text;
+      const shape = shapeOfType(p.type, `parameter ${pname}`, p, sf);
+      if (shape.kind === 'scalar') {
+        paramSorts.set(pname, shape.sort);
+        vars.set(pname, { kind: 'var', name: pname });
+        params.push({ name: pname, sort: shape.sort });
+        jsParams.push({ kind: 'scalar', name: pname, param: pname });
+      } else if (shape.kind === 'record') {
+        const fields = new Map<string, { param: string; sort: Sort }>();
+        for (const f of shape.fields) {
+          const param = flat(p, pname, f.key);
+          fields.set(f.key, { param, sort: f.sort });
+          params.push({ name: param, sort: f.sort });
+        }
+        aggregates.set(pname, { kind: 'record', name: pname, fields });
+        jsParams.push({
+          kind: 'record',
+          name: pname,
+          fields: [...fields].map(([key, f]) => ({ key, param: f.param })),
+        });
+      } else {
+        const length = flat(p, pname, 'length');
+        const elements = Array.from({ length: maxArrayLength }, (_, i) => flat(p, pname, String(i)));
+        params.push({ name: length, sort: 'int' });
+        for (const e of elements) params.push({ name: e, sort: shape.sort });
+        lengths.add(length);
+        aggregates.set(pname, { kind: 'array', name: pname, length, elements, sort: shape.sort });
+        jsParams.push({ kind: 'array', name: pname, length, elements });
+      }
+    }
     const returns = sortOfType(fn.type, `return type of ${name}`, fn);
+    const outOfBounds: Expr[] = [];
     const scope: Scope = {
       sf,
       vars,
@@ -285,6 +489,9 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
       functions: models,
       // Callees are namespaced per root model so an original and a mutant can coexist in one query.
       translateCallee: (callee) => translateNamed(callee, `${rootModel}__${callee}`),
+      aggregates,
+      path: [],
+      outOfBounds,
     };
     const body = fn.body
       ? ts.isBlock(fn.body)
@@ -300,6 +507,8 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
       params,
       returns,
       body,
+      ...(jsParams.some((p) => p.kind !== 'scalar') ? { jsParams } : {}),
+      ...(outOfBounds.length ? { outOfBounds } : {}),
     };
     models.set(modelName, model);
     return model;
@@ -322,7 +531,13 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
     throw error;
   }
   const params: Param[] = model.params.map((p) =>
-    p.sort === 'int' ? { name: p.name, sort: 'int', domain: options.domain } : { name: p.name, sort: 'bool' },
+    p.sort === 'bool'
+      ? { name: p.name, sort: 'bool' }
+      : {
+          name: p.name,
+          sort: 'int',
+          domain: lengths.has(p.name) ? { min: '0', max: String(maxArrayLength) } : options.domain,
+        },
   );
   const dependencies = [...models.values()].filter((m) => m !== model);
   return { status: 'translated', model, params, dependencies };

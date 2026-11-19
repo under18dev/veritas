@@ -30,7 +30,14 @@ Distinguishability uses only calls whose arguments are all integer or boolean li
 
 - Pure functions with no side effects, I/O, async, `this`, closures over mutable state, `eval` or `Proxy`.
 - Parameters and results that are booleans or integers. Integer parameters must have an explicit bounded domain inside the safe-integer range (default `[-10000, 10000]`).
+- Parameters that are records of integer and boolean properties, or arrays of integers or booleans with at most `formal.maxArrayLength` (default 3, at most 8) elements. Results stay integers or booleans.
 - Comparison, integer `+ - *`, logical operators, `if`/`else`, ternaries and conditional `return`.
+
+## Records and arrays
+
+Records and arrays are flattened into scalar model parameters: the field `order.total` becomes `order__total`, and an array `xs` becomes a length `xs__length` in `[0, maxArrayLength]` plus one parameter per element slot (`xs__0`, `xs__1`, ...). Slots at or beyond the length are not part of the JavaScript value. Counterexamples are shown, and replayed in JavaScript, in the shape of the original arguments (`{"order":{"total":"1000","vip":false}}`, `{"xs":["7"]}`).
+
+Reading `xs[k]` when `k >= xs.length` gives `undefined` in JavaScript, which the model does not describe. Every element read records the condition under which it is out of bounds (taking `if`, ternary, `&&` and `||` guards into account), and a property is only `proven_within_model` when the solver shows that no input in the domain satisfying the preconditions can reach such a read. Otherwise the claim is `unsupported`, with an input that reads beyond the length; an undecided check gives `unknown`. Arrays longer than `maxArrayLength` are not covered.
 
 ## JavaScript numbers versus the integer model
 

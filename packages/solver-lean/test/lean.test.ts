@@ -78,6 +78,26 @@ function project(source: string): string {
 }
 
 describe('irToLean', () => {
+  it('refuses records and arrays instead of emitting a theorem that does not describe them', () => {
+    const source =
+      'export function pay(order: { total: number }): number {\n  return order.total >= 1000 ? 100 : 0;\n}\n';
+    const t = translateFunction({
+      file: 'src/o.ts',
+      source,
+      exportName: 'pay',
+      domain: { min: '-10', max: '10' },
+    });
+    if (t.status !== 'translated') throw new Error(JSON.stringify(t));
+    const ir = thresholdProperty({
+      implementation: t,
+      param: 'order__total',
+      operator: '>=',
+      value: '5',
+      whenTrue: '100',
+    });
+    expect(() => irToLean(ir, { theoremName: 'pay_rule' })).toThrow(/record or array/);
+  });
+
   it('emits defs over Int/Bool, exact literals and the bounded theorem, deterministically', () => {
     const ir = discountIR('candidates/pricing-fixed.ts');
     const a = irToLean(ir, { theoremName: 'discount_rule' });

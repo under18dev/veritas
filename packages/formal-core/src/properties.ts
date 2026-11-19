@@ -11,8 +11,10 @@ function callOf(t: Translated): Expr {
   return { kind: 'call', fn: t.model.name, args: t.params.map((p) => v(p.name)) };
 }
 
-function withDomain(params: Param[], domain?: IntDomain): Param[] {
-  return params.map((p) => (p.sort === 'int' && domain ? { ...p, domain } : p));
+/** Apply the integer domain to every integer parameter except array lengths, which keep [0, maxArrayLength]. */
+function withDomain(params: Param[], domain: IntDomain | undefined, model: FunctionModel): Param[] {
+  const lengths = new Set((model.jsParams ?? []).flatMap((p) => (p.kind === 'array' ? [p.length] : [])));
+  return params.map((p) => (p.sort === 'int' && domain && !lengths.has(p.name) ? { ...p, domain } : p));
 }
 
 /**
@@ -61,7 +63,7 @@ export function thresholdProperty(options: {
         };
   return {
     irVersion: 1,
-    params: withDomain(impl.params, options.domain),
+    params: withDomain(impl.params, options.domain, impl.model),
     preconditions: [],
     functions: [...impl.dependencies, impl.model],
     body,
@@ -84,7 +86,7 @@ export function equivalenceProperty(a: Translated, b: Translated, domain?: IntDo
   });
   return {
     irVersion: 1,
-    params: withDomain(a.params, domain),
+    params: withDomain(a.params, domain, a.model),
     preconditions: [],
     functions: [...a.dependencies, a.model, ...b.dependencies, b.model],
     body: { kind: 'binary', op: '==', left: call(a), right: call(b) },

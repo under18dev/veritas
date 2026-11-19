@@ -148,6 +148,13 @@ function prepare(ir: PropertyIR, theoremName: string): Prepared {
   checkIR(ir);
   const defs: string[] = [];
   for (const f of ordered(ir.functions)) {
+    if (f.jsParams?.some((p) => p.kind !== 'scalar') || f.outOfBounds?.length) {
+      throw new VeritasError(
+        'user',
+        'IR_UNSUPPORTED',
+        `function ${f.name} takes a record or array; the Lean backend covers integer and boolean parameters only`,
+      );
+    }
     if (f.body === null) {
       throw new VeritasError(
         'user',
