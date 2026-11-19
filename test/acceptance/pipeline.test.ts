@@ -257,6 +257,30 @@ describe('discount-boundary end to end', () => {
     expect(replay.findings.map((f) => f.id).sort()).toEqual(first.findings.map((f) => f.id).sort());
   });
 
+  it('replays a prove run with the same properties, engine and scope', () => {
+    const dir = setup('discount-boundary');
+    expect(runCli(['run', '--profile', 'quick', '--json'], dir).status).toBe(0);
+    const list = json<{ properties: { id: string }[] }>(runCli(['spec', 'list', '--json'], dir));
+    const property = list.properties[0]?.id as string;
+    const first = json<RunJson>(
+      runCli(['prove', '--property', property, '--include-proposed', '--engine', 'z3', '--json'], dir),
+    );
+    const replay = json<RunJson>(runCli(['replay', first.runId, '--json'], dir));
+    const recorded = (runId: string) =>
+      JSON.parse(readFileSync(path.join(dir, '.veritas/runs', runId, 'run.json'), 'utf8')).data as {
+        options: unknown;
+        scope: { paths: string[] };
+      };
+    expect(recorded(first.runId).options).toEqual({
+      includeProposed: true,
+      propertyIds: [property],
+      formalEngine: 'z3',
+      offline: true,
+    });
+    expect(recorded(replay.runId).options).toEqual(recorded(first.runId).options);
+    expect(recorded(replay.runId).scope.paths).toEqual(recorded(first.runId).scope.paths);
+  });
+
   it('replays the run with the command shown in the rendered markdown report', () => {
     const dir = setup('discount-boundary');
     const first = json<RunJson>(runCli(['run', '--profile', 'quick', '--json'], dir));

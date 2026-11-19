@@ -99,4 +99,48 @@ describe('exit codes and output contract', () => {
     expect(runCli(['doctor', '--no-such-flag'], dir).status).toBe(2);
     expect(runCli(['prove', '--engine', 'coq'], dir).status).toBe(2);
   });
+
+  it('prints usage errors as JSON on stdout with --json', () => {
+    const dir = copyFixture('discount-boundary');
+    for (const args of [
+      ['--json', 'no-such-command'],
+      ['--json', 'prove', '--engine', 'coq'],
+    ]) {
+      const result = runCli(args, dir);
+      expect(result.status).toBe(2);
+      expect(json(result)).toMatchObject({ status: 'error', category: 'user', code: 'USAGE', exitCode: 2 });
+    }
+  });
+
+  it('rejects option values it cannot honour instead of ignoring them', () => {
+    const dir = copyFixture('discount-boundary');
+    expect(runCli(['init', '--yes'], dir).status).toBe(0);
+    const cases: [string[], string][] = [
+      [['discover', '--sources', 'bogus'], 'SOURCES_INVALID'],
+      [['discover', '--max-pages', 'abc'], 'OPTION_INVALID'],
+      [['discover', '--max-pages', '0'], 'OPTION_INVALID'],
+      [['discover', '--allow-domain', 'not a domain'], 'CONFIG_INVALID'],
+      [['analyze', 'src/no-such-file.ts'], 'PATH_NOT_FOUND'],
+      [['mutate', '--scope', 'src/no-such-dir'], 'PATH_NOT_FOUND'],
+    ];
+    for (const [args, code] of cases) {
+      const result = runCli(['--json', ...args], dir);
+      expect(result.status, args.join(' ')).toBe(2);
+      expect(json(result), args.join(' ')).toMatchObject({ status: 'error', code });
+    }
+  });
+
+  it('refuses a project root that does not exist', () => {
+    const dir = copyFixture('discount-boundary');
+    const result = runCli(['--json', '-C', path.join(dir, 'missing'), 'doctor'], dir);
+    expect(result.status).toBe(2);
+    expect(json(result)).toMatchObject({ status: 'error', code: 'ROOT_NOT_FOUND' });
+  });
+
+  it('never prints a non-JSON report format when --json is given', () => {
+    const dir = copyFixture('discount-boundary');
+    const result = runCli(['--json', 'report', '--format', 'html'], dir);
+    expect(result.status).toBe(2);
+    expect(json(result)).toMatchObject({ status: 'error', code: 'FORMAT_CONFLICT' });
+  });
 });

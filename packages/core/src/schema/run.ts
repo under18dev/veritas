@@ -68,6 +68,16 @@ export const Run = z.object({
   args: z.array(z.string()),
   profile: z.enum(['quick', 'standard', 'deep']).optional(),
   scope: z.object({ root: z.string(), since: z.string().optional(), paths: z.array(z.string()) }),
+  /** The options that select what the run verifies, so `veritas replay` can repeat exactly the same run. */
+  options: z
+    .object({
+      includeProposed: z.boolean(),
+      propertyIds: z.array(z.string()).optional(),
+      formalEngine: z.enum(['z3', 'lean']).optional(),
+      sources: z.array(z.enum(['local', 'github', 'web'])).optional(),
+      offline: z.boolean(),
+    })
+    .optional(),
   startedAt: IsoDate,
   finishedAt: IsoDate.optional(),
   status: StageStatus,

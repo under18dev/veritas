@@ -46,6 +46,45 @@
         "paths"
       ]
     },
+    "options": {
+      "type": "object",
+      "properties": {
+        "includeProposed": {
+          "type": "boolean"
+        },
+        "propertyIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "formalEngine": {
+          "type": "string",
+          "enum": [
+            "z3",
+            "lean"
+          ]
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "local",
+              "github",
+              "web"
+            ]
+          }
+        },
+        "offline": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "includeProposed",
+        "offline"
+      ]
+    },
     "startedAt": {
       "type": "string",
       "format": "date-time",

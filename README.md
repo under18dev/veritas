@@ -59,9 +59,11 @@ node /path/to/veritas/packages/cli/dist/bin.js explain <finding-id>
 | `veritas report [--format text\|json\|markdown\|html\|sarif]`          | Print the latest results                                                     |
 | `veritas explain <finding-id>`                                         | Evidence chain of a finding                                                  |
 | `veritas improve [--dry-run \| --apply --plan <id> --approve <token>]` | Plan test-only improvements; apply an approved plan in an isolated copy      |
-| `veritas replay <run-id>`                                              | Re-run a previous run with the same stages and options                       |
+| `veritas replay <run-id>`                                              | Re-run a previous run with the same stages and options, offline              |
 
-Exit codes: `0` success, `1` confirmed policy failure, `2` invalid configuration or usage, `3` tool or infrastructure error, `4` inconclusive under the configured policy. With `--json`, stdout contains only JSON.
+`discover --allow-domain <domain>` and `--max-pages <n>` add to and override `sources.web` for one run; web discovery still has to be enabled in the configuration.
+
+Exit codes: `0` success, `1` confirmed policy failure, `2` invalid configuration or usage, `3` tool or infrastructure error, `4` inconclusive under the configured policy. With `--json`, stdout contains only JSON, usage errors included; `report --json` cannot be combined with another `--format`.
 
 See the [support matrix](docs/support-matrix.md) for what is available in the current build.
 

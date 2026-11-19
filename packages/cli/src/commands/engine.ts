@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import {
   ExitCode as Exit,
   type ExitCode,
@@ -62,16 +64,50 @@ async function stagesCommand(
   return summaryOut(opts, summary);
 }
 
+type SourceKind = 'local' | 'github' | 'web';
+
+/** Parse `--sources local,github,web,all`; anything else is a user error rather than silently ignored. */
+export function parseSources(value: string): SourceKind[] {
+  const out = new Set<SourceKind>();
+  for (const raw of value.split(',').map((v) => v.trim())) {
+    if (raw === 'all') for (const s of ['local', 'github', 'web'] as const) out.add(s);
+    else if (raw === 'local' || raw === 'github' || raw === 'web') out.add(raw);
+    else
+      throw new VeritasError(
+        'user',
+        'SOURCES_INVALID',
+        `unknown source "${raw}" in --sources`,
+        'use a comma-separated list of local, github, web or all',
+      );
+  }
+  return [...out];
+}
+
+function positiveInt(value: unknown, flag: string, max: number): number {
+  const n = Number(value);
+  if (!/^\d+$/.test(String(value)) || !Number.isSafeInteger(n) || n < 1 || n > max)
+    throw new VeritasError('user', 'OPTION_INVALID', `${flag} must be an integer from 1 to ${max}`);
+  return n;
+}
+
 export function discoverCommand(opts: Opts): Promise<ExitCode> {
-  const sources = String(opts.sources ?? 'local');
-  if (opts.offline && /github|web|all/.test(sources)) log('note: --offline overrides network sources');
+  const sources = parseSources(String(opts.sources ?? 'local'));
+  const network = sources.some((s) => s !== 'local');
+  if (opts.offline && network) log('note: --offline overrides network sources');
+  const allowDomains = Array.isArray(opts.allowDomain) ? opts.allowDomain.map(String) : [];
+  const maxPages = opts.maxPages === undefined ? undefined : positiveInt(opts.maxPages, '--max-pages', 1000);
   return stagesCommand(opts, 'discover', ['discover'], {
     offline: Boolean(opts.offline),
-    localSourcesOnly: !/github|web|all/.test(sources),
+    sources,
+    ...(allowDomains.length || maxPages !== undefined
+      ? { web: { allowDomains, ...(maxPages !== undefined ? { maxPages } : {}) } }
+      : {}),
   });
 }
 
 export function analyzeCommand(opts: Opts, args: string[]): Promise<ExitCode> {
+  if (args[0] && !existsSync(path.resolve(opts.root, args[0])))
+    throw new VeritasError('user', 'PATH_NOT_FOUND', `no such file or directory in the project: ${args[0]}`);
   return stagesCommand(opts, 'analyze', ['index', 'discover', 'spec', 'map', 'assess'], {
     offline: true,
     ...(args[0] ? { scope: [args[0]] } : {}),
@@ -80,6 +116,9 @@ export function analyzeCommand(opts: Opts, args: string[]): Promise<ExitCode> {
 }
 
 export function mutateCommand(opts: Opts): Promise<ExitCode> {
+  const scope = opts.scope === undefined ? undefined : String(opts.scope);
+  if (scope && !/[*?[\]{}]/.test(scope) && !existsSync(path.resolve(opts.root, scope)))
+    throw new VeritasError('user', 'PATH_NOT_FOUND', `no such file or directory in the project: ${scope}`);
   return stagesCommand(opts, 'mutate', ['index', 'discover', 'spec', 'map', 'mutate', 'assess'], {
     offline: true,
     ...(opts.since ? { since: String(opts.since) } : {}),
@@ -110,6 +149,9 @@ export async function replayCommand(opts: Opts, args: string[]): Promise<ExitCod
   const runId = args[0] as string;
   const { data: run } = readArtifact(opts.root, runId, 'run');
   log(`replaying ${run.command} from ${runId} (${run.args.join(' ')})`);
+  // Replays never touch the network: GitHub and web sources and LLM extraction are not repeated.
+  if (run.options && !run.options.offline)
+    log('note: replay runs offline; network sources and LLM extraction are skipped');
   const summary = await runVeritas({
     root: opts.root,
     command: run.command,
@@ -117,7 +159,11 @@ export async function replayCommand(opts: Opts, args: string[]): Promise<ExitCod
     stages: run.stages.map((s) => s.stage),
     ...(run.profile ? { profile: run.profile } : {}),
     offline: true,
-    includeProposed: run.args.includes('--include-proposed'),
+    includeProposed: run.options?.includeProposed ?? run.args.includes('--include-proposed'),
+    ...(run.options?.propertyIds ? { propertyIds: run.options.propertyIds } : {}),
+    ...(run.options?.formalEngine ? { formalEngine: run.options.formalEngine } : {}),
+    ...(run.options?.sources ? { sources: run.options.sources } : {}),
+    ...(run.scope.paths.length ? { scope: run.scope.paths } : {}),
     ...(run.scope.since ? { since: run.scope.since } : {}),
     allowCodeConfig: Boolean(opts.allowCodeConfig),
     log,
@@ -126,6 +172,13 @@ export async function replayCommand(opts: Opts, args: string[]): Promise<ExitCod
 }
 
 export async function reportCommand(opts: Opts): Promise<ExitCode> {
+  if (opts.json && opts.format !== undefined && opts.format !== 'json')
+    throw new VeritasError(
+      'user',
+      'FORMAT_CONFLICT',
+      `--json prints JSON on stdout and cannot be combined with --format ${String(opts.format)}`,
+      `drop --json to print ${String(opts.format)}`,
+    );
   const format = String(opts.format ?? (opts.json ? 'json' : 'text')) as ReportFormat;
   const runId = typeof opts.run === 'string' ? opts.run : undefined;
   const input = buildReportInput(

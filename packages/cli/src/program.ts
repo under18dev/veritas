@@ -1,5 +1,6 @@
+import { statSync } from 'node:fs';
 import path from 'node:path';
-import { ExitCode, TOOL_VERSION } from '@under18dev/veritas-core';
+import { ExitCode, TOOL_VERSION, VeritasError } from '@under18dev/veritas-core';
 import { Command, CommanderError, Option } from 'commander';
 import { doctorCommand } from './commands/doctor.js';
 import {
@@ -16,7 +17,7 @@ import {
 } from './commands/engine.js';
 import { improveCommand } from './commands/improve.js';
 import { initCommand } from './commands/init.js';
-import { type GlobalOptions, reportError } from './output.js';
+import { emitJson, type GlobalOptions, reportError } from './output.js';
 
 type Handler = (opts: GlobalOptions & Record<string, unknown>, args: string[]) => Promise<ExitCode>;
 
@@ -37,6 +38,8 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
       const opts = { ...global, ...command.opts(), root: path.resolve(global.root) } as GlobalOptions &
         Record<string, unknown>;
       try {
+        if (!statSync(opts.root, { throwIfNoEntry: false })?.isDirectory())
+          throw new VeritasError('user', 'ROOT_NOT_FOUND', `project root is not a directory: ${opts.root}`);
         setExit(await handler(opts, command.args));
       } catch (error) {
         setExit(reportError(error, opts.json));
@@ -186,7 +189,18 @@ export async function main(argv: string[]): Promise<ExitCode> {
     await program.parseAsync(argv);
   } catch (error) {
     if (error instanceof CommanderError) {
-      return error.exitCode === 0 ? ExitCode.Success : ExitCode.UserError;
+      if (error.exitCode === 0) return ExitCode.Success;
+      // Usage errors (unknown command or option, invalid choice) are user errors; with --json they are JSON too.
+      if (argv.includes('--json'))
+        emitJson({
+          status: 'error',
+          category: 'user',
+          code: 'USAGE',
+          message: error.message.replace(/^error: /, ''),
+          hint: 'run `veritas --help`',
+          exitCode: ExitCode.UserError,
+        });
+      return ExitCode.UserError;
     }
     return reportError(error, argv.includes('--json'));
   }

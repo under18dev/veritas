@@ -13,6 +13,7 @@ import {
   type PolicyDecision,
   type PolicyEvidence,
   type Property,
+  parseConfig,
   type Run,
   RunStore,
   resolveInsideRoot,
@@ -62,6 +63,10 @@ export interface RunOptions {
   offline?: boolean;
   /** Collect only local sources (no GitHub or web), while still allowing a configured LLM. */
   localSourcesOnly?: boolean;
+  /** Sources to collect; by default local plus the network sources enabled in the configuration. */
+  sources?: ('local' | 'github' | 'web')[];
+  /** Web discovery overrides from the command line: extra allowed domains and a page budget. */
+  web?: { allowDomains?: string[]; maxPages?: number };
   since?: string;
   scope?: string[];
   /** Verify proposed (not yet accepted) properties as experimental. Accepted ones are always verified. */
@@ -127,6 +132,25 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
   const { root } = options;
   const log = options.log ?? (() => {});
   const { config, configHash } = await openProject(root, { allowCodeConfig: options.allowCodeConfig });
+  // Command-line web overrides go through the same validation as the configuration file.
+  const discoveryConfig = options.web
+    ? parseConfig(
+        {
+          ...config,
+          sources: {
+            ...config.sources,
+            web: {
+              ...config.sources.web,
+              allowDomains: [
+                ...new Set([...config.sources.web.allowDomains, ...(options.web.allowDomains ?? [])]),
+              ],
+              ...(options.web.maxPages !== undefined ? { maxPages: options.web.maxPages } : {}),
+            },
+          },
+        },
+        'command-line options',
+      )
+    : config;
   const runId = newRunId();
   const startedAt = new Date().toISOString();
   // Scope entries must stay inside the project; `..`, absolute paths elsewhere and escaping symlinks are refused.
@@ -185,8 +209,9 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
     run: async () => {
       const result = await discoverEvidence({
         root,
-        config,
+        config: discoveryConfig,
         offline: Boolean(options.offline || options.localSourcesOnly),
+        ...(options.sources ? { sources: options.sources } : {}),
       });
       let llmTokens = 0;
       const llmMessages: string[] = [];
@@ -646,6 +671,13 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
     args: options.args ?? [],
     ...(options.profile ? { profile: options.profile } : {}),
     scope: { root, ...(options.since ? { since: options.since } : {}), paths: options.scope ?? [] },
+    options: {
+      includeProposed: Boolean(options.includeProposed),
+      ...(options.propertyIds ? { propertyIds: options.propertyIds } : {}),
+      ...(options.formalEngine ? { formalEngine: options.formalEngine } : {}),
+      ...(options.sources ? { sources: options.sources } : {}),
+      offline: Boolean(options.offline),
+    },
     startedAt,
     finishedAt: new Date().toISOString(),
     status: results.every((r) => r.status === 'succeeded')
