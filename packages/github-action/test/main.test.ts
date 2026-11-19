@@ -260,4 +260,30 @@ describe('main end to end', { timeout: 300_000 }, () => {
     expect(await main()).toBe(2);
     expect(existsSync(path.join(project, '.veritas'))).toBe(false);
   });
+
+  it('reports a repository without package.json as degraded, failing only when inconclusive results must fail', async () => {
+    const project = mkdtempSync(path.join(tmpdir(), 'veritas-action-nopkg-'));
+    writeFileSync(path.join(project, 'main.py'), 'print("not a node project")\n');
+    git(project, 'init', '-q');
+    git(project, '-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'add', '-A');
+    git(
+      project,
+      '-c',
+      'user.email=fixture@example.invalid',
+      '-c',
+      'user.name=fixture',
+      'commit',
+      '-qm',
+      'base',
+    );
+    const base = git(project, 'rev-parse', 'HEAD');
+    const warn = configure(project, base);
+    expect(await main()).toBe(0);
+    expect(outputValues(warn.output).verdict).toBe('inconclusive');
+    expect(readFileSync(warn.summary, 'utf8')).toMatch(/Degraded: no package\.json found/);
+    const strict = configure(project, base, { inconclusive: 'fail' });
+    expect(await main()).toBe(4);
+    expect(outputValues(strict.output)['exit-code']).toBe('4');
+    expect(existsSync(path.join(project, '.veritas'))).toBe(false);
+  });
 });
