@@ -14,12 +14,15 @@ import {
   type Property,
   type Run,
   RunStore,
+  resolveInsideRoot,
   runDoctor,
   runStages,
   type Stage,
   type StageName,
   type StageResult,
   stableId,
+  toPosixRelative,
+  VeritasError,
 } from '@veritas/core';
 import { applyMutation, equivalenceProperty, proveProperty, translateFunction } from '@veritas/formal-core';
 import { LlmClient, type LlmProvider } from '@veritas/llm';
@@ -107,7 +110,25 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
   const { config, configHash } = await openProject(root, { allowCodeConfig: options.allowCodeConfig });
   const runId = newRunId();
   const startedAt = new Date().toISOString();
-  const code0 = analyzeCode({ root, config });
+  // Scope entries must stay inside the project; `..`, absolute paths elsewhere and escaping symlinks are refused.
+  const scopePrefixes = (options.scope ?? []).map((entry) => {
+    if (/[*?[\]{}]/.test(entry)) {
+      if (path.isAbsolute(entry) || entry.split(/[\\/]/).includes('..')) {
+        throw new VeritasError('user', 'SCOPE_OUTSIDE_ROOT', `scope escapes the project root: ${entry}`);
+      }
+      return null;
+    }
+    return toPosixRelative(root, resolveInsideRoot(root, entry));
+  });
+  const fullIndex = analyzeCode({ root, config });
+  const prefixes = scopePrefixes.filter((p): p is string => p !== null);
+  const inScope = (file: string) =>
+    prefixes.length === 0 || prefixes.some((p) => p === '' || file === p || file.startsWith(`${p}/`));
+  const code0 = {
+    ...fullIndex,
+    functions: fullIndex.functions.filter((f) => inScope(f.file)),
+    files: fullIndex.files.filter((f) => inScope(f.path)),
+  };
   const sourceHash = hashValue(code0.files);
   const store = new RunStore(root, runId, { configHash, sourceHash });
   const signal = options.signal ?? new AbortController().signal;
