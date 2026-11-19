@@ -17,23 +17,37 @@ const SECRET_ENV = /(TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|CREDENTIAL)/i;
 
 export const REDACTED = '[REDACTED]';
 
-export function redact(text: string, env: NodeJS.ProcessEnv = process.env): string {
-  let out = text;
+function secretValues(env: NodeJS.ProcessEnv): string[] {
+  const values: string[] = [];
   for (const [name, value] of Object.entries(env)) {
-    if (value && value.length >= 8 && SECRET_ENV.test(name)) out = out.split(value).join(REDACTED);
+    if (value && value.length >= 8 && SECRET_ENV.test(name)) values.push(value);
   }
+  return values;
+}
+
+function redactWith(text: string, secrets: string[]): string {
+  let out = text;
+  for (const value of secrets) if (out.includes(value)) out = out.split(value).join(REDACTED);
   for (const pattern of PATTERNS) out = out.replace(pattern, REDACTED);
   return out;
 }
 
-/** Redact every string inside a JSON-like value. */
+export function redact(text: string, env: NodeJS.ProcessEnv = process.env): string {
+  return redactWith(text, secretValues(env));
+}
+
+/** Redact every string inside a JSON-like value. Secret environment values are collected once per call. */
 export function redactDeep<T>(value: T, env: NodeJS.ProcessEnv = process.env): T {
-  if (typeof value === 'string') return redact(value, env) as T;
-  if (Array.isArray(value)) return value.map((v) => redactDeep(v, env)) as T;
-  if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) out[k] = redactDeep(v, env);
-    return out as T;
-  }
-  return value;
+  const secrets = secretValues(env);
+  const walk = (v: unknown): unknown => {
+    if (typeof v === 'string') return redactWith(v, secrets);
+    if (Array.isArray(v)) return v.map(walk);
+    if (v !== null && typeof v === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, inner] of Object.entries(v)) out[k] = walk(inner);
+      return out;
+    }
+    return v;
+  };
+  return walk(value) as T;
 }
