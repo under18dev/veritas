@@ -68,7 +68,9 @@ export function inventoryTests(options: {
         message: ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'),
       });
     }
-    visitTests(source, [], [], file, sourceFiles, projectSet, checker, root, tests);
+    const ctx: Ctx = { checker, projectSet, root, program, compilerOptions, file };
+    const mocks = collectMocks(source, ctx);
+    visitTests(source, [], [], file, mocks, ctx, tests);
   }
 
   const edges: TestPropertyEdgeType[] = [];
@@ -101,15 +103,23 @@ export function inventoryTests(options: {
   return TestInventory.parse({ tests, edges, files, diagnostics });
 }
 
+interface Ctx {
+  checker: ts.TypeChecker;
+  projectSet: Set<string>;
+  root: string;
+  program: ts.Program;
+  compilerOptions: ts.CompilerOptions;
+  /** Absolute path of the test file being analysed. */
+  file: string;
+}
+
 function visitTests(
   source: ts.SourceFile,
   suitePath: string[],
   inheritedModifiers: TestCaseType['modifiers'],
   file: string,
-  sourceFiles: Map<string, ts.SourceFile>,
-  projectSet: Set<string>,
-  checker: ts.TypeChecker,
-  root: string,
+  mocks: MockRecord[],
+  ctx: Ctx,
   output: TestCaseType[],
 ): void {
   const walk = (node: ts.Node, currentSuite: string[], currentModifiers: TestCaseType['modifiers']) => {
@@ -132,10 +142,8 @@ function visitTests(
             { ...info, modifiers: [...new Set([...currentModifiers, ...info.modifiers])] },
             currentSuite,
             file,
-            sourceFiles,
-            projectSet,
-            checker,
-            root,
+            mocks,
+            ctx,
           ),
         );
         return;
@@ -210,11 +218,10 @@ function analyzeTest(
   info: Registration,
   suitePath: string[],
   file: string,
-  _sourceFiles: Map<string, ts.SourceFile>,
-  projectSet: Set<string>,
-  checker: ts.TypeChecker,
-  root: string,
+  mocks: MockRecord[],
+  ctx: Ctx,
 ): TestCaseType {
+  const { checker, projectSet, root } = ctx;
   const source = registrationCall.getSourceFile();
   const callback = info.callback;
   const name = info.name ?? '<dynamic test>';
@@ -256,15 +263,19 @@ function analyzeTest(
     asserted: asserted.has(node.getStart(source)),
     location: location(source, node, relativeFile),
   }));
-  const derivedAssertion = assertions.some((assertion) => {
-    const argument = assertion.arguments[0];
-    return Boolean(
-      argument &&
-        (calls.some((call) => contains(argument, call.node)) ||
-          (ts.isIdentifier(argument) && localCalls.has(argument.text))),
+  // Tautological only when every compared value (subject and expected) is a compile-time
+  // constant; runtime values such as process.env or non-project call results are not.
+  const comparisons = assertions.filter((assertion) => !isAssertionCountCall(assertion));
+  const tautological =
+    comparisons.length > 0 &&
+    comparisons.every((assertion) =>
+      comparedValues(assertion).every((value) => isCompileTimeConstant(value, checker)),
     );
-  });
-  const usesMocks = descendants(source).some((node) => ts.isCallExpression(node) && isMockCall(node));
+  const applicableMocks = mocks.filter((mock) => mockApplies(mock, registrationCall, callback));
+  const usesMocks = applicableMocks.length > 0;
+  const mockedTarget = applicableMocks.some((mock) =>
+    mock.targets.some((target) => calledSymbols.includes(target)),
+  );
   const usesSnapshots = nodes.some(
     (node) =>
       ts.isCallExpression(node) &&
@@ -276,9 +287,9 @@ function analyzeTest(
   const nondeterminism = [...new Set(nodes.flatMap((node) => nondeterminismFor(node, fakeTimers)))];
   const suspicions: TestCaseType['suspicions'] = [];
   if (assertions.length === 0 && !callsHelperWithAssertion(body, source)) suspicions.push('no_assertion');
-  if (assertions.length > 0 && !derivedAssertion) suspicions.push('tautological_assertion');
+  if (tautological) suspicions.push('tautological_assertion');
   if (calledSymbols.length === 0) suspicions.push('target_not_called');
-  if (usesMocks && calledSymbols.length > 0) suspicions.push('unconditional_mock');
+  if (mockedTarget) suspicions.push('unconditional_mock');
   return {
     id: testId(toPosixRelative(root, file), suitePath, name),
     file: toPosixRelative(root, file),
@@ -303,7 +314,16 @@ function resolveProjectCall(
   projectSet: Set<string>,
   root: string,
 ): string | undefined {
-  let symbol = checker.getSymbolAtLocation(node.expression);
+  return projectSymbolId(checker.getSymbolAtLocation(node.expression), checker, projectSet, root);
+}
+
+function projectSymbolId(
+  input: ts.Symbol | undefined,
+  checker: ts.TypeChecker,
+  projectSet: Set<string>,
+  root: string,
+): string | undefined {
+  let symbol = input;
   if (!symbol) return undefined;
   if (symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
   const declaration = symbol.declarations?.find((item) =>
@@ -313,8 +333,195 @@ function resolveProjectCall(
   return symbolId(toPosixRelative(root, declaration.getSourceFile().fileName), symbol.getName());
 }
 
-function isMockCall(node: ts.CallExpression): boolean {
-  return /^vi\.(mock|spyOn)\b/.test(node.getText()) || node.getText().includes('.mockReturnValue(');
+/** A call to a real Vitest mock API, with the project symbols it replaces (if any). */
+interface MockRecord {
+  node: ts.CallExpression;
+  /** `vi.mock` is hoisted by Vitest, so it applies to every test in the file wherever it is written. */
+  fileWide: boolean;
+  targets: string[];
+}
+
+const VI_MOCK_APIS = new Set(['mock', 'doMock', 'spyOn', 'fn', 'mocked', 'stubGlobal']);
+
+/** `vi.<name>(...)` where `vi` is Vitest's (imported from 'vitest' or the ambient global). */
+function viCall(node: ts.Expression, checker: ts.TypeChecker): string | undefined {
+  if (!ts.isCallExpression(node)) return undefined;
+  const callee = node.expression;
+  if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)) return undefined;
+  if (callee.expression.text !== 'vi') return undefined;
+  const declarations = checker.getSymbolAtLocation(callee.expression)?.declarations ?? [];
+  const fromVitest = declarations.every((declaration) => {
+    if (!ts.isImportSpecifier(declaration)) return declaration.getSourceFile().isDeclarationFile;
+    const specifier = declaration.parent.parent.parent.moduleSpecifier;
+    return ts.isStringLiteral(specifier) && specifier.text === 'vitest';
+  });
+  return fromVitest ? callee.name.text : undefined;
+}
+
+function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
+  const { checker, projectSet, root } = ctx;
+  const records: MockRecord[] = [];
+  const spyTargets = (spy: ts.Expression): string[] => {
+    const target = skipParens(spy);
+    if (!ts.isCallExpression(target)) return [];
+    const api = viCall(target, checker);
+    if (api === 'mocked') {
+      const argument = target.arguments[0];
+      const id =
+        argument && projectSymbolId(checker.getSymbolAtLocation(argument), checker, projectSet, root);
+      return id ? [id] : [];
+    }
+    if (api !== 'spyOn') return [];
+    const [object, nameNode] = target.arguments;
+    const name = literalString(nameNode);
+    if (!object || name === undefined) return [];
+    let owner = checker.getSymbolAtLocation(object);
+    if (owner && owner.flags & ts.SymbolFlags.Alias) owner = checker.getAliasedSymbol(owner);
+    const member =
+      owner && owner.flags & ts.SymbolFlags.ValueModule
+        ? checker.getExportsOfModule(owner).find((item) => item.getName() === name)
+        : checker.getTypeAtLocation(object).getProperty(name);
+    const id = projectSymbolId(member, checker, projectSet, root);
+    return id ? [id] : [];
+  };
+  const spyVariable = (identifier: ts.Identifier): string[] | undefined => {
+    const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
+    if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer) return undefined;
+    const api = viCall(skipParens(declaration.initializer), checker);
+    return api === 'spyOn' || api === 'mocked' || api === 'fn'
+      ? spyTargets(declaration.initializer)
+      : undefined;
+  };
+  for (const node of descendants(source)) {
+    if (!ts.isCallExpression(node)) continue;
+    const api = viCall(node, checker);
+    if (api && VI_MOCK_APIS.has(api)) {
+      const targets = api === 'mock' || api === 'doMock' ? moduleExports(node.arguments[0], ctx) : [];
+      records.push({ node, fileWide: api === 'mock', targets });
+      continue;
+    }
+    // `<spy>.mockReturnValue(...)` and friends, only on real Vitest spies.
+    const callee = node.expression;
+    if (!ts.isPropertyAccessExpression(callee) || !/^mock[A-Z]/.test(callee.name.text)) continue;
+    const receiver = skipParens(callee.expression);
+    const receiverApi = viCall(receiver, checker);
+    if (receiverApi === 'spyOn' || receiverApi === 'mocked' || receiverApi === 'fn')
+      records.push({ node, fileWide: false, targets: spyTargets(receiver) });
+    else if (ts.isIdentifier(receiver)) {
+      const targets = spyVariable(receiver);
+      if (targets) records.push({ node, fileWide: false, targets });
+    }
+  }
+  return records;
+}
+
+/** Project symbols exported by the module a `vi.mock(specifier)` call replaces. */
+function moduleExports(argument: ts.Expression | undefined, ctx: Ctx): string[] {
+  if (!argument) return [];
+  let specifierNode = skipParens(argument);
+  if (
+    ts.isCallExpression(specifierNode) &&
+    specifierNode.expression.kind === ts.SyntaxKind.ImportKeyword &&
+    specifierNode.arguments[0]
+  )
+    specifierNode = specifierNode.arguments[0];
+  const specifier = literalString(specifierNode);
+  if (specifier === undefined) return [];
+  const resolved = ts.resolveModuleName(specifier, ctx.file, ctx.compilerOptions, ts.sys).resolvedModule;
+  const sourceFile = resolved && ctx.program.getSourceFile(resolved.resolvedFileName);
+  const moduleSymbol = sourceFile && ctx.checker.getSymbolAtLocation(sourceFile);
+  if (!moduleSymbol) return [];
+  return ctx.checker
+    .getExportsOfModule(moduleSymbol)
+    .map((item) => projectSymbolId(item, ctx.checker, ctx.projectSet, ctx.root))
+    .filter((id): id is string => id !== undefined);
+}
+
+/**
+ * A mock applies to a test when it is inside that test's body, is a hoisted `vi.mock`, or sits
+ * outside every test body (module level or a describe/hook) within describes enclosing the test.
+ */
+function mockApplies(
+  mock: MockRecord,
+  registrationCall: ts.CallExpression,
+  callback: ts.Node | undefined,
+): boolean {
+  if (mock.fileWide) return true;
+  if (callback && contains(callback, mock.node)) return true;
+  for (let current: ts.Node | undefined = mock.node.parent; current; current = current.parent) {
+    if (!ts.isCallExpression(current)) continue;
+    const test = testRegistration(current);
+    if (test?.callback && isFunction(test.callback) && contains(test.callback, mock.node)) return false;
+    const suite = describeRegistration(current);
+    if (suite?.callback && contains(suite.callback, mock.node) && !contains(suite.callback, registrationCall))
+      return false;
+  }
+  return true;
+}
+
+function isAssertionCountCall(node: ts.CallExpression): boolean {
+  return (
+    ts.isPropertyAccessExpression(node.expression) &&
+    ['assertions', 'hasAssertions'].includes(node.expression.name.text)
+  );
+}
+
+/** Values an assertion compares: the expect subject plus matcher arguments, or assert.* arguments. */
+function comparedValues(assertion: ts.CallExpression): ts.Expression[] {
+  const values = [...assertion.arguments];
+  if (!isExpectCall(assertion)) return values;
+  let current: ts.Node = assertion;
+  while (ts.isPropertyAccessExpression(current.parent) && current.parent.expression === current)
+    current = current.parent;
+  if (current !== assertion && ts.isCallExpression(current.parent) && current.parent.expression === current)
+    values.push(...current.parent.arguments);
+  return values;
+}
+
+/** Literals, and `const` bindings initialised with constants, recursively. */
+function isCompileTimeConstant(node: ts.Expression, checker: ts.TypeChecker, depth = 0): boolean {
+  if (depth > 20) return false;
+  const expression = skipParens(node);
+  if (literalArgument(expression) !== null) return true;
+  if (ts.isNoSubstitutionTemplateLiteral(expression) || ts.isRegularExpressionLiteral(expression))
+    return true;
+  if (ts.isPrefixUnaryExpression(expression))
+    return isCompileTimeConstant(expression.operand, checker, depth + 1);
+  if (ts.isArrayLiteralExpression(expression))
+    return expression.elements.every(
+      (element) => !ts.isSpreadElement(element) && isCompileTimeConstant(element, checker, depth + 1),
+    );
+  if (ts.isObjectLiteralExpression(expression))
+    return expression.properties.every(
+      (property) =>
+        ts.isPropertyAssignment(property) &&
+        !ts.isComputedPropertyName(property.name) &&
+        isCompileTimeConstant(property.initializer, checker, depth + 1),
+    );
+  if (ts.isIdentifier(expression)) {
+    if (expression.text === 'undefined') return true;
+    const declaration = checker.getSymbolAtLocation(expression)?.valueDeclaration;
+    return Boolean(
+      declaration &&
+        ts.isVariableDeclaration(declaration) &&
+        ts.isVariableDeclarationList(declaration.parent) &&
+        declaration.parent.flags & ts.NodeFlags.Const &&
+        declaration.initializer &&
+        isCompileTimeConstant(declaration.initializer, checker, depth + 1),
+    );
+  }
+  return false;
+}
+
+function skipParens(node: ts.Expression): ts.Expression {
+  let current = node;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isNonNullExpression(current)
+  )
+    current = current.expression;
+  return current;
 }
 
 function nondeterminismFor(node: ts.Node, fakeTimers: boolean): string[] {
@@ -400,11 +607,33 @@ function location(
   node: ts.Node,
   file: string,
 ): { file: string; range: { start: number; end: number } } {
-  return { file, range: { start: node.getStart(source) + 1, end: node.getEnd() } };
+  return {
+    file,
+    range: {
+      start: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+      end: source.getLineAndCharacterOfPosition(node.getEnd()).line + 1,
+    },
+  };
 }
-function literalArgument(node: ts.Expression): string | null {
+/**
+ * Source text of a literal argument, or null. Numeric literals are normalised to decimal
+ * (`0x10` -> `'16'`), a leading `-`/`+` on a numeric or bigint literal is folded in (`-1` -> `'-1'`),
+ * and parentheses are ignored.
+ */
+function literalArgument(input: ts.Expression): string | null {
+  const node = skipParens(input);
+  if (ts.isNumericLiteral(node)) return node.text;
+  if (ts.isBigIntLiteral(node)) return node.text;
+  if (
+    ts.isPrefixUnaryExpression(node) &&
+    (node.operator === ts.SyntaxKind.MinusToken || node.operator === ts.SyntaxKind.PlusToken)
+  ) {
+    const operand = skipParens(node.operand);
+    if (!ts.isNumericLiteral(operand) && !ts.isBigIntLiteral(operand)) return null;
+    return node.operator === ts.SyntaxKind.MinusToken ? `-${operand.text}` : operand.text;
+  }
   return ts.isStringLiteral(node) ||
-    ts.isNumericLiteral(node) ||
+    ts.isNoSubstitutionTemplateLiteral(node) ||
     node.kind === ts.SyntaxKind.TrueKeyword ||
     node.kind === ts.SyntaxKind.FalseKeyword ||
     node.kind === ts.SyntaxKind.NullKeyword
