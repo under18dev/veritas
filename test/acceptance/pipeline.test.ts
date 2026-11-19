@@ -216,9 +216,12 @@ describe('discount-boundary end to end', () => {
     expect(generated.length).toBeGreaterThan(0);
     for (const g of generated) expect(g.file.startsWith('.veritas/generated-tests/')).toBe(true);
     const vitest = spawnSync(
-      path.join(dir, 'node_modules/.bin/vitest'),
-      ['run', '.veritas/generated-tests'],
-      { cwd: dir, encoding: 'utf8', shell: process.platform === 'win32' },
+      process.execPath,
+      [path.join(dir, 'node_modules/vitest/vitest.mjs'), 'run', '.veritas/generated-tests'],
+      {
+        cwd: dir,
+        encoding: 'utf8',
+      },
     );
     expect(vitest.status).not.toBe(0);
     expect(vitest.stdout + vitest.stderr).toMatch(/Counterexample: \[\{"total":1000\}\]/);

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,9 +16,8 @@ export function copyFixture(name: string, options: { git?: boolean; linkDeps?: b
     filter: (src) => !src.includes('node_modules') && !src.includes('.mutator'),
   });
   // Fixture dependencies (vitest, mutator) are installed in the workspace; link them instead of reinstalling.
-  if (options.linkDeps && existsSync(path.join(source, 'node_modules'))) {
-    symlinkSync(path.join(source, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
-  }
+  if (options.linkDeps && existsSync(path.join(source, 'node_modules')))
+    linkPackages(path.join(source, 'node_modules'), path.join(dir, 'node_modules'));
   if (options.git) {
     const git = (...args: string[]) => spawnSync('git', args, { cwd: dir, stdio: 'ignore' });
     git('init', '-q');
@@ -26,6 +25,22 @@ export function copyFixture(name: string, options: { git?: boolean; linkDeps?: b
     git('-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'commit', '-qm', 'fixture');
   }
   return dir;
+}
+
+/**
+ * Link every installed package to its real location. Linking the whole node_modules directory is not enough on
+ * Windows: pnpm's relative links inside it would resolve against the junction instead of the real directory.
+ */
+function linkPackages(from: string, to: string): void {
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from)) {
+    if (entry === '.bin' || entry.startsWith('.')) continue;
+    if (entry.startsWith('@')) {
+      linkPackages(path.join(from, entry), path.join(to, entry));
+      continue;
+    }
+    symlinkSync(realpathSync(path.join(from, entry)), path.join(to, entry), 'junction');
+  }
 }
 
 export interface CliResult {
