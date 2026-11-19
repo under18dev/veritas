@@ -79,7 +79,7 @@ describe('security fixture: traversal and symlink escapes', () => {
     config.project.tsconfig = 'config/tsconfig.json';
     writeFileSync(configFile, JSON.stringify(config));
     const run = runCli(['run', '--profile', 'quick', '--json'], dir);
-    expect(run.status, run.stderr).toBe(0);
+    expect(run.status, `${run.stderr}\n${run.stdout}`).toBe(0);
     const { runId } = json<{ runId: string }>(run);
     const artifacts = runArtifacts(dir);
     expect(artifacts).toContain(runId);
@@ -121,7 +121,7 @@ describe('security fixture: traversal and symlink escapes', () => {
       patch(changed);
       writeFileSync(configFile, JSON.stringify(changed));
       const result = runCli(['run', '--profile', 'quick', '--json'], dir);
-      expect(result.status, `${name}: ${result.stderr}`).toBe(0);
+      expect(result.status, `${name}: ${result.stderr}\n${result.stdout}`).toBe(0);
       const { runId } = json<{ runId: string }>(result);
       const map = JSON.parse(
         readFileSync(path.join(dir, '.veritas/runs', runId, 'test-map.json'), 'utf8'),

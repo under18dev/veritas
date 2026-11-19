@@ -115,11 +115,12 @@ describe('sandboxed execution', () => {
       timeoutMs: 20_000,
     });
     expect(result.status).toBe('ok');
-    const major = Number(process.versions.node.split('.')[0]);
-    // Both branches assert: CI runs this on Node 24 and on the current LTS.
-    expect(result.isolation.network).toBe(major >= 25);
-    if (major >= 25) expect(result.results[0]).toEqual({ t: 'boolean', v: false });
-    else expect(sandboxBlocksNetwork()).toBe(false);
+    // The Node.js that ran it may be newer than this one (VERITAS_SANDBOX_NODE); both outcomes assert something.
+    const runtime = sandboxRuntime();
+    expect(result.isolation.network).toBe(runtime.networkIsolated);
+    expect(runtime.networkIsolated).toBe(sandboxBlocksNetwork(runtime.version));
+    if (runtime.networkIsolated) expect(result.results[0]).toEqual({ t: 'boolean', v: false });
+    else expect(sandboxRefusal(runtime)).toMatch(/cannot block network access/);
   });
 
   it('works when the project root is reached through a symlink', async () => {
@@ -195,10 +196,16 @@ describe('sandbox runtime', () => {
   });
 
   it('uses a newer Node.js from VERITAS_SANDBOX_NODE when this one is too old', () => {
-    const runtime = sandboxRuntime({ PATH: '', VERITAS_SANDBOX_NODE: process.execPath }, old);
-    expect(runtime.node).toBe(process.execPath);
-    expect(runtime.networkIsolated).toBe(sandboxBlocksNetwork(process.versions.node));
-    expect(sandboxRefusal(runtime)).toBe(runtime.networkIsolated ? null : sandboxRefusal(runtime));
+    // The newest Node.js this machine offers (this one, or the one CI names in VERITAS_SANDBOX_NODE).
+    const newer = sandboxRuntime();
+    const runtime = sandboxRuntime({ PATH: '', VERITAS_SANDBOX_NODE: newer.node }, old);
+    if (newer.networkIsolated) {
+      expect(runtime).toEqual({ node: newer.node, version: newer.version, networkIsolated: true });
+      expect(sandboxRefusal(runtime)).toBeNull();
+    } else {
+      expect(runtime.networkIsolated).toBe(false);
+      expect(sandboxRefusal(runtime)).not.toBeNull();
+    }
   });
 
   it('ignores a VERITAS_SANDBOX_NODE that does not run', () => {
