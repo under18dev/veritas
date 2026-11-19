@@ -41,7 +41,7 @@ describe('deliberately broken discountAmount (total > 1000 instead of >= 1000)',
     expect(first.runsExecuted).toBeLessThanOrEqual(200);
     expect(first.path).toMatch(/^\d+(:\d+)*$/);
     expect(first.domains).toEqual(ir.params);
-    expect(first.replayCommand).toBe(`veritas test replay ${first.id} --seed ${SEED} --path ${first.path}`);
+    expect(first.replayCommand).toBe(`veritas test replay ${first.id}`);
     expect(first.error).toBeNull();
 
     // Persisted with the failing input.
@@ -88,7 +88,7 @@ describe('deliberately broken discountAmount (total > 1000 instead of >= 1000)',
       experimental: false,
     });
     expect(Number.isInteger(result.seed)).toBe(true);
-    expect(result.replayCommand).toBe(`veritas test replay ${result.id} --seed ${result.seed}`);
+    expect(result.replayCommand).toBe(`veritas test replay ${result.id}`);
   }, 60_000);
 
   it('rejects a replay whose IR domains differ from the record', async () => {

@@ -22,6 +22,7 @@ import {
   readArtifact,
   readLatest,
   renderReport,
+  replayPbt,
   runVeritas,
   showProperty,
 } from '@under18dev/veritas-engine';
@@ -313,4 +314,23 @@ export async function testGenerateCommand(opts: Opts): Promise<ExitCode> {
       emitText(`wrote ${g.file}${g.experimental ? ' (experimental: property not accepted)' : ''}`);
   if (generated.length === 0) log('no formalized property to generate tests for');
   return Exit.Success;
+}
+
+export async function testReplayCommand(opts: Opts, args: string[]): Promise<ExitCode> {
+  const result = await replayPbt(opts.root, args[0] as string, {
+    ...(typeof opts.run === 'string' ? { runId: opts.run } : {}),
+  });
+  const { recorded, replayed } = result;
+  if (opts.json) emitJson({ status: result.reproduced ? 'reproduced' : 'not_reproduced', ...result });
+  else
+    emitText(
+      [
+        `${recorded.id} (${recorded.propertyId}, run ${result.runId}, seed ${recorded.seed}, ${recorded.numRuns} runs)`,
+        `recorded: ${recorded.status}${recorded.counterexample ? ` ${JSON.stringify(recorded.counterexample)}` : ''}`,
+        `replayed: ${replayed.status}${replayed.counterexample ? ` ${JSON.stringify(replayed.counterexample)}` : ''}${replayed.error ? ` (${replayed.error})` : ''}`,
+        result.reproduced ? 'reproduced' : 'NOT reproduced',
+      ].join('\n'),
+    );
+  if (replayed.status === 'error') return Exit.ToolError;
+  return result.reproduced ? Exit.Success : Exit.Inconclusive;
 }

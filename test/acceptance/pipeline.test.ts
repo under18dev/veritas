@@ -325,6 +325,34 @@ describe('discount-boundary end to end', () => {
   });
 });
 
+describe('property-based test replay', () => {
+  it('replays a counterexample with the command shown in its finding and reproduces the same input', () => {
+    const dir = setup('discount-boundary');
+    const run = json<{ findings: { kind: string; explanation: string[] }[] }>(
+      runCli(['run', '--profile', 'deep', '--include-proposed', '--json'], dir),
+    );
+    const finding = run.findings.find(
+      (f) => f.kind === 'counterexample' && f.explanation.some((e) => e.startsWith('replay: ')),
+    );
+    const command =
+      finding?.explanation.find((e) => e.startsWith('replay: '))?.slice('replay: '.length) ?? '';
+    expect(command).toMatch(/^veritas test replay PBT-[0-9a-f]+$/);
+    const replay = runCli([...command.split(' ').slice(1), '--json'], dir);
+    expect(replay.status, replay.stderr).toBe(0);
+    const result = json<{
+      status: string;
+      recorded: { counterexample: unknown };
+      replayed: { counterexample: unknown };
+    }>(replay);
+    expect(result.status).toBe('reproduced');
+    expect(result.replayed.counterexample).toEqual(result.recorded.counterexample);
+    expect(result.replayed.counterexample).toEqual({ total: '1000' });
+    const missing = runCli(['test', 'replay', 'PBT-000000000000', '--json'], dir);
+    expect(missing.status).toBe(2);
+    expect(json(missing)).toMatchObject({ code: 'PBT_RESULT_NOT_FOUND' });
+  });
+});
+
 describe('changes since a git ref', () => {
   it('marks properties of changed code with the change and refuses refs that look like options', () => {
     const dir = setup('discount-boundary');

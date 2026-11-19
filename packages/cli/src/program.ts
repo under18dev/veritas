@@ -14,6 +14,7 @@ import {
   runCommandCli,
   specCommand,
   testGenerateCommand,
+  testReplayCommand,
 } from './commands/engine.js';
 import { improveCommand } from './commands/improve.js';
 import { initCommand } from './commands/init.js';
@@ -120,9 +121,18 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
       ),
     (o) => mutateCommand(o),
   );
+  const testCommand = program.command('test').description('property-based tests');
   wire(
-    program
-      .command('test')
+    testCommand
+      .command('replay <pbt-id>')
+      .description(
+        'replay a recorded property-based test with its seed and shrink path; exit 0 when the recorded result is reproduced, 4 when it is not',
+      )
+      .option('--run <run-id>', 'look in this run instead of the most recent ones'),
+    (o, a) => testReplayCommand(o, a),
+  );
+  wire(
+    testCommand
       .command('generate')
       .description(
         'generate fast-check property tests for formalized properties (written under .veritas/generated-tests)',

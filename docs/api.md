@@ -29,5 +29,5 @@ codes (`0` success, `1` confirmed policy failure, `2` user error, `3` tool error
 input throws a `VeritasError` whose `category` maps to the same codes.
 
 Also exported: `readArtifact`/`readLatest` to read run artifacts, `buildReportInput`/`renderReport` for reports,
-`explainFinding`, the `spec` helpers (`listProperties`, `decideProperty`, `diffLatest`), `generateTests`,
+`explainFinding`, `replayPbt` (replay a recorded property-based test), the `spec` helpers (`listProperties`, `decideProperty`, `diffLatest`), `generateTests`,
 `planImprovement`/`applyImprovement`, `initProject`, `loadConfig` and `runDoctor`.

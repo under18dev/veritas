@@ -38,6 +38,8 @@ export interface ReplayOptions {
   bindings: Binding[];
   timeoutMs: number;
   signal?: AbortSignal;
+  /** Run without network isolation when no Node.js 25+ is available (`sandbox.allowNetworkWithoutIsolation`). */
+  allowNetworkWithoutIsolation?: boolean;
 }
 
 const SAFE = 9007199254740991n;
@@ -192,8 +194,9 @@ function pbtId(options: {
   });
 }
 
-function replayCommand(id: string, seed: number, replayPath: string | null): string {
-  return `veritas test replay ${id} --seed ${seed}${replayPath ? ` --path ${replayPath}` : ''}`;
+/** The record holds the seed and fast-check path; `veritas test replay` reads them from it. */
+function replayCommand(id: string): string {
+  return `veritas test replay ${id}`;
 }
 
 interface RunnerOutput {
@@ -240,7 +243,7 @@ async function execute(
     failure: null,
     domains: options.ir.params,
     experimental: options.experimental,
-    replayCommand: replayCommand(id, seed, null),
+    replayCommand: replayCommand(id),
     error: null,
   };
   const finish = (status: PbtStatus, fields: Partial<PbtResult> = {}): PbtResult => {
@@ -333,7 +336,7 @@ async function execute(
     counterexample: output.counterexample ?? null,
     originalCounterexample: output.original ?? null,
     path: output.path ?? null,
-    replayCommand: replayCommand(id, seed, output.path ?? null),
+    replayCommand: replayCommand(id),
   };
   if (output.error || !output.counterexample) {
     return finish('error', {
@@ -389,6 +392,7 @@ export async function replayPropertyTest(record: PbtResult, options: ReplayOptio
     timeoutMs: options.timeoutMs,
     experimental: stored.experimental,
     signal: options.signal,
+    allowNetworkWithoutIsolation: options.allowNetworkWithoutIsolation,
   };
   const domainsDiffer = JSON.stringify(stored.domains) !== JSON.stringify(options.ir.params);
   return execute(
