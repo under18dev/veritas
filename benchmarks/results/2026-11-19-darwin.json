@@ -1,0 +1,218 @@
+{
+  "node": "26.13.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "cpus": 10,
+  "results": [
+    {
+      "fixture": "discount-boundary",
+      "profile": "quick",
+      "exitCode": 0,
+      "wallMs": 1433,
+      "functions": 2,
+      "tests": 5,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 0,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "discount-boundary",
+      "profile": "standard",
+      "exitCode": 0,
+      "wallMs": 1742,
+      "functions": 2,
+      "tests": 5,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 17,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "discount-boundary",
+      "profile": "deep",
+      "exitCode": 0,
+      "wallMs": 2403,
+      "functions": 2,
+      "tests": 5,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 402,
+        "mutants": 17,
+        "testRuns": 1017
+      }
+    },
+    {
+      "fixture": "agent-loop",
+      "profile": "quick",
+      "exitCode": 0,
+      "wallMs": 1056,
+      "functions": 1,
+      "tests": 2,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 0,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "agent-loop",
+      "profile": "standard",
+      "exitCode": 0,
+      "wallMs": 1625,
+      "functions": 1,
+      "tests": 2,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 7,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "agent-loop",
+      "profile": "deep",
+      "exitCode": 0,
+      "wallMs": 2007,
+      "functions": 1,
+      "tests": 2,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 249,
+        "mutants": 7,
+        "testRuns": 1000
+      }
+    },
+    {
+      "fixture": "conflicting-docs",
+      "profile": "quick",
+      "exitCode": 0,
+      "wallMs": 991,
+      "functions": 1,
+      "tests": 2,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 0,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "conflicting-docs",
+      "profile": "standard",
+      "exitCode": 0,
+      "wallMs": 1548,
+      "functions": 1,
+      "tests": 2,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 7,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "conflicting-docs",
+      "profile": "deep",
+      "exitCode": 0,
+      "wallMs": 2320,
+      "functions": 1,
+      "tests": 2,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 373,
+        "mutants": 7,
+        "testRuns": 1007
+      }
+    },
+    {
+      "fixture": "equivalent-mutants",
+      "profile": "quick",
+      "exitCode": 0,
+      "wallMs": 1121,
+      "functions": 2,
+      "tests": 3,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 0,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "equivalent-mutants",
+      "profile": "standard",
+      "exitCode": 0,
+      "wallMs": 1515,
+      "functions": 2,
+      "tests": 3,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 13,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "equivalent-mutants",
+      "profile": "deep",
+      "exitCode": 0,
+      "wallMs": 2042,
+      "functions": 2,
+      "tests": 3,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 137,
+        "mutants": 13,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "no-spec",
+      "profile": "quick",
+      "exitCode": 0,
+      "wallMs": 1162,
+      "functions": 1,
+      "tests": 1,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 0,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "no-spec",
+      "profile": "standard",
+      "exitCode": 0,
+      "wallMs": 1535,
+      "functions": 1,
+      "tests": 1,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 9,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "no-spec",
+      "profile": "deep",
+      "exitCode": 0,
+      "wallMs": 2119,
+      "functions": 1,
+      "tests": 1,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 262,
+        "mutants": 9,
+        "testRuns": 0
+      }
+    }
+  ]
+}
