@@ -245,6 +245,26 @@ describe('discount-boundary end to end', () => {
     expect(replay.stages.map((s) => s.stage)).toEqual(first.stages.map((s) => s.stage));
     expect(replay.findings.map((f) => f.id).sort()).toEqual(first.findings.map((f) => f.id).sort());
   });
+
+  it('replays the run with the command shown in the rendered markdown report', () => {
+    const dir = setup('discount-boundary');
+    const first = json<RunJson>(runCli(['run', '--profile', 'quick', '--json'], dir));
+    const rendered = runCli(['report', '--format', 'markdown'], dir);
+    expect(rendered.status, rendered.stderr).toBe(0);
+    const command = /`(veritas replay [^`]+)`/.exec(rendered.stdout)?.[1];
+    expect(command).toBe(`veritas replay ${first.runId}`);
+    // The report written by the run shows the same command.
+    expect(readFileSync(path.join(dir, '.veritas/runs', first.runId, 'report.md'), 'utf8')).toContain(
+      `\`${command}\``,
+    );
+    const [program, ...args] = (command as string).split(' ');
+    expect(program).toBe('veritas');
+    const replay = json<RunJson>(runCli([...args, '--json'], dir));
+    expect(replay.runId).not.toBe(first.runId);
+    expect(replay.stages.map((s) => s.stage)).toEqual(first.stages.map((s) => s.stage));
+    expect(replay.findings.map((f) => f.id).sort()).toEqual(first.findings.map((f) => f.id).sort());
+    expect(first.findings.length).toBeGreaterThan(0);
+  });
 });
 
 describe('a ten-function project', () => {

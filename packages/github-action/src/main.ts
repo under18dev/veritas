@@ -1,5 +1,6 @@
 import { appendFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { detectProject, loadConfig, redact, runCommand, runDoctor } from '@under18dev/veritas-core';
 import { PROFILE_STAGES, type Profile, runVeritas } from '@under18dev/veritas-engine';
 import { planFromEvent, type RunPlan } from './event.js';
@@ -33,7 +34,7 @@ function writeOutput(values: Record<string, string>): void {
         .join('\n')}\n`,
     );
 }
-function degraded(reason: string, behavior: string): number {
+function degraded(reason: string, behavior: string, fromFork: boolean): number {
   const exitCode = behavior === 'fail' ? 4 : 0;
   writeOutput({
     verdict: 'inconclusive',
@@ -41,6 +42,7 @@ function degraded(reason: string, behavior: string): number {
     'run-id': '',
     'confirmed-findings': '0',
     'report-path': '',
+    'from-fork': String(fromFork),
   });
   if (process.env.GITHUB_STEP_SUMMARY)
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Veritas\n\nDegraded: ${redact(reason)}.\n`);
@@ -69,6 +71,7 @@ export async function main(): Promise<number> {
       'run-id': '',
       'confirmed-findings': '0',
       'report-path': '',
+      'from-fork': String(event.fromFork),
     });
     if (process.env.GITHUB_STEP_SUMMARY)
       appendFileSync(process.env.GITHUB_STEP_SUMMARY, '## Veritas\n\nSkipped: documentation-only change.\n');
@@ -76,10 +79,10 @@ export async function main(): Promise<number> {
   }
   const project = detectProject(root);
   const behaviorInput = input('inconclusive', 'warn');
-  if (!project.hasPackageJson) return degraded('no package.json found', behaviorInput);
+  if (!project.hasPackageJson) return degraded('no package.json found', behaviorInput, event.fromFork);
   const doctor = await runDoctor(root, null);
   if (!doctor.capabilities.some((cap) => cap.name === 'vitest' && cap.state !== 'unavailable'))
-    return degraded('Vitest is unavailable', behaviorInput);
+    return degraded('Vitest is unavailable', behaviorInput, event.fromFork);
   const profile = input('profile', 'standard') as Profile;
   if (!PROFILE_STAGES[profile]) throw new Error(`unsupported profile: ${profile}`);
   const configured = await loadConfig(root).catch(() => null);
@@ -108,6 +111,7 @@ export async function main(): Promise<number> {
     'run-id': summary.runId,
     'confirmed-findings': String(summary.findings.filter((f) => f.certainty === 'confirmed').length),
     'report-path': reportPath,
+    'from-fork': String(event.fromFork),
   });
   if (process.env.GITHUB_STEP_SUMMARY && input('summary', 'true') !== 'false') {
     const counts = summary.findings.reduce<Record<string, number>>((out, finding) => {
@@ -122,13 +126,13 @@ export async function main(): Promise<number> {
     appendFileSync(
       process.env.GITHUB_STEP_SUMMARY,
       redact(
-        `# Veritas\n\n- Verdict: **${decision.verdict}**\n- Exit code: **${decision.exitCode}**\n- Run ID: \`${summary.runId}\`\n- Findings by certainty: ${JSON.stringify(counts)}\n\n## Findings\n${findings}\n\nRun \`veritas explain <finding-id>\` locally for details.\n`,
+        `# Veritas\n\n- Verdict: **${decision.verdict}**\n- Exit code: **${decision.exitCode}**\n- Run ID: \`${summary.runId}\`\n${event.fromFork ? '- Pull request from a fork: yes\n' : ''}- Findings by certainty: ${JSON.stringify(counts)}\n\n## Findings\n${findings}\n\nRun \`veritas explain <finding-id>\` locally for details.\n`,
       ).slice(0, 60_000),
     );
   }
   return decision.exitCode;
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname))
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
   main()
     .then((code) => {
       process.exitCode = code;

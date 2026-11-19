@@ -39,6 +39,7 @@ cd /path/to/your/project
 node /path/to/veritas/packages/cli/dist/bin.js init --yes
 node /path/to/veritas/packages/cli/dist/bin.js doctor
 node /path/to/veritas/packages/cli/dist/bin.js run --profile deep --offline --include-proposed
+node /path/to/veritas/packages/cli/dist/bin.js report
 node /path/to/veritas/packages/cli/dist/bin.js explain <finding-id>
 ```
 

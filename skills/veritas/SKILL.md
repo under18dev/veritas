@@ -48,7 +48,7 @@ Profiles: `quick` (no project code executed: discovery, analysis, assessment), `
 
 ## Specification decisions belong to people
 
-- Never run `veritas spec accept` or `veritas spec reject` unless the user explicitly tells you which property and why. They record the user's decision (`--reason` and `--actor` are required).
+- Never run `veritas spec accept` or `veritas spec reject` unless the user explicitly tells you which property and why. They record the user's decision: `--reason` is required; pass `--actor` with the user's name, otherwise `VERITAS_ACTOR` or the git user name is recorded.
 - If properties are `conflicted`, show both sources and the suggested reading, and stop. Do not pick one.
 - Never edit README, docs or issues to make them match the code, and never change a test's expected value to match the implementation.
 

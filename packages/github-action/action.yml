@@ -12,6 +12,7 @@ outputs:
   run-id: { description: Run identifier }
   confirmed-findings: { description: Number of confirmed findings }
   report-path: { description: Path to the run report }
+  from-fork: { description: Whether the pull request comes from a fork }
 runs:
   using: node24
   main: dist/main.js
