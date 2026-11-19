@@ -1,0 +1,23 @@
+{
+  "name": "@veritas/llm",
+  "version": "0.0.0",
+  "description": "Provider-neutral LLM interface for Veritas: budgets, redaction, input hashing",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@veritas/core": "workspace:*",
+    "zod": "4.6.7"
+  }
+}

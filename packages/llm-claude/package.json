@@ -1,0 +1,25 @@
+{
+  "name": "@veritas/llm-claude",
+  "version": "0.0.0",
+  "description": "Claude adapter for the Veritas LLM interface",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.10.0",
+    "@veritas/core": "workspace:*",
+    "@veritas/llm": "workspace:*",
+    "zod": "4.6.7"
+  }
+}
