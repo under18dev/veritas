@@ -107,7 +107,7 @@ export function numberOnly(type: string): boolean {
  * exported function (`docs/reference/array/chunk.md`) is about that function. Elsewhere, any exported function.
  */
 export function statementScope(
-  statement: Pick<StatementInput, 'range'>,
+  statement: Pick<StatementInput, 'range' | 'quote'>,
   source: Pick<EvidenceSource, 'kind' | 'locator'> | undefined,
   functions: FunctionInfo[],
 ): (fn: FunctionInfo) => boolean {
@@ -115,16 +115,24 @@ export function statementScope(
   const locator = source.locator.split('\\').join('/');
 
   if (source.kind === 'code') {
+    // Code sources hold the JSDoc of exported declarations: the statement is about the function whose JSDoc has it.
     const inFile = functions.filter((fn) => fn.file === locator);
-    const line = statement.range.start;
-    // The function whose body contains the line, or the first one starting within a few lines after it (JSDoc).
-    const around = inFile.find((fn) => {
-      const range = fn.location.range;
+    const plain = (text: string) =>
+      text
+        .replace(/[\s*]+/g, ' ')
+        .trim()
+        .toLowerCase();
+    const quote = plain(statement.quote).slice(0, 80);
+    const documented = inFile.filter((fn) => fn.jsdoc !== null && plain(fn.jsdoc).includes(quote));
 
-      return range !== undefined && line >= range.start - 15 && line <= range.end;
-    });
+    if (documented.length > 0) return (fn) => documented.includes(fn);
 
-    return around ? (fn) => fn === around : (fn) => fn.file === locator;
+    // Otherwise the first function declared after it, which its JSDoc block precedes.
+    const next = inFile
+      .filter((fn) => (fn.location.range?.start ?? 0) >= statement.range.start)
+      .sort((a, b) => (a.location.range?.start ?? 0) - (b.location.range?.start ?? 0))[0];
+
+    return next ? (fn) => fn === next : (fn) => fn.file === locator;
   }
 
   if (source.kind === 'docs' || source.kind === 'readme') {

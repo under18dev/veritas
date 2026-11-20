@@ -385,33 +385,39 @@ describe('registry from documentation and code', { timeout: 60_000 }, () => {
 });
 
 describe('statementScope', () => {
-  const fn = (name: string, file: string, start: number, end: number) =>
-    ({ name, file, exported: true, location: { file, range: { start, end } } }) as never;
+  const fn = (name: string, file: string, start: number, end: number, jsdoc: string | null = null) =>
+    ({ name, file, exported: true, jsdoc, location: { file, range: { start, end } } }) as never;
   const functions = [
-    fn('chunk', 'src/chunk.ts', 10, 20),
+    fn('chunk', 'src/chunk.ts', 30, 40, '/**\n * Splits into chunks.\n * The size must be at least 1.\n */'),
     fn('times', 'src/times.ts', 5, 9),
-    fn('sum', 'src/chunk.ts', 30, 40),
+    fn('sum', 'src/chunk.ts', 60, 70),
   ];
+  const names = (scope: (f: never) => boolean) =>
+    functions.filter(scope).map((f: { name: string }) => f.name);
 
-  it('limits a source comment to the function it documents, and a named page to that function', () => {
-    const inChunk = statementScope(
-      { range: { start: 3, end: 3 } },
-      { kind: 'code', locator: 'src/chunk.ts' },
-      functions,
-    );
-    expect(functions.filter(inChunk).map((f: { name: string }) => f.name)).toEqual(['chunk']);
-    const page = statementScope(
-      { range: { start: 1, end: 1 } },
-      { kind: 'docs', locator: 'docs/reference/chunk.md' },
-      functions,
-    );
-    expect(functions.filter(page).map((f: { name: string }) => f.name)).toEqual(['chunk']);
-    const intro = statementScope(
-      { range: { start: 1, end: 1 } },
-      { kind: 'docs', locator: 'docs/intro.md' },
-      functions,
-    );
-    expect(functions.filter(intro)).toHaveLength(3);
+  it('limits a JSDoc statement to the function it documents, however long the block', () => {
+    const code = { kind: 'code' as const, locator: 'src/chunk.ts' };
+    expect(
+      names(
+        statementScope(
+          { range: { start: 3, end: 3 }, quote: 'The size must be at least 1.' },
+          code,
+          functions,
+        ),
+      ),
+    ).toEqual(['chunk']);
+    // Not found in any JSDoc: the first function declared after it.
+    expect(
+      names(statementScope({ range: { start: 45, end: 45 }, quote: 'Other text.' }, code, functions)),
+    ).toEqual(['sum']);
+  });
+
+  it('limits a page named after a function to that function', () => {
+    const at = { range: { start: 1, end: 1 }, quote: 'x' };
+    expect(
+      names(statementScope(at, { kind: 'docs', locator: 'docs/reference/chunk.md' }, functions)),
+    ).toEqual(['chunk']);
+    expect(names(statementScope(at, { kind: 'docs', locator: 'docs/intro.md' }, functions))).toHaveLength(3);
   });
 });
 

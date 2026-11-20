@@ -150,9 +150,32 @@ function versionAt(text: string): (offset: number) => string | undefined {
  * example (`// at most 3 requests at a time`) describe that example, not a rule of the API.
  */
 export function withoutCodeBlocks(text: string): string {
-  return text.replace(/^([ \t]*)(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1\2[ \t]*$/gm, (block) =>
-    block.replace(/[^\n]/g, ' '),
-  );
+  let fence: { char: string; length: number } | null = null;
+
+  return text
+    .split('\n')
+    .map((line) => {
+      const marker = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+
+      if (fence === null) {
+        if (!marker) return line;
+        fence = { char: marker.charAt(0), length: marker.length };
+
+        return '';
+      }
+
+      // A closing fence uses the same character, at least as many times, and nothing else on the line.
+      if (
+        marker &&
+        marker.charAt(0) === fence.char &&
+        marker.length >= fence.length &&
+        /^[ \t]{0,3}[`~]+[ \t]*$/.test(line)
+      )
+        fence = null;
+
+      return '';
+    })
+    .join('\n');
 }
 
 function extract(text: string, sourceId: string, stale: boolean): NormativeStatement[] {
@@ -188,7 +211,7 @@ function extract(text: string, sourceId: string, stale: boolean): NormativeState
         (hit.index ?? 0) + hit[0].indexOf(hit[1] as string) + (hit[1] as string).length,
       );
 
-      if (/^\s*(?:%|％|percent\b|パーセント)/i.test(after)) continue;
+      if (/^\s*(?:%|％|per\s*cent\b|パーセント)/i.test(after)) continue;
       const before = raw.slice(0, hit.index ?? 0);
       const q = before.match(/([A-Za-z_$][\w$.-]*|[A-Za-z][A-Za-z -]{1,40}?)(?:\s+of)?\s*$/);
       const quantity = q?.[1]?.trim().split(/\s+/).at(-1) ?? 'value';
@@ -256,8 +279,13 @@ function exportedDocs(text: string): string {
     if (!/\*\/\s*export\s+(?:async\s+)?(?:function|class|const|let|var)\b/.test(block)) continue;
     const startLine = text.slice(0, match.index ?? 0).split('\n').length - 1;
 
+    // An `@example` section shows a call and comments on that call, not a rule: it runs to the next tag.
+    let example = false;
+
     for (const [offset, line] of block.split('\n').entries()) {
-      if (output[startLine + offset] !== undefined) output[startLine + offset] = line;
+      if (/^\s*\*?\s*@\w+/.test(line)) example = /^\s*\*?\s*@example\b/.test(line);
+
+      if (output[startLine + offset] !== undefined) output[startLine + offset] = example ? '' : line;
     }
   }
 
@@ -948,7 +976,9 @@ export async function discoverEvidence(options: {
       ...(input.kind === 'standard'
         ? schemaStatements(input.text, source.id)
         : extract(
-            /\.mdx?$/i.test(input.locator) ? withoutCodeBlocks(input.text) : input.text,
+            /\.mdx?$/i.test(input.locator) || input.kind === 'issue' || input.kind === 'pr'
+              ? withoutCodeBlocks(input.text)
+              : input.text,
             source.id,
             stale,
           )),

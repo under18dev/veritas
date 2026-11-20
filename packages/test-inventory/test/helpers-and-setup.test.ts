@@ -254,6 +254,31 @@ it('stored on a property', () => {
     expect(byName('stored on a property')).toMatchObject({ symbols: ['src/fns.ts#create'], asserted: true });
   });
 
+  it('does not link functions or objects that project code only stores or reads', () => {
+    const extra = {
+      'src/store.ts': `const registry: unknown[] = [];
+export function register(fn: (n: number) => number) { registry.push(fn); return true; }
+export function double(n: number) { return n * 2; }
+export function observe(x: { a: number }) { return x.a > 0; }
+export function touch(x: { a: number }) { x.a += 1; }
+`,
+    };
+    const byName = inventory(
+      `import { expect, it } from 'vitest';
+import { double, observe, register, touch } from '../src/store.js';
+it('stored', () => { expect(register(double)).toBe(true); });
+it('read only', () => { const x = { a: 1 }; observe(x); expect(x).toEqual({ a: 1 }); });
+it('changed', () => { const x = { a: 1 }; touch(x); expect(x).toEqual({ a: 2 }); });
+`,
+      extra,
+    );
+    // register is asserted; double, which it only stores, is not counted as called.
+    expect(byName('stored').symbols).toEqual(['src/store.ts#register']);
+    // observe only reads x, so asserting on x checks nothing observe produced.
+    expect(byName('read only').asserted).toBe(false);
+    expect(byName('changed').asserted).toBe(true);
+  });
+
   it('links the expected side of an assertion and the state of an object a project method ran on', () => {
     const byName = inventory(`${header}
       it('reversed', () => { expect([2, 3]).toContain(fn(1)); });

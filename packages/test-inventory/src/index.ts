@@ -321,10 +321,14 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
     }
     const callbacks = new Set<ts.Node>();
 
-    for (const argument of argumentsOf(call)) {
+    for (const [index, argument] of argumentsOf(call).entries()) {
       const value = skipParens(argument);
 
-      if (ts.isIdentifier(value) && passedByReference(value, checker))
+      if (
+        ts.isIdentifier(value) &&
+        passedByReference(value, checker) &&
+        mayChangeArgument(call, index, checker)
+      )
         if (checker.getSymbolAtLocation(value)?.valueDeclaration?.getSourceFile() === source)
           bind([value], [call], true);
     }
@@ -468,7 +472,13 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
     else info = { ...none, opaque: ts.isCallExpression(node) && isOpaqueCall(node, ctx.checker) };
   }
   const known = new Set(info.targets.map((t) => t.symbol));
-  const passed = passedProjectFunctions(node, ctx).filter((symbol) => !known.has(symbol));
+  // Built-ins such as `map` and test helpers call the functions they are given. Project code may only store
+  // them, so a function handed to project code is not counted as called.
+  const projectReceives =
+    info.targets.some((t) => t.ownArgs) || (!direct && projectReceiver(node, ctx) !== undefined);
+  const passed = projectReceives
+    ? []
+    : passedProjectFunctions(node, ctx).filter((symbol) => !known.has(symbol));
 
   if (passed.length > 0)
     info = {
@@ -1010,6 +1020,82 @@ function passedProjectFunctions(node: Invocation, ctx: Ctx): string[] {
   }
 
   return found;
+}
+
+/**
+ * Whether the function an invocation runs may change its `index`-th argument: its body writes a property of that
+ * parameter, calls a method on it, passes it on or aliases it. Unknown when the body is not visible (a method, a
+ * declaration file), which counts as "may".
+ */
+function mayChangeArgument(node: Invocation, index: number, checker: ts.TypeChecker): boolean {
+  const symbol = aliasTarget(calleeOf(node), checker);
+  const resolved = symbol && symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+  const fn = (resolved?.declarations ?? [])
+    .map((d) => (ts.isVariableDeclaration(d) && d.initializer ? skipParens(d.initializer) : d))
+    .find(
+      (d): d is ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | ts.MethodDeclaration =>
+        isFunctionLike(d) && d.body !== undefined,
+    );
+
+  if (!fn?.body || ts.isTaggedTemplateExpression(node)) return true;
+  const parameter = fn.parameters[index];
+
+  if (!parameter) return fn.parameters.some((p) => p.dotDotDotToken !== undefined);
+
+  if (parameter.dotDotDotToken || !ts.isIdentifier(parameter.name)) return true;
+  const target = checker.getSymbolAtLocation(parameter.name);
+
+  return descendants(fn.body).some((item) => {
+    if (!ts.isIdentifier(item) || checker.getSymbolAtLocation(item) !== target) return false;
+    let use: ts.Node = item;
+
+    while (
+      ts.isParenthesizedExpression(use.parent) ||
+      ts.isNonNullExpression(use.parent) ||
+      ts.isAsExpression(use.parent)
+    )
+      use = use.parent;
+    const parent = use.parent;
+
+    // Read-only uses: a property read, a comparison, `typeof`, a condition. Anything else may change it.
+    if (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) {
+      let access: ts.Node = parent;
+
+      while (ts.isPropertyAccessExpression(access.parent) || ts.isElementAccessExpression(access.parent))
+        access = access.parent;
+      const outer = access.parent;
+
+      return (
+        (ts.isCallExpression(outer) && outer.expression === access) ||
+        ts.isDeleteExpression(outer) ||
+        ((ts.isPrefixUnaryExpression(outer) || ts.isPostfixUnaryExpression(outer)) &&
+          (outer.operator === ts.SyntaxKind.PlusPlusToken ||
+            outer.operator === ts.SyntaxKind.MinusMinusToken)) ||
+        (ts.isBinaryExpression(outer) &&
+          outer.left === access &&
+          outer.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+          outer.operatorToken.kind <= ts.SyntaxKind.LastAssignment)
+      );
+    }
+
+    if (
+      ts.isBinaryExpression(parent) &&
+      parent.operatorToken.kind >= ts.SyntaxKind.FirstBinaryOperator &&
+      parent.operatorToken.kind <= ts.SyntaxKind.LastBinaryOperator &&
+      !(
+        parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+      )
+    )
+      return false;
+
+    if (ts.isTypeOfExpression(parent) || ts.isIfStatement(parent) || ts.isPrefixUnaryExpression(parent))
+      return false;
+
+    if (ts.isConditionalExpression(parent) && parent.condition === use) return false;
+
+    return true;
+  });
 }
 
 /** A local that holds an object (or a value of unknown type), which a function it is passed to can change. */

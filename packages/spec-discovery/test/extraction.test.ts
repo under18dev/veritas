@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { discoverEvidence } from '../src/index.js';
+import { discoverEvidence, withoutCodeBlocks } from '../src/index.js';
 import { config, tempProject, writeProjectFile } from './helpers.js';
 
 describe('statement extraction', () => {
@@ -22,6 +22,37 @@ describe('statement extraction', () => {
     const result = await discoverEvidence({ root, config: config() });
     const thresholds = result.statements.filter((s) => s.relation.kind === 'threshold');
     expect(thresholds.map((s) => [s.quote, s.range.start])).toEqual([['The count must be at most 5.', 8]]);
+  });
+
+  it('closes a code block only on a fence at least as long, and skips per cent and JSDoc examples', async () => {
+    expect(withoutCodeBlocks('a\n```ts\nat most 3\n````\nb at most 4').split('\n')).toEqual([
+      'a',
+      '',
+      '',
+      '',
+      'b at most 4',
+    ]);
+    expect(withoutCodeBlocks('````\n```\nat most 3\n````\nc').split('\n')).toEqual(['', '', '', '', 'c']);
+    const root = tempProject('jsdoc');
+    writeProjectFile(root, 'README.md', 'The bundle is up to 97 per cent smaller.\n');
+    writeProjectFile(
+      root,
+      'src/limit.ts',
+      [
+        '/**',
+        ' * Runs tasks.',
+        ' * The concurrency must be at least 1.',
+        ' * @example',
+        ' * // at most 3 requests at a time',
+        ' * limit(tasks, 3);',
+        ' * @returns the results',
+        ' */',
+        'export function limit(tasks: unknown[], concurrency: number) { return [tasks, concurrency]; }',
+      ].join('\n'),
+    );
+    const result = await discoverEvidence({ root, config: config() });
+    const thresholds = result.statements.filter((s) => s.relation.kind === 'threshold');
+    expect(thresholds.map((s) => s.quote)).toEqual(['* The concurrency must be at least 1.']);
   });
 
   it('handles every English and Japanese threshold family, separators, and modality', async () => {

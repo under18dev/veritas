@@ -193,6 +193,19 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       'tsconfig.json at the root only references other projects, and mutator type-checks against that file alone: mutants were not type-checked, so some survivors may be type errors',
     );
 
+  const vitest = resolvePackageVersion(options.root, 'vitest');
+  const major = vitestMajor(vitest);
+
+  if (major !== null && major < MUTATOR_MIN_VITEST_MAJOR)
+    return result('unsupported', {
+      detail: `mutation testing needs Vitest ${MUTATOR_MIN_VITEST_MAJOR} or later; the project has Vitest ${vitest}`,
+    });
+
+  if (major !== null && major < MUTATOR_DECLARED_VITEST_MAJOR)
+    warnings.push(
+      `@mizchi/mutator declares Vitest ${MUTATOR_DECLARED_VITEST_MAJOR}; the project has Vitest ${vitest}, which has worked but is outside that range`,
+    );
+
   if (options.testFiles?.length === 0) {
     warnings.push('no test imports the code in scope; mutation was not run');
 
@@ -217,20 +230,6 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   if (!detection.available || detection.binPath === null) {
     return result('unsupported', { backend, detail: detection.detail });
   }
-
-  const vitest = resolvePackageVersion(options.root, 'vitest');
-  const major = vitestMajor(vitest);
-
-  if (major !== null && major < MUTATOR_MIN_VITEST_MAJOR)
-    return result('unsupported', {
-      backend,
-      detail: `mutation testing needs Vitest ${MUTATOR_MIN_VITEST_MAJOR} or later; the project has Vitest ${vitest}`,
-    });
-
-  if (major !== null && major < MUTATOR_DECLARED_VITEST_MAJOR)
-    warnings.push(
-      `@mizchi/mutator declares Vitest ${MUTATOR_DECLARED_VITEST_MAJOR}; the project has Vitest ${vitest}, which has worked but is outside that range`,
-    );
 
   // The adapter's copy runs the Vitest installed with Veritas, not the project's, so test environments and plugins
   // the tests load from the project (happy-dom, jsdom, ...) are not found there.

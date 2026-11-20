@@ -164,6 +164,14 @@ describe('runMutation failures', () => {
     expect(r.status).toBe('unsupported');
     expect(r.detail).toBe('mutation testing needs Vitest 4 or later; the project has Vitest 3.2.4');
     expect(r.command).toEqual([]);
+    // Also when no test imports the code in scope.
+    const none = await runMutation({
+      root,
+      config: config(),
+      reportDir: path.join(root, 'out'),
+      testFiles: [],
+    });
+    expect(none.status).toBe('unsupported');
   });
 
   it('rejects a relative report dir and unsafe arguments before running anything', async () => {
