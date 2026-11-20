@@ -12,6 +12,7 @@ const inventory = {
     { path: 'test/cli.test.ts', hash: 'd', dependencies: ['test/helpers.ts'] },
     { path: 'test/spawn.test.ts', hash: 'e', dependencies: ['src/b.ts'] },
     { path: 'test/alias.test.ts', hash: 'f', dependencies: ['src/b.ts'] },
+    { path: 'test/custom.test.ts', hash: 'g', dependencies: ['src/b.ts'] },
   ],
   tests: [
     test('test/a.test.ts'),
@@ -33,6 +34,7 @@ describe('selectMutationTestFiles', () => {
       'test/cli.test.ts',
       'test/spawn.test.ts',
       'test/alias.test.ts',
+      'test/custom.test.ts',
     ]);
   });
 
@@ -43,6 +45,8 @@ describe('selectMutationTestFiles', () => {
     expect(selected).toContain('test/cli.test.ts');
     expect(selected).toContain('test/spawn.test.ts');
     expect(selected).toContain('test/alias.test.ts');
+    // No test case was recognized in it (a custom registration, say), so what it runs is unknown.
+    expect(selected).toContain('test/custom.test.ts');
     expect(selected).not.toContain('test/b.test.ts');
   });
 

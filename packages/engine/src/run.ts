@@ -1112,8 +1112,8 @@ async function runInContext(
  * Test files mutator needs to run. A test file is left out only on evidence that it cannot kill these
  * mutants: it imports project sources and none of them is in scope. A test whose reach static analysis cannot
  * see is always kept: a child process or dynamic import may load the mutated source itself (plain JavaScript,
- * a TypeScript loader), and an unresolved import may be the source in scope. A test that imports no source at
- * all is kept too, so a failing baseline still shows.
+ * a TypeScript loader), and an unresolved import may be the source in scope. So is a file in which no test was
+ * recognized, and a test that imports no source at all, so a failing baseline still shows.
  */
 export function selectMutationTestFiles(
   inventory: Pick<TestInventory, 'files' | 'tests'>,
@@ -1136,9 +1136,16 @@ export function selectMutationTestFiles(
       .map((test) => test.file),
   );
 
+  // A file without a recorded test (a custom registration, say) may still run anything.
+  const recorded = new Set(inventory.tests.map((test) => test.file));
+
   return inventory.files
     .filter(
-      (file) => unseen.has(file.path) || !file.dependencies.some(isSource) || file.dependencies.some(inScope),
+      (file) =>
+        unseen.has(file.path) ||
+        !recorded.has(file.path) ||
+        !file.dependencies.some(isSource) ||
+        file.dependencies.some(inScope),
     )
     .map((file) => file.path);
 }
