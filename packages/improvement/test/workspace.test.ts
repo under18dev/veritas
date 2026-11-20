@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createWorkspace,
   diffSnapshots,
@@ -50,10 +50,16 @@ describe('workspace and repository writes', () => {
     writeFileSync(path.join(outside, 'shared.test.ts'), 'outside');
     const root = project({ 'src/a.ts': 'x' });
     symlinkSync(outside, path.join(root, 'test'), process.platform === 'win32' ? 'junction' : 'dir');
-    const before = readdirSync(tmpdir()).filter((d) => d.startsWith('veritas-improve-')).length;
-    expect(() => createWorkspace(root)).toThrow(/links outside the project/);
-    // The partial copy is removed.
-    expect(readdirSync(tmpdir()).filter((d) => d.startsWith('veritas-improve-')).length).toBe(before);
+    // A temporary directory of its own, so workspaces of tests running in parallel do not count.
+    const temp = mkdtempSync(path.join(tmpdir(), 'veritas-temp-'));
+    for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, temp);
+    try {
+      expect(() => createWorkspace(root)).toThrow(/links outside the project/);
+      // The partial copy is removed.
+      expect(readdirSync(temp)).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('keeps links that stay inside the copy', () => {
