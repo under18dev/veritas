@@ -232,6 +232,11 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       `@mizchi/mutator declares Vitest ${MUTATOR_DECLARED_VITEST_MAJOR}; the project has Vitest ${vitest}, which has worked but is outside that range`,
     );
 
+  // The adapter's copy runs the Vitest installed with Veritas, not the project's, so test environments and plugins
+  // the tests load from the project (happy-dom, jsdom, ...) are not found there.
+  const ownCopyHint =
+    "the project has no @mizchi/mutator, so the copy bundled with Veritas ran the tests with its own Vitest; add @mizchi/mutator to the project's devDependencies to run them with the project's Vitest, test environments and plugins";
+
   if (detection.origin === 'adapter') {
     warnings.push(`the project has no @mizchi/mutator; using the adapter's own copy at ${detection.binPath}`);
   }
@@ -306,7 +311,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   if (run.exitCode === EXIT_BASELINE_FAILED) {
     return result('failed', {
       ...common,
-      detail: `tests fail without mutants (baseline, exit 4): ${summarize(redact(run.stderr))}`,
+      detail: `tests fail without mutants (baseline, exit 4): ${summarize(redact(run.stderr))}${detection.origin === 'adapter' ? `; ${ownCopyHint}` : ''}`,
     });
   }
 
