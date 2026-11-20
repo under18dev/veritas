@@ -1,5 +1,6 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -458,4 +459,27 @@ export async function replayPropertyTest(record: PbtResult, options: ReplayOptio
     },
     stored.seed,
   );
+}
+
+/** Version of the fast-check copy this package runs property tests with, or null when it is not installed. */
+export function bundledFastCheckVersion(): string | null {
+  try {
+    let dir = path.dirname(createRequire(import.meta.url).resolve('fast-check'));
+
+    for (;;) {
+      const file = path.join(dir, 'package.json');
+
+      if (existsSync(file)) {
+        const pkg = JSON.parse(readFileSync(file, 'utf8')) as { name?: string; version?: string };
+
+        if (pkg.name === 'fast-check') return pkg.version ?? null;
+      }
+      const parent = path.dirname(dir);
+
+      if (parent === dir) return null;
+      dir = parent;
+    }
+  } catch {
+    return null;
+  }
 }

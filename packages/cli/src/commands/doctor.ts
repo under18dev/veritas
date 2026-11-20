@@ -1,4 +1,5 @@
 import { ExitCode, loadConfig, runDoctor, type VeritasConfig, VeritasError } from '@under18dev/veritas-core';
+import { bundledTools } from '@under18dev/veritas-engine';
 import { emitJson, emitText, type GlobalOptions, log } from '../output.js';
 
 export async function doctorCommand(opts: GlobalOptions): Promise<ExitCode> {
@@ -10,7 +11,7 @@ export async function doctorCommand(opts: GlobalOptions): Promise<ExitCode> {
     if (!(error instanceof VeritasError) || error.code !== 'CONFIG_MISSING') throw error;
     log('no configuration found; checking with defaults (run `veritas init`)');
   }
-  const report = await runDoctor(opts.root, config);
+  const report = await runDoctor(opts.root, config, process.env, bundledTools());
   const nodeOk = report.capabilities.find((c) => c.name === 'node')?.state === 'available';
 
   if (opts.json) {

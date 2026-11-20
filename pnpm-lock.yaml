@@ -439,6 +439,9 @@ importers:
       '@under18dev/veritas-solver-lean':
         specifier: workspace:*
         version: link:../solver-lean
+      '@under18dev/veritas-solver-z3':
+        specifier: workspace:*
+        version: link:../solver-z3
       '@under18dev/veritas-spec-discovery':
         specifier: workspace:*
         version: link:../spec-discovery

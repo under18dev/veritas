@@ -181,3 +181,19 @@ export function summarize(text: string, maxLines = 15, maxChars = 2000): string 
 
   return tail.length > maxChars ? tail.slice(-maxChars) : tail;
 }
+
+/** Version of the @mizchi/mutator copy that comes with this package, or null when there is none. */
+export function bundledMutatorVersion(): string | null {
+  const dir = adapterPackageDir();
+
+  if (!dir) return null;
+
+  try {
+    return (
+      (JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { version?: string }).version ??
+      null
+    );
+  } catch {
+    return null;
+  }
+}

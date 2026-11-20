@@ -215,6 +215,15 @@ export function solveSmtLib(smt: string, options: SolveOptions): Promise<SolverR
   return (options.engine ?? 'z3-wasm') === 'z3-native' ? runNative(smt, options) : runWasm(smt, options);
 }
 
+/** Version of the z3-solver (WebAssembly) package this package runs, or null when it is not installed. */
+export function bundledZ3SolverVersion(): string | null {
+  try {
+    return (createRequire(import.meta.url)('z3-solver/package.json') as { version?: string }).version ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Version of the solver build `engine` would run, or null when it cannot be determined. */
 export async function solverEngineVersion(
   engine: SolverEngine = 'z3-wasm',

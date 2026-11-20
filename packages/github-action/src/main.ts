@@ -11,7 +11,7 @@ import {
   runCommand,
   runDoctor,
 } from '@under18dev/veritas-core';
-import { PROFILE_STAGES, type Profile, runVeritas } from '@under18dev/veritas-engine';
+import { bundledTools, PROFILE_STAGES, type Profile, runVeritas } from '@under18dev/veritas-engine';
 import { planFromEvent, type RunPlan } from './event.js';
 
 const input = (name: string, fallback: string): string =>
@@ -109,7 +109,7 @@ export async function main(): Promise<number> {
     process.env.INPUT_INCONCLUSIVE || (configured?.config.policy.inconclusiveBehavior ?? 'warn');
 
   if (!project.hasPackageJson) return degraded('no package.json found', behaviorInput, event.fromFork);
-  const doctor = await runDoctor(root, null);
+  const doctor = await runDoctor(root, null, process.env, bundledTools());
 
   if (!doctor.capabilities.some((cap) => cap.name === 'vitest' && cap.state !== 'unavailable'))
     return degraded('Vitest is unavailable', behaviorInput, event.fromFork);

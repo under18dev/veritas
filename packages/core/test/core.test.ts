@@ -38,6 +38,7 @@ import {
   redact,
   redactArgs,
   resolveInsideRoot,
+  runDoctor,
   runStages,
   SCHEMA_VERSION,
   type Stage,
@@ -606,6 +607,22 @@ describe('schemas', () => {
 });
 
 describe('doctor', () => {
+  it('reports the tools the Veritas installation brings when the project has none', async () => {
+    const root = tmp();
+    writeFileSync(path.join(root, 'package.json'), '{"name":"p"}');
+    const report = await runDoctor(
+      root,
+      null,
+      {},
+      { '@mizchi/mutator': '1.2.3', 'fast-check': '4.5.6', 'z3-solver': '7.8.9' },
+    );
+    const cap = (name: string) => report.capabilities.find((c) => c.name === name);
+    expect(cap('mutator')).toMatchObject({ state: 'available', version: '1.2.3' });
+    expect(cap('fast_check')).toMatchObject({ state: 'available', version: '4.5.6' });
+    expect(cap('z3')).toMatchObject({ state: 'available', version: '7.8.9' });
+    expect(cap('z3')?.detail).toMatch(/resolved from veritas/);
+  });
+
   it('looks for Lean on the PATH first, then in the elan install directories', () => {
     const exe = process.platform === 'win32' ? 'lean.exe' : 'lean';
     const home = path.join(tmpdir(), 'home');

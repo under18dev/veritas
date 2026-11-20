@@ -80,6 +80,7 @@ import { extractWithLlm } from './llm-extract.js';
 import { createLlmProvider } from './llm-providers.js';
 import { defaultSeed, latestRunWith, openProject, readArtifact } from './project.js';
 import { buildReportInput, REPORT_FILES, renderReport } from './report.js';
+import { bundledTools } from './tools.js';
 
 export type Profile = 'quick' | 'standard' | 'deep';
 
@@ -1044,7 +1045,8 @@ async function runInContext(
   });
 
   const results: StageResult[] = await runStages(stages, { root, config, store, signal, log });
-  const capabilities: Capability[] = (await runDoctor(root, config)).capabilities;
+  const capabilities: Capability[] = (await runDoctor(root, config, process.env, bundledTools()))
+    .capabilities;
   const decision = evaluatePolicy(config.policy, findings, results, claims, { mutants, ...policyEvidence });
   const usage = results.reduce(
     (acc, r) => ({

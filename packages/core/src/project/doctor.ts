@@ -66,15 +66,25 @@ async function versionOf(command: string, args: string[], root: string): Promise
   return (result.stdout || result.stderr).trim().split('\n')[0] ?? null;
 }
 
+/**
+ * Versions of the tools the Veritas installation brings itself, as the packages that run them resolve them
+ * (mutation-adapter, property-testing, solver-z3). `core` cannot see their dependencies under a strict layout
+ * (pnpm), so the caller that depends on those packages passes them in.
+ */
+export type BundledTools = Partial<Record<'@mizchi/mutator' | 'fast-check' | 'z3-solver', string | null>>;
+
 /** Resolve a package from the project first, then from the Veritas installation itself. */
 function packageVersion(
   root: string,
   name: string,
+  bundled: BundledTools = {},
 ): { version: string | null; from: 'project' | 'veritas' | null } {
   const fromProject = resolvePackageVersion(root, name);
 
   if (fromProject) return { version: fromProject, from: 'project' };
-  const fromSelf = resolvePackageVersion(path.dirname(fileURLToPath(import.meta.url)), name);
+  const fromSelf =
+    bundled[name as keyof BundledTools] ??
+    resolvePackageVersion(path.dirname(fileURLToPath(import.meta.url)), name);
 
   return fromSelf ? { version: fromSelf, from: 'veritas' } : { version: null, from: null };
 }
@@ -89,6 +99,7 @@ export async function runDoctor(
   root: string,
   config: VeritasConfig | null,
   env: NodeJS.ProcessEnv = process.env,
+  bundled: BundledTools = {},
 ): Promise<DoctorReport> {
   const project = detectProject(root);
   const caps: Capability[] = [];
@@ -142,7 +153,7 @@ export async function runDoctor(
     vitest,
   );
 
-  const mutator = packageVersion(root, '@mizchi/mutator');
+  const mutator = packageVersion(root, '@mizchi/mutator', bundled);
   add(
     'mutator',
     mutator.version ? 'available' : 'unavailable',
@@ -150,7 +161,7 @@ export async function runDoctor(
     mutator.version,
   );
 
-  const fc = packageVersion(root, 'fast-check');
+  const fc = packageVersion(root, 'fast-check', bundled);
   add(
     'fast_check',
     fc.version ? 'available' : 'unavailable',
@@ -159,7 +170,7 @@ export async function runDoctor(
   );
 
   // `prove` runs the z3-solver WebAssembly build; a native z3 executable alone does not make it available.
-  const z3wasm = packageVersion(root, 'z3-solver');
+  const z3wasm = packageVersion(root, 'z3-solver', bundled);
   add(
     'z3',
     z3wasm.version ? 'available' : 'unavailable',
