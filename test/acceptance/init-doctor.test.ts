@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { copyFixture, json, runCli } from './helpers.js';
+import { CLI, copyFixture, json, runCli } from './helpers.js';
 
 describe('init and doctor', () => {
   it('initialises a fixture, runs doctor and round-trips the config', () => {
@@ -204,5 +204,27 @@ describe('exit codes and output contract', () => {
     const result = runCli(['--json', 'report', '--format', 'html'], dir);
     expect(result.status).toBe(2);
     expect(json(result)).toMatchObject({ status: 'error', code: 'FORMAT_CONFLICT' });
+  });
+});
+
+describe('output to a closed pipe', () => {
+  it('ends quietly when the reader stops early, as `| head` does', async () => {
+    const dir = copyFixture('discount-boundary');
+    expect(runCli(['init', '--yes'], dir).status).toBe(0);
+    expect(runCli(['analyze', '--json'], dir).status).toBe(0);
+    const { spawn } = await import('node:child_process');
+    const child = spawn(process.execPath, [CLI, 'spec', 'list'], {
+      cwd: dir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    // Read one chunk, then close the pipe like `head -1`.
+    child.stdout.once('data', () => child.stdout.destroy());
+    const code = await new Promise<number | null>((resolve) => child.on('close', resolve));
+    expect(stderr).not.toMatch(/EPIPE|Unhandled 'error' event/);
+    expect(code).toBe(0);
   });
 });
