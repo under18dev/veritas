@@ -369,7 +369,10 @@ describe('applyImprovement refusals', () => {
     expect(second.outcome).toBe('blocked');
     expect(second.reasons.join()).toMatch(/iteration budget exhausted/);
     expect(projectHash(root)).toBe(hash);
+    // Each approved attempt records its approval, the blocked one included.
     expect(filesUnder(root, `.veritas/improvements/${result.planId}`)).toEqual([
+      'approval-1.json',
+      'approval-2.json',
       'attempt-1.json',
       'attempt-2.json',
       'plan.json',
