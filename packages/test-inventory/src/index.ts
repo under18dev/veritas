@@ -69,7 +69,7 @@ export function inventoryTests(options: {
   const tests: TestCaseType[] = [];
   const diagnostics: { file: string; message: string }[] = [];
 
-  const callInfoCache = new Map<ts.CallExpression, CallInfo>();
+  const callInfoCache = new Map<Invocation, CallInfo>();
   const helperInfoCache = new Map<ts.Node, CallInfo>();
 
   for (const file of uniqueFiles) {
@@ -159,8 +159,28 @@ interface Ctx {
   /** Absolute path of the test file being analysed. */
   file: string;
   /** Per call: the project symbols it reaches. Also guards helper recursion. */
-  callInfo: Map<ts.CallExpression, CallInfo>;
+  callInfo: Map<Invocation, CallInfo>;
   helperInfo: Map<ts.Node, CallInfo>;
+}
+
+/** Code that runs a function: a call, a constructor call (`new X()`) or a tagged template (`` tag`...` ``). */
+type Invocation = ts.CallExpression | ts.NewExpression | ts.TaggedTemplateExpression;
+
+function isInvocation(node: ts.Node): node is Invocation {
+  return ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node);
+}
+
+function calleeOf(node: Invocation): ts.Expression {
+  return ts.isTaggedTemplateExpression(node) ? node.tag : node.expression;
+}
+
+/** The values an invocation passes: its arguments, or the substitutions of a tagged template. */
+function argumentsOf(node: Invocation): readonly ts.Expression[] {
+  if (!ts.isTaggedTemplateExpression(node)) return node.arguments ?? [];
+
+  return ts.isTemplateExpression(node.template)
+    ? node.template.templateSpans.map((span) => span.expression)
+    : [];
 }
 
 interface Target {
@@ -182,15 +202,15 @@ interface CallInfo {
 }
 
 interface BodyAnalysis {
-  calls: { node: ts.CallExpression; target: Target }[];
+  calls: { node: Invocation; target: Target }[];
   assertions: ts.CallExpression[];
   /** Calls in the body whose result (or a value derived from it) reaches an assertion subject. */
-  asserted: Set<ts.CallExpression>;
+  asserted: Set<Invocation>;
   unresolvedImports: Set<string>;
   helperAsserts: boolean;
   opaque: boolean;
   /** Calls whose result flows into what the body returns. */
-  returned: Set<ts.CallExpression>;
+  returned: Set<Invocation>;
 }
 
 /**
@@ -201,12 +221,12 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
   const { checker } = ctx;
   const source = body.getSourceFile();
   const calls: BodyAnalysis['calls'] = [];
-  const recorded = new Set<ts.CallExpression>();
+  const recorded = new Set<Invocation>();
   const assertions: ts.CallExpression[] = [];
   const unresolvedImports = new Set<string>();
   let helperAsserts = false;
   let opaque = false;
-  const record = (node: ts.CallExpression): boolean => {
+  const record = (node: Invocation): boolean => {
     const info = callInfo(node, ctx);
 
     if (!recorded.has(node)) {
@@ -220,16 +240,16 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
     return info.targets.length > 0;
   };
   // Variables holding (something derived from) a project call's result, keyed by symbol so shadowing is respected.
-  const localCalls = new Map<ts.Symbol, ts.CallExpression[]>();
+  const localCalls = new Map<ts.Symbol, Invocation[]>();
   const outerDone = new Set<ts.Symbol>();
-  const sourcesOf = (expressions: ts.Expression[]): ts.CallExpression[] => {
-    const found = new Set<ts.CallExpression>();
+  const sourcesOf = (expressions: ts.Expression[]): Invocation[] => {
+    const found = new Set<Invocation>();
 
     for (const expression of expressions) {
       // A function value is a helper; it is followed where it is called, not where it is defined.
       if (isFunctionLike(skipParens(expression))) continue;
       const direct = [expression, ...descendants(expression)].filter(
-        (item): item is ts.CallExpression => ts.isCallExpression(item) && record(item),
+        (item): item is Invocation => isInvocation(item) && record(item),
       );
 
       for (const item of direct.length > 0 ? direct : trackedCalls(expression)) found.add(item);
@@ -254,8 +274,8 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
 
     if (sources.length > 0) localCalls.set(symbol, sources);
   };
-  const trackedCalls = (expression: ts.Node): ts.CallExpression[] => {
-    const found = new Set<ts.CallExpression>();
+  const trackedCalls = (expression: ts.Node): Invocation[] => {
+    const found = new Set<Invocation>();
 
     for (const item of [expression, ...descendants(expression)]) {
       if (!ts.isIdentifier(item)) continue;
@@ -270,7 +290,7 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
 
     return [...found];
   };
-  const bind = (identifiers: ts.Identifier[], sources: ts.CallExpression[], merge = false) => {
+  const bind = (identifiers: ts.Identifier[], sources: Invocation[], merge = false) => {
     if (sources.length === 0) return;
 
     for (const identifier of identifiers) {
@@ -282,9 +302,10 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
     }
   };
   // Project code runs the callbacks it is given: what they write to is an output of that call. So is the
-  // state of a local object after a project method ran on it (`client.complete(); client.cachedResponses`).
-  const bindCallOutputs = (call: ts.CallExpression) => {
-    const callee = skipParens(call.expression);
+  // state of a local object after a project method ran on it (`client.complete(); client.cachedResponses`), or
+  // after it was passed to project code (`deepMerge(target, source); target.x`), which may change it in place.
+  const bindCallOutputs = (call: Invocation) => {
+    const callee = skipParens(calleeOf(call));
 
     if (ts.isPropertyAccessExpression(callee)) {
       let receiver = skipParens(callee.expression);
@@ -300,7 +321,15 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
     }
     const callbacks = new Set<ts.Node>();
 
-    for (const argument of call.arguments)
+    for (const argument of argumentsOf(call)) {
+      const value = skipParens(argument);
+
+      if (ts.isIdentifier(value) && passedByReference(value, checker))
+        if (checker.getSymbolAtLocation(value)?.valueDeclaration?.getSourceFile() === source)
+          bind([value], [call], true);
+    }
+
+    for (const argument of argumentsOf(call))
       for (const item of [argument, ...descendants(argument)]) {
         if (isFunctionLike(item)) callbacks.add(item);
 
@@ -319,9 +348,7 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
     if (ts.isTryStatement(node) && node.catchClause?.variableDeclaration)
       bind(
         bindingIdentifiers(node.catchClause.variableDeclaration.name),
-        descendants(node.tryBlock).filter(
-          (item): item is ts.CallExpression => ts.isCallExpression(item) && record(item),
-        ),
+        descendants(node.tryBlock).filter((item): item is Invocation => isInvocation(item) && record(item)),
       );
 
     if (ts.isVariableDeclaration(node) && node.initializer)
@@ -340,22 +367,22 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
         sourcesOf([node.expression]),
       );
 
-    if (!ts.isCallExpression(node)) continue;
+    if (!isInvocation(node)) continue;
 
     if (record(node)) bindCallOutputs(node);
     else {
-      const specifier = unresolvedImportOf(node.expression, ctx);
+      const specifier = unresolvedImportOf(calleeOf(node), ctx);
 
       if (specifier !== undefined) unresolvedImports.add(specifier);
     }
 
-    if (isExpectCall(node) || isAssertCall(node)) assertions.push(node);
+    if (ts.isCallExpression(node) && (isExpectCall(node) || isAssertCall(node))) assertions.push(node);
   }
   // What a helper returns may come from enclosing variables, e.g. `const of = (n) => candidates.filter(...)`.
   const returned = new Set(
     sourcesOf(ts.isBlock(body) ? returnedExpressions(body) : ts.isExpression(body) ? [body] : []),
   );
-  const asserted = new Set<ts.CallExpression>();
+  const asserted = new Set<Invocation>();
 
   // Either side of a comparison counts: `expect(['a', 'b']).toContain(result.status)` checks the result.
   for (const value of assertions.flatMap(comparedValues)) {
@@ -384,7 +411,7 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
  * The project symbols a call reaches: directly, through a function defined in test code, or as a method of a
  * project value (`Schema.parse(x)` exercises the project's `Schema`).
  */
-function callInfo(node: ts.CallExpression, ctx: Ctx): CallInfo {
+function callInfo(node: Invocation, ctx: Ctx): CallInfo {
   const cached = ctx.callInfo.get(node);
 
   if (cached) return cached;
@@ -407,7 +434,7 @@ function callInfo(node: ts.CallExpression, ctx: Ctx): CallInfo {
         ...none,
         targets: [{ symbol: receiver, ownArgs: false, assertedInside: false, flowsToResult: true }],
       };
-    else info = { ...none, opaque: isOpaqueCall(node, ctx.checker) };
+    else info = { ...none, opaque: ts.isCallExpression(node) && isOpaqueCall(node, ctx.checker) };
   }
   ctx.callInfo.set(node, info);
 
@@ -415,8 +442,8 @@ function callInfo(node: ts.CallExpression, ctx: Ctx): CallInfo {
 }
 
 /** `X.method(...)` or `X.a.b(...)` where `X` is a value declared in a project file. */
-function projectReceiver(node: ts.CallExpression, ctx: Ctx): string | undefined {
-  const callee = skipParens(node.expression);
+function projectReceiver(node: Invocation, ctx: Ctx): string | undefined {
+  const callee = skipParens(calleeOf(node));
 
   if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) return undefined;
   let current: ts.Expression = callee;
@@ -536,8 +563,8 @@ function helperInfo(body: ts.Node, ctx: Ctx): CallInfo {
 }
 
 /** The body of the function a call invokes, when that function is test code inside the root. */
-function helperBody(node: ts.CallExpression, ctx: Ctx): ts.Node | undefined {
-  let symbol = ctx.checker.getSymbolAtLocation(node.expression);
+function helperBody(node: Invocation, ctx: Ctx): ts.Node | undefined {
+  let symbol = ctx.checker.getSymbolAtLocation(calleeOf(node));
 
   if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = ctx.checker.getAliasedSymbol(symbol);
 
@@ -787,7 +814,8 @@ function analyzeTest(
   const targetCalls = (analysis?.calls ?? []).map(({ node, target }) => ({
     symbol: target.symbol,
     // A helper's or a method's arguments are not the project function's, so they say nothing about its inputs.
-    args: target.ownArgs ? node.arguments.map(literalArgument) : [],
+    args:
+      target.ownArgs && !ts.isTaggedTemplateExpression(node) ? argumentsOf(node).map(literalArgument) : [],
     asserted: target.assertedInside || (target.flowsToResult && analysis?.asserted.has(node) === true),
     location: location(source, node, relativeFile),
   }));
@@ -853,12 +881,31 @@ function analyzeTest(
 }
 
 function resolveProjectCall(
-  node: ts.CallExpression,
+  node: Invocation,
   checker: ts.TypeChecker,
   projectSet: Set<string>,
   root: string,
 ): string | undefined {
-  return projectSymbolId(checker.getSymbolAtLocation(node.expression), checker, projectSet, root);
+  return projectSymbolId(checker.getSymbolAtLocation(calleeOf(node)), checker, projectSet, root);
+}
+
+/** A local that holds an object (or a value of unknown type), which a function it is passed to can change. */
+function passedByReference(identifier: ts.Identifier, checker: ts.TypeChecker): boolean {
+  const type = checker.getTypeAtLocation(identifier);
+  const primitive =
+    ts.TypeFlags.StringLike |
+    ts.TypeFlags.NumberLike |
+    ts.TypeFlags.BooleanLike |
+    ts.TypeFlags.BigIntLike |
+    ts.TypeFlags.ESSymbolLike |
+    ts.TypeFlags.Null |
+    ts.TypeFlags.Undefined |
+    ts.TypeFlags.Void;
+
+  if (type.flags & primitive) return false;
+
+  // Functions passed as callbacks are followed separately, by what they write.
+  return type.getCallSignatures().length === 0;
 }
 
 /**
@@ -1383,8 +1430,11 @@ function assertingHelpers(source: ts.SourceFile): Map<ts.Node, Set<number>> {
   return helpers;
 }
 
+/** `expect(...)`, and Vitest's type-level checks `expectTypeOf(...)` and `assertType(...)`. */
 function isExpectCall(node: ts.CallExpression): boolean {
-  return rootIdentifier(node.expression) === 'expect';
+  const root = rootIdentifier(node.expression);
+
+  return root === 'expect' || root === 'expectTypeOf' || root === 'assertType';
 }
 
 function isAssertCall(node: ts.CallExpression): boolean {

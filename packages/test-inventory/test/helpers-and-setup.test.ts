@@ -163,6 +163,34 @@ describe('result flow', () => {
     expect(byName('non-project callback').asserted).toBe(false);
   });
 
+  it('links constructor calls, tagged templates, type-level checks and objects changed in place', () => {
+    const extra = {
+      'src/more.ts': `export class Url { constructor(public input: string) { if (typeof input !== 'string') throw new TypeError('x'); } }
+export const dedent = (strings: TemplateStringsArray, ...values: unknown[]) => strings.join('').trim();
+export function merge(target: Record<string, unknown>, source: Record<string, unknown>) { Object.assign(target, source); }
+export function double(n: number) { return n * 2; }
+`,
+    };
+    const byName = inventory(
+      `import { expect, expectTypeOf, it } from 'vitest';
+import { Url, dedent, double, merge } from '../src/more.js';
+it('constructor', () => { expect(() => new Url(1 as never)).toThrow(TypeError); });
+it('tagged template', () => { expect(dedent\`  a  \`).toBe('a'); });
+it('type-level', () => { expectTypeOf(double(1)).toEqualTypeOf<number>(); });
+it('changed in place', () => { const target = {}; merge(target, { a: 1 }); expect(target).toEqual({ a: 1 }); });
+it('primitive argument', () => { const n = 2; double(n); expect(n).toBe(2); });
+`,
+      extra,
+    );
+    expect(byName('constructor')).toMatchObject({ symbols: ['src/more.ts#Url'], asserted: true });
+    expect(byName('tagged template')).toMatchObject({ symbols: ['src/more.ts#dedent'], asserted: true });
+    expect(byName('type-level')).toMatchObject({ symbols: ['src/more.ts#double'], asserted: true });
+    expect(byName('type-level').suspicions).not.toContain('no_assertion');
+    expect(byName('changed in place')).toMatchObject({ symbols: ['src/more.ts#merge'], asserted: true });
+    // A number cannot be changed by the function it is passed to.
+    expect(byName('primitive argument').asserted).toBe(false);
+  });
+
   it('links the expected side of an assertion and the state of an object a project method ran on', () => {
     const byName = inventory(`${header}
       it('reversed', () => { expect([2, 3]).toContain(fn(1)); });
@@ -170,7 +198,11 @@ describe('result flow', () => {
       it('project value method', () => { expect(items.includes(2)).toBe(true); });
     `);
     expect(byName('reversed').asserted).toBe(true);
-    expect(byName('state')).toMatchObject({ symbols: ['src/math.ts#inc'], asserted: true });
+    // The constructor is project code too.
+    expect(byName('state')).toMatchObject({
+      symbols: ['src/math.ts#Counter', 'src/math.ts#inc'],
+      asserted: true,
+    });
     expect(byName('project value method')).toMatchObject({ symbols: ['src/math.ts#items'], asserted: true });
     // The method's argument is not an input of `items`.
     expect(byName('project value method').args).toEqual([[]]);
