@@ -364,6 +364,9 @@ importers:
       '@under18dev/veritas-improvement':
         specifier: workspace:*
         version: link:../improvement
+      '@under18dev/veritas-mcp':
+        specifier: workspace:*
+        version: link:../mcp
       commander:
         specifier: 15.1.0
         version: 15.1.0

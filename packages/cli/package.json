@@ -3,9 +3,17 @@
   "version": "0.0.0",
   "description": "Command-line interface for Veritas",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/under18dev/veritas.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/under18dev/veritas#readme",
+  "bugs": "https://github.com/under18dev/veritas/issues",
   "type": "module",
   "bin": {
-    "veritas": "./dist/bin.js"
+    "veritas": "./dist/bin.js",
+    "veritas-mcp": "./dist/mcp-bin.js"
   },
   "exports": {
     ".": {
@@ -21,8 +29,9 @@
   },
   "dependencies": {
     "@under18dev/veritas-core": "workspace:*",
-    "commander": "15.1.0",
     "@under18dev/veritas-engine": "workspace:*",
-    "@under18dev/veritas-improvement": "workspace:*"
+    "@under18dev/veritas-improvement": "workspace:*",
+    "@under18dev/veritas-mcp": "workspace:*",
+    "commander": "15.1.0"
   }
 }

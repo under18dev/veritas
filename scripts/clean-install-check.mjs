@@ -59,8 +59,8 @@ writeFileSync(
     private: true,
     type: 'module',
     devDependencies: {
+      // Only the main package, as a user installs it: it must provide both `veritas` and `veritas-mcp`.
       '@under18dev/veritas': tarballs['@under18dev/veritas'],
-      '@under18dev/veritas-mcp': tarballs['@under18dev/veritas-mcp'],
       vitest: '5.1.1',
       '@mizchi/mutator': '0.4.5',
       'fast-check': '4.10.3',
@@ -104,6 +104,8 @@ for (const command of readmeQuickStart(repo)) {
   }
 }
 if (!mismatch) throw new Error('the README quick start never runs `veritas run`');
-// Beyond the quick start: the markdown report renders from the installed packages.
+// Beyond the quick start: the markdown report renders from the installed packages, and the MCP server starts.
 veritas('report', '--format', 'markdown');
+if (!run(pnpm, ['exec', 'veritas-mcp', '--help'], project).includes('Usage: veritas-mcp'))
+  throw new Error('veritas-mcp is not usable from the main package');
 console.log(`clean install check passed in ${project}`);
