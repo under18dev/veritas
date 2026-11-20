@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { Expr, PropertyIR } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import {
@@ -155,6 +158,27 @@ describe('Z3 (wasm) execution', () => {
     expect(nativeZ3Args(1024)).toEqual(['-in', '-smt2', '-memory:1024']);
     expect(nativeZ3Args(undefined)).toEqual(['-in', '-smt2']);
   });
+
+  it('reports a crashed solver process as an error, and the caller keeps running', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'veritas-z3-crash-'));
+    const crash = path.join(dir, 'crash.mjs');
+    // Ends the way a V8 or engine fault does: no output, killed by a signal.
+    writeFileSync(crash, 'process.stdin.resume(); setTimeout(() => process.abort(), 10);\n');
+    const run = await solveSmtLib(conformanceQuery(boundaryIR('>'), 1000), {
+      timeoutMs: 20_000,
+      wasmScript: crash,
+    });
+    expect(run.verdict).toBe('error');
+    expect(run.error).toMatch(/solver process ended with/);
+    const garbage = path.join(dir, 'garbage.mjs');
+    writeFileSync(garbage, "process.stdout.write('sat\\n'); process.exit(0);\n");
+    const unparsable = await solveSmtLib(conformanceQuery(boundaryIR('>'), 1000), {
+      timeoutMs: 20_000,
+      wasmScript: garbage,
+    });
+    // Output that is not the solver's JSON report is never read as a verdict.
+    expect(unparsable.verdict).toBe('error');
+  }, 60_000);
 
   it('reports a missing native binary as an error, not a verdict', async () => {
     const run = await solveSmtLib(conformanceQuery(boundaryIR('>'), 1000), {

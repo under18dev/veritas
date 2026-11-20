@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
-import { Worker } from 'node:worker_threads';
-import { runCommand, runContext } from '@under18dev/veritas-core';
+import { fileURLToPath } from 'node:url';
+import { outOfMemory, runCommand, runContext } from '@under18dev/veritas-core';
 import { parseGetValue, parseSExprs, type SExpr } from './sexpr.js';
 
 export type SolverEngine = 'z3-wasm' | 'z3-native';
@@ -25,10 +25,12 @@ export interface SolveOptions {
   signal?: AbortSignal;
   nativeBinary?: string;
   /**
-   * Memory limit in MiB, defaulting to the run's `limits.memoryMb`: the JavaScript heap of the WebAssembly worker,
-   * or z3's own `-memory:` limit for the native binary.
+   * Memory limit in MiB, defaulting to the run's `limits.memoryMb`: the JavaScript heap of the WebAssembly solver
+   * process, or z3's own `-memory:` limit for the native binary.
    */
   memoryMb?: number;
+  /** Test hook: the script the WebAssembly solver process runs (default: the bundled `wasm-worker`). */
+  wasmScript?: string;
 }
 
 /**
@@ -108,63 +110,63 @@ export function interpretOutput(
   }
 }
 
-/** Below this a worker cannot even start, and V8 then ends the whole process instead of the worker. */
+/** Below this the solver process cannot even start Z3. */
 export const MIN_SOLVER_HEAP_MB = 256;
 
-/** The worker heap limit for a requested limit: never below `MIN_SOLVER_HEAP_MB`; undefined means no limit. */
+/** The solver process heap limit for a requested limit: never below `MIN_SOLVER_HEAP_MB`; undefined means no limit. */
 export function solverHeapLimit(memoryMb: number | undefined): number | undefined {
   return memoryMb === undefined ? undefined : Math.max(MIN_SOLVER_HEAP_MB, Math.floor(memoryMb));
 }
 
-function runWasm(smt: string, options: SolveOptions): Promise<SolverRun> {
-  const started = Date.now();
+async function runWasm(smt: string, options: SolveOptions): Promise<SolverRun> {
+  // Run next to this module; under tests this module is TypeScript, which Node 24+ runs natively.
+  const ext = import.meta.url.endsWith('.ts') ? '.ts' : '.js';
+  const script = options.wasmScript ?? fileURLToPath(new URL(`./wasm-worker${ext}`, import.meta.url));
+  // The solver process's JavaScript heap is capped at the run's memory limit (Z3's WebAssembly memory is separate
+  // and bounded by the 32-bit address space); running out ends that process with an error, never a verdict.
+  const memoryMb = solverHeapLimit(options.memoryMb ?? runContext()?.memoryMb);
+  const result = await runCommand(
+    process.execPath,
+    [...(memoryMb ? [`--max-old-space-size=${memoryMb}`] : []), script],
+    { cwd: process.cwd(), timeoutMs: options.timeoutMs, input: smt, signal: options.signal },
+  );
+  const base = {
+    engine: 'z3-wasm' as const,
+    engineVersion: 'unknown',
+    model: {},
+    reasonUnknown: null,
+    output: '',
+    durationMs: result.durationMs,
+  };
 
-  return new Promise((resolve) => {
-    // Load the worker next to this module; under tests this module is TypeScript, which Node 24+ runs natively.
-    const ext = import.meta.url.endsWith('.ts') ? '.ts' : '.js';
-    // The worker's JavaScript heap is capped at the run's memory limit (Z3's WebAssembly memory is separate
-    // and bounded by the 32-bit address space); running out ends the worker with an error, never a verdict.
-    const memoryMb = solverHeapLimit(options.memoryMb ?? runContext()?.memoryMb);
-    const worker = new Worker(new URL(`./wasm-worker${ext}`, import.meta.url), {
-      workerData: { smt },
-      ...(memoryMb ? { resourceLimits: { maxOldGenerationSizeMb: memoryMb } } : {}),
-    });
-    let settled = false;
-    const done = (run: Omit<SolverRun, 'engine' | 'durationMs'>) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      options.signal?.removeEventListener('abort', onAbort);
-      void worker.terminate();
-      resolve({ engine: 'z3-wasm', durationMs: Date.now() - started, ...run });
-    };
-    const base = { engineVersion: 'unknown', model: {}, reasonUnknown: null, output: '' };
-    const timer = setTimeout(
-      () =>
-        done({ ...base, verdict: 'timeout', error: `wall-clock limit of ${options.timeoutMs} ms exceeded` }),
-      options.timeoutMs,
-    );
-    const onAbort = () => done({ ...base, verdict: 'cancelled', error: 'cancelled' });
-    options.signal?.addEventListener('abort', onAbort, { once: true });
-    worker.once('message', (msg: { ok: boolean; output?: string; version?: string; error?: string }) => {
-      if (!msg.ok) return done({ ...base, verdict: 'error', error: msg.error ?? 'solver failed' });
-      const output = msg.output ?? '';
-      done({ ...interpretOutput(output), engineVersion: msg.version ?? 'unknown', output });
-    });
-    worker.once('error', (error: Error & { code?: string }) =>
-      done({
-        ...base,
-        verdict: 'error',
-        error:
-          error.code === 'ERR_WORKER_OUT_OF_MEMORY'
-            ? `solver ran out of memory (limit ${memoryMb} MiB, limits.memoryMb)`
-            : error.message,
-      }),
-    );
-    worker.once('exit', (code) =>
-      done({ ...base, verdict: 'error', error: `solver worker exited with code ${code}` }),
-    );
-  });
+  if (result.spawnError) return { ...base, verdict: 'error', error: result.spawnError };
+
+  if (result.timedOut)
+    return { ...base, verdict: 'timeout', error: `wall-clock limit of ${options.timeoutMs} ms exceeded` };
+
+  if (options.signal?.aborted) return { ...base, verdict: 'cancelled', error: 'cancelled' };
+
+  const line = result.stdout.trim().split('\n').pop() ?? '';
+  let message: { ok?: boolean; output?: string; version?: string; error?: string } | undefined;
+
+  try {
+    message = JSON.parse(line);
+  } catch {
+    message = undefined;
+  }
+
+  if (!message || result.exitCode !== 0) {
+    const reason = outOfMemory(result.stderr)
+      ? `solver ran out of memory (limit ${memoryMb} MiB, limits.memoryMb)`
+      : `solver process ended with ${result.signal ? `signal ${result.signal}` : `exit code ${result.exitCode}`}${message?.error ? `: ${message.error}` : ''}`;
+
+    return { ...base, verdict: 'error', error: reason };
+  }
+
+  if (!message.ok) return { ...base, verdict: 'error', error: message.error ?? 'solver failed' };
+  const output = message.output ?? '';
+
+  return { ...base, ...interpretOutput(output), engineVersion: message.version ?? 'unknown', output };
 }
 
 /** Arguments of the native z3 binary: SMT-LIB on stdin, and z3's own memory limit (MiB) when one is set. */
