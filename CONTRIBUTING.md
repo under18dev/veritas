@@ -12,7 +12,7 @@ Node.js 24 or later and pnpm are required. Lean 4 (via [elan](https://github.com
 ## Checks
 
 ```bash
-pnpm lint              # Biome + dependency rules (no cycles, core depends on nothing else)
+pnpm lint              # Biome (warnings fail too) + dependency rules (no cycles, core depends on nothing else)
 pnpm typecheck
 pnpm test              # unit tests
 pnpm test:acceptance   # end-to-end tests that run the CLI against copies of fixtures/

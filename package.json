@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b && tsc -p tsconfig.test.json",
-    "lint": "biome check . && depcruise packages --config .dependency-cruiser.cjs",
+    "lint": "biome check --error-on-warnings . && depcruise packages --config .dependency-cruiser.cjs",
     "format": "biome check --write .",
     "test": "vitest run --project unit",
     "test:acceptance": "pnpm build && vitest run --project acceptance",
