@@ -2,7 +2,7 @@ import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { redact } from './redact.js';
+import { redact, redactArgs } from './redact.js';
 import { logEvent, nodeMemoryFlags, outOfMemory, relativeToRoot } from './run-context.js';
 
 export interface CommandResult {
@@ -89,7 +89,7 @@ export function runCommand(
         {
           event: 'process',
           command: path.basename(command),
-          args: args.slice(0, 40).map((a) => (a.length > 300 ? `${a.slice(0, 300)}...` : a)),
+          args: redactArgs(args.slice(0, 40)).map((a) => (a.length > 300 ? `${a.slice(0, 300)}...` : a)),
           cwd: relativeToRoot(options.cwd),
           durationMs,
           exitCode: result.exitCode ?? null,

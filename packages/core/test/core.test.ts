@@ -35,6 +35,7 @@ import {
   RunStore,
   readEnvelope,
   redact,
+  redactArgs,
   resolveInsideRoot,
   runStages,
   SCHEMA_VERSION,
@@ -143,6 +144,16 @@ describe('redaction', () => {
     expect(out).not.toContain('ghp_');
     expect(out).toContain('plain text');
     expect(redact('value supersecretvalue', { MY_API_KEY: 'supersecretvalue' })).toBe('value [REDACTED]');
+  });
+
+  it('removes URL credentials, HTTP auth values and the values of secret command-line flags', () => {
+    expect(redact('fetch https://alice:s3cr3tpass@example.com/x', {})).toBe(
+      'fetch https://[REDACTED]@example.com/x',
+    );
+    expect(redact('Authorization: Bearer abcdefghijklmnop', {})).not.toContain('abcdefghijklmnop');
+    expect(
+      redactArgs(['--token', 'arbitrary-value-1', '--root', '/p', '--authorization=xyz123456'], {}),
+    ).toEqual(['--token', '[REDACTED]', '--root', '/p', '--[REDACTED]']);
   });
 });
 

@@ -90,15 +90,18 @@ export function traceCollector(maxBytes = 4 * 1024 * 1024): { sink: LogSink; tex
   const lines: string[] = [];
   let bytes = 0;
   let dropped = 0;
+  // UTF-8 bytes, with room kept for the closing "truncated" line so the file never exceeds maxBytes.
+  const reserve = Math.min(512, Math.floor(maxBytes / 4));
   return {
     sink: (event) => {
       const line = JSON.stringify(event);
-      if (bytes + line.length + 1 > maxBytes) {
+      const size = Buffer.byteLength(line, 'utf8') + 1;
+      if (dropped > 0 || bytes + size > maxBytes - reserve) {
         dropped++;
         return;
       }
       lines.push(line);
-      bytes += line.length + 1;
+      bytes += size;
     },
     text: () =>
       `${[

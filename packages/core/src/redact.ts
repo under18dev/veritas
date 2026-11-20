@@ -10,8 +10,22 @@ const PATTERNS: RegExp[] = [
   /AKIA[0-9A-Z]{16}/g,
   /xox[abprs]-[A-Za-z0-9-]{10,}/g,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  /\b(?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*["']?[^\s"']{6,}/gi,
+  /\b(?:password|passwd|secret|token|api[_-]?key|authorization|auth)\s*[:=]\s*["']?[^\s"']{6,}/gi,
 ];
+
+/** Secrets that keep their surroundings: URL credentials (`https://user:pass@host`) and HTTP auth schemes. */
+const KEEP_PREFIX: [RegExp, string][] = [
+  [/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[REDACTED]@'],
+  [/\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{8,}/g, '$1 [REDACTED]'],
+];
+
+/** Command-line flags whose next argument is a secret (`--token abc`). */
+const SECRET_FLAG = /^--?(?:token|password|passwd|secret|api[-_]?key|authorization|auth|credentials?)$/i;
+
+/** Arguments of a command with the values of secret flags replaced, then each argument redacted. */
+export function redactArgs(args: string[], env: NodeJS.ProcessEnv = process.env): string[] {
+  return args.map((arg, i) => (i > 0 && SECRET_FLAG.test(args[i - 1] ?? '') ? REDACTED : redact(arg, env)));
+}
 
 const SECRET_ENV = /(TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|CREDENTIAL)/i;
 
@@ -28,6 +42,7 @@ function secretValues(env: NodeJS.ProcessEnv): string[] {
 function redactWith(text: string, secrets: string[]): string {
   let out = text;
   for (const value of secrets) if (out.includes(value)) out = out.split(value).join(REDACTED);
+  for (const [pattern, replacement] of KEEP_PREFIX) out = out.replace(pattern, replacement);
   for (const pattern of PATTERNS) out = out.replace(pattern, REDACTED);
   return out;
 }
