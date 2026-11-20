@@ -120,7 +120,7 @@ veritas run --profile standard --offline --since origin/main
 
 ## code scanning に finding を表示する
 
-実行ごとに `report.sarif`（SARIF 2.1.0）が書き出され、`veritas report --format sarif` で最新のものを出力できます。`github/codeql-action/upload-sarif` でアップロードしてください。このステップには `security-events: write` の権限が要り、フォークのプルリクエストのワークフローにはこの権限が与えられません。push と、同じリポジトリからのプルリクエストのときだけ実行してください。
+`veritas run`、`veritas prove`、Action は、`reports.formats` に `sarif` が含まれていれば（既定では含まれます）、`report.sarif`（SARIF 2.1.0）を実行ディレクトリに書き出します。最新の実行の SARIF は `veritas report --format sarif` でも出力できます。`github/codeql-action/upload-sarif` でアップロードしてください。このステップには `security-events: write` の権限が要り、フォークのプルリクエストのワークフローにはこの権限が与えられません。push と、同じリポジトリからのプルリクエストのときだけ実行してください。
 
 ## GitHub のワークフローで CLI を使う
 

@@ -120,7 +120,7 @@ veritas run --profile standard --offline --since origin/main
 
 ## Show findings in code scanning
 
-Every run writes `report.sarif` (SARIF 2.1.0); `veritas report --format sarif` prints the latest one. Upload it with `github/codeql-action/upload-sarif`. That step needs `security-events: write`, which workflows on fork pull requests do not receive, so run it only for pushes and same-repository pull requests.
+`veritas run`, `veritas prove` and the action write `report.sarif` (SARIF 2.1.0) to the run directory when `reports.formats` includes `sarif`, which it does by default; `veritas report --format sarif` prints it for the latest run. Upload it with `github/codeql-action/upload-sarif`. That step needs `security-events: write`, which workflows on fork pull requests do not receive, so run it only for pushes and same-repository pull requests.
 
 ## Use the CLI in a GitHub workflow
 
