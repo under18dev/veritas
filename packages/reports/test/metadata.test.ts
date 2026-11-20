@@ -11,6 +11,7 @@ describe('report metadata', () => {
     const sarif = renderSarif(fixture()).runs[0];
     expect(sarif?.properties).toEqual({ veritas: meta });
     expect(sarif?.tool.driver.version).toBe(meta.toolVersion);
+
     for (const output of [renderText(fixture()), renderMarkdown(fixture()), renderHtml(fixture())]) {
       for (const value of [meta.gitCommit, meta.toolVersion, meta.configHash, meta.sourceHash])
         expect(output).toContain(value);

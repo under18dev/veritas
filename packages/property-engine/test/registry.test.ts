@@ -26,6 +26,7 @@ function fixture(name: string): string {
     recursive: true,
     filter: (s) => !s.includes('node_modules') && !s.includes('.mutator'),
   });
+
   return dir;
 }
 
@@ -142,6 +143,7 @@ const conflictDiscovery: DiscoveryInput = {
 function registryFor(name: string, discovery: DiscoveryInput) {
   const root = fixture(name);
   const code = analyzeCode({ root, config });
+
   return {
     root,
     code,
@@ -160,6 +162,7 @@ describe('registry from documentation and code', () => {
     expect(discount?.citations).toEqual(['README.md:7']);
     expect(shipping?.targetSymbols).toEqual(['src/pricing.ts#shippingFee']);
     expect(shipping?.implementationAgreement).toBe('agree');
+
     for (const p of registry.properties) expect(Property.parse(p)).toBeTruthy();
   });
 
@@ -171,6 +174,7 @@ describe('registry from documentation and code', () => {
   it('keeps code-inferred candidates inferred, experimental and circular', () => {
     const { registry } = registryFor('no-spec', { sources: [], statements: [], provenance: [] });
     expect(registry.properties.length).toBeGreaterThan(0);
+
     for (const p of registry.properties) {
       expect(p.origin).toBe('inferred');
       expect(p.status).toBe('proposed');
@@ -451,6 +455,7 @@ describe('formalization', () => {
       quote: discountDiscovery.statements[0]?.quote,
     });
     expect(result.status).toBe('formalized');
+
     if (result.status === 'formalized') {
       expect(result.assumptions.join(' ')).toMatch(/== 100/);
       expect(result.ir.params).toEqual([{ name: 'total', sort: 'int', domain }]);
@@ -469,6 +474,7 @@ describe('formalization', () => {
       quote: discountDiscovery.statements[1]?.quote,
     });
     expect(result.status).toBe('formalized');
+
     if (result.status === 'formalized') expect(result.assumptions.join(' ')).toMatch(/== 0, otherwise 500/);
   });
 
@@ -478,6 +484,7 @@ describe('formalization', () => {
     const fn = code.functions.find((f) => f.symbol === 'src/limit.ts#isAllowed');
     const result = formalizeProperty({ root, property: readme, fn: fn as never, domain });
     expect(result.status).toBe('formalized');
+
     if (result.status === 'formalized')
       expect(result.assumptions[0]).toMatch(/returns true exactly when requestsThisMinute <= 100/);
   });

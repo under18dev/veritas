@@ -29,6 +29,7 @@ export function snapshotTree(root: string): Map<string, string> {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
       const abs = path.join(dir, entry.name);
+
       if (entry.isDirectory()) {
         if (!IGNORED_DIRS.has(entry.name)) walk(abs, relPath);
       } else if (entry.isSymbolicLink()) {
@@ -39,6 +40,7 @@ export function snapshotTree(root: string): Map<string, string> {
     }
   };
   walk(root, '');
+
   return out;
 }
 
@@ -53,8 +55,11 @@ export function projectHash(root: string): string {
 /** Paths whose hash differs between two snapshots (added, removed or changed). */
 export function diffSnapshots(before: Map<string, string>, after: Map<string, string>): string[] {
   const changed = new Set<string>();
+
   for (const [p, h] of before) if (after.get(p) !== h) changed.add(p);
+
   for (const p of after.keys()) if (!before.has(p)) changed.add(p);
+
   return [...changed].sort();
 }
 
@@ -70,6 +75,7 @@ export function createWorkspace(root: string): string {
     verbatimSymlinks: true,
     filter: (src) => {
       const rel = path.relative(realRoot, src);
+
       return rel === '' || !rel.split(path.sep).some((s) => IGNORED_DIRS.has(s));
     },
   });
@@ -84,7 +90,9 @@ export function createWorkspace(root: string): string {
     );
   }
   const modules = path.join(realRoot, 'node_modules');
+
   if (existsSync(modules)) linkPackages(modules, path.join(dir, 'node_modules'));
+
   return dir;
 }
 
@@ -121,11 +129,14 @@ export interface WriteRecord {
  */
 export function writeNewFiles(root: string, files: PatchFile[]): WriteRecord {
   const record: WriteRecord = { files: [], dirs: [] };
+
   try {
     for (const file of files) {
       const abs = resolveInsideRoot(root, file.path);
       const missing: string[] = [];
+
       for (let d = path.dirname(abs); !existsSync(d); d = path.dirname(d)) missing.unshift(d);
+
       for (const d of missing) {
         mkdirSync(d);
         record.dirs.push(d);
@@ -135,6 +146,7 @@ export function writeNewFiles(root: string, files: PatchFile[]): WriteRecord {
       writeFileSync(abs, file.content, { flag: 'wx' });
       record.files.push(abs);
     }
+
     return record;
   } catch (error) {
     undoWrites(record);
@@ -145,6 +157,7 @@ export function writeNewFiles(root: string, files: PatchFile[]): WriteRecord {
 /** Remove written files and the directories created for them (deepest first). Returns paths that could not be removed. */
 export function undoWrites(record: WriteRecord): string[] {
   const failed: string[] = [];
+
   for (const file of [...record.files].reverse()) {
     try {
       if (lstatSync(file).isFile()) unlinkSync(file);
@@ -152,6 +165,7 @@ export function undoWrites(record: WriteRecord): string[] {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') failed.push(file);
     }
   }
+
   for (const dir of [...record.dirs].reverse()) {
     try {
       rmdirSync(dir);
@@ -161,6 +175,7 @@ export function undoWrites(record: WriteRecord): string[] {
   }
   record.files = [];
   record.dirs = [];
+
   return failed;
 }
 
@@ -171,9 +186,11 @@ export function undoWrites(record: WriteRecord): string[] {
  */
 function linkPackages(from: string, to: string): void {
   mkdirSync(to, { recursive: true });
+
   for (const entry of readdirSync(from)) {
     if (entry.startsWith('.') && entry !== '.bin') continue;
     const source = path.join(from, entry);
+
     if (entry.startsWith('@')) {
       linkPackages(source, path.join(to, entry));
       continue;

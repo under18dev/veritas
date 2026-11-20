@@ -15,6 +15,7 @@ export function fixture(): string {
     recursive: true,
     filter: (src) => !src.includes('node_modules') && !src.includes('.mutator'),
   });
+
   return dir;
 }
 
@@ -26,6 +27,7 @@ export function discountProperty(root: string, file: string): { ir: PropertyIR; 
     exportName: 'discountAmount',
     domain: DOMAIN,
   });
+
   if (translated.status !== 'translated')
     throw new Error(`translation failed: ${JSON.stringify(translated)}`);
   const ir = thresholdProperty({
@@ -37,6 +39,7 @@ export function discountProperty(root: string, file: string): { ir: PropertyIR; 
     whenFalse: '0',
     domain: DOMAIN,
   });
+
   return {
     ir,
     bindings: [
@@ -76,5 +79,6 @@ export function opaqueProperty(
         ? { kind: 'binary', op: '>=', left: call, right: { kind: 'int', value: '0' } }
         : { kind: 'binary', op: '==', left: call, right: { kind: 'bool', value: true } },
   };
+
   return { ir, bindings: [{ modelName: 'f', modulePath, exportName: options.exportName ?? 'f' }] };
 }

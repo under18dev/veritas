@@ -9,6 +9,7 @@ describe('GitHub collector', () => {
     const seen: RequestInit[] = [];
     const fetcher: typeof fetch = async (_input, init) => {
       seen.push(init ?? {});
+
       return Response.json([
         {
           html_url: 'https://github.com/acme/app/issues/1',
@@ -27,6 +28,7 @@ describe('GitHub collector', () => {
     };
     const oldToken = process.env.GITHUB_TOKEN;
     process.env.GITHUB_TOKEN = 'ghp_abcdefghijklmnopqrstuvwxyz';
+
     try {
       const result = await discoverEvidence({
         root,
@@ -69,6 +71,7 @@ describe('GitHub collector', () => {
       offline: true,
       fetch: async () => {
         calls++;
+
         return Response.json([]);
       },
     });
@@ -80,6 +83,7 @@ describe('GitHub collector', () => {
   it('accepts only owner/name repositories, so the token never reaches another API path', () => {
     for (const repo of ['acme/app', 'acme-co/app.js', 'a/b_c'])
       expect(VeritasConfig.safeParse({ sources: { github: { repo } } }).success, repo).toBe(true);
+
     for (const repo of [
       '../../user/repos?',
       'acme/app/issues',
@@ -107,6 +111,7 @@ describe('GitHub collector', () => {
             reject(new DOMException('timed out', 'TimeoutError')),
           ),
         );
+
         return Response.json([]);
       },
     });

@@ -20,5 +20,6 @@ export function newRunId(now: Date = new Date()): string {
   sequence = stamp === lastStamp ? sequence + 1 : 0;
   lastStamp = stamp;
   const rand = Math.random().toString(16).slice(2, 8).padEnd(6, '0');
+
   return `run-${stamp}-${sequence.toString().padStart(3, '0')}-${rand}`;
 }

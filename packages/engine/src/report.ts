@@ -59,14 +59,18 @@ const StoredPlan = z.object({
 /** Improvement plans made from `runId`, with their apply attempts, from `.veritas/improvements/`. */
 export function improvementsFor(root: string, runId: string): ReportImprovement[] {
   const dir = resolveInsideRoot(root, path.join('.veritas', 'improvements'));
+
   if (!existsSync(dir)) return [];
   const out: ReportImprovement[] = [];
+
   for (const planId of readdirSync(dir)
     .filter((d) => /^IP-[0-9a-f]{12}$/.test(d))
     .sort()) {
     const planFile = resolveInsideRoot(dir, path.join(planId, 'plan.json'));
+
     if (!existsSync(planFile)) continue;
     const doc = readEnvelope(planFile, StoredPlan).data;
+
     if (doc.runId !== runId) continue;
     const attempts = readdirSync(path.join(dir, planId))
       .filter((f) => /^attempt-\d+\.json$/.test(f))
@@ -89,12 +93,14 @@ export function improvementsFor(root: string, runId: string): ReportImprovement[
       })),
     });
   }
+
   return out;
 }
 
 /** Assemble the report input of a run from its artifacts; missing optional stages become empty sections. */
 export function buildReportInput(root: string, runId?: string, artifactBase = '.'): ReportInput {
   const id = runId ?? latestRunWith(root, 'run');
+
   if (!id) throw new VeritasError('user', 'NO_RUN', 'no run to report on', 'run `veritas run` first');
   const { meta, data: run } = readArtifact(root, id, 'run');
   const evidence = optional(root, id, 'evidence', (d) => d, {
@@ -117,6 +123,7 @@ export function buildReportInput(root: string, runId?: string, artifactBase = '.
     files: [],
     diagnostics: [],
   });
+
   return {
     meta,
     run,

@@ -46,20 +46,25 @@ function checkThresholds(
 ): { failures: string[]; undecided: string[] } {
   const failures: string[] = [];
   const undecided: string[] = [];
+
   if (policy.maxNewSurvivors !== undefined) {
     const mutate = stages.find((s) => s.stage === 'mutate');
+
     if (!mutate || (mutate.status !== 'succeeded' && mutate.status !== 'partial')) {
       undecided.push('policy.maxNewSurvivors: no mutation results in this run');
     } else {
       const survivors = (evidence.mutants ?? []).filter((m) => m.status === 'survived').length;
+
       if (survivors > policy.maxNewSurvivors)
         failures.push(
           `${survivors} surviving mutant(s), more than policy.maxNewSurvivors ${policy.maxNewSurvivors}`,
         );
     }
   }
+
   if (policy.minPropertyCoverage !== undefined) {
     const accepted = (evidence.properties ?? []).filter((p) => p.status === 'accepted');
+
     if (accepted.length === 0 || evidence.assessments === undefined) {
       undecided.push('policy.minPropertyCoverage: no accepted property or no test assessment in this run');
     } else {
@@ -69,12 +74,14 @@ function checkThresholds(
         ),
       ).length;
       const share = covered / accepted.length;
+
       if (share < policy.minPropertyCoverage)
         failures.push(
           `${covered} of ${accepted.length} accepted properties have a meaningful test, below policy.minPropertyCoverage ${policy.minPropertyCoverage}`,
         );
     }
   }
+
   return { failures, undecided };
 }
 
@@ -108,6 +115,7 @@ export function evaluatePolicy(
 
   const thresholds = checkThresholds(policy, stages, evidence);
   inconclusive.push(...thresholds.undecided);
+
   if (thresholds.failures.length > 0) {
     return {
       exitCode: ExitCode.PolicyFailure,
@@ -121,26 +129,35 @@ export function evaluatePolicy(
       ],
     };
   }
+
   if (confirmedViolations.length > 0 && policy.confirmedViolation === 'fail') {
     reasons.push(`${confirmedViolations.length} confirmed specification violation(s)`);
+
     return {
       exitCode: ExitCode.PolicyFailure,
       verdict: 'policy_failure',
       reasons: [...reasons, ...inconclusive],
     };
   }
+
   if (toolErrors.length > 0) {
     reasons.push(`stage failure(s): ${toolErrors.map((s) => `${s.stage}=${s.status}`).join(', ')}`);
+
     return { exitCode: ExitCode.ToolError, verdict: 'tool_error', reasons: [...reasons, ...inconclusive] };
   }
+
   if (inconclusive.length > 0 && policy.inconclusiveBehavior === 'fail') {
     return { exitCode: ExitCode.Inconclusive, verdict: 'inconclusive', reasons: inconclusive };
   }
+
   if (confirmedViolations.length > 0) reasons.push('confirmed violations reported as warnings by policy');
   const open = findings.filter((f) => f.certainty !== 'informational' && !confirmedViolations.includes(f));
+
   if (open.length > 0) reasons.push(`${open.length} finding(s) to review (not policy failures)`);
+
   if (inconclusive.length > 0)
     reasons.push(...inconclusive.map((r) => `inconclusive (${policy.inconclusiveBehavior}): ${r}`));
+
   return {
     exitCode: ExitCode.Success,
     verdict: reasons.length > 0 ? 'pass_with_warnings' : 'pass',

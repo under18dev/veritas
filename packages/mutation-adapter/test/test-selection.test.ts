@@ -29,6 +29,7 @@ function recordingCli(root: string): string {
       "console.log('{}');",
     ].join('\n'),
   });
+
   return bin;
 }
 
@@ -118,6 +119,7 @@ describe('writeNarrowedVitestConfig', () => {
       timeout: 60_000,
     });
     expect(listed.status, listed.stderr).toBe(0);
+
     return listed.stdout
       .split('\n')
       .map((line) => line.replace(/^\[[^\]]*\]\s*/, '').trim())

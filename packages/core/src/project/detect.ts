@@ -45,8 +45,10 @@ function readPackageJson(root: string): Record<string, unknown> | null {
  */
 export function resolvePackageVersion(root: string, name: string): string | null {
   let dir = path.resolve(root);
+
   for (;;) {
     const manifest = path.join(dir, 'node_modules', ...name.split('/'), 'package.json');
+
     if (existsSync(manifest)) {
       try {
         return (JSON.parse(readFileSync(manifest, 'utf8')) as { version?: string }).version ?? null;
@@ -55,6 +57,7 @@ export function resolvePackageVersion(root: string, name: string): string | null
       }
     }
     const parent = path.dirname(dir);
+
     if (parent === dir) return null;
     dir = parent;
   }
@@ -62,9 +65,11 @@ export function resolvePackageVersion(root: string, name: string): string | null
 
 function findUp(start: string, name: string): boolean {
   let dir = start;
+
   for (;;) {
     if (existsSync(path.join(dir, name))) return true;
     const parent = path.dirname(dir);
+
     if (parent === dir) return false;
     dir = parent;
   }
@@ -88,6 +93,7 @@ export function detectProject(root: string): ProjectInfo {
       ? (pkg.packageManager.split('@')[0] as PackageManager)
       : 'unknown');
   const sourceDir = ['src', 'lib'].find((d) => isDir(path.join(root, d)));
+
   return {
     root,
     hasPackageJson: pkg !== null,

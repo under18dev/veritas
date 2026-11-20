@@ -55,6 +55,7 @@ describe('scope and diagnostics', () => {
       `,
     });
     const testCase = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests.at(0);
+
     if (!testCase) throw new Error('missing non-project test');
 
     expect(testCase.calledSymbols).toEqual([]);
@@ -74,8 +75,10 @@ describe('tsconfig containment', () => {
     const original = ts.sys.readFile;
     ts.sys.readFile = (name, encoding) => {
       read.push(path.resolve(name));
+
       return original(name, encoding);
     };
+
     try {
       // No tsconfig in the root: the parent's must not be picked up.
       inventoryTests({ root, config: VeritasConfig.parse({}) });

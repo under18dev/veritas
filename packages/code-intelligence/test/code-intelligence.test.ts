@@ -28,15 +28,18 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 function copyFixture(name: string): string {
   const dir = realpathSync(mkdtempSync(path.join(tmpdir(), `veritas-ci-${name}-`)));
   cpSync(path.join(REPO_ROOT, 'fixtures', name), dir, { recursive: true });
+
   return dir;
 }
 
 function project(files: Record<string, string>): string {
   const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-ci-')));
+
   for (const [file, content] of Object.entries(files)) {
     mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
     writeFileSync(path.join(dir, file), content);
   }
+
   return dir;
 }
 
@@ -46,13 +49,16 @@ function analyze(root: string, files?: string[], input?: VeritasConfigInput) {
   const index = analyzeCode({ root, config: config(input), ...(files ? { files } : {}) });
   // Every result must satisfy the exported schema.
   expect(CodeIndex.parse(index)).toEqual(index);
+
   return index;
 }
 
 function fn(index: CodeIndex, symbol: string): FunctionInfo {
   const found = index.functions.find((f) => f.symbol === symbol);
+
   if (!found)
     throw new Error(`no function ${symbol}; have ${index.functions.map((f) => f.symbol).join(', ')}`);
+
   return found;
 }
 
@@ -112,6 +118,7 @@ describe('discount-boundary fixture', () => {
       origin: 'inferred',
       basis: ['implementation'],
     });
+
     for (const c of candidates) expect(BehaviorCandidate.parse(c)).toEqual(c);
   });
 });
@@ -279,6 +286,7 @@ export async function later(n: number): Promise<number> {
     const again = analyze(root);
     expect(again).toEqual(index);
     expect(inferBehaviorCandidates(again)).toEqual(inferBehaviorCandidates(index));
+
     for (const f of index.functions) {
       expect(f.symbol).not.toContain('\\');
       expect(f.symbol.startsWith(`${f.file}#`)).toBe(true);
@@ -532,6 +540,7 @@ describe('file selection and safety', () => {
 
   it('rejects explicit paths outside the root', () => {
     const root = project({ 'src/a.ts': 'export const a = 1;\n' });
+
     for (const bad of ['../escape.ts', path.join(root, 'src/a.ts')]) {
       expect(() => analyzeCode({ root, config: config(), files: [bad] })).toThrow(VeritasError);
     }
@@ -670,6 +679,7 @@ export const useInternal = (n: number): number => internal(n);
 
   it('is always inferred, schema-valid, with unique stable ids', () => {
     expect(candidates.every((c) => c.origin === 'inferred')).toBe(true);
+
     for (const c of candidates) expect(BehaviorCandidate.parse(c)).toEqual(c);
     expect(new Set(candidates.map((c) => c.id)).size).toBe(candidates.length);
     expect(inferBehaviorCandidates(analyze(root)).map((c) => c.id)).toEqual(candidates.map((c) => c.id));
@@ -811,6 +821,7 @@ export function tax(total: number): number {
     expect(feeOther?.notes).toContain(
       'fee changed since origin/main; check whether its behaviour changed on purpose',
     );
+
     for (const c of marked.filter((c) => c.symbol === 'src/fees.ts#tax'))
       expect(c.basis).not.toContain('git_diff');
   });

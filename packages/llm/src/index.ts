@@ -61,6 +61,7 @@ export const SYSTEM_PREAMBLE = [
 /** Render documents as escaped, delimited data blocks. */
 export function renderDocuments(documents: QuotedDocument[]): string {
   const escapeMarkup = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
   return documents
     .map((d) => `<document id="${escapeMarkup(d.id)}">\n${escapeMarkup(d.text)}\n</document>`)
     .join('\n');
@@ -135,14 +136,18 @@ export class LlmClient {
       schema: jsonSchemaOf(request.schema),
       maxOutputTokens: request.maxOutputTokens,
     });
+
     if (cache && cacheKey) {
       const hit = cache.get('llm', cacheKey, CachedResponse);
       const data = hit ? request.schema.safeParse(hit.data) : null;
+
       if (data?.success) {
         this.reused += 1;
+
         return { ...base, status: 'ok', data: data.data, error: null, cached: true };
       }
     }
+
     if (this.used + estimate > this.options.tokenBudget) {
       return {
         ...base,
@@ -153,9 +158,11 @@ export class LlmClient {
     }
     const result = await this.provider.complete({ ...request, instructions, documents });
     this.used += result.usage.inputTokens + result.usage.outputTokens;
+
     // Only a successful response that matches the schema is reused later; failures are always retried.
     if (cache && cacheKey && result.status === 'ok' && request.schema.safeParse(result.data).success)
       cache.set('llm', cacheKey, { data: result.data, usage: result.usage });
+
     return { ...result, inputHash };
   }
 }
@@ -166,6 +173,7 @@ export function jsonSchemaOf(schema: z.ZodType): Record<string, unknown> {
     string,
     unknown
   >;
+
   return rest;
 }
 

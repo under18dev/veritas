@@ -42,6 +42,7 @@ process.exit(${exitCode});
       cwdEntries: string[];
       stdin: string;
     };
+
   return { provider, recorded };
 }
 
@@ -63,6 +64,7 @@ describe('ClaudeCodeProvider', () => {
     const { provider, recorded } = fakeCli(success);
     const previous = process.env.ANTHROPIC_API_KEY;
     process.env.ANTHROPIC_API_KEY = 'sk-ant-should-not-leak';
+
     try {
       const result = await provider.complete(request);
       expect(result).toMatchObject({

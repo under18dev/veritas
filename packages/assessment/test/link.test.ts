@@ -15,10 +15,12 @@ import { linkMutants, linkTests } from '../src/index.js';
 
 function project(files: Record<string, string>): string {
   const root = mkdtempSync(path.join(tmpdir(), 'veritas-link-'));
+
   for (const [relative, contents] of Object.entries(files)) {
     mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
     writeFileSync(path.join(root, relative), contents);
   }
+
   return root;
 }
 

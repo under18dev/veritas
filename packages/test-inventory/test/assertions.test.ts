@@ -21,7 +21,9 @@ describe('assertion evidence', () => {
     const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
     const byName = (name: string) => {
       const test = inventory.tests.find((candidate) => candidate.name === name);
+
       if (!test) throw new Error(`missing test: ${name}`);
+
       return test;
     };
 

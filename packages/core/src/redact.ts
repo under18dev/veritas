@@ -42,17 +42,23 @@ export const REDACTED = '[REDACTED]';
 
 function secretValues(env: NodeJS.ProcessEnv): string[] {
   const values: string[] = [];
+
   for (const [name, value] of Object.entries(env)) {
     if (value && value.length >= 8 && SECRET_ENV.test(name)) values.push(value);
   }
+
   return values;
 }
 
 function redactWith(text: string, secrets: string[]): string {
   let out = text;
+
   for (const value of secrets) if (out.includes(value)) out = out.split(value).join(REDACTED);
+
   for (const [pattern, replacement] of KEEP_PREFIX) out = out.replace(pattern, replacement);
+
   for (const pattern of PATTERNS) out = out.replace(pattern, REDACTED);
+
   return out;
 }
 
@@ -65,13 +71,19 @@ export function redactDeep<T>(value: T, env: NodeJS.ProcessEnv = process.env): T
   const secrets = secretValues(env);
   const walk = (v: unknown): unknown => {
     if (typeof v === 'string') return redactWith(v, secrets);
+
     if (Array.isArray(v)) return v.map(walk);
+
     if (v !== null && typeof v === 'object') {
       const out: Record<string, unknown> = {};
+
       for (const [k, inner] of Object.entries(v)) out[k] = walk(inner);
+
       return out;
     }
+
     return v;
   };
+
   return walk(value) as T;
 }

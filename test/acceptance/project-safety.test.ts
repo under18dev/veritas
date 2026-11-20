@@ -17,19 +17,25 @@ interface RunJson {
 
 function setup(name: string): string {
   const dir = copyFixture(name, { git: true, linkDeps: true });
+
   if (runCli(['init', '--yes'], dir).status !== 0) throw new Error('init failed');
+
   return dir;
 }
 
 /** Every project file (outside .git, node_modules and Veritas' own directory) with its bytes. */
 function snapshot(dir: string, rel = ''): Map<string, Buffer> {
   const out = new Map<string, Buffer>();
+
   for (const entry of readdirSync(path.join(dir, rel))) {
     const file = rel ? `${rel}/${entry}` : entry;
+
     if (['.git', 'node_modules', '.veritas', '.mutator'].includes(file)) continue;
+
     if (statSync(path.join(dir, file)).isDirectory()) for (const [k, v] of snapshot(dir, file)) out.set(k, v);
     else out.set(file, readFileSync(path.join(dir, file)));
   }
+
   return out;
 }
 
@@ -59,6 +65,7 @@ describe('mutation runs', () => {
 
     const after = snapshot(dir);
     expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
+
     for (const [file, bytes] of before) expect(after.get(file)?.equals(bytes), file).toBe(true);
 
     // No tracked file is modified or deleted. New files are confined to Veritas' run directory, mutator's own
@@ -151,6 +158,7 @@ describe('Node API', () => {
     ];
     const artifact = (dir: string, runId: string, name: string) => {
       const file = path.join(dir, '.veritas/runs', runId, name);
+
       // The two copies live in different directories; reproduction commands name them.
       // Durations differ between any two runs.
       return statSync(file, { throwIfNoEntry: false })
@@ -161,6 +169,7 @@ describe('Node API', () => {
           ).data
         : null;
     };
+
     for (const [args, call] of commands) {
       const cli = json<RunJson>(runCli([...args, '--json'], cliDir));
       const api = await call();
@@ -174,6 +183,7 @@ describe('Node API', () => {
       const files = (dir: string, runId: string) =>
         readdirSync(path.join(dir, '.veritas/runs', runId)).sort();
       expect(files(apiDir, api.runId), label).toEqual(files(cliDir, cli.runId));
+
       for (const name of ['findings.json', 'properties.json', 'assessments.json', 'claims.json'])
         expect(artifact(apiDir, api.runId, name), `${label} ${name}`).toEqual(
           artifact(cliDir, cli.runId, name),
@@ -181,6 +191,7 @@ describe('Node API', () => {
       // Evidence and mutation results without their timestamps and durations, which differ between any two runs.
       const evidence = (dir: string, runId: string) => {
         const data = artifact(dir, runId, 'evidence.json');
+
         return (
           data && { statements: data.statements, sources: data.sources.map((x: { id: string }) => x.id) }
         );

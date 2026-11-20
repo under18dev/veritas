@@ -5,7 +5,9 @@ import { fixture } from './fixtures.js';
 describe('SARIF report', () => {
   function first<T>(items: T[]): T {
     const item = items[0];
+
     if (item === undefined) throw new Error('expected an item');
+
     return item;
   }
 
@@ -28,6 +30,7 @@ describe('SARIF report', () => {
     const log = renderSarif(fixture());
     const run = first(log.runs);
     const rules = new Set(run.tool.driver.rules.map((rule) => (rule as { id: string }).id));
+
     for (const result of run.results as Array<{ ruleId: string }>)
       expect(rules.has(result.ruleId)).toBe(true);
   });

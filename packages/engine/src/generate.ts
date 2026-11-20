@@ -26,6 +26,7 @@ export async function generateTests(
   const selected = properties.filter(
     (p) => p.ir && (options.propertyId ? p.id === options.propertyId : true),
   );
+
   if (options.propertyId && selected.length === 0) {
     throw new VeritasError(
       'user',
@@ -49,14 +50,18 @@ export async function generateTests(
       numRuns: config.pbt.numRuns,
       experimental,
     });
+
     return { propertyId: p.id, file: target, content, experimental };
   });
+
   if (options.dryRun) return generated;
   // A file someone changed after it was generated is never replaced without --force; nothing is written then.
   const changed = generated.filter((g) => {
     const abs = resolveInsideRoot(root, g.file);
+
     return existsSync(abs) && readFileSync(abs, 'utf8') !== g.content;
   });
+
   if (changed.length > 0 && !options.force) {
     throw new VeritasError(
       'user',
@@ -65,10 +70,12 @@ export async function generateTests(
       'keep your changes elsewhere, or rerun with --force to replace them',
     );
   }
+
   for (const g of generated) {
     const abs = resolveInsideRoot(root, g.file);
     mkdirSync(path.dirname(abs), { recursive: true });
     writeFileSync(abs, g.content);
   }
+
   return generated;
 }

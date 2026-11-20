@@ -35,11 +35,13 @@ export const PUBLIC_SCHEMAS: Record<string, z.ZodType> = {
 /** JSON Schema documents for every public schema, describing accepted input. */
 export function exportJsonSchemas(): Record<string, unknown> {
   const out: Record<string, unknown> = {};
+
   for (const [name, schema] of Object.entries(PUBLIC_SCHEMAS)) {
     out[name] = {
       $id: `https://veritas.invalid/schemas/${name}.json`,
       ...toJSONSchema(schema, { io: 'input', unrepresentable: 'any' }),
     };
   }
+
   return out;
 }

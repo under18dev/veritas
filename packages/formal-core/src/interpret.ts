@@ -11,7 +11,9 @@ export function evaluate(
   switch (expr.kind) {
     case 'var': {
       const v = env.get(expr.name);
+
       if (v === undefined) throw new Error(`unbound ${expr.name}`);
+
       return v;
     }
     case 'int':
@@ -20,17 +22,21 @@ export function evaluate(
       return expr.value;
     case 'unary': {
       const v = evaluate(expr.arg, env, functions);
+
       return expr.op === 'not' ? !v : -(v as bigint);
     }
     case 'binary': {
       if (expr.op === 'and')
         return Boolean(evaluate(expr.left, env, functions)) && Boolean(evaluate(expr.right, env, functions));
+
       if (expr.op === 'or')
         return Boolean(evaluate(expr.left, env, functions)) || Boolean(evaluate(expr.right, env, functions));
+
       if (expr.op === 'implies')
         return !evaluate(expr.left, env, functions) || Boolean(evaluate(expr.right, env, functions));
       const l = evaluate(expr.left, env, functions);
       const r = evaluate(expr.right, env, functions);
+
       switch (expr.op) {
         case '+':
           return (l as bigint) + (r as bigint);
@@ -42,15 +48,19 @@ export function evaluate(
           // SMT-LIB Euclidean division.
           const a = l as bigint;
           const b = r as bigint;
+
           if (b === 0n) throw new Error('division by zero is unspecified in SMT-LIB');
           const q = a / b;
+
           return a - q * b < 0n ? (b > 0n ? q - 1n : q + 1n) : q;
         }
         case 'mod': {
           const a = l as bigint;
           const b = r as bigint;
+
           if (b === 0n) throw new Error('modulo by zero is unspecified in SMT-LIB');
           const m = a % b;
+
           return m < 0n ? m + (b < 0n ? -b : b) : m;
         }
         case '<':
@@ -74,8 +84,10 @@ export function evaluate(
         : evaluate(expr.whenFalse, env, functions);
     case 'call': {
       const fn = functions.get(expr.fn);
+
       if (!fn?.body) throw new Error(`opaque function ${expr.fn} cannot be evaluated`);
       const args = expr.args.map((a) => evaluate(a, env, functions));
+
       return evaluate(fn.body, new Map(fn.params.map((p, i) => [p.name, args[i] as IRValue])), functions);
     }
   }
@@ -84,6 +96,7 @@ export function evaluate(
 export function callModel(model: FunctionModel, args: IRValue[], functions: FunctionModel[]): IRValue {
   const table = new Map(functions.map((f) => [f.name, f]));
   table.set(model.name, model);
+
   return evaluate({ kind: 'call', fn: model.name, args: args.map(toLiteral) }, new Map(), table);
 }
 
@@ -104,15 +117,21 @@ export function shapeArguments<T, L>(
 ): (L | Record<string, L> | L[])[] {
   const get = (name: string): T => {
     if (!values.has(name)) throw new Error(`no value for ${name}`);
+
     return values.get(name) as T;
   };
+
   if (!model.jsParams) return model.params.map((p) => leaf(get(p.name)));
+
   return model.jsParams.map((p) => {
     if (p.kind === 'scalar') return leaf(get(p.param));
+
     if (p.kind === 'record') return Object.fromEntries(p.fields.map((f) => [f.key, leaf(get(f.param))]));
     const n = length(get(p.length));
+
     if (!Number.isInteger(n) || n < 0 || n > p.elements.length)
       throw new Error(`invalid length ${n} for ${p.name}`);
+
     return p.elements.slice(0, n).map((e) => leaf(get(e)));
   });
 }

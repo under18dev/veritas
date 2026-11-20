@@ -26,6 +26,7 @@ function git(cwd: string, ...args: string[]): string {
 
 function linkPackages(source: string, target: string): void {
   mkdirSync(target, { recursive: true });
+
   for (const name of readdirSync(source)) {
     // Tool caches (.vite) and shims (.bin) are not packages; linking the cache lets git race with other tests.
     if (name.startsWith('.')) continue;
@@ -75,6 +76,7 @@ function copyFixture(): string {
     '-qm',
     'config',
   );
+
   return target;
 }
 
@@ -107,6 +109,7 @@ function configure(
   vi.stubEnv('INPUT_INCONCLUSIVE', options.inconclusive ?? 'warn');
   vi.stubEnv('INPUT_SUMMARY', 'true');
   vi.stubEnv('INPUT_SINCE', '');
+
   return { output, summary };
 }
 
@@ -121,9 +124,11 @@ function outputValues(file: string): Record<string, string> {
 
 function allText(directory: string): string {
   if (!existsSync(directory)) return '';
+
   return readdirSync(directory, { withFileTypes: true })
     .map((entry) => {
       const file = path.join(directory, entry.name);
+
       return entry.isDirectory() ? allText(file) : readFileSync(file, 'utf8');
     })
     .join('\n');
@@ -194,6 +199,7 @@ describe('main end to end', { timeout: 300_000 }, () => {
     const run = JSON.parse(readFileSync(path.join(project, reportPath as string), 'utf8')) as {
       policyReasons?: string[];
     };
+
     if (run.policyReasons?.some((reason) => /timeout|unknown/i.test(reason)))
       expect(values.verdict).not.toBe('pass');
     expect(code).not.toBe(0);

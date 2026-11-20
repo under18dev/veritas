@@ -12,6 +12,7 @@ import type {
 /** Integer points that decide a threshold: both sides of `x op v`. */
 export function boundaryPoints(predicate: NonNullable<Property['predicate']>): string[] {
   const v = BigInt(predicate.value);
+
   switch (predicate.operator) {
     case '>':
       return [v.toString(), (v + 1n).toString()];
@@ -71,6 +72,7 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
   const linkUnknown = unresolved || opaque;
 
   const boundaryCoverage: EvidenceVector['boundaryCoverage'] = [];
+
   for (const p of properties) {
     if (!p.predicate) continue;
     const points = boundaryPoints(p.predicate);
@@ -93,12 +95,17 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
     ...testClaims,
   ];
   const unknowns: string[] = [];
+
   if (!input.mutationAvailable)
     unknowns.push('no mutation results for this run; detection power not measured');
+
   if (test.granularity === 'suite') unknowns.push('analysed at suite level only');
+
   if (test.nondeterminism.length > 0)
     unknowns.push(`non-deterministic inputs: ${test.nondeterminism.join(', ')}`);
+
   if (test.usesMocks) unknowns.push('uses mocks; observed behaviour may not be the real implementation');
+
   if (unresolved)
     unknowns.push(
       'a call goes through a relative import TypeScript could not resolve; its link to project code is unknown (see the inventory diagnostics)',
@@ -110,6 +117,7 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
     unknowns.push(
       'runs code in a child process or through a dynamic import; static analysis cannot see which project code it reaches',
     );
+
   for (const c of claims)
     if (c.status !== 'proven_within_model' && c.status !== 'counterexample_found')
       unknowns.push(`formal claim ${c.id} is ${c.status}`);
@@ -144,18 +152,24 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
     test.suspicions.includes('target_not_called') ||
     test.suspicions.includes('no_assertion') ||
     (!assertedCall && !linkUnknown);
+
   if (disconnected) {
     outcome = 'tautological_or_disconnected';
+
     if (test.suspicions.length) rationale.push(`static analysis: ${test.suspicions.join(', ')}`);
+
     if (!assertedCall) rationale.push('no assertion checks the result of a project function');
+
     if (input.mutationAvailable && killed.length === 0) rationale.push('killed no mutant');
   } else if (!assertedCall) {
     // Only reachable when the link is unknown: the asserted value may come from project code, so do not judge it.
     outcome = 'inconclusive';
+
     if (unresolved)
       rationale.push(
         'the asserted call could not be linked to a project symbol because its import did not resolve',
       );
+
     if (opaque)
       rationale.push(
         'the asserted values come from a child process or a dynamic import, which static analysis cannot follow',
@@ -170,13 +184,16 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
     );
   } else if (relevantSurvived.length > 0 || boundaryCoverage.some((b) => b.exercised === 'no')) {
     outcome = 'weak_or_incomplete';
+
     if (relevantSurvived.length > 0) {
       rationale.push(
         `${relevantSurvived.length} specification-relevant mutant(s) it runs survived: ${relevantSurvived.map((m) => `${m.location.file}:${m.location.range?.start} ${m.original} -> ${m.replacement}`).join('; ')}`,
       );
     }
+
     for (const b of boundaryCoverage.filter((b) => b.exercised === 'no'))
       rationale.push(`boundary not exercised: ${b.boundary}`);
+
     for (const c of testClaims.filter((c) => relevantSurvived.some((m) => m.id === c.mutantId))) {
       if (c.status === 'counterexample_found')
         rationale.push(
@@ -208,6 +225,7 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
     rationale.push(
       `kills ${relevantKilled.length} specification-relevant mutant(s) and survivors it covers: none`,
     );
+
     if (boundaryCoverage.length)
       rationale.push(`exercises decisive inputs: ${boundaryCoverage.map((b) => b.boundary).join('; ')}`);
   } else {
@@ -218,8 +236,10 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
   }
 
   const limitations = [...unknowns];
+
   if (properties.some((p) => p.status !== 'accepted'))
     limitations.push('linked properties are not accepted; relevance is to proposed specifications');
+
   return {
     testId: test.id,
     propertyIds,
@@ -244,11 +264,13 @@ export function assessTests(input: AssessInput): TestAssessment[] {
  */
 function argumentValues(arg: string): string[] {
   if (!arg.startsWith('[') && !arg.startsWith('{')) return [arg];
+
   try {
     const parsed = JSON.parse(arg) as unknown;
     const leaves = Object.values(parsed as Record<string, unknown>).filter(
       (v): v is string => typeof v === 'string',
     );
+
     return Array.isArray(parsed) ? [...leaves, String(parsed.length)] : leaves;
   } catch {
     return [arg];

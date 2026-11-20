@@ -89,6 +89,7 @@ export class RunStore {
   /** Validate against `schema`, redact secrets, wrap in an envelope and write. Returns the run-relative path. */
   write<S extends z.ZodType>(name: string, schema: S, data: z.input<S>): string {
     const parsed = schema.safeParse(data);
+
     if (!parsed.success) {
       throw new VeritasError(
         'tool',
@@ -101,6 +102,7 @@ export class RunStore {
     const file = this.pathFor(name);
     const envelope: Envelope<unknown> = { meta: this.meta(), data: redactDeep(parsed.data) };
     writeAtomic(file, `${JSON.stringify(envelope, null, 2)}\n`);
+
     return path.relative(this.dir, file).split(path.sep).join('/');
   }
 
@@ -111,6 +113,7 @@ export class RunStore {
     writeAtomic(file, redacted);
     const relative = path.relative(this.dir, file).split(path.sep).join('/');
     this.index(relative, 'text', Buffer.from(redacted));
+
     return relative;
   }
 
@@ -123,13 +126,16 @@ export class RunStore {
     const recorded: string[] = [];
     const walk = (current: string) => {
       let entries: import('node:fs').Dirent[];
+
       try {
         entries = readdirSync(current, { withFileTypes: true });
       } catch {
         return;
       }
+
       for (const entry of entries) {
         const abs = path.join(current, entry.name);
+
         if (entry.isDirectory()) walk(abs);
         else if (entry.isFile()) {
           const relative = path.relative(this.dir, abs).split(path.sep).join('/');
@@ -145,7 +151,9 @@ export class RunStore {
       }
     };
     walk(base);
+
     if (recorded.length) this.writeIndex();
+
     return recorded.sort();
   }
 
@@ -193,6 +201,7 @@ export function readEnvelope<S extends z.ZodType>(
   migrations: Migration[] = MIGRATIONS,
 ): Envelope<z.output<S>> {
   let raw: { meta?: Record<string, unknown>; data?: unknown };
+
   try {
     raw = JSON.parse(readFileSync(file, 'utf8'));
   } catch (error) {
@@ -204,9 +213,11 @@ export function readEnvelope<S extends z.ZodType>(
   }
   let envelope = { meta: raw.meta ?? {}, data: raw.data };
   const seen = new Set<string>();
+
   while (envelope.meta.schemaVersion !== SCHEMA_VERSION) {
     const version = String(envelope.meta.schemaVersion ?? 'none');
     const step = migrations.find((m) => m.from === version);
+
     if (!step || seen.has(version)) {
       throw new VeritasError(
         'user',
@@ -220,6 +231,7 @@ export function readEnvelope<S extends z.ZodType>(
     envelope.meta = { ...envelope.meta, schemaVersion: step.to };
   }
   const meta = ArtifactMeta.safeParse(envelope.meta);
+
   if (!meta.success) {
     throw new VeritasError(
       'tool',
@@ -230,6 +242,7 @@ export function readEnvelope<S extends z.ZodType>(
     );
   }
   const parsed = schema.safeParse(envelope.data);
+
   if (!parsed.success) {
     throw new VeritasError(
       'tool',
@@ -239,6 +252,7 @@ export function readEnvelope<S extends z.ZodType>(
       parsed.error.issues,
     );
   }
+
   return { meta: meta.data, data: parsed.data };
 }
 
@@ -292,6 +306,7 @@ export class ContentCache {
       key,
       hit: value !== undefined,
     });
+
     return value;
   }
 
@@ -301,10 +316,13 @@ export class ContentCache {
         mac?: unknown;
         value?: unknown;
       };
+
       if (typeof entry.mac !== 'string' || !/^[0-9a-f]{64}$/.test(entry.mac)) return undefined;
       const expected = Buffer.from(this.mac(namespace, key, entry.value), 'hex');
+
       if (!timingSafeEqual(Buffer.from(entry.mac, 'hex'), expected)) return undefined;
       const parsed = schema.safeParse(entry.value);
+
       return parsed.success ? parsed.data : undefined;
     } catch {
       return undefined;
@@ -327,6 +345,7 @@ export class ContentCache {
         `invalid cache namespace or key: ${namespace}/${key}`,
       );
     }
+
     return path.join(this.dir, namespace, key.slice(0, 2), `${key}.json`);
   }
 }
@@ -342,6 +361,7 @@ export function openCache(
   env: NodeJS.ProcessEnv = process.env,
 ): { cache: ContentCache | null; message: string | null } {
   if (!config.cache.enabled) return { cache: null, message: 'cache: disabled by configuration' };
+
   if (gitOutput(root, ['ls-files', '--', CACHE_DIR.split(path.sep).join('/')])?.trim()) {
     return {
       cache: null,
@@ -349,7 +369,9 @@ export function openCache(
     };
   }
   const secret = cacheSecret(env);
+
   if (!secret) return { cache: null, message: 'cache: disabled because no cache key could be created' };
+
   return { cache: new ContentCache(root, secret), message: null };
 }
 
@@ -363,12 +385,14 @@ export function cacheKeyFile(env: NodeJS.ProcessEnv = process.env): string {
     process.platform === 'win32'
       ? env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local')
       : env.XDG_CACHE_HOME || path.join(env.HOME || homedir(), '.cache');
+
   return path.join(base, 'veritas', 'cache-key');
 }
 
 /** The 32-byte cache key, created (mode 0600) on first use; null when it can be neither read nor created. */
 function cacheSecret(env: NodeJS.ProcessEnv): Buffer | null {
   const file = cacheKeyFile(env);
+
   try {
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     // Exclusive create: when two processes race, both end up using the key that was written first.
@@ -376,11 +400,14 @@ function cacheSecret(env: NodeJS.ProcessEnv): Buffer | null {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return null;
   }
+
   try {
     // A key others can read could sign forged entries: tighten it to 0600, or do without a cache.
     if (process.platform !== 'win32' && (statSync(file).mode & 0o077) !== 0) chmodSync(file, 0o600);
+
     if (process.platform !== 'win32' && (statSync(file).mode & 0o077) !== 0) return null;
     const secret = readFileSync(file);
+
     return secret.length === 32 ? secret : null;
   } catch {
     return null;
@@ -395,6 +422,7 @@ export function gitOutput(root: string, args: string[]): string | null {
         process.env[name] === undefined ? [] : [[name, process.env[name]]],
       ),
     );
+
     return execFileSync('git', args, {
       cwd: root,
       env,
@@ -408,5 +436,6 @@ export function gitOutput(root: string, args: string[]): string | null {
 
 export function hashFiles(files: { path: string; content: string | Uint8Array }[]): string {
   const sorted = [...files].sort((a, b) => a.path.localeCompare(b.path));
+
   return hashValue(sorted.map((f) => [f.path, sha256(f.content)]));
 }

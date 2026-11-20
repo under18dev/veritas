@@ -56,6 +56,7 @@ describe('patch validation', () => {
 
   it('rejects traversal and absolute paths', () => {
     const root = repo();
+
     for (const p of [
       '../evil.test.ts',
       'test/../../evil.test.ts',

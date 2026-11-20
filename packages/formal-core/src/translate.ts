@@ -74,6 +74,7 @@ const REJECTED_BINARY: Partial<Record<ts.SyntaxKind, string>> = {
 
 function sortOfType(node: ts.TypeNode | undefined, what: string, owner: ts.Node): Sort {
   if (node?.kind === ts.SyntaxKind.NumberKeyword) return 'int';
+
   if (node?.kind === ts.SyntaxKind.BooleanKeyword) return 'bool';
   throw new Unsupported(node ?? owner, 'type', `${what} must be annotated as number or boolean`);
 }
@@ -92,13 +93,18 @@ function recordFields(
   const fields = members.map((m) => {
     if (!ts.isPropertySignature(m) || !m.name || !(ts.isIdentifier(m.name) || ts.isStringLiteral(m.name)))
       throw new Unsupported(m, 'record', `${what}: only named number or boolean properties are supported`);
+
     if (m.questionToken)
       throw new Unsupported(m, 'record', `${what}: optional property ${m.name.text} can be undefined`);
+
     if (!/^[A-Za-z_$][\w$]*$/.test(m.name.text))
       throw new Unsupported(m, 'record', `${what}: property name ${m.name.text} is not a plain identifier`);
+
     return { key: m.name.text, sort: sortOfType(m.type, `${what}.${m.name.text}`, m) };
   });
+
   if (fields.length === 0) throw new Unsupported(owner, 'record', `${what} has no properties`);
+
   return fields;
 }
 
@@ -113,27 +119,39 @@ function shapeOfType(
   sf: ts.SourceFile,
 ): ParamShape {
   if (!node) throw new Unsupported(owner, 'type', `${what} must have a type annotation`);
+
   if (node.kind === ts.SyntaxKind.NumberKeyword) return { kind: 'scalar', sort: 'int' };
+
   if (node.kind === ts.SyntaxKind.BooleanKeyword) return { kind: 'scalar', sort: 'bool' };
+
   if (ts.isParenthesizedTypeNode(node)) return shapeOfType(node.type, what, owner, sf);
+
   if (ts.isTypeOperatorNode(node) && node.operator === ts.SyntaxKind.ReadonlyKeyword)
     return shapeOfType(node.type, what, owner, sf);
+
   if (ts.isArrayTypeNode(node))
     return { kind: 'array', sort: sortOfType(node.elementType, `elements of ${what}`, node) };
+
   if (ts.isTypeLiteralNode(node)) return { kind: 'record', fields: recordFields(node.members, what, node) };
+
   if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
     const name = node.typeName.text;
+
     if ((name === 'Array' || name === 'ReadonlyArray') && node.typeArguments?.length === 1)
       return { kind: 'array', sort: sortOfType(node.typeArguments[0], `elements of ${what}`, node) };
+
     if (name === 'Readonly' && node.typeArguments?.length === 1)
       return shapeOfType(node.typeArguments[0], what, owner, sf);
+
     if (!node.typeArguments) {
       for (const stmt of sf.statements) {
         if (ts.isInterfaceDeclaration(stmt) && stmt.name.text === name) {
           if (stmt.heritageClauses?.length || stmt.typeParameters?.length)
             throw new Unsupported(stmt, 'record', `interface ${name} extends or is generic`);
+
           return { kind: 'record', fields: recordFields(stmt.members, what, stmt) };
         }
+
         if (ts.isTypeAliasDeclaration(stmt) && stmt.name.text === name && !stmt.typeParameters) {
           return shapeOfType(stmt.type, what, stmt, sf);
         }
@@ -159,6 +177,7 @@ const not = (arg: Expr): Expr => ({ kind: 'unary', op: 'not', arg });
 function findFunction(sf: ts.SourceFile, name: string): ts.FunctionLikeDeclaration | null {
   for (const stmt of sf.statements) {
     if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name) return stmt;
+
     if (ts.isVariableStatement(stmt)) {
       for (const decl of stmt.declarationList.declarations) {
         if (ts.isIdentifier(decl.name) && decl.name.text === name && decl.initializer) {
@@ -168,6 +187,7 @@ function findFunction(sf: ts.SourceFile, name: string): ts.FunctionLikeDeclarati
       }
     }
   }
+
   return null;
 }
 
@@ -196,22 +216,31 @@ function aggregateOf(node: ts.Expression, scope: Scope): Aggregate | undefined {
 
 function expr(node: ts.Expression, scope: Scope): Expr {
   if (ts.isParenthesizedExpression(node)) return expr(node.expression, scope);
+
   if (ts.isAsExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node)) {
     throw new Unsupported(node, 'cast', 'type assertions can hide non-integer values');
   }
+
   if (ts.isNumericLiteral(node)) {
     const text = node.text;
+
     if (!/^\d+$/.test(text))
       throw new Unsupported(node, 'number', `non-integer literal ${node.getText(scope.sf)}`);
+
     if (BigInt(text) > SAFE) throw new Unsupported(node, 'number', 'literal outside the safe-integer range');
+
     return { kind: 'int', value: text };
   }
+
   if (node.kind === ts.SyntaxKind.TrueKeyword) return { kind: 'bool', value: true };
+
   if (node.kind === ts.SyntaxKind.FalseKeyword) return { kind: 'bool', value: false };
+
   if (ts.isIdentifier(node)) {
     if (node.text === 'NaN' || node.text === 'Infinity' || node.text === 'undefined') {
       throw new Unsupported(node, node.text, `${node.text} is not an integer or boolean`);
     }
+
     if (scope.aggregates.has(node.text))
       throw new Unsupported(
         node,
@@ -219,22 +248,28 @@ function expr(node: ts.Expression, scope: Scope): Expr {
         `${node.text} can only be read by property, .length or a literal index (passing, returning or copying it is not supported)`,
       );
     const bound = scope.vars.get(node.text);
+
     if (!bound)
       throw new Unsupported(
         node,
         'identifier',
         `reference to ${node.text}, which is not a parameter or local constant`,
       );
+
     return bound;
   }
+
   if (ts.isPrefixUnaryExpression(node)) {
     if (node.operator === ts.SyntaxKind.ExclamationToken)
       return { kind: 'unary', op: 'not', arg: expr(node.operand, scope) };
+
     if (node.operator === ts.SyntaxKind.MinusToken) {
       if (ts.isNumericLiteral(node.operand)) {
         const inner = expr(node.operand, scope) as { kind: 'int'; value: string };
+
         return inner.value === '0' ? inner : { kind: 'int', value: `-${inner.value}` };
       }
+
       return { kind: 'unary', op: 'neg', arg: expr(node.operand, scope) };
     }
     throw new Unsupported(
@@ -243,11 +278,14 @@ function expr(node: ts.Expression, scope: Scope): Expr {
       `unary ${ts.tokenToString(node.operator)} is not supported (coercion or mutation)`,
     );
   }
+
   if (ts.isBinaryExpression(node)) {
     const kind = node.operatorToken.kind;
     const rejected = REJECTED_BINARY[kind];
+
     if (rejected) throw new Unsupported(node, ts.tokenToString(kind) ?? 'operator', rejected);
     const op = BINARY[kind];
+
     if (!op)
       throw new Unsupported(
         node,
@@ -258,10 +296,13 @@ function expr(node: ts.Expression, scope: Scope): Expr {
     // The right operand of && / || is only evaluated when the left one is true / false.
     const rightPath =
       op === 'and' ? [...scope.path, left] : op === 'or' ? [...scope.path, not(left)] : scope.path;
+
     return { kind: 'binary', op, left, right: expr(node.right, { ...scope, path: rightPath }) };
   }
+
   if (ts.isConditionalExpression(node)) {
     const cond = expr(node.condition, scope);
+
     return {
       kind: 'ite',
       cond,
@@ -269,6 +310,7 @@ function expr(node: ts.Expression, scope: Scope): Expr {
       whenFalse: expr(node.whenFalse, { ...scope, path: [...scope.path, not(cond)] }),
     };
   }
+
   if (ts.isCallExpression(node)) {
     if (!ts.isIdentifier(node.expression)) {
       throw new Unsupported(
@@ -278,30 +320,40 @@ function expr(node: ts.Expression, scope: Scope): Expr {
       );
     }
     const callee = scope.translateCallee(node.expression.text);
+
     if (callee.jsParams?.some((p) => p.kind !== 'scalar'))
       throw new Unsupported(
         node,
         'call',
         `${node.expression.text} takes a record or array parameter; such calls are not supported`,
       );
+
     return { kind: 'call', fn: callee.name, args: node.arguments.map((a) => expr(a, scope)) };
   }
+
   if (ts.isAwaitExpression(node)) throw new Unsupported(node, 'await', 'asynchronous code is not supported');
+
   if (ts.isPropertyAccessExpression(node) && !node.questionDotToken) {
     const target = aggregateOf(node.expression, scope);
     const key = node.name.text;
+
     if (target?.kind === 'record') {
       const field = target.fields.get(key);
+
       if (field) return { kind: 'var', name: field.param };
     }
+
     if (target?.kind === 'array' && key === 'length') return { kind: 'var', name: target.length };
   }
+
   if (ts.isElementAccessExpression(node) && !node.questionDotToken) {
     const target = aggregateOf(node.expression, scope);
     const index = node.argumentExpression;
+
     if (target?.kind === 'array' && ts.isNumericLiteral(index) && /^\d+$/.test(index.text)) {
       const k = Number(index.text);
       const slot = target.elements[k];
+
       if (slot === undefined)
         throw new Unsupported(
           node,
@@ -317,9 +369,11 @@ function expr(node: ts.Expression, scope: Scope): Expr {
           right: { kind: 'int', value: String(k) },
         }),
       );
+
       return { kind: 'var', name: slot };
     }
   }
+
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
     throw new Unsupported(
       node,
@@ -337,13 +391,18 @@ function expr(node: ts.Expression, scope: Scope): Expr {
 /** Translate a statement list into one expression; every path must end in `return`. */
 function statements(stmts: readonly ts.Statement[], scope: Scope, owner: ts.Node): Expr {
   const [first, ...rest] = stmts;
+
   if (!first)
     throw new Unsupported(owner, 'missing return', 'a path through the function does not return a value');
+
   if (ts.isReturnStatement(first)) {
     if (!first.expression) throw new Unsupported(first, 'return', 'return without a value');
+
     return expr(first.expression, scope);
   }
+
   if (ts.isBlock(first)) return statements([...first.statements, ...rest], scope, owner);
+
   if (ts.isIfStatement(first)) {
     const cond = expr(first.expression, scope);
     const negated = not(cond);
@@ -355,6 +414,7 @@ function statements(stmts: readonly ts.Statement[], scope: Scope, owner: ts.Node
         ? [...first.elseStatement.statements]
         : [first.elseStatement]
       : [];
+
     return {
       kind: 'ite',
       cond,
@@ -370,12 +430,14 @@ function statements(stmts: readonly ts.Statement[], scope: Scope, owner: ts.Node
       ),
     };
   }
+
   if (ts.isVariableStatement(first)) {
     if (!(first.declarationList.flags & ts.NodeFlags.Const)) {
       throw new Unsupported(first, 'let/var', 'mutable variables are not supported; use const');
     }
     const vars = new Map(scope.vars);
     const aggregates = new Map(scope.aggregates);
+
     for (const decl of first.declarationList.declarations) {
       if (!ts.isIdentifier(decl.name) || !decl.initializer)
         throw new Unsupported(decl, 'declaration', 'destructuring or uninitialised const');
@@ -383,8 +445,10 @@ function statements(stmts: readonly ts.Statement[], scope: Scope, owner: ts.Node
       // A local constant shadows a record or array parameter of the same name.
       aggregates.delete(decl.name.text);
     }
+
     return statements(rest, { ...scope, vars, aggregates }, owner);
   }
+
   if (ts.isEmptyStatement(first)) return statements(rest, scope, owner);
   const construct = ts.SyntaxKind[first.kind];
   throw new Unsupported(
@@ -412,6 +476,7 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
   const inProgress = new Set<string>();
   const rootModel = options.modelName ?? options.exportName;
   const maxArrayLength = options.maxArrayLength ?? 3;
+
   if (!Number.isInteger(maxArrayLength) || maxArrayLength < 1 || maxArrayLength > 8)
     throw new RangeError('maxArrayLength must be an integer from 1 to 8');
   /** Array length parameters: their domain is [0, maxArrayLength], not the integer domain. */
@@ -420,11 +485,16 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
 
   const translateNamed = (name: string, modelName: string): FunctionModel => {
     const existing = models.get(modelName);
+
     if (existing) return existing;
+
     if (inProgress.has(name)) throw new Unsupported(sf, 'recursion', `recursive call to ${name}`);
     const fn = findFunction(sf, name);
+
     if (!fn) throw new Unsupported(sf, 'call', `${name} is not a function declared in ${options.file}`);
+
     if (fn.asteriskToken) throw new Unsupported(fn, 'generator', 'generators are not supported');
+
     if (fn.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword))
       throw new Unsupported(fn, 'async', 'async functions are not supported');
     inProgress.add(name);
@@ -436,22 +506,27 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
     const jsNames = new Set(fn.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : '')));
     const flat = (owner: ts.Node, base: string, part: string) => {
       const flatName = `${base}${FLAT_SEPARATOR}${part}`;
+
       if (jsNames.has(flatName) || params.some((q) => q.name === flatName))
         throw new Unsupported(
           owner,
           'parameter',
           `parameter name ${flatName} collides with a flattened field`,
         );
+
       return flatName;
     };
+
     for (const p of fn.parameters) {
       if (!ts.isIdentifier(p.name))
         throw new Unsupported(p, 'destructuring', 'destructured parameters are not supported');
+
       if (p.questionToken || p.initializer || p.dotDotDotToken) {
         throw new Unsupported(p, 'parameter', 'optional, default and rest parameters can be undefined');
       }
       const pname = p.name.text;
       const shape = shapeOfType(p.type, `parameter ${pname}`, p, sf);
+
       if (shape.kind === 'scalar') {
         paramSorts.set(pname, shape.sort);
         vars.set(pname, { kind: 'var', name: pname });
@@ -459,6 +534,7 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
         jsParams.push({ kind: 'scalar', name: pname, param: pname });
       } else if (shape.kind === 'record') {
         const fields = new Map<string, { param: string; sort: Sort }>();
+
         for (const f of shape.fields) {
           const param = flat(p, pname, f.key);
           fields.set(f.key, { param, sort: f.sort });
@@ -474,6 +550,7 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
         const length = flat(p, pname, 'length');
         const elements = Array.from({ length: maxArrayLength }, (_, i) => flat(p, pname, String(i)));
         params.push({ name: length, sort: 'int' });
+
         for (const e of elements) params.push({ name: e, sort: shape.sort });
         lengths.add(length);
         aggregates.set(pname, { kind: 'array', name: pname, length, elements, sort: shape.sort });
@@ -511,12 +588,14 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
       ...(outOfBounds.length ? { outOfBounds } : {}),
     };
     models.set(modelName, model);
+
     return model;
   };
 
   if (!findFunction(sf, options.exportName)) return { status: 'not_found', symbol: id };
   const fn = findFunction(sf, options.exportName) as ts.FunctionLikeDeclaration;
   let model: FunctionModel;
+
   try {
     model = translateNamed(options.exportName, options.modelName ?? options.exportName);
   } catch (error) {
@@ -526,6 +605,7 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
         construct: error.construct,
         reason: error.message,
       });
+
       return { status: 'unsupported', symbol: id, reasons };
     }
     throw error;
@@ -540,5 +620,6 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
         },
   );
   const dependencies = [...models.values()].filter((m) => m !== model);
+
   return { status: 'translated', model, params, dependencies };
 }

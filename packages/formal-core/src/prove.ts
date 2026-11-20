@@ -89,6 +89,7 @@ function irValue(value: string | boolean): IRValue {
 
 function sameValue(model: IRValue, js: EncodedValue): boolean {
   if (typeof model === 'boolean') return js.t === 'boolean' && js.v === model;
+
   return js.t === 'number' && js.v === model.toString();
 }
 
@@ -100,11 +101,14 @@ async function replay(
 ): Promise<ReplayRecord[]> {
   const records: ReplayRecord[] = [];
   const functions = options.ir.functions;
+
   for (const binding of options.bindings) {
     const model = functions.find((f) => f.name === binding.modelName);
+
     if (!model?.body) continue;
     const argLists = inputs.map((input) => model.params.map((p) => input[p.name] ?? null));
     const runnable = argLists.filter((args) => args.every((a) => a !== null)) as (string | boolean)[][];
+
     if (runnable.length === 0) continue;
     // Records and arrays are rebuilt from their flattened model parameters.
     const jsCall = (args: (string | boolean)[]): EncodedValue[] =>
@@ -115,8 +119,11 @@ async function replay(
         (v) => Number(v),
       ).map((a, j): EncodedValue => {
         const kind = model.jsParams?.[j]?.kind ?? 'scalar';
+
         if (kind === 'array') return { t: 'array', v: a as EncodedValue[] };
+
         if (kind === 'record') return { t: 'object', v: a as Record<string, EncodedValue> };
+
         return a as EncodedValue;
       });
     const sandbox = await callInSandbox({
@@ -131,6 +138,7 @@ async function replay(
     runnable.forEach((args, i) => {
       const input = Object.fromEntries(model.params.map((p, j) => [p.name, args[j] as string | boolean]));
       let modelValue: IRValue | null = null;
+
       try {
         modelValue = callModel(model, args.map(irValue), functions);
       } catch {
@@ -149,6 +157,7 @@ async function replay(
       });
     });
   }
+
   return records;
 }
 
@@ -178,6 +187,7 @@ export function differentialInputs(
   max = 64,
 ): Record<string, string | boolean>[] {
   const literals = new Set<bigint>([0n, 1n, -1n]);
+
   for (const f of functions) if (f.body) collectLiterals(f.body, literals);
   collectLiterals(ir.body, literals);
   const perParam = ir.params.map((p) => {
@@ -185,7 +195,9 @@ export function differentialInputs(
     const lo = BigInt(p.domain.min);
     const hi = BigInt(p.domain.max);
     const values = new Set<bigint>([lo, hi]);
+
     for (const l of literals) for (const d of [-1n, 0n, 1n]) values.add(l + d);
+
     return [...values]
       .filter((v) => v >= lo && v <= hi)
       .sort((a, b) => (a < b ? -1 : 1))
@@ -194,13 +206,17 @@ export function differentialInputs(
   const out: Record<string, string | boolean>[] = [];
   const build = (i: number, acc: Record<string, string | boolean>) => {
     if (out.length >= max) return;
+
     if (i === ir.params.length) {
       out.push({ ...acc });
+
       return;
     }
+
     for (const v of perParam[i] ?? []) build(i + 1, { ...acc, [(ir.params[i] as { name: string }).name]: v });
   };
   build(0, {});
+
   return out;
 }
 
@@ -239,14 +255,18 @@ async function solve(
     options.cache && version
       ? options.cache.key({ solver: 'z3', smt, engine, engineVersion: version, timeoutMs })
       : null;
+
   if (options.cache && key) {
     const hit = options.cache.get('solver', key, CachedSolverRun);
+
     // No solver time was spent on a reused result.
     if (hit) return { ...hit, durationMs: 0, cacheKey: key };
   }
   const run = await solveSmtLib(smt, { timeoutMs, engine, signal: options.signal });
+
   if (options.cache && key && (run.verdict === 'sat' || run.verdict === 'unsat'))
     options.cache.set('solver', key, run);
+
   return run;
 }
 
@@ -265,6 +285,7 @@ function checkKind(options: ProveOptions): void {
   const collect = (e: Expr): void => {
     if (e.kind === 'call') {
       calls.add(e.fn);
+
       for (const a of e.args) collect(a);
     } else if (e.kind === 'unary') collect(e.arg);
     else if (e.kind === 'binary') {
@@ -280,6 +301,7 @@ function checkKind(options: ProveOptions): void {
   const fail = (why: string) => {
     throw new Error(`${kind} claim refused: ${why}`);
   };
+
   switch (kind) {
     case 'conformance':
       if (mutantId) fail('a conformance claim is about the implementation, not a mutant');
@@ -288,8 +310,10 @@ function checkKind(options: ProveOptions): void {
     case 'distinguishability':
     case 'property_detection':
       if (!mutantId) fail('a mutant id is required');
+
       // The body must compare two different models: the original and the mutant.
       if (calls.size < 2) fail('the property must call both the original and the mutant model');
+
       if (kind === 'distinguishability' && ir.preconditions.length === 0)
         fail('the inputs to check must be restricted to the test inputs (restrictToInputs)');
       if (
@@ -311,15 +335,19 @@ function checkKind(options: ProveOptions): void {
  */
 function boundModels(options: ProveOptions): Set<string> {
   const out = new Set<string>();
+
   for (const b of options.bindings) {
     const model = options.ir.functions.find((f) => f.name === b.modelName);
     const hash = model?.symbol.lastIndexOf('#') ?? -1;
+
     if (!model || hash <= 0) continue;
     const file = model.symbol.slice(0, hash);
     const name = model.symbol.slice(hash + 1);
+
     if (name === b.exportName && path.resolve(options.root, file) === path.resolve(b.modulePath))
       out.add(b.modelName);
   }
+
   return out;
 }
 
@@ -327,6 +355,7 @@ function boundModels(options: ProveOptions): Set<string> {
 function callsIn(e: Expr, out = new Set<string>()): Set<string> {
   if (e.kind === 'call') {
     out.add(e.fn);
+
     for (const a of e.args) callsIn(a, out);
   } else if (e.kind === 'unary') callsIn(e.arg, out);
   else if (e.kind === 'binary') {
@@ -337,6 +366,7 @@ function callsIn(e: Expr, out = new Set<string>()): Set<string> {
     callsIn(e.whenTrue, out);
     callsIn(e.whenFalse, out);
   }
+
   return out;
 }
 
@@ -364,11 +394,14 @@ function isDetection(body: Expr, bound: Set<string>): boolean {
   if (body.kind !== 'binary' || body.op !== 'implies') return false;
   const left = callsIn(body.left);
   const right = callsIn(body.right);
+
   for (const from of left)
     for (const to of right) {
       if (from === to || left.has(to) || !bound.has(from) || bound.has(to)) continue;
+
       if (JSON.stringify(renameCalls(body.left, from, to)) === JSON.stringify(body.right)) return true;
     }
+
   return false;
 }
 
@@ -398,12 +431,14 @@ export async function proveProperty(options: ProveOptions): Promise<ProveResult>
   let semanticValidation: FormalClaim['semanticValidation'] = 'not_attempted';
   const assumptions = [...BASE_ASSUMPTIONS, ...(options.assumptions ?? [])];
   const semanticGaps = [...SEMANTIC_GAPS];
+
   if (solver.verdict === 'cancelled') assumptions.push('solver run was cancelled');
   const replays: ReplayRecord[] = [];
 
   if (solver.verdict === 'sat') {
     replays.push(...(await replay('counterexample', [solver.model], options)));
     const checked = replays.filter((r) => r.agrees !== null);
+
     if (replays.some((r) => r.agrees === false)) {
       status = 'semantic_mismatch';
       semanticValidation = 'mismatch';
@@ -418,6 +453,7 @@ export async function proveProperty(options: ProveOptions): Promise<ProveResult>
 
   if (solver.verdict === 'unsat') {
     const rangeSmt = safeRangeQuery(options.ir, options.timeoutMs);
+
     if (rangeSmt) {
       const range = await solve(rangeSmt, options, options.timeoutMs * 2 + 5_000);
       options.store?.writeText(`proofs/${claimId}.safe-range.smt2`, rangeSmt);
@@ -425,6 +461,7 @@ export async function proveProperty(options: ProveOptions): Promise<ProveResult>
         `proofs/${claimId}.safe-range.out`,
         `; verdict ${range.verdict}\n${cacheNote(range)}${range.output}`,
       );
+
       if (range.verdict === 'sat') {
         status = 'semantic_mismatch';
         semanticGaps.push(
@@ -438,6 +475,7 @@ export async function proveProperty(options: ProveOptions): Promise<ProveResult>
       }
     }
     const bounds = status === 'proven_within_model' ? outOfBoundsProperty(options.ir) : null;
+
     if (bounds) {
       // Reading an element at or beyond an array's length gives undefined in JavaScript, which the model does
       // not describe: the result only holds if no input in the domain can do that.
@@ -448,6 +486,7 @@ export async function proveProperty(options: ProveOptions): Promise<ProveResult>
         `proofs/${claimId}.bounds.out`,
         `; verdict ${run.verdict}\n${cacheNote(run)}${run.output}`,
       );
+
       if (run.verdict === 'sat') {
         status = 'unsupported';
         semanticGaps.push(
@@ -460,9 +499,11 @@ export async function proveProperty(options: ProveOptions): Promise<ProveResult>
         assumptions.push('no array element is read at or beyond the array length (checked by solver)');
       }
     }
+
     if (status === 'proven_within_model') {
       replays.push(...(await replay('differential', differentialInputs(options.ir), options)));
       const checked = replays.filter((r) => r.agrees !== null);
+
       if (replays.some((r) => r.agrees === false)) {
         status = 'semantic_mismatch';
         semanticValidation = 'mismatch';
@@ -509,7 +550,9 @@ export async function proveProperty(options: ProveOptions): Promise<ProveResult>
     durationMs: solver.durationMs,
     ...(options.mutantId ? { mutantId: options.mutantId } : {}),
   };
+
   if (options.store) options.store.write(`proofs/${claimId}.replay.json`, ReplayLog, replays);
+
   return { claim, solver, replay: replays };
 }
 

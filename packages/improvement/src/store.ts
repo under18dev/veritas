@@ -26,6 +26,7 @@ export function assertPlanId(planId: string): void {
 /** Absolute directory of a plan, confined to the project root. */
 export function planDir(root: string, planId: string): string {
   assertPlanId(planId);
+
   return resolveInsideRoot(root, path.join(IMPROVEMENTS_DIR, planId));
 }
 
@@ -48,6 +49,7 @@ export function writePlanArtifact<S extends z.ZodType>(
   options: { exclusive?: boolean } = {},
 ): string {
   const parsed = schema.safeParse(data);
+
   if (!parsed.success) {
     throw new VeritasError(
       'tool',
@@ -58,6 +60,7 @@ export function writePlanArtifact<S extends z.ZodType>(
     );
   }
   assertPlanId(planId);
+
   if (!/^[a-z0-9-]+\.json$/.test(name)) {
     throw new VeritasError('tool', 'ARTIFACT_NAME_INVALID', `invalid improvement artifact name: ${name}`);
   }
@@ -75,6 +78,7 @@ export function writePlanArtifact<S extends z.ZodType>(
   // A unique temporary name: concurrent writers in one process or several never share it.
   const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
   writeFileSync(tmp, `${JSON.stringify({ meta, data: redactDeep(parsed.data) }, null, 2)}\n`);
+
   if (options.exclusive) {
     // link fails atomically when the name is taken, so two writers can never both claim it.
     try {
@@ -83,11 +87,13 @@ export function writePlanArtifact<S extends z.ZodType>(
       unlinkSync(tmp);
     }
   } else renameSync(tmp, file);
+
   return path.relative(root, file).split(path.sep).join('/');
 }
 
 export function readPlan(root: string, planId: string): PlanDocument {
   const file = path.join(planDir(root, planId), 'plan.json');
+
   if (!existsSync(file)) {
     throw new VeritasError(
       'user',
@@ -96,6 +102,7 @@ export function readPlan(root: string, planId: string): PlanDocument {
       'run `veritas improve --dry-run` first',
     );
   }
+
   return readEnvelope(file, PlanDocument).data;
 }
 
@@ -105,12 +112,15 @@ export function readPlan(root: string, planId: string): PlanDocument {
  */
 export function approvalTokenFor(doc: PlanDocument): string {
   const { plan, ...rest } = doc;
+
   // hashValue hashes canonical JSON (sorted keys, undefined dropped).
   return hashValue({ ...rest, plan: plan ? { ...plan, createdAt: undefined } : null });
 }
 
 export function attemptCount(root: string, planId: string): number {
   const dir = planDir(root, planId);
+
   if (!existsSync(dir)) return 0;
+
   return readdirSync(dir).filter((f) => /^attempt-\d+\.json$/.test(f)).length;
 }

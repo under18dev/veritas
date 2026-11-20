@@ -37,6 +37,7 @@ export async function extractWithLlm(
   const candidates = discovery.statements
     .filter((s) => s.relation.kind === 'free_text' && /\d/.test(s.quote))
     .slice(0, 50);
+
   if (candidates.length === 0)
     return { added: [], tokens: 0, messages: ['llm: no free-text statement with numbers to examine'] };
   const before = client.tokensUsed;
@@ -48,6 +49,7 @@ export async function extractWithLlm(
     ...(signal ? { signal } : {}),
   });
   const tokens = client.tokensUsed - before;
+
   if (result.status !== 'ok' || !result.data) {
     return {
       added: [],
@@ -57,15 +59,19 @@ export async function extractWithLlm(
   }
   const byId = new Map(candidates.map((s) => [s.id, s]));
   const added: DiscoveryResult['statements'] = [];
+
   for (const item of result.data.statements) {
     const source = byId.get(item.id);
+
     if (!source || !item.threshold) continue;
+
     // Keep only values that literally appear in the quoted text: the model may not invent numbers.
     if (!source.quote.replace(/,/g, '').includes(item.threshold.value.replace(/^-/, ''))) continue;
     // Text fields must come from the statement itself, so nothing else the model saw or produced (for example
     // file contents a CLI agent could read) can reach artifacts or reports.
     const quote = normalize(source.quote);
     const quantity = normalize(item.threshold.quantity);
+
     // The quantity may paraphrase (it is matched against parameter names), but only as a short word, never data.
     if (!quote.includes(quantity) && !/^[a-z][a-z _-]{0,23}$/.test(quantity)) continue;
     const threshold = {
@@ -81,6 +87,7 @@ export async function extractWithLlm(
       flags: [...source.flags, 'llm_extracted'],
     });
   }
+
   return {
     added,
     tokens,

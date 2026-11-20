@@ -65,6 +65,7 @@ class Semaphore {
       });
     }
     this.active++;
+
     try {
       return await task();
     } finally {
@@ -76,6 +77,7 @@ class Semaphore {
 
 function ok(data: unknown): CallToolResult {
   const text = redact(JSON.stringify(data, null, 2));
+
   return {
     content: [{ type: 'text', text }],
     structuredContent: JSON.parse(text) as Record<string, unknown>,
@@ -92,6 +94,7 @@ function fail(error: unknown): CallToolResult {
           message: (error as Error)?.message ?? String(error),
           hint: null,
         };
+
   return { isError: true, content: [{ type: 'text', text: redact(JSON.stringify(body)) }] };
 }
 
@@ -126,14 +129,17 @@ function summarize(summary: RunSummary) {
 export function createServer(options: ServerOptions): McpServer {
   // Programmatic callers get the same checks as the command: an existing directory and a sane concurrency limit.
   const maxConcurrent = options.maxConcurrent ?? 1;
+
   if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 16)
     throw new VeritasError('user', 'OPTION_INVALID', 'maxConcurrent must be an integer from 1 to 16');
   let root: string;
+
   try {
     root = realpathSync(path.resolve(options.root));
   } catch {
     throw new VeritasError('user', 'ROOT_NOT_FOUND', `project root does not exist: ${options.root}`);
   }
+
   if (!statSync(root).isDirectory())
     throw new VeritasError('user', 'ROOT_NOT_FOUND', `project root is not a directory: ${options.root}`);
   const server = new McpServer({ name: 'veritas', version: options.version ?? '0.0.0' });
@@ -148,6 +154,7 @@ export function createServer(options: ServerOptions): McpServer {
     gate.run(extra.signal, async () => {
       let step = 0;
       const progressToken = extra._meta?.progressToken;
+
       return runVeritas({
         root,
         command: `mcp:${command}`,
@@ -156,6 +163,7 @@ export function createServer(options: ServerOptions): McpServer {
         signal: extra.signal,
         log: (message) => {
           step++;
+
           if (progressToken !== undefined) {
             void extra
               .sendNotification({
@@ -183,6 +191,7 @@ export function createServer(options: ServerOptions): McpServer {
           ...COMMAND_STAGES.discover,
         ]);
         const evidence = readArtifact(root, summary.runId, 'evidence').data;
+
         return ok({
           ...summarize(summary),
           sources: evidence.sources.map((s) => ({
@@ -217,6 +226,7 @@ export function createServer(options: ServerOptions): McpServer {
     async ({ status }) => {
       try {
         const { runId, properties } = listProperties(root);
+
         return ok({ runId, properties: properties.filter((p) => !status || p.status === status) });
       } catch (error) {
         return fail(error);
@@ -237,6 +247,7 @@ export function createServer(options: ServerOptions): McpServer {
         const summary = await runStages(extra as unknown as Extra, 'analyze_tests', [
           ...COMMAND_STAGES.analyze,
         ]);
+
         return ok({
           ...summarize(summary),
           assessments: readArtifact(root, summary.runId, 'assessments').data,
@@ -281,6 +292,7 @@ export function createServer(options: ServerOptions): McpServer {
           },
         );
         const mutation = readArtifact(root, summary.runId, 'mutation').data;
+
         return ok({ ...summarize(summary), counts: mutation.counts, mutants: mutation.mutants });
       } catch (error) {
         return fail(error);
@@ -314,6 +326,7 @@ export function createServer(options: ServerOptions): McpServer {
             return [];
           }
         })();
+
         return ok({ ...summarize(summary), claims });
       } catch (error) {
         return fail(error);
@@ -348,6 +361,7 @@ export function createServer(options: ServerOptions): McpServer {
     async ({ runId }) => {
       try {
         const run = runId ? readArtifact(root, runId, 'run').data : readLatest(root, 'run').data;
+
         return ok({ run });
       } catch (error) {
         return fail(error);
@@ -367,6 +381,7 @@ export function createServer(options: ServerOptions): McpServer {
       try {
         const { signal } = extra as unknown as Extra;
         const result = await gate.run(signal, () => planImprovement({ root, signal }));
+
         return ok(result);
       } catch (error) {
         return fail(error);
@@ -410,6 +425,7 @@ export function createServer(options: ServerOptions): McpServer {
               ...(actor ? { actor } : {}),
             }),
           );
+
           return ok({ attempt });
         } catch (error) {
           return fail(error);

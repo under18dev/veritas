@@ -34,6 +34,7 @@ function optional<T>(read: () => T, fallback: T): T {
 export function explainFinding(root: string, findingId: string): Explanation {
   const { runId, data: findings } = readLatest(root, 'findings');
   const finding = findings.find((f) => f.id === findingId);
+
   if (!finding)
     throw new VeritasError(
       'user',
@@ -68,6 +69,7 @@ export function explainFinding(root: string, findingId: string): Explanation {
   const mutation = optional(() => readArtifact(root, runId, 'mutation').data.mutants, [] as Mutant[]);
   const claims = optional(() => readArtifact(root, runId, 'claims').data, [] as FormalClaim[]);
   const assessments = optional(() => readArtifact(root, runId, 'assessments').data, [] as TestAssessment[]);
+
   return {
     runId,
     finding,

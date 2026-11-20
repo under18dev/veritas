@@ -40,6 +40,7 @@ describe('discount-boundary fixture', () => {
       root: copyFixture('discount-boundary'),
       config: VeritasConfig.parse({}),
     });
+
     for (const test of inventory.tests) expect(() => TestCase.parse(test)).not.toThrow();
   });
 });

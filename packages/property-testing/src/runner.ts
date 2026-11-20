@@ -37,6 +37,7 @@ class Falsified extends Error {
 
 const write = process.stdout.write.bind(process.stdout);
 let input = '';
+
 for await (const chunk of process.stdin) input += chunk;
 const job = JSON.parse(input) as Job;
 const emit = (payload: Record<string, unknown>) =>
@@ -44,11 +45,17 @@ const emit = (payload: Record<string, unknown>) =>
 
 function encode(value: unknown): Encoded {
   if (typeof value === 'number') return { t: 'number', v: Object.is(value, -0) ? '-0' : String(value) };
+
   if (typeof value === 'boolean') return { t: 'boolean', v: value };
+
   if (typeof value === 'string') return { t: 'string', v: value };
+
   if (typeof value === 'bigint') return { t: 'bigint', v: value.toString() };
+
   if (value === undefined) return { t: 'undefined' };
+
   if (value === null) return { t: 'null' };
+
   return { t: 'other', v: Object.prototype.toString.call(value) };
 }
 
@@ -69,16 +76,20 @@ async function main(): Promise<void> {
   const { ir } = job;
   const table = new Map(ir.functions.map((f) => [f.name, f]));
   const bound = new Map<string, { model: FunctionModel; fn: (...args: unknown[]) => unknown }>();
+
   for (const binding of job.bindings) {
     const model = table.get(binding.modelName);
+
     if (!model) throw new Error(`binding ${binding.modelName} has no function model in the IR`);
     let mod: Record<string, unknown>;
+
     try {
       mod = (await import(pathToFileURL(binding.modulePath).href)) as Record<string, unknown>;
     } catch (error) {
       throw new Error(`cannot import ${binding.modulePath}: ${describe(error)}`);
     }
     const fn = mod[binding.exportName];
+
     if (typeof fn !== 'function') throw new Error(`export ${binding.exportName} is not a function`);
     bound.set(binding.modelName, { model, fn: fn as (...args: unknown[]) => unknown });
   }
@@ -87,9 +98,12 @@ async function main(): Promise<void> {
   const usesJs = new Map<Expr, boolean>();
   const hasBound = (expr: Expr, depth = 0): boolean => {
     const cached = usesJs.get(expr);
+
     if (cached !== undefined) return cached;
+
     if (depth > 200) throw new Error('IR nesting too deep');
     let result = false;
+
     if (expr.kind === 'unary') result = hasBound(expr.arg, depth + 1);
     else if (expr.kind === 'binary')
       result = hasBound(expr.left, depth + 1) || hasBound(expr.right, depth + 1);
@@ -103,6 +117,7 @@ async function main(): Promise<void> {
         (body ? hasBound(body, depth + 1) : false);
     }
     usesJs.set(expr, result);
+
     return result;
   };
 
@@ -114,9 +129,11 @@ async function main(): Promise<void> {
     const toJs = (a: IRValue): number | boolean => {
       if (typeof a === 'boolean') return a;
       const n = Number(a);
+
       if (!Number.isSafeInteger(n) || BigInt(n) !== a) {
         throw new Error(`argument ${a} to ${name} is outside the safe-integer range`);
       }
+
       return n;
     };
     // Records and arrays are rebuilt from their flattened model parameters.
@@ -127,26 +144,32 @@ async function main(): Promise<void> {
       (v) => Number(v),
     );
     let raw: unknown;
+
     try {
       raw = target.fn(...jsArgs);
     } catch (error) {
       throw new Falsified({ reason: 'threw', javascript: { t: 'throw', v: describe(error) } });
     }
     last.js = encode(raw);
+
     if (target.model.returns === 'bool') {
       if (typeof raw !== 'boolean')
         throw new Falsified({ reason: 'non_boolean_result', javascript: encode(raw) });
+
       return raw;
     }
+
     // -0 is a safe integer and compares equal to 0; it is read as 0 (documented in the result schema).
     if (typeof raw !== 'number' || !Number.isSafeInteger(raw)) {
       throw new Falsified({ reason: 'non_integer_result', javascript: encode(raw) });
     }
+
     return BigInt(raw);
   };
 
   const run = (expr: Expr, env: Map<string, IRValue>): IRValue => {
     if (!hasBound(expr)) return evaluate(expr, env, table);
+
     switch (expr.kind) {
       case 'unary':
         return evaluate({ ...expr, arg: toLiteral(run(expr.arg, env)) }, env, table);
@@ -154,25 +177,32 @@ async function main(): Promise<void> {
         return run(expr.cond, env) ? run(expr.whenTrue, env) : run(expr.whenFalse, env);
       case 'call': {
         const args = expr.args.map((a) => run(a, env));
+
         if (bound.has(expr.fn)) return callJs(expr.fn, args);
         const fn = table.get(expr.fn);
+
         if (!fn?.body) throw new Error(`opaque function ${expr.fn} cannot be evaluated`);
+
         return run(fn.body, new Map(fn.params.map((p, i) => [p.name, args[i] as IRValue])));
       }
       case 'binary': {
         if (expr.op === 'and') return Boolean(run(expr.left, env)) && Boolean(run(expr.right, env));
+
         if (expr.op === 'or') return Boolean(run(expr.left, env)) || Boolean(run(expr.right, env));
+
         if (expr.op === 'implies') return !run(expr.left, env) || Boolean(run(expr.right, env));
         const l = run(expr.left, env);
         const leftJs = expr.left.kind === 'call' && bound.has(expr.left.fn) ? last.js : null;
         const r = run(expr.right, env);
         const rightJs = expr.right.kind === 'call' && bound.has(expr.right.fn) ? last.js : null;
         const value = evaluate({ ...expr, left: toLiteral(l), right: toLiteral(r) }, env, table);
+
         if (value === false && leftJs) {
           last.mismatch = { reason: 'property_violated', javascript: leftJs, expected: plain(r) };
         } else if (value === false && rightJs) {
           last.mismatch = { reason: 'property_violated', javascript: rightJs, expected: plain(l) };
         }
+
         return value;
       }
       default:
@@ -184,16 +214,21 @@ async function main(): Promise<void> {
     const env = new Map<string, IRValue>(
       ir.params.map((p) => {
         const v = values[p.name] as number | boolean;
+
         return [p.name, p.sort === 'int' ? BigInt(v as number) : (v as boolean)];
       }),
     );
+
     try {
       for (const pre of ir.preconditions) if (!run(pre, env)) return { kind: 'ok' };
       last.mismatch = null;
+
       if (run(ir.body, env)) return { kind: 'ok' };
+
       return { kind: 'falsified', failure: last.mismatch ?? { reason: 'property_violated' } };
     } catch (error) {
       if (error instanceof Falsified) return { kind: 'falsified', failure: error.failure };
+
       return { kind: 'model_error', error: describe(error) };
     }
   };
@@ -202,9 +237,11 @@ async function main(): Promise<void> {
     const env = new Map<string, IRValue>(
       ir.params.map((p) => {
         const v = values[p.name] as number | boolean;
+
         return [p.name, p.sort === 'int' ? BigInt(v as number) : (v as boolean)];
       }),
     );
+
     try {
       return ir.preconditions.every((pre) => Boolean(run(pre, env)));
     } catch {
@@ -214,6 +251,7 @@ async function main(): Promise<void> {
   };
 
   const arbitraries: Record<string, FastCheck.Arbitrary<number | boolean>> = {};
+
   for (const p of ir.params) {
     if (p.sort === 'bool') {
       arbitraries[p.name] = fc.boolean();
@@ -231,8 +269,10 @@ async function main(): Promise<void> {
     if (ir.preconditions.length > 0) pre(preconditionHolds(values));
     const outcome = assess(values);
     observed.set(JSON.stringify(values), outcome);
+
     if (outcome.kind === 'ok') return true;
     original ??= { ...values };
+
     return false;
   });
   const details = fc.check(property, {
@@ -268,8 +308,10 @@ async function main(): Promise<void> {
 function describe(error: unknown): string {
   if (error instanceof Error) {
     const code = (error as { code?: unknown }).code;
+
     return `${error.name}${typeof code === 'string' ? ` [${code}]` : ''}: ${error.message}`;
   }
+
   return String(error);
 }
 

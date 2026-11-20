@@ -32,20 +32,26 @@ export function improveExitCode(outcome: PlanOutcome | ImprovementOutcome): Exit
 function parseIterations(value: unknown): number | undefined {
   if (value === undefined) return undefined;
   const n = Number(value);
+
   if (!/^\d+$/.test(String(value)) || n < 1 || n > 20) {
     throw new VeritasError('user', 'BUDGET_INVALID', '--max-iterations must be an integer from 1 to 20');
   }
+
   return n;
 }
 
 function planText(result: PlanResult): string {
   const lines = [`plan ${result.planId} from ${result.runId}: ${result.outcome}`];
   const plan = result.plan;
+
   if (plan) {
     lines.push('', `goal: ${plan.goal}`, '', 'proposed tests (expected values from the specification):');
+
     for (const t of plan.proposedTestCases) lines.push(`  ${t.file}: ${t.name}`, `      ${t.rationale}`);
+
     if (plan.observedGaps.length)
       lines.push('', 'gaps:', ...plan.observedGaps.map((g) => `  ${g.findingId}  ${g.description}`));
+
     if (plan.risks.length) lines.push('', 'risks:', ...plan.risks.map((r) => `  - ${r}`));
     lines.push(
       '',
@@ -55,14 +61,18 @@ function planText(result: PlanResult): string {
       plan.patchPreview,
     );
   }
+
   if (result.specViolationCandidates.length) {
     lines.push('', 'spec violation candidates (not added; expected values unchanged):');
+
     for (const c of result.specViolationCandidates) lines.push(`  ${c.id}  ${c.reason}`);
     lines.push(
       `  implementation fix proposals: .veritas/improvements/${result.planId}/implementation-fix-proposal.json`,
     );
   }
+
   if (result.reasons.length) lines.push('', ...result.reasons.map((r) => `note: ${r}`));
+
   if (result.skipped.length) {
     lines.push(
       '',
@@ -72,6 +82,7 @@ function planText(result: PlanResult): string {
       ),
     );
   }
+
   if (result.approvalToken) {
     lines.push(
       '',
@@ -80,6 +91,7 @@ function planText(result: PlanResult): string {
     );
   }
   lines.push('', `plan: ${result.planFile} (no project file was written)`);
+
   return lines.join('\n');
 }
 
@@ -88,6 +100,7 @@ function attemptText(attempt: PatchAttempt): string {
     s
       ? `tests ${s.testsPassed} passed / ${s.testsFailed} failed, mutants ${s.mutantsKilled} killed / ${s.mutantsSurvived} survived`
       : 'not measured';
+
   return [
     `attempt ${attempt.id} for plan ${attempt.planId}: ${attempt.outcome}${attempt.rolledBack ? ' (rolled back)' : ''}`,
     `before: ${m(attempt.before)}`,
@@ -100,6 +113,7 @@ export async function improveCommand(opts: Opts): Promise<ExitCode> {
   if (opts.apply && opts.dryRun) {
     throw new VeritasError('user', 'IMPROVE_MODE', '--apply and --dry-run cannot be combined');
   }
+
   if (!opts.apply) {
     const result = await planImprovement({
       root: opts.root,
@@ -109,10 +123,13 @@ export async function improveCommand(opts: Opts): Promise<ExitCode> {
       includeProposed: Boolean(opts.includeProposed),
     });
     const exitCode = improveExitCode(result.outcome);
+
     if (opts.json) emitJson({ status: result.outcome, exitCode, ...result });
     else emitText(planText(result));
+
     return exitCode;
   }
+
   if (typeof opts.plan !== 'string' || opts.plan === '') {
     throw new VeritasError(
       'user',
@@ -130,7 +147,9 @@ export async function improveCommand(opts: Opts): Promise<ExitCode> {
     via: 'cli',
   });
   const exitCode = improveExitCode(attempt.outcome);
+
   if (opts.json) emitJson({ status: attempt.outcome, exitCode, attempt });
   else emitText(attemptText(attempt));
+
   return exitCode;
 }

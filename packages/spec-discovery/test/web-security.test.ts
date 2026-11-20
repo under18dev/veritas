@@ -15,6 +15,7 @@ const webConfig = (extra: Record<string, unknown> = {}) =>
       ...extra,
     },
   });
+
 function seed(root: string, urls: string): void {
   writeFileSync(`${root}/README.md`, urls);
 }
@@ -33,6 +34,7 @@ describe('web safety and budgets', () => {
       config: webConfig(),
       fetch: async (input) => {
         requested.push(String(input));
+
         return new Response('', { status: 302, headers: { location: 'https://evil.test/' } });
       },
     });
@@ -51,12 +53,15 @@ describe('web safety and budgets', () => {
       fetch: async (input, init) => {
         const url = String(input);
         requested.push(url);
+
         if (url.endsWith('/root'))
           return new Response('<p>The total must be at least 10.</p><a href="/child">child</a>');
+
         if (url.endsWith('/child')) return new Response('<a href="/grandchild">grandchild</a>');
         await new Promise<void>((_resolve, reject) => {
           init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
         });
+
         return new Response('never');
       },
     });
@@ -77,8 +82,11 @@ describe('web safety and budgets', () => {
       fetch: async (input) => {
         const url = String(input);
         depthRequested.push(url);
+
         if (url.endsWith('/root')) return new Response('<a href="/child">child</a>');
+
         if (url.endsWith('/child')) return new Response('<a href="/grandchild">grandchild</a>');
+
         return new Response('grandchild');
       },
     });
@@ -98,6 +106,7 @@ describe('web safety and budgets', () => {
         await new Promise<void>((_resolve, reject) =>
           init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))),
         );
+
         return new Response('never');
       },
     });
@@ -130,6 +139,7 @@ describe('web crawl limits', () => {
               },
             }),
           );
+
         return new Response(
           new ReadableStream({
             pull(controller) {
@@ -159,6 +169,7 @@ describe('web crawl limits', () => {
       fetch: async (input) => {
         requested.push(String(input));
         await new Promise((resolve) => setTimeout(resolve, 40));
+
         return new Response('<p>page</p>');
       },
     });
@@ -177,6 +188,7 @@ describe('web crawl limits', () => {
       config: webConfig({ maxDepth: 0, maxDurationMs: 50 }),
       fetch: async () => {
         fetched = true;
+
         return new Response('<p>page</p>');
       },
     });

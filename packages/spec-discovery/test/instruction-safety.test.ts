@@ -13,6 +13,7 @@ describe('untrusted statement safety', () => {
       config: config({ web: { enabled: true, allowDomains: ['attacker.invalid'] } }),
       fetch: async () => {
         calls++;
+
         return new Response('');
       },
       offline: true,

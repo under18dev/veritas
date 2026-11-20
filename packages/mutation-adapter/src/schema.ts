@@ -55,6 +55,8 @@ export function emptyCounts(): MutantCounts {
 
 export function countMutants(mutants: readonly Mutant[]): MutantCounts {
   const counts = emptyCounts();
+
   for (const m of mutants) counts[m.status] += 1;
+
   return counts;
 }

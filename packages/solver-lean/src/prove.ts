@@ -125,6 +125,7 @@ export async function proveWithLean(options: ProveWithLeanOptions): Promise<Lean
       semanticValidation: 'not_attempted',
       durationMs: Date.now() - started,
     };
+
     return { claim, check, attempts, strategy: extra.strategy ?? null };
   };
   const plainCheck = (status: LeanCheckStatus, reasons: string[], leanVersion: string | null): LeanCheck => ({
@@ -138,19 +139,24 @@ export async function proveWithLean(options: ProveWithLeanOptions): Promise<Lean
   });
 
   let strategies: LeanStrategy[];
+
   try {
     strategies = leanProofStrategies(options.ir);
     irToLean(options.ir, { theoremName });
   } catch (error) {
     if (!(error instanceof VeritasError)) throw error;
     semanticGaps.push(`not translated to Lean: ${error.message}`);
+
     return finish(plainCheck('error', [`IR rejected: ${error.message}`], null), { status: 'unsupported' });
   }
+
   if (irUsesDivision(options.ir)) semanticGaps.push(DIVISION_GAP);
 
   const lean = await detectLean(options);
+
   if (!lean.available) {
     assumptions.push('Lean did not run');
+
     return finish(plainCheck('unavailable', [`Lean unavailable: ${lean.detail}`], lean.version));
   }
 
@@ -158,17 +164,20 @@ export async function proveWithLean(options: ProveWithLeanOptions): Promise<Lean
   const dir = options.store
     ? options.store.pathFor(relDir)
     : mkdtempSync(path.join(tmpdir(), 'veritas-lean-'));
+
   try {
     mkdirSync(dir, { recursive: true });
     const write = (name: string, content: string): string | undefined => {
       if (options.store) return options.store.writeText(`${relDir}/${name}`, content);
       writeFileSync(path.join(dir, name), content);
+
       return undefined;
     };
     write('lakefile.toml', LAKEFILE);
     let winner: { check: LeanCheck; strategy: string } | null = null;
     const checks: LeanCheck[] = [];
     let input: string | undefined;
+
     for (const strategy of strategies) {
       const source = irToLean(options.ir, { theoremName, strategy });
       input = write(`${PROOF_NAMESPACE}.lean`, source);
@@ -186,14 +195,17 @@ export async function proveWithLean(options: ProveWithLeanOptions): Promise<Lean
         durationMs: check.durationMs,
         source,
       });
+
       if (check.status === 'kernel_checked') {
         winner = { check, strategy: strategy.name };
         break;
       }
+
       if (options.signal?.aborted || check.status === 'unavailable') break;
     }
 
     let check: LeanCheck;
+
     if (winner) {
       check = winner.check;
       assumptions.push(
@@ -216,6 +228,7 @@ export async function proveWithLean(options: ProveWithLeanOptions): Promise<Lean
     }
 
     let output: string | undefined;
+
     if (options.store) {
       options.store.write(`${relDir}.attempts.json`, z.array(LeanAttempt), attempts);
       output = options.store.writeText(
@@ -224,6 +237,7 @@ export async function proveWithLean(options: ProveWithLeanOptions): Promise<Lean
           `${check.reasons.map((r) => `-- ${r}`).join('\n')}\n${check.stdout}\n${check.stderr}`,
       );
     }
+
     return finish(check, {
       strategy: winner?.strategy ?? null,
       engineVersion: lean.version,

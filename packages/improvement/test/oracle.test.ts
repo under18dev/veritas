@@ -49,6 +49,7 @@ describe('expected values from the specification model', () => {
   it('never evaluates the implementation model', () => {
     // Replace the implementation body with something that would throw if evaluated.
     const ir = structuredClone(senior.ir as NonNullable<typeof senior.ir>);
+
     for (const f of ir.functions) f.body = { kind: 'call', fn: 'missing', args: [] };
     expect(expectedFromSpec(ir, { age: '70' })).toMatchObject({ status: 'expected', value: true });
   });
@@ -88,6 +89,7 @@ describe('expected values from the specification model', () => {
       domain: DOMAIN,
       modelName: 'b',
     });
+
     if (a.status !== 'translated' || b.status !== 'translated') throw new Error('translation failed');
     const ir = equivalenceProperty(a, b, DOMAIN);
     expect(specClauses(ir)).toEqual([]);

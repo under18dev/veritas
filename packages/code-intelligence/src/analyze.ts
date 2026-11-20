@@ -169,17 +169,21 @@ export function analyzeCode(options: AnalyzeOptions): CodeIndex {
   const ctx = new Context(root, program, checker, selection.files);
 
   const indexed: Indexed[] = [];
+
   for (const file of selection.files) {
     const sf = program.getSourceFile(file.absolute);
+
     if (!sf) {
       diagnostics.push({ file: file.path, message: 'skipped: the compiler did not load this file' });
       continue;
     }
+
     for (const d of program.getSyntacticDiagnostics(sf)) {
       const line = d.start === undefined ? null : sf.getLineAndCharacterOfPosition(d.start).line + 1;
       const text = ts.flattenDiagnosticMessageText(d.messageText, ' ');
       diagnostics.push({ file: file.path, message: line === null ? text : `line ${line}: ${text}` });
     }
+
     for (const target of collectFunctions(sf, diagnostics, file.path)) {
       indexed.push(analyzeFunction(target, sf, file.path, ctx));
     }
@@ -201,8 +205,10 @@ function loadCompilerOptions(
   diagnostics: CodeIndex['diagnostics'],
 ): ts.CompilerOptions {
   const tsconfig = config.project.tsconfig;
+
   if (!tsconfig) return DEFAULT_OPTIONS;
   let file: string;
+
   try {
     // Rejects `..`, absolute paths and symlinks (or links in its parents) that leave the root.
     file = resolveInsideRoot(root, tsconfig);
@@ -211,18 +217,22 @@ function loadCompilerOptions(
       file: tsconfig,
       message: 'tsconfig outside the project root ignored; using defaults',
     });
+
     return DEFAULT_OPTIONS;
   }
   const read = ts.readConfigFile(file, ts.sys.readFile);
+
   if (read.error) {
     const text = ts.flattenDiagnosticMessageText(read.error.messageText, ' ');
     diagnostics.push({ file: tsconfig, message: `tsconfig not usable, using defaults: ${text}` });
+
     return DEFAULT_OPTIONS;
   }
   // `extends` chains are followed through this host, so a base config outside the root is never read.
   const inside = (name: string) => {
     try {
       resolveInsideRoot(root, name);
+
       return true;
     } catch {
       return false;
@@ -236,16 +246,20 @@ function loadCompilerOptions(
     readFile: (name) => {
       if (inside(name)) return ts.sys.readFile(name);
       outside.add(name);
+
       return undefined;
     },
   };
   const parsed = ts.parseJsonConfigFileContent(read.config, host, path.dirname(file), undefined, file);
+
   for (const name of outside)
     diagnostics.push({ file: tsconfig, message: `config outside the project root not read: ${name}` });
+
   for (const error of parsed.errors) {
     if (error.code === 18003) continue; // "no inputs found": we supply our own root files
     diagnostics.push({ file: tsconfig, message: ts.flattenDiagnosticMessageText(error.messageText, ' ') });
   }
+
   return { ...parsed.options, allowJs: true, noEmit: true, types: parsed.options.types ?? [] };
 }
 
@@ -260,9 +274,12 @@ function createProgram(files: SelectedFile[], options: ts.CompilerOptions): ts.P
   host.fileExists = (name) => contents.has(path.normalize(name)) || fileExists(name);
   host.getSourceFile = (name, languageVersion, onError, shouldCreate) => {
     const content = contents.get(path.normalize(name));
+
     if (content !== undefined) return ts.createSourceFile(name, content, languageVersion, true);
+
     return getSourceFile(name, languageVersion, onError, shouldCreate);
   };
+
   return ts.createProgram({
     rootNames: files.map((f) => f.absolute),
     options: { ...options, noEmit: true },
@@ -285,21 +302,27 @@ class Context {
   /** Project-relative POSIX path for files inside the root, null for libraries and outside files. */
   projectPath(sf: ts.SourceFile): string | null {
     if (sf.isDeclarationFile || this.program.isSourceFileDefaultLibrary(sf)) return null;
+
     if (this.program.isSourceFileFromExternalLibrary(sf)) return null;
     const rel = path.relative(this.root, sf.fileName);
+
     if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
     const posix = rel.split(path.sep).join('/');
+
     return posix.split('/').includes('node_modules') ? null : posix;
   }
 
   exportedNames(node: ts.Node): string[] {
     const sf = node.getSourceFile();
+
     if (!this.loadedExports.has(sf)) {
       this.loadedExports.add(sf);
       const moduleSymbol = this.checker.getSymbolAtLocation(sf);
+
       for (const exported of moduleSymbol ? this.checker.getExportsOfModule(moduleSymbol) : []) {
         const target =
           exported.flags & ts.SymbolFlags.Alias ? this.checker.getAliasedSymbol(exported) : exported;
+
         for (const decl of target.declarations ?? []) {
           const names = this.exportNames.get(decl) ?? [];
           names.push(exported.name);
@@ -307,18 +330,22 @@ class Context {
         }
       }
     }
+
     return [...(this.exportNames.get(node) ?? [])].sort();
   }
 
   /** The symbol name used in ids: the exported name when exported (preferring the local one). */
   publicName(declaration: ts.Node, local: string): { name: string; exported: boolean } {
     const names = this.exportedNames(declaration);
+
     if (names.length === 0) return { name: local, exported: false };
+
     return { name: names.includes(local) ? local : (names[0] as string), exported: true };
   }
 
   resolve(node: ts.Node): ts.Symbol | undefined {
     const symbol = this.checker.getSymbolAtLocation(node);
+
     if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
       try {
         return this.checker.getAliasedSymbol(symbol);
@@ -326,13 +353,16 @@ class Context {
         return undefined;
       }
     }
+
     return symbol;
   }
 
   /** True when the identifier refers to an ambient global rather than a project declaration. */
   isGlobal(identifier: ts.Identifier): boolean {
     const symbol = this.checker.getSymbolAtLocation(identifier);
+
     if (!symbol?.declarations?.length) return true;
+
     return symbol.declarations.every((d) => this.projectPath(d.getSourceFile()) === null && !isImport(d));
   }
 }
@@ -352,12 +382,14 @@ function collectFunctions(
   file: string,
 ): FunctionTarget[] {
   const out: FunctionTarget[] = [];
+
   for (const statement of sf.statements) {
     if (ts.isFunctionDeclaration(statement) && statement.body) {
       out.push({ node: statement, declaration: statement, local: statement.name?.text ?? 'default' });
     } else if (ts.isVariableStatement(statement)) {
       for (const decl of statement.declarationList.declarations) {
         const init = decl.initializer && skipParens(decl.initializer);
+
         if (
           ts.isIdentifier(decl.name) &&
           init &&
@@ -368,9 +400,12 @@ function collectFunctions(
       }
     } else if (ts.isClassDeclaration(statement)) {
       const className = statement.name?.text ?? 'default';
+
       for (const member of statement.members) {
         const isAccessor = ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member);
+
         if (!(ts.isMethodDeclaration(member) || isAccessor) || !member.body) continue;
+
         if (!ts.isIdentifier(member.name) && !ts.isStringLiteral(member.name)) {
           diagnostics.push({
             file,
@@ -389,11 +424,13 @@ function collectFunctions(
       }
     } else if (ts.isExportAssignment(statement)) {
       const expr = skipParens(statement.expression);
+
       if (ts.isArrowFunction(expr) || ts.isFunctionExpression(expr)) {
         out.push({ node: expr, declaration: statement, local: 'default' });
       }
     }
   }
+
   return out;
 }
 
@@ -401,32 +438,44 @@ function symbolNameOf(ctx: Context, target: FunctionTarget): { name: string; exp
   if (target.memberOf) {
     const owner = ctx.publicName(target.memberOf.declaration, target.memberOf.local);
     const suffix = target.accessor === 'set' ? '=' : '';
+
     return { name: `${owner.name}.${target.local}${suffix}`, exported: owner.exported };
   }
+
   if (ts.isExportAssignment(target.declaration)) return { name: 'default', exported: true };
+
   return ctx.publicName(target.declaration, target.local);
 }
 
 /** Symbol id for a callee declaration inside the project, mirroring how functions are indexed. */
 function calleeSymbol(ctx: Context, decl: ts.Declaration): string | null {
   const file = ctx.projectPath(decl.getSourceFile());
+
   if (file === null) return null;
+
   if (ts.isFunctionDeclaration(decl))
     return symbolId(file, decl.name ? ctx.publicName(decl, decl.name.text).name : 'default');
+
   if (ts.isExportAssignment(decl)) {
     const expr = skipParens(decl.expression);
+
     return ts.isArrowFunction(expr) || ts.isFunctionExpression(expr) ? symbolId(file, 'default') : null;
   }
+
   if (ts.isVariableDeclaration(decl) && ts.isIdentifier(decl.name)) {
     return symbolId(file, ctx.publicName(decl, decl.name.text).name);
   }
+
   if (ts.isMethodDeclaration(decl) && (ts.isIdentifier(decl.name) || ts.isStringLiteral(decl.name))) {
     const owner = decl.parent;
+
     if (ts.isClassDeclaration(owner)) {
       const className = owner.name?.text ?? 'default';
+
       return symbolId(file, `${ctx.publicName(owner, className).name}.${decl.name.text}`);
     }
   }
+
   return null;
 }
 
@@ -466,6 +515,7 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
   const unsupported = (at: ts.Node, reason: string) => {
     const location = loc(sf, file, at);
     const key = `${location.range?.start}:${reason}`;
+
     if (unsupportedSeen.has(key)) return;
     unsupportedSeen.add(key);
     info.unsupported.push({ location, reason });
@@ -489,20 +539,25 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
     unsupported(at, reason);
     result.unknown.push(reason);
   };
+
   if (info.async) undecidable(node, 'async function');
+
   if (
     (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isMethodDeclaration(node)) &&
     node.asteriskToken
   ) {
     undecidable(node, 'generator function');
   }
+
   if (target.accessor) undecidable(node, `${target.accessor === 'get' ? 'getter' : 'setter'} accessor`);
 
   const isOwnParam = (expr: ts.Expression): string | null => {
     const e = skipParens(expr);
+
     if (!ts.isIdentifier(e)) return null;
     const symbol = checker.getSymbolAtLocation(e);
     const decl = symbol?.valueDeclaration;
+
     return decl && ts.isParameter(decl) && decl.parent === node && ts.isIdentifier(decl.name)
       ? decl.name.text
       : null;
@@ -510,10 +565,13 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
   /** A parameter, or a field of one (`order.total`, `xs.length`), as `param` / `param.field`. */
   const paramPath = (expr: ts.Expression): string | null => {
     const e = skipParens(expr);
+
     if (ts.isPropertyAccessExpression(e) && !e.questionDotToken && ts.isIdentifier(e.name)) {
       const base = isOwnParam(e.expression);
+
       return base ? `${base}.${e.name.text}` : null;
     }
+
     return isOwnParam(e);
   };
   const isLocal = (decl: ts.Declaration) =>
@@ -522,38 +580,51 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
   /** Record writes: outer variables and parameter properties make the function impure. */
   const recordWrite = (targetExpr: ts.Expression, mutatesValue = false) => {
     const t = skipParens(targetExpr);
+
     if (ts.isArrayLiteralExpression(t)) {
       for (const el of t.elements) recordWrite(ts.isSpreadElement(el) ? el.expression : el);
+
       return;
     }
+
     if (ts.isObjectLiteralExpression(t)) {
       for (const prop of t.properties) {
         if (ts.isShorthandPropertyAssignment(prop)) recordWrite(prop.name);
         else if (ts.isPropertyAssignment(prop)) recordWrite(prop.initializer);
         else if (ts.isSpreadAssignment(prop)) recordWrite(prop.expression);
       }
+
       return;
     }
+
     if (ts.isBinaryExpression(t) && t.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
       recordWrite(t.left);
+
       return;
     }
     const direct = ts.isIdentifier(t) && !mutatesValue;
     let rootExpr: ts.Expression = t;
+
     while (ts.isPropertyAccessExpression(rootExpr) || ts.isElementAccessExpression(rootExpr)) {
       rootExpr = skipParens(rootExpr.expression);
     }
+
     if (rootExpr.kind === ts.SyntaxKind.ThisKeyword) {
       sideEffect('mutates this');
+
       return;
     }
+
     if (!ts.isIdentifier(rootExpr)) {
       sideEffect(`mutates ${text(t)}`);
+
       return;
     }
     const decl = checker.getSymbolAtLocation(rootExpr)?.valueDeclaration;
+
     if (decl && isLocal(decl)) {
       if (!direct && ts.isParameter(decl)) sideEffect(`mutates parameter ${rootExpr.text}`);
+
       return;
     }
     sideEffect(direct ? `assigns outer variable ${rootExpr.text}` : `mutates outer ${text(t)}`);
@@ -561,23 +632,28 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
 
   const visitCall = (expr: ts.CallExpression) => {
     const callee = skipParens(expr.expression);
+
     if (ts.isIdentifier(callee) && callee.text === 'eval' && ctx.isGlobal(callee)) {
       unsupported(expr, 'eval');
       result.unknown.push('eval');
     }
+
     if (ts.isIdentifier(callee) && callee.text === 'Function' && ctx.isGlobal(callee)) {
       unsupported(expr, 'Function constructor');
       result.unknown.push('Function constructor');
     }
+
     if (callee.kind === ts.SyntaxKind.ImportKeyword) {
       unsupported(expr, 'dynamic import');
       sideEffect('dynamic import');
       call('import');
+
       return;
     }
     const nameNode = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
     const symbol = ctx.resolve(nameNode);
     const decl = symbol?.declarations?.[0];
+
     if (decl && isLocal(decl)) {
       // Local helper functions are walked as part of this body; other local callees are unknown.
       call(text(callee).slice(0, 200));
@@ -585,17 +661,22 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
       const walked =
         ts.isFunctionDeclaration(decl) ||
         (init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)));
+
       if (!walked) result.unknown.push(`calls a value that is not a local function: ${text(callee)}`);
+
       return;
     }
     const internal = decl ? calleeSymbol(ctx, decl) : null;
+
     if (internal) {
       call(internal);
       result.internalCalls.push(internal);
+
       return;
     }
     call(text(callee).slice(0, 200));
     const fromLib = decl ? ctx.projectPath(decl.getSourceFile()) === null && isLibFile(ctx, decl) : false;
+
     if (
       ts.isPropertyAccessExpression(callee) &&
       MUTATING_METHODS.has(callee.name.text) &&
@@ -603,17 +684,21 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
     ) {
       recordWrite(callee.expression, true);
     }
+
     if (!fromLib) result.unknown.push(`unresolved callee ${text(callee)}`);
   };
 
   const visit = (n: ts.Node, nestedFunction: boolean): void => {
     if (ts.isTypeNode(n) && !ts.isExpressionWithTypeArguments(n)) return;
+
     if (n !== node && ts.isFunctionLike(n)) {
       if (hasModifier(n, ts.SyntaxKind.AsyncKeyword)) undecidable(n, 'async function');
+
       if ((ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n)) && n.asteriskToken) {
         undecidable(n, 'generator function');
       }
       ts.forEachChild(n, (c) => visit(c, true));
+
       return;
     }
 
@@ -638,8 +723,10 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
         break;
       case ts.SyntaxKind.NumericLiteral: {
         const value = Number((n as ts.NumericLiteral).text);
+
         if (Number.isInteger(value)) {
           numeric.add('integer_literal');
+
           if (!Number.isSafeInteger(value))
             unsupported(n, `integer literal outside the safe range: ${text(n)}`);
         } else {
@@ -660,6 +747,7 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
         sideEffect(n.text);
       } else {
         const ioModule = importedIoModule(ctx, n);
+
         if (ioModule) sideEffect(`io import ${ioModule}`);
       }
     }
@@ -667,13 +755,17 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
     if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && ctx.isGlobal(n.expression)) {
       const owner = n.expression.text;
       const prop = n.name.text;
+
       if (owner === 'Math' && prop === 'random') sideEffect('Math.random');
       else if (owner === 'Math') unsupported(n, `Math.${prop} is outside the integer model`);
+
       if (owner === 'Date' && prop === 'now') sideEffect('Date.now');
+
       if (owner === 'Number' && ['NaN', 'POSITIVE_INFINITY', 'NEGATIVE_INFINITY'].includes(prop)) {
         numeric.add('nan');
         unsupported(n, `Number.${prop}`);
       }
+
       if (owner === 'Proxy' && prop === 'revocable') {
         unsupported(n, 'Proxy');
         result.unknown.push('Proxy');
@@ -682,6 +774,7 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
 
     if (ts.isNewExpression(n) && ts.isIdentifier(n.expression) && ctx.isGlobal(n.expression)) {
       const ctor = n.expression.text;
+
       if (ctor === 'Proxy') {
         unsupported(n, 'Proxy');
         result.unknown.push('Proxy');
@@ -696,6 +789,7 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
     if (ts.isElementAccessExpression(n)) {
       const param = isOwnParam(n.expression);
       const key = skipParens(n.argumentExpression);
+
       if (param && !ts.isStringLiteralLike(key) && !ts.isNumericLiteral(key)) {
         undecidable(n, `computed property access on parameter ${param}`);
       }
@@ -705,7 +799,9 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
 
     if (ts.isBinaryExpression(n)) {
       const op = n.operatorToken.kind;
+
       if (op >= ts.SyntaxKind.FirstAssignment && op <= ts.SyntaxKind.LastAssignment) recordWrite(n.left);
+
       if (
         op === ts.SyntaxKind.SlashToken ||
         op === ts.SyntaxKind.SlashEqualsToken ||
@@ -716,6 +812,7 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
         unsupported(n, `${n.operatorToken.getText(sf)} operator`);
       }
       const comparison = COMPARISON_OPERATORS.get(op);
+
       if (comparison) {
         const literal = integerLiteral(n.right) ?? integerLiteral(n.left);
         const record: Comparison = {
@@ -726,6 +823,7 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
           literal,
           param: paramPath(n.left) ?? paramPath(n.right),
         };
+
         if (!nestedFunction) info.comparisons.push(record);
       }
       checkCoercion(n, ctx, unsupported);
@@ -733,7 +831,9 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
 
     if (ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) {
       const op = n.operator;
+
       if (op === ts.SyntaxKind.PlusPlusToken || op === ts.SyntaxKind.MinusMinusToken) recordWrite(n.operand);
+
       if (
         ts.isPrefixUnaryExpression(n) &&
         (op === ts.SyntaxKind.PlusToken || op === ts.SyntaxKind.MinusToken) &&
@@ -746,29 +846,36 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
         );
       }
     }
+
     if (ts.isDeleteExpression(n)) recordWrite(n.expression);
 
     if (!nestedFunction) {
       if (ts.isIfStatement(n))
         info.branches.push({ location: loc(sf, file, n), condition: text(n.expression) });
+
       if (ts.isConditionalExpression(n)) {
         info.branches.push({ location: loc(sf, file, n), condition: text(n.condition) });
       }
+
       if (ts.isCaseClause(n)) {
         const subject = text(n.parent.parent.expression);
         info.branches.push({ location: loc(sf, file, n), condition: `${subject} === ${text(n.expression)}` });
       }
+
       if (ts.isDefaultClause(n)) info.branches.push({ location: loc(sf, file, n), condition: 'default' });
+
       if (ts.isWhileStatement(n) || ts.isDoStatement(n) || (ts.isForStatement(n) && n.condition)) {
         const cond = ts.isForStatement(n) ? (n.condition as ts.Expression) : n.expression;
         info.branches.push({ location: loc(sf, file, n), condition: text(cond) });
       }
+
       if (ts.isReturnStatement(n)) {
         info.returns.push({
           location: loc(sf, file, n),
           expression: n.expression ? text(n.expression) : 'undefined',
         });
       }
+
       if (ts.isThrowStatement(n))
         info.throws.push({ location: loc(sf, file, n), expression: text(n.expression) });
     }
@@ -776,6 +883,7 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
   };
 
   for (const param of node.parameters) ts.forEachChild(param, (c) => visit(c, false));
+
   if (node.body) {
     if (ts.isBlock(node.body)) {
       visit(node.body, false);
@@ -790,6 +898,7 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
     (a, b) =>
       (a.location.range?.start ?? 0) - (b.location.range?.start ?? 0) || a.reason.localeCompare(b.reason),
   );
+
   return result;
 }
 
@@ -802,14 +911,18 @@ function checkCoercion(
   const left = ctx.checker.getTypeAtLocation(n.left);
   const right = ctx.checker.getTypeAtLocation(n.right);
   const opText = ts.tokenToString(op) ?? '';
+
   if (op === ts.SyntaxKind.EqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken) {
     const l = categories(left);
     const r = categories(right);
+
     if (l === null || r === null || l !== r) {
       unsupported(n, `implicit coercion: ${opText} between different or unknown types`);
     }
+
     return;
   }
+
   if (
     op === ts.SyntaxKind.LessThanToken ||
     op === ts.SyntaxKind.LessThanEqualsToken ||
@@ -818,22 +931,29 @@ function checkCoercion(
   ) {
     const l = categories(left);
     const r = categories(right);
+
     if (l === null || r === null || l !== r) {
       unsupported(n, `implicit coercion: ${opText} between different or unknown types`);
     }
+
     return;
   }
+
   if (op === ts.SyntaxKind.PlusToken || op === ts.SyntaxKind.PlusEqualsToken) {
     const bothNumbers = isNumberLike(left) && isNumberLike(right);
     const bothBigInt = isBigIntLike(left) && isBigIntLike(right);
     const bothStrings = isStringLike(left) && isStringLike(right);
+
     if (!bothNumbers && !bothBigInt && !bothStrings) {
       unsupported(n, `implicit coercion: ${opText} on mixed or non-numeric operands`);
     }
+
     return;
   }
+
   if (ARITHMETIC_OPERATORS.has(op)) {
     const ok = (isNumberLike(left) && isNumberLike(right)) || (isBigIntLike(left) && isBigIntLike(right));
+
     if (!ok) unsupported(n, `implicit coercion: ${opText} on non-numeric operands`);
   }
 }
@@ -842,8 +962,10 @@ function checkCoercion(
 function categories(type: ts.Type): string | null {
   const parts = type.isUnion() ? type.types : [type];
   const out = new Set<string>();
+
   for (const t of parts) {
     const f = t.flags;
+
     if (f & ts.TypeFlags.NumberLike) out.add('number');
     else if (f & ts.TypeFlags.StringLike) out.add('string');
     else if (f & ts.TypeFlags.BooleanLike) out.add('boolean');
@@ -852,6 +974,7 @@ function categories(type: ts.Type): string | null {
     else if (f & ts.TypeFlags.Undefined) out.add('undefined');
     else return null;
   }
+
   return [...out].sort().join('|');
 }
 
@@ -863,30 +986,39 @@ const isStringLike = (t: ts.Type) => categories(t) === 'string';
 function integerLiteral(expr: ts.Expression): string | null {
   let e = skipParens(expr);
   let sign = '';
+
   if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.MinusToken) {
     sign = '-';
     e = skipParens(e.operand);
   }
+
   if (!ts.isNumericLiteral(e)) return null;
   const raw = e.getText().replace(/_/g, '');
   const value = Number(raw);
+
   if (!Number.isInteger(value)) return null;
   let digits: string;
+
   if (/^0[xob]/i.test(raw) || /^\d+$/.test(raw)) digits = BigInt(raw).toString();
   else if (Number.isSafeInteger(value)) digits = String(value);
   else return null;
+
   return digits === '0' ? '0' : `${sign}${digits}`;
 }
 
 function importedIoModule(ctx: Context, identifier: ts.Identifier): string | null {
   const symbol = ctx.checker.getSymbolAtLocation(identifier);
+
   for (const decl of symbol?.declarations ?? []) {
     if (!isImport(decl)) continue;
     let n: ts.Node = decl;
+
     while (!ts.isImportDeclaration(n) && !ts.isImportEqualsDeclaration(n) && n.parent) n = n.parent;
     let specifier: string | null = null;
+
     if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier))
       specifier = n.moduleSpecifier.text;
+
     if (
       ts.isImportEqualsDeclaration(n) &&
       ts.isExternalModuleReference(n.moduleReference) &&
@@ -894,8 +1026,10 @@ function importedIoModule(ctx: Context, identifier: ts.Identifier): string | nul
     ) {
       specifier = n.moduleReference.expression.text;
     }
+
     if (specifier && IO_MODULES.has(specifier.replace(/^node:/, ''))) return specifier;
   }
+
   return null;
 }
 
@@ -915,24 +1049,34 @@ function isLibFile(ctx: Context, decl: ts.Node): boolean {
 /** Identifiers in value positions: not property names, declaration names or labels. */
 function isExpressionIdentifier(n: ts.Identifier): boolean {
   const p = n.parent;
+
   if (!p) return false;
+
   if (ts.isPropertyAccessExpression(p) && p.name === n) return false;
+
   if (ts.isQualifiedName(p)) return false;
+
   if (
     (ts.isPropertyAssignment(p) || ts.isPropertyDeclaration(p) || ts.isMethodDeclaration(p)) &&
     p.name === n
   ) {
     return false;
   }
+
   if (ts.isBindingElement(p) && p.propertyName === n) return false;
+
   if ((ts.isLabeledStatement(p) || ts.isBreakOrContinueStatement(p)) && p.label === n) return false;
+
   if ((p as { name?: ts.Node }).name === n && !ts.isShorthandPropertyAssignment(p)) return false;
+
   return true;
 }
 
 function returnTypeOf(checker: ts.TypeChecker, node: FunctionNode): string {
   const signature = checker.getSignatureFromDeclaration(node);
+
   if (!signature) return 'unknown';
+
   return checker.typeToString(
     checker.getReturnTypeOfSignature(signature),
     node,
@@ -947,6 +1091,7 @@ function jsdocOf(sf: ts.SourceFile, target: FunctionTarget): string | null {
       ? target.declaration
       : target.node;
   const docs = (host as { jsDoc?: ts.JSDoc[] }).jsDoc;
+
   if (!docs?.length) return null;
   const text = docs
     .map((doc) =>
@@ -961,6 +1106,7 @@ function jsdocOf(sf: ts.SourceFile, target: FunctionTarget): string | null {
     )
     .filter(Boolean)
     .join('\n');
+
   return text || null;
 }
 
@@ -968,6 +1114,7 @@ function outerStatement(node: ts.Node): ts.Node {
   if (ts.isVariableDeclaration(node) && ts.isVariableDeclarationList(node.parent)) {
     return ts.isVariableStatement(node.parent.parent) ? node.parent.parent : node;
   }
+
   return node;
 }
 
@@ -977,8 +1124,10 @@ function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
 
 function skipParens(expr: ts.Expression): ts.Expression {
   let e = expr;
+
   while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e))
     e = e.expression;
+
   return e;
 }
 
@@ -996,9 +1145,11 @@ function loc(sf: ts.SourceFile, file: string, node: ts.Node): Location {
 /** Disambiguate symbol ids that collide (e.g. a duplicated declaration in a broken file). */
 function dedupeSymbols(indexed: Indexed[], diagnostics: CodeIndex['diagnostics']): void {
   const seen = new Map<string, number>();
+
   for (const entry of indexed) {
     const count = (seen.get(entry.info.symbol) ?? 0) + 1;
     seen.set(entry.info.symbol, count);
+
     if (count > 1) {
       diagnostics.push({
         file: entry.info.file,
@@ -1012,16 +1163,20 @@ function dedupeSymbols(indexed: Indexed[], diagnostics: CodeIndex['diagnostics']
 /** Direct effects make a function impure; calls into impure or unknown project functions propagate. */
 function propagatePurity(indexed: Indexed[]): void {
   const bySymbol = new Map(indexed.map((i) => [i.info.symbol, i]));
+
   for (const entry of indexed) {
     entry.info.purity =
       entry.info.sideEffects.length > 0 ? 'impure' : entry.unknown.length > 0 ? 'unknown' : 'pure';
   }
+
   for (let changed = true; changed; ) {
     changed = false;
+
     for (const entry of indexed) {
       for (const callee of entry.internalCalls) {
         const target = bySymbol.get(callee);
         const purity = target?.info.purity ?? 'unknown';
+
         if (purity === 'impure' && entry.info.purity !== 'impure') {
           entry.info.sideEffects.push(`calls impure ${callee}`);
           entry.info.purity = 'impure';

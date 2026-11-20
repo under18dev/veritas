@@ -26,7 +26,9 @@ function readRunArtifact<T>(dir: string, runId: string, file: string): T {
 function setup(name: string): string {
   const dir = copyFixture(name, { git: true, linkDeps: true });
   const init = runCli(['init', '--yes'], dir);
+
   if (init.status !== 0) throw new Error(init.stderr);
+
   return dir;
 }
 
@@ -126,6 +128,7 @@ describe('discount-boundary end to end', () => {
     expect(survivor?.relevance).toBe('spec_relevant');
     const killedShipping = mutants.filter((m) => m.status === 'killed' && m.original === 'total >= 5000');
     expect(killedShipping.length).toBeGreaterThan(0);
+
     for (const m of killedShipping) {
       expect(m.killedBy.length).toBeGreaterThan(0);
       expect(m.propertyIds.length).toBeGreaterThan(0);
@@ -224,6 +227,7 @@ describe('discount-boundary end to end', () => {
     expect(gen.status, gen.stderr).toBe(0);
     const generated = json<{ generated: { file: string; propertyId: string }[] }>(gen).generated;
     expect(generated.length).toBeGreaterThan(0);
+
     for (const g of generated) expect(g.file.startsWith('.veritas/generated-tests/')).toBe(true);
     const vitest = spawnSync(
       process.execPath,
@@ -375,6 +379,7 @@ describe('test and property discriminating power', () => {
     // The discount tests call discountAmount(2000) and discountAmount(10): neither input can tell the mutant apart.
     const distinguish = claims.filter((c) => c.kind === 'distinguishability' && c.mutantId === boundary?.id);
     expect(distinguish.length).toBeGreaterThan(0);
+
     for (const c of distinguish) {
       expect(c.status).toBe('proven_within_model');
       expect(c.scope.testIds?.length).toBeGreaterThan(0);
@@ -411,6 +416,7 @@ describe('changes since a git ref', () => {
       'this comparison changed since HEAD; check whether the boundary moved on purpose',
     );
     const untouched = properties.filter((p) => p.targetSymbols.includes('src/pricing.ts#shippingFee'));
+
     for (const p of untouched) expect(p.assumptions.join(' ')).not.toMatch(/changed since/);
     const refused = runCli(['analyze', '--since', '--output=x', '--json'], dir);
     expect(refused.status).toBe(2);
@@ -490,6 +496,7 @@ describe('existing mutation reports', () => {
       [['--import', 'missing.json'], 'MUTATION_REPORT_UNREADABLE'],
       [['--import', 'ok.json', '--kill-matrix'], 'OPTION_CONFLICT'],
     ];
+
     for (const [args, code] of cases) {
       const result = runCli(['mutate', ...args, '--json'], dir);
       expect(result.status, args.join(' ')).toBe(2);
@@ -512,6 +519,7 @@ describe('a ten-function project', () => {
       .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
     expect(counterexamples).toEqual([{ distance: '50' }, { points: '300' }]);
     expect(mismatches).toHaveLength(2);
+
     // Rules the extractor cannot read are reported (unsupported or not formalized), never guessed.
     for (const c of claims)
       expect(['proven_within_model', 'counterexample_found', 'unsupported']).toContain(c.status);
@@ -595,6 +603,7 @@ describe('specification sources', () => {
       'The clamp function must return a value of at least 0.',
       '`clamp(x)` returns x limited to the range 0 to 10, inclusive.',
     ]);
+
     for (const s of ordinary) expect(s.flags).not.toContain('instruction_like');
     expect(ordinary.find((s) => /must return/.test(s.quote))?.modality).toBe('must');
   });

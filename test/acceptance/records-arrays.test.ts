@@ -33,6 +33,7 @@ describe('records and arrays', () => {
           x.origin === 'normative' && x.targetSymbols.includes(symbol) && x.formalExpression === expression,
       );
       expect(p, `${symbol} ${expression}`).toBeTruthy();
+
       return claims.find((c) => c.propertyId === p?.id);
     };
     const discount = claimOf('src/order.ts#orderDiscount', 'order.total >= 1000');

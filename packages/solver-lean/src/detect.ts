@@ -22,7 +22,9 @@ const exe = (tool: string) => (process.platform === 'win32' ? `${tool}.exe` : to
 
 async function firstLine(command: string, args: string[]): Promise<string | null> {
   const result = await runCommand(command, args, { cwd: tmpdir(), timeoutMs: 30_000 });
+
   if (result.spawnError || result.exitCode !== 0) return null;
+
   return (result.stdout || result.stderr).trim().split('\n')[0]?.trim() || null;
 }
 
@@ -35,13 +37,16 @@ export async function detectLean(options: LeanToolOptions = {}): Promise<LeanIns
   const leanCandidates = options.leanPath ? [options.leanPath] : leanToolCandidates('lean');
   let lean: string | null = null;
   let version: string | null = null;
+
   for (const candidate of leanCandidates) {
     version = await firstLine(candidate, ['--version']);
+
     if (version) {
       lean = candidate;
       break;
     }
   }
+
   if (!lean || !version) {
     return {
       available: false,
@@ -51,11 +56,13 @@ export async function detectLean(options: LeanToolOptions = {}): Promise<LeanIns
       detail: `lean not found or not runnable (tried ${leanCandidates.join(', ')})`,
     };
   }
+
   if (!/^Lean \(version 4\./.test(version)) {
     return { available: false, lean, lake: null, version, detail: `unsupported Lean version: ${version}` };
   }
   const prefix = await firstLine(lean, ['--print-prefix']);
   const toolchainBin = prefix ? path.join(prefix, 'bin') : null;
+
   if (toolchainBin && existsSync(path.join(toolchainBin, exe('lean'))))
     lean = path.join(toolchainBin, exe('lean'));
 
@@ -68,12 +75,14 @@ export async function detectLean(options: LeanToolOptions = {}): Promise<LeanIns
         ...leanToolCandidates('lake'),
       ];
   let lake: string | null = null;
+
   for (const candidate of lakeCandidates) {
     if (await firstLine(candidate, ['--version'])) {
       lake = candidate;
       break;
     }
   }
+
   if (!lake) {
     return {
       available: false,
@@ -83,5 +92,6 @@ export async function detectLean(options: LeanToolOptions = {}): Promise<LeanIns
       detail: `lake not found or not runnable (tried ${lakeCandidates.join(', ')})`,
     };
   }
+
   return { available: true, lean, lake, version, detail: `${version}; lake at ${lake}` };
 }

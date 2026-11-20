@@ -45,6 +45,7 @@ export class ClaudeProvider implements LlmProvider {
     request: LlmRequest<S>,
   ): Promise<Omit<LlmResult<z.output<S>>, 'inputHash'>> {
     const base = { provider: this.name, model: this.model };
+
     try {
       const response = await this.client.messages.parse(
         {
@@ -59,6 +60,7 @@ export class ClaudeProvider implements LlmProvider {
         request.signal ? { signal: request.signal } : undefined,
       );
       const usage = { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens };
+
       if (response.stop_reason === 'refusal') {
         return {
           ...base,
@@ -68,10 +70,12 @@ export class ClaudeProvider implements LlmProvider {
           error: response.stop_details?.explanation ?? 'refused',
         };
       }
+
       if (response.stop_reason === 'max_tokens') {
         return { ...base, status: 'truncated', data: null, usage, error: 'output reached max_tokens' };
       }
       const parsed = request.schema.safeParse(response.parsed_output);
+
       if (!parsed.success)
         return {
           ...base,
@@ -80,15 +84,20 @@ export class ClaudeProvider implements LlmProvider {
           usage,
           error: 'output did not match the schema',
         };
+
       return { ...base, status: 'ok', data: parsed.data as z.output<S>, usage, error: null };
     } catch (error) {
       const usage = { inputTokens: 0, outputTokens: 0 };
+
       if (error instanceof Anthropic.AuthenticationError)
         return { ...base, status: 'unavailable', data: null, usage, error: 'invalid API key' };
+
       if (error instanceof Anthropic.RateLimitError)
         return { ...base, status: 'error', data: null, usage, error: 'rate limited' };
+
       if (error instanceof Anthropic.APIError)
         return { ...base, status: 'error', data: null, usage, error: `API error ${error.status}` };
+
       return {
         ...base,
         status: 'error',

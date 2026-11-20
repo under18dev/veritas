@@ -10,8 +10,10 @@ const CONFIG_NAMES = ['vitest', 'vite'].flatMap((base) =>
 export function findVitestConfig(root: string): string | null {
   for (const name of CONFIG_NAMES) {
     const file = path.join(root, name);
+
     if (existsSync(file)) return file;
   }
+
   return null;
 }
 
@@ -69,5 +71,6 @@ export function writeNarrowedVitestConfig(options: {
     '',
   ];
   writeFileSync(file, lines.join('\n'));
+
   return file;
 }

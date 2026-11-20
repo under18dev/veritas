@@ -49,13 +49,16 @@ export async function runStages(stages: Stage[], ctx: Omit<StageContext, 'output
   const outputs = new Map<StageName, unknown>();
   const results: StageResult[] = [];
   const statusOf = new Map<StageName, StageStatus>();
+
   for (const stage of stages) {
     const started = new Date();
     let outcome: StageOutcome;
     const blocked = stage.dependsOn.filter((d) => {
       const s = statusOf.get(d);
+
       return s === undefined || s === 'error' || s === 'cancelled' || s === 'failed' || s === 'timeout';
     });
+
     if (ctx.signal.aborted) {
       outcome = { status: 'cancelled', messages: ['run cancelled before this stage started'] };
     } else if (blocked.length > 0) {
@@ -65,8 +68,10 @@ export async function runStages(stages: Stage[], ctx: Omit<StageContext, 'output
       };
     } else {
       logEvent('debug', `stage ${stage.name} started`, { event: 'stage', stage: stage.name, at: 'start' });
+
       try {
         outcome = await stage.run({ ...ctx, outputs });
+
         if (outcome.output !== undefined) outputs.set(stage.name, outcome.output);
       } catch (error) {
         const message =
@@ -100,5 +105,6 @@ export async function runStages(stages: Stage[], ctx: Omit<StageContext, 'output
       usage: addUsage(emptyUsage(), outcome.usage ?? {}),
     });
   }
+
   return results;
 }

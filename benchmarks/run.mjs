@@ -38,8 +38,10 @@ const budget = JSON.parse(readFileSync(path.join(repo, 'benchmarks/budget.json')
 
 function link(from, to) {
   mkdirSync(to, { recursive: true });
+
   for (const entry of readdirSync(from)) {
     if (entry.startsWith('.')) continue;
+
     if (entry.startsWith('@')) link(path.join(from, entry), path.join(to, entry));
     else symlinkSync(realpathSync(path.join(from, entry)), path.join(to, entry), 'junction');
   }
@@ -59,10 +61,12 @@ function copy(name) {
     cwd: dir,
   });
   spawnSync(process.execPath, [cli, 'init', '--yes'], { cwd: dir });
+
   return dir;
 }
 
 const results = [];
+
 for (const fixture of fixtures) {
   for (const profile of profiles) {
     const dir = copy(fixture);
@@ -76,6 +80,7 @@ for (const fixture of fixtures) {
     let usage = null;
     let functions = null;
     let tests = null;
+
     try {
       const { runId } = JSON.parse(run.stdout);
       const runDir = path.join(dir, '.veritas/runs', runId);
@@ -83,6 +88,7 @@ for (const fixture of fixtures) {
       functions = JSON.parse(readFileSync(path.join(runDir, 'code-index.json'), 'utf8')).data.functions
         .length;
       tests = JSON.parse(readFileSync(path.join(runDir, 'test-map.json'), 'utf8')).data.tests.length;
+
       if (keepRuns) cpSync(runDir, path.join(keepRuns, `${fixture}-${profile}`), { recursive: true });
     } catch {
       // keep nulls: a failed run is reported, not hidden
@@ -103,22 +109,28 @@ console.log(`wrote ${path.relative(repo, file)}`);
 if (check) {
   // Exit codes 0, 1 and 4 are verdicts; 2, 3 or a crash mean the run itself failed.
   const problems = [];
+
   for (const r of results) {
     if (![0, 1, 4].includes(r.exitCode)) problems.push(`${r.fixture} ${r.profile}: exit code ${r.exitCode}`);
     const limit = budget.maxWallMs[r.profile];
+
     if (limit !== undefined && r.wallMs > limit)
       problems.push(`${r.fixture} ${r.profile}: ${r.wallMs} ms exceeds the budget of ${limit} ms`);
     // Usage counters (LLM tokens, solver time, mutants, test runs) have budgets too; a run without them fails.
     const usageLimits = budget.maxUsage?.[r.profile] ?? {};
+
     for (const [counter, max] of Object.entries(usageLimits)) {
       const value = r.usage?.[counter];
+
       if (typeof value !== 'number')
         problems.push(`${r.fixture} ${r.profile}: usage counter ${counter} missing`);
       else if (value > max)
         problems.push(`${r.fixture} ${r.profile}: ${counter} ${value} exceeds the budget of ${max}`);
     }
   }
+
   for (const p of problems) console.error(p);
+
   if (problems.length) process.exit(1);
   console.log('within budget');
 }

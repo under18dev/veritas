@@ -54,6 +54,7 @@ export function buildProgram(
       const opts = { ...global, ...command.opts(), root: path.resolve(global.root) } as GlobalOptions &
         Record<string, unknown>;
       configureLogging({ debug: Boolean(global.debug), format: global.logFormat });
+
       try {
         if (!statSync(opts.root, { throwIfNoEntry: false })?.isDirectory())
           throw new VeritasError('user', 'ROOT_NOT_FOUND', `project root is not a directory: ${opts.root}`);
@@ -218,6 +219,7 @@ export function buildProgram(
   wire(program.command('explain <finding-id>').description('show the evidence chain of a finding'), (o, a) =>
     explainCommand(o, a),
   );
+
   return program;
 }
 
@@ -259,9 +261,11 @@ export async function main(argv: string[]): Promise<ExitCode> {
           hint: 'run `veritas --help`',
           exitCode: ExitCode.UserError,
         });
+
       return ExitCode.UserError;
     }
     return reportError(error, json);
   }
+
   return exitCode;
 }

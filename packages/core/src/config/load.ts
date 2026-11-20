@@ -23,6 +23,7 @@ export function formatIssues(issues: z.core.$ZodIssue[]): string[] {
 
 export function parseConfig(input: unknown, file: string | null): VeritasConfig {
   const result = VeritasConfig.safeParse(input);
+
   if (!result.success) {
     const lines = formatIssues(result.error.issues);
     throw new VeritasError(
@@ -33,6 +34,7 @@ export function parseConfig(input: unknown, file: string | null): VeritasConfig 
       result.error.issues,
     );
   }
+
   return result.data;
 }
 
@@ -47,6 +49,7 @@ export async function loadConfig(
   // Configuration files must be inside the project: a symlink pointing elsewhere is refused, not followed.
   const jsonPath = resolveInsideRoot(root, JSON_CONFIG);
   const codePath = CODE_CONFIGS.map((f) => resolveInsideRoot(root, f)).find((f) => existsSync(f));
+
   if (existsSync(jsonPath) && codePath) {
     throw new VeritasError(
       'user',
@@ -55,8 +58,10 @@ export async function loadConfig(
       'keep only one configuration file',
     );
   }
+
   if (existsSync(jsonPath)) {
     let raw: unknown;
+
     try {
       raw = JSON.parse(readFileSync(jsonPath, 'utf8'));
     } catch (error) {
@@ -67,8 +72,10 @@ export async function loadConfig(
       );
     }
     const config = parseConfig(raw, JSON_CONFIG);
+
     return { config, file: jsonPath, hash: hashValue(config) };
   }
+
   if (codePath) {
     if (!options.allowCodeConfig) {
       throw new VeritasError(
@@ -80,6 +87,7 @@ export async function loadConfig(
     }
     const mod = (await import(pathToFileURL(codePath).href)) as { default?: unknown };
     const config = parseConfig(mod.default, path.basename(codePath));
+
     return { config, file: codePath, hash: hashValue(config) };
   }
   throw new VeritasError('user', 'CONFIG_MISSING', `no configuration found in ${root}`, 'run `veritas init`');

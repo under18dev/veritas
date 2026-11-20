@@ -5,7 +5,9 @@ import { copyFixture, json, runCli } from './helpers.js';
 
 function setup(name: string): string {
   const dir = copyFixture(name, { git: true, linkDeps: true });
+
   if (runCli(['init', '--yes'], dir).status !== 0) throw new Error('init failed');
+
   return dir;
 }
 
@@ -39,6 +41,7 @@ describe('bounded equivalence of mutants', () => {
     const survivorsInSmaller = mutants.filter(
       (m) => m.status === 'survived' && m.original.includes('Math.min'),
     );
+
     for (const m of survivorsInSmaller) expect(m.status).toBe('survived');
     expect(mutants.some((m) => m.status === 'suspected_equivalent')).toBe(false);
   });
@@ -56,6 +59,7 @@ describe('constructs outside the formal subset', () => {
     }>(dir, run.runId, 'properties.json');
     const normative = properties.properties.filter((p) => p.origin === 'normative');
     expect(normative.length).toBe(3);
+
     for (const p of normative) {
       expect(properties.formalization.find((f) => f.propertyId === p.id)?.status).toBe('not_formalizable');
     }
@@ -64,6 +68,7 @@ describe('constructs outside the formal subset', () => {
       run.runId,
       'claims.json',
     );
+
     for (const p of normative) {
       const claim = claims.find((c) => c.propertyId === p.id);
       expect(claim?.status).toBe('unsupported');
@@ -137,12 +142,14 @@ describe('solver time limits', () => {
     >(dir, run.runId, 'claims.json');
     const timedOut = claims.filter((c) => c.status === 'timeout');
     expect(timedOut.length).toBeGreaterThan(0);
+
     for (const c of timedOut) expect(c.assurance).toBe('none');
     const mutants = artifact<{ mutants: { id: string; status: string }[] }>(
       dir,
       run.runId,
       'mutation.json',
     ).mutants;
+
     for (const c of timedOut) expect(mutants.find((m) => m.id === c.mutantId)?.status).toBe('survived');
     expect(mutants.some((m) => m.status === 'equivalent_proven')).toBe(false);
     expect(result.status).toBe(0);

@@ -20,9 +20,12 @@ const NEGATIVE = /\b(reject|rejected|deny|denied|invalid|block|blocked|forbidden
 /** Integer literals the function can return: the leaves of its translated if/ternary tree. */
 function returnLiterals(body: Expr | null): string[] {
   if (!body) return [];
+
   if (body.kind === 'int') return [body.value];
+
   if (body.kind === 'ite')
     return [...new Set([...returnLiterals(body.whenTrue), ...returnLiterals(body.whenFalse)])];
+
   return [];
 }
 
@@ -44,7 +47,9 @@ export function formalizeProperty(options: {
 }): Formalization {
   const { property, fn } = options;
   const predicate = property.predicate;
+
   if (!predicate) return { status: 'not_formalizable', reason: 'property has no threshold predicate' };
+
   if (fn.purity !== 'pure')
     return { status: 'not_formalizable', reason: `${fn.symbol} is ${fn.purity}, not pure` };
   const { file, name } = parseSymbolId(fn.symbol);
@@ -56,17 +61,20 @@ export function formalizeProperty(options: {
     domain: options.domain,
     ...(options.maxArrayLength !== undefined ? { maxArrayLength: options.maxArrayLength } : {}),
   });
+
   if (translated.status !== 'translated') {
     const reason =
       translated.status === 'unsupported'
         ? translated.reasons.map((r) => `line ${r.line}: ${r.reason}`).join('; ')
         : `${fn.symbol} not found`;
+
     return { status: 'not_formalizable', reason: `outside the supported subset: ${reason}` };
   }
   const text = `${predicate.consequence} ${options.quote ?? ''}`;
   const assumptions: string[] = [];
   let whenTrue: string | boolean | undefined;
   let whenFalse: string | boolean | undefined;
+
   if (translated.model.returns === 'bool') {
     if (POSITIVE.test(predicate.consequence) && !NEGATIVE.test(predicate.consequence)) {
       whenTrue = true;
@@ -77,10 +85,12 @@ export function formalizeProperty(options: {
     }
     // `isSenior` + "... are seniors": the predicate named by the function is what the statement defines.
     const named = /^(?:is|has|can|should|allows?)([A-Z]\w*)$/.exec(name)?.[1]?.toLowerCase();
+
     if (whenTrue === undefined && named && new RegExp(`\\b${named}s?\\b`, 'i').test(predicate.consequence)) {
       whenTrue = !NEGATIVE.test(predicate.consequence);
       whenFalse = !whenTrue;
     }
+
     if (whenTrue !== undefined) {
       assumptions.push(
         `formalized as: ${name} returns ${whenTrue} exactly when ${predicate.param} ${predicate.operator} ${predicate.value}`,
@@ -90,9 +100,11 @@ export function formalizeProperty(options: {
     const literals = returnLiterals(translated.model.body);
     const numbers = [...predicate.consequence.matchAll(/-?\d[\d,]*/g)].map((m) => m[0].replace(/,/g, ''));
     whenTrue = numbers.find((n) => literals.includes(n) && n !== predicate.value);
+
     if (whenTrue === undefined && /\bfree\b/i.test(predicate.consequence) && literals.includes('0'))
       whenTrue = '0';
     const otherwise = /otherwise[^.]*?(-?\d[\d,]*)/i.exec(text)?.[1]?.replace(/,/g, '');
+
     if (otherwise && literals.includes(otherwise)) whenFalse = otherwise;
     else if (
       whenTrue !== undefined &&
@@ -106,6 +118,7 @@ export function formalizeProperty(options: {
         `assumed: ${name} returns 0 when the condition does not hold (only other literal it returns)`,
       );
     }
+
     if (whenTrue !== undefined) {
       assumptions.push(
         `formalized as: ${predicate.param} ${predicate.operator} ${predicate.value} implies ${name}(...) == ${whenTrue}` +
@@ -113,6 +126,7 @@ export function formalizeProperty(options: {
       );
     }
   }
+
   if (whenTrue === undefined) {
     return {
       status: 'not_formalizable',
@@ -121,6 +135,7 @@ export function formalizeProperty(options: {
   }
   // A record field (`order.total`) is the flattened model parameter `order__total`.
   const param = predicate.param.split('.').join(FLAT_SEPARATOR);
+
   if (!translated.params.some((p) => p.name === param && p.sort === 'int'))
     return { status: 'not_formalizable', reason: `${predicate.param} is not an integer input of ${name}` };
   const ir = thresholdProperty({
@@ -132,5 +147,6 @@ export function formalizeProperty(options: {
     ...(whenFalse !== undefined ? { whenFalse } : {}),
     domain: options.domain,
   });
+
   return { status: 'formalized', ir, assumptions, file, exportName: name };
 }

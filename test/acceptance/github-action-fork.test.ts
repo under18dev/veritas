@@ -47,9 +47,11 @@ function git(cwd: string, ...args: string[]): string {
 
 function allText(directory: string): string {
   if (!existsSync(directory)) return '';
+
   return readdirSync(directory, { withFileTypes: true })
     .map((entry) => {
       const file = path.join(directory, entry.name);
+
       return entry.isDirectory() ? allText(file) : readFileSync(file, 'utf8');
     })
     .join('\n');
@@ -67,6 +69,7 @@ function forkPullRequest(probes: string): { project: string; base: string } {
   });
   const modules = path.join(fixture, 'node_modules');
   mkdirSync(path.join(project, 'node_modules'));
+
   for (const name of readdirSync(modules))
     symlinkSync(realpathSync(path.join(modules, name)), path.join(project, 'node_modules', name), 'junction');
   git(project, 'init', '-q');
@@ -97,6 +100,7 @@ function forkPullRequest(probes: string): { project: string; base: string } {
   );
   git(project, 'add', '-A');
   git(project, 'commit', '-qm', 'pull request from a fork');
+
   return { project, base };
 }
 
@@ -108,6 +112,7 @@ function gitRecorder(probes: string): string | null {
   mkdirSync(bin);
   writeFileSync(path.join(bin, 'git'), `#!/bin/sh\nenv > "${probes}/git-$$.env"\nexec "${real}" "$@"\n`);
   chmodSync(path.join(bin, 'git'), 0o755);
+
   return bin;
 }
 
@@ -172,9 +177,12 @@ describe('the built action on a pull request from a fork', { timeout: 300_000 },
     const dumps = readdirSync(probes).filter((f) => f.startsWith('vitest-'));
     expect(dumps.length).toBeGreaterThan(0);
     const gitDumps = readdirSync(probes).filter((f) => f.startsWith('git-'));
+
     if (recorder) expect(gitDumps.length).toBeGreaterThan(0);
+
     for (const file of [...dumps, ...gitDumps]) {
       const text = readFileSync(path.join(probes, file), 'utf8');
+
       for (const [name, value] of Object.entries(SECRETS)) {
         expect(text, `${file} has ${name}`).not.toContain(value);
         expect(text, `${file} has ${name}`).not.toMatch(new RegExp(`"?${name}"?\\s*[:=]`));
@@ -199,6 +207,7 @@ describe('the built action on a pull request from a fork', { timeout: 300_000 },
       result.stderr,
       allText(path.join(project, '.veritas')),
     ].join('\n');
+
     for (const value of Object.values(SECRETS)) expect(written).not.toContain(value);
   });
 });

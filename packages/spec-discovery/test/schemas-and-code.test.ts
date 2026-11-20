@@ -64,6 +64,7 @@ describe('schema and code collectors', () => {
       ),
     ).toBe(false);
     expect(DiscoveryResult.parse(result)).toEqual(result);
+
     for (const source of result.sources) expect(EvidenceSource.parse(source)).toEqual(source);
   });
 

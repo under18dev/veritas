@@ -15,13 +15,16 @@ export async function createLlmProvider(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ provider: LlmProvider | null; message: string | null }> {
   const name = config.llm.provider;
+
   if (name === 'none') return { provider: null, message: null };
   const availability = await llmAvailability(name, env, root, {
     allowCodexFileReads: config.llm.allowCodexFileReads,
   });
+
   if (availability.state !== 'available')
     return { provider: null, message: `llm: ${availability.detail}; rule-based results only` };
   const model = config.llm.model ? { model: config.llm.model } : {};
+
   switch (name) {
     case 'claude':
       return { provider: new ClaudeProvider(model), message: null };

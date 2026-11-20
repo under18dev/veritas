@@ -15,9 +15,11 @@ export function copyFixture(name: string, options: { git?: boolean; linkDeps?: b
     recursive: true,
     filter: (src) => !src.includes('node_modules') && !src.includes('.mutator'),
   });
+
   // Fixture dependencies (vitest, mutator) are installed in the workspace; link them instead of reinstalling.
   if (options.linkDeps && existsSync(path.join(source, 'node_modules')))
     linkPackages(path.join(source, 'node_modules'), path.join(dir, 'node_modules'));
+
   if (options.git) {
     // Fixed dates make the commit identical for every copy of a fixture, so ids derived from it match.
     const date = '2026-01-01T00:00:00Z';
@@ -41,6 +43,7 @@ export function copyFixture(name: string, options: { git?: boolean; linkDeps?: b
       'fixture',
     );
   }
+
   return dir;
 }
 
@@ -50,8 +53,10 @@ export function copyFixture(name: string, options: { git?: boolean; linkDeps?: b
  */
 function linkPackages(from: string, to: string): void {
   mkdirSync(to, { recursive: true });
+
   for (const entry of readdirSync(from)) {
     if (entry === '.bin' || entry.startsWith('.')) continue;
+
     if (entry.startsWith('@')) {
       linkPackages(path.join(from, entry), path.join(to, entry));
       continue;
@@ -79,6 +84,7 @@ export function runCli(args: string[], cwd: string, env: NodeJS.ProcessEnv = {})
     },
     timeout: 120_000,
   });
+
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 

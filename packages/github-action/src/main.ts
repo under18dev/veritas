@@ -15,24 +15,29 @@ import { planFromEvent, type RunPlan } from './event.js';
 
 const input = (name: string, fallback: string): string =>
   process.env[`INPUT_${name.toUpperCase().replaceAll('-', '_')}`] || fallback;
+
 export async function changedFiles(root: string, since: string | null): Promise<string[] | null> {
   if (!since) return null;
   const result = await runCommand('git', ['diff', '--name-only', `${since}...HEAD`], {
     cwd: root,
     timeoutMs: 10_000,
   });
+
   if (result.exitCode !== 0 || result.spawnError || result.timedOut) return null;
+
   return result.stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
 }
+
 function docsOnly(files: string[]): boolean {
   return (
     files.length > 0 &&
     files.every((file) => /^(docs\/|.*\.md$|.*\.(png|jpe?g|gif|svg|webp|bmp|ico)$)/i.test(file))
   );
 }
+
 function writeOutput(values: Record<string, string>): void {
   if (process.env.GITHUB_OUTPUT)
     appendFileSync(
@@ -42,6 +47,7 @@ function writeOutput(values: Record<string, string>): void {
         .join('\n')}\n`,
     );
 }
+
 function degraded(reason: string, behavior: string, fromFork: boolean): number {
   const exitCode = behavior === 'fail' ? 4 : 0;
   writeOutput({
@@ -52,16 +58,20 @@ function degraded(reason: string, behavior: string, fromFork: boolean): number {
     'report-path': '',
     'from-fork': String(fromFork),
   });
+
   if (process.env.GITHUB_STEP_SUMMARY)
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Veritas\n\nDegraded: ${redact(reason)}.\n`);
+
   return exitCode;
 }
+
 export async function main(): Promise<number> {
   // The working directory must stay inside the checked-out repository; `../..` or an absolute path elsewhere
   // would analyse and write .veritas/ outside it.
   const workspace = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const root = resolveInsideRoot(workspace, input('working-directory', '.'));
   let event: RunPlan;
+
   try {
     event = planFromEvent({
       eventName: process.env.GITHUB_EVENT_NAME,
@@ -75,6 +85,7 @@ export async function main(): Promise<number> {
   }
   const since = input('since', '') || event.since;
   const files = await changedFiles(root, since);
+
   if (files && docsOnly(files)) {
     writeOutput({
       verdict: 'skipped',
@@ -84,17 +95,22 @@ export async function main(): Promise<number> {
       'report-path': '',
       'from-fork': String(event.fromFork),
     });
+
     if (process.env.GITHUB_STEP_SUMMARY)
       appendFileSync(process.env.GITHUB_STEP_SUMMARY, '## Veritas\n\nSkipped: documentation-only change.\n');
+
     return 0;
   }
   const project = detectProject(root);
   const behaviorInput = input('inconclusive', 'warn');
+
   if (!project.hasPackageJson) return degraded('no package.json found', behaviorInput, event.fromFork);
   const doctor = await runDoctor(root, null);
+
   if (!doctor.capabilities.some((cap) => cap.name === 'vitest' && cap.state !== 'unavailable'))
     return degraded('Vitest is unavailable', behaviorInput, event.fromFork);
   const profile = input('profile', 'standard') as Profile;
+
   if (!PROFILE_STAGES[profile]) throw new Error(`unsupported profile: ${profile}`);
   const configured = await loadConfig(root).catch(() => null);
   const behavior = (
@@ -124,9 +140,11 @@ export async function main(): Promise<number> {
     'report-path': reportPath,
     'from-fork': String(event.fromFork),
   });
+
   if (process.env.GITHUB_STEP_SUMMARY && input('summary', 'true') !== 'false') {
     const counts = summary.findings.reduce<Record<string, number>>((out, finding) => {
       out[finding.certainty] = (out[finding.certainty] ?? 0) + 1;
+
       return out;
     }, {});
     const findings =
@@ -141,8 +159,10 @@ export async function main(): Promise<number> {
       ).slice(0, 60_000),
     );
   }
+
   return decision.exitCode;
 }
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
   main()
     .then((code) => {

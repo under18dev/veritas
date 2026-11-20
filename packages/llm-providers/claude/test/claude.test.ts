@@ -10,11 +10,14 @@ function mockClient(response: Record<string, unknown> | Error) {
     messages: {
       parse: async (params: Record<string, unknown>) => {
         calls.push(params);
+
         if (response instanceof Error) throw response;
+
         return response;
       },
     },
   } as unknown as MessagesParser;
+
   return { client, calls };
 }
 

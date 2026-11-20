@@ -11,6 +11,7 @@ interface TestMap {
 /** Test-map artifacts of every run, newest last. */
 function testMaps(dir: string): TestMap[] {
   const runs = path.join(dir, '.veritas/runs');
+
   return readdirSync(runs)
     .sort()
     .map((run) => path.join(runs, run, 'test-map.json'))
@@ -58,6 +59,7 @@ describe('test files are parsed, never executed, by the static stages', () => {
     for (const marker of markers) expect(existsSync(marker), marker).toBe(false);
     const maps = testMaps(dir);
     expect(maps).toHaveLength(2);
+
     for (const map of maps) {
       const test = map.tests.find((t) => t.file === 'test/side-effect.test.ts');
       expect(test?.name).toBe('discounts an order of exactly 1000');

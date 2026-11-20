@@ -7,22 +7,27 @@ import { analyzeCode, CodeIndex, type FunctionInfo } from '../src/index.js';
 
 function project(files: Record<string, string>): string {
   const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-ci-review-')));
+
   for (const [file, content] of Object.entries(files)) {
     mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
     writeFileSync(path.join(dir, file), content);
   }
+
   return dir;
 }
 
 function analyze(files: Record<string, string>): CodeIndex {
   const index = analyzeCode({ root: project(files), config: parseConfig({}, null) });
   expect(CodeIndex.parse(index)).toEqual(index);
+
   return index;
 }
 
 function fn(index: CodeIndex, symbol: string): FunctionInfo {
   const found = index.functions.find((f) => f.symbol === symbol);
+
   if (!found) throw new Error(`no ${symbol}; have ${index.functions.map((f) => f.symbol).join(', ')}`);
+
   return found;
 }
 

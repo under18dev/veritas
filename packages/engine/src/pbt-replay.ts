@@ -22,8 +22,10 @@ export async function replayPbt(
 ): Promise<PbtReplay> {
   const { config } = await openProject(root);
   const runs = options.runId ? [options.runId] : listRuns(root);
+
   for (const runId of runs) {
     let results: PbtResult[];
+
     try {
       results = readArtifact(root, runId, 'pbt').data;
     } catch (error) {
@@ -31,11 +33,13 @@ export async function replayPbt(
       continue;
     }
     const recorded = results.find((r) => r.id === resultId);
+
     if (!recorded) continue;
     const property = readArtifact(root, runId, 'properties').data.properties.find(
       (p) => p.id === recorded.propertyId,
     );
     const symbol = property?.targetSymbols[0];
+
     if (!property?.ir || !symbol)
       throw new VeritasError(
         'tool',
@@ -54,6 +58,7 @@ export async function replayPbt(
     const reproduced =
       replayed.status === recorded.status &&
       JSON.stringify(replayed.counterexample) === JSON.stringify(recorded.counterexample);
+
     return { runId, recorded, replayed, reproduced };
   }
   throw new VeritasError(

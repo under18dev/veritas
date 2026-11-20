@@ -35,7 +35,9 @@ export interface Registry {
 /** Crude singular form, so "passes", "orders" and "boxes" match "pass", "order" and "box". */
 function singular(w: string): string {
   if (w.length > 4 && /(?:ss|sh|ch|x|z)es$/.test(w)) return w.slice(0, -2);
+
   if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) return w.slice(0, -1);
+
   return w;
 }
 
@@ -74,7 +76,9 @@ interface Target {
  */
 function lengthStatement(quote: string, arrayWords: string[]): boolean {
   if (/\b(?:first|second|third|fourth|fifth|last|\d+(?:st|nd|rd|th))\s+\w+/i.test(quote)) return false;
+
   if (/\b(?:count|number of|length|size|how many)\b/i.test(quote)) return true;
+
   // "3 or more items", "at least 3 items", "up to 5 values": a number right before the array's noun.
   return arrayWords.some((noun) =>
     new RegExp(`\\d[\\d,]*\\s+(?:or\\s+(?:more|fewer|less)\\s+)?${noun}`, 'i').test(quote),
@@ -90,6 +94,7 @@ function mapStatement(
   const quoteWords = new Set([...words(statement.quote), ...statement.subjects.flatMap(words)]);
   const quantityWords = words(relation.quantity);
   const scored: Target[] = [];
+
   for (const fn of index.functions) {
     if (!fn.exported) continue;
     // Number parameters, and fields of record parameters the function compares (`order.total`).
@@ -101,13 +106,16 @@ function mapStatement(
         ...new Set(fn.comparisons.map((c) => c.param).filter((n): n is string => n?.includes('.') ?? false)),
       ].map((name) => ({ name, words: words(name.slice(name.indexOf('.') + 1)) })),
     ];
+
     if (numeric.length === 0) continue;
     const nameHits = words(fn.name).filter((w) => quoteWords.has(w)).length;
+
     for (const p of numeric) {
       // An array's length only when the statement talks about a count ("3 or more items", "the item count"),
       // never about one element ("the second value") and never on the function name alone.
       if (p.name.endsWith('.length')) {
         const arrayWords = words(p.name.slice(0, -'.length'.length));
+
         if (!lengthStatement(statement.quote, arrayWords)) continue;
       }
       const paramWords = p.words;
@@ -121,13 +129,17 @@ function mapStatement(
         nameHits * 2 +
         (compared ? 1 : 0) +
         (numeric.length === 1 && nameHits > 0 ? 1 : 0);
+
       if (paramHit || nameHits > 0) scored.push({ fn, param: p.name, score });
     }
   }
   scored.sort((a, b) => b.score - a.score);
   const [best, second] = scored;
+
   if (!best || best.score < 3) return null;
+
   if (second && second.score === best.score) return null;
+
   return best;
 }
 
@@ -140,17 +152,22 @@ export function implementationAgreement(
 ): Property['implementationAgreement'] {
   const documented = toInterval(op, value);
   let near = false;
+
   for (const c of fn.comparisons) {
     if (c.param !== param || c.literal === null) continue;
     const paramOnLeft = c.left.trim() === param;
     const codeOp = normalizeComparison(c.operator, paramOnLeft);
+
     if (!codeOp) continue;
     const code = toInterval(codeOp, c.literal);
     const negated = complement(code);
+
     if (sameInterval(code, documented) || (negated && sameInterval(negated, documented))) return 'agree';
     const distance = BigInt(c.literal) - BigInt(value);
+
     if (distance >= -1n && distance <= 1n) near = true;
   }
+
   return near ? 'disagree' : 'unknown';
 }
 
@@ -158,10 +175,13 @@ export function implementationAgreement(
 export function compareVersions(a: string, b: string): number {
   const pa = a.split('.').map(Number);
   const pb = b.split('.').map(Number);
+
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
     const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+
     if (d !== 0) return d;
   }
+
   return 0;
 }
 
@@ -180,12 +200,14 @@ function sourceRank(source: EvidenceSource | undefined, statement: StatementInpu
     test: 0,
     runtime: 0,
   }[source.kind];
+
   if (
     /\b(decision|decided|supersede|outdated|replaces)\b/i.test(statement.quote) ||
     /\b(decision|outdated)\b/i.test(source.summary)
   ) {
     rank += 3;
   }
+
   return rank;
 }
 
@@ -215,6 +237,7 @@ export function buildRegistry(options: BuildOptions): Registry {
   // Sources another source calls outdated. That claim is itself untrusted data: it lowers the source's
   // freshness and its rank as a suggestion, but never removes it from a conflict.
   const supersededBy = new Map<string, string[]>();
+
   for (const p of discovery.provenance.filter((e) => e.relation === 'supersedes'))
     supersededBy.set(p.to, [...(supersededBy.get(p.to) ?? []), p.from]);
   const mapping: MappingNote[] = [];
@@ -226,6 +249,7 @@ export function buildRegistry(options: BuildOptions): Registry {
 
   for (const statement of discovery.statements) {
     const source = sources.get(statement.sourceId);
+
     if (statement.relation.kind !== 'threshold') {
       mapping.push({
         statementId: statement.id,
@@ -236,6 +260,7 @@ export function buildRegistry(options: BuildOptions): Registry {
       continue;
     }
     const canonical = duplicateOf.get(statement.sourceId) ?? duplicateOf.get(statement.id);
+
     if (canonical) {
       mapping.push({
         statementId: statement.id,
@@ -247,6 +272,7 @@ export function buildRegistry(options: BuildOptions): Registry {
     }
     const relation = statement.relation;
     const target = mapStatement(statement, relation, code);
+
     if (!target) {
       mapping.push({
         statementId: statement.id,
@@ -307,8 +333,10 @@ export function buildRegistry(options: BuildOptions): Registry {
       implementationAgreement: agreement,
       experimental: instructionLike || llmExtracted,
     };
+
     if (instructionLike)
       property.assumptions.push('source text contains instruction-like content; treated as data only');
+
     if (llmExtracted)
       property.assumptions.push(
         'threshold read by an LLM from free text; not reproducible, review before accepting',
@@ -327,30 +355,36 @@ export function buildRegistry(options: BuildOptions): Registry {
   }
 
   const conflicts: ConflictGroup[] = [];
+
   for (const [key, group] of bySymbolParam) {
     const live = group.filter((g) => !g.stale);
     // Merge claims that say the same thing (same interval) from different sources.
     const distinct = new Map<string, typeof live>();
+
     for (const g of live) {
       const p = g.property.predicate as NonNullable<Property['predicate']>;
       const iv = toInterval(p.operator, p.value);
       const k = `${iv.lo}:${iv.hi}`;
       distinct.set(k, [...(distinct.get(k) ?? []), g]);
     }
+
     for (const same of distinct.values()) {
       if (same.length > 1) {
         // Agreement needs two sources that are not copies of each other.
         const independent = new Set(
           same.filter((g) => !derived.has(g.statement.sourceId)).map((g) => g.statement.sourceId),
         );
+
         for (const g of same) {
           if (independent.size >= 2) g.property.confidence.agreement = 'agree';
           g.property.sourceIds = [...new Set(same.flatMap((s) => s.property.sourceIds))];
         }
       }
     }
+
     if (distinct.size > 1) {
       const ids = live.map((g) => g.property.id);
+
       for (const g of live) {
         g.property.status = 'conflicted';
         g.property.conflictsWith = ids.filter((id) => id !== g.property.id);
@@ -364,7 +398,9 @@ export function buildRegistry(options: BuildOptions): Registry {
           sourceRank(sources.get(g.statement.sourceId), g.statement) -
           (supersededBy.has(g.statement.sourceId) ? 2 : 0);
         const v = g.statement.version;
+
         if (!v || !newest || versions.length < 2) return base;
+
         return base + (compareVersions(v, newest) === 0 ? 2 : -2);
       };
       const ranked = [...live].sort((a, b) => rankOf(b) - rankOf(a));
@@ -435,11 +471,14 @@ export function buildRegistry(options: BuildOptions): Registry {
   }
 
   const previous = new Map((options.previous ?? []).map((p) => [p.id, p]));
+
   for (const p of properties) {
     const before = previous.get(p.id);
+
     if (before && contentHash(before) !== contentHash(p)) p.version = before.version + 1;
     else if (before) p.version = before.version;
   }
+
   return { properties, conflicts, mapping };
 }
 

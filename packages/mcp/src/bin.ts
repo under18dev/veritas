@@ -15,6 +15,7 @@ Serves Veritas over MCP (stdio).
 `;
 
 let values: { root?: string; 'max-concurrent'?: string; 'allow-write'?: boolean; help?: boolean };
+
 try {
   ({ values } = parseArgs({
     options: {
@@ -28,6 +29,7 @@ try {
   process.stderr.write(`${(error as Error).message}\n\n${USAGE}`);
   process.exit(2);
 }
+
 if (values.help) {
   process.stdout.write(USAGE);
   process.exit(0);
@@ -37,14 +39,17 @@ const fail = (message: string): never => {
   process.exit(2);
 };
 const maxConcurrent = Number(values['max-concurrent']);
+
 if (!/^\d+$/.test(values['max-concurrent'] ?? '') || maxConcurrent < 1 || maxConcurrent > 16)
   fail('--max-concurrent must be an integer from 1 to 16');
 let root = '';
+
 try {
   root = realpathSync(path.resolve(values.root as string));
 } catch {
   fail(`--root is not an existing directory: ${values.root}`);
 }
+
 if (!statSync(root).isDirectory()) fail(`--root is not a directory: ${values.root}`);
 const server = createServer({
   root,

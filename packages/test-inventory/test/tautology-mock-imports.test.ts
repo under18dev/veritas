@@ -20,7 +20,9 @@ describe('tautology, mocks, and imports', () => {
     const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
     const byName = (name: string) => {
       const test = inventory.tests.find((candidate) => candidate.name === name);
+
       if (!test) throw new Error(`missing test: ${name}`);
+
       return test;
     };
 
@@ -42,6 +44,7 @@ describe('tautology, mocks, and imports', () => {
       `,
     });
     const testCase = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests.at(0);
+
     if (!testCase) throw new Error('missing mocked test');
 
     expect(testCase.usesMocks).toBe(true);

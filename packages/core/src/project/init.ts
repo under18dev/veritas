@@ -31,6 +31,7 @@ export function proposeConfig(project: ProjectInfo): VeritasConfig {
 /** Detect the project and write `.veritas/config.json`. Never overwrites without `force`. */
 export function initProject(root: string, options: InitOptions = {}): InitResult {
   const project = detectProject(root);
+
   if (!project.hasPackageJson) {
     throw new VeritasError(
       'user',
@@ -39,6 +40,7 @@ export function initProject(root: string, options: InitOptions = {}): InitResult
       'run veritas in a Node.js project root',
     );
   }
+
   if (!project.vitest.declared && !project.vitest.installedVersion) {
     throw new VeritasError(
       'user',
@@ -50,6 +52,7 @@ export function initProject(root: string, options: InitOptions = {}): InitResult
   // Refuse a `.veritas` (or config.json) symlink that points outside the project instead of writing through it.
   const file = resolveInsideRoot(root, JSON_CONFIG);
   const codeConfigs = CODE_CONFIGS.filter((f) => existsSync(path.join(root, f)));
+
   if (codeConfigs.length > 0) {
     throw new VeritasError(
       'user',
@@ -59,6 +62,7 @@ export function initProject(root: string, options: InitOptions = {}): InitResult
     );
   }
   const existing = [file, ...CODE_CONFIGS.map((f) => path.join(root, f))].filter((f) => existsSync(f));
+
   if (existing.length > 0 && !options.force) {
     throw new VeritasError(
       'user',
@@ -69,10 +73,14 @@ export function initProject(root: string, options: InitOptions = {}): InitResult
   }
   const config = proposeConfig(project);
   const nextSteps = ['veritas doctor', 'veritas discover --offline', 'veritas run --profile quick --offline'];
+
   if (!project.vitest.installedVersion) nextSteps.unshift('install dependencies so Vitest can be resolved');
+
   if (!project.git) nextSteps.push('initialise git to enable --since and reproducible run metadata');
+
   if (options.dryRun) return { project, config, file, written: false, nextSteps };
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(resolveInsideRoot(root, JSON_CONFIG), `${JSON.stringify(config, null, 2)}\n`);
+
   return { project, config, file, written: true, nextSteps };
 }

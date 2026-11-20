@@ -52,13 +52,16 @@ const RUNNER = path.join(here, `runner${import.meta.url.endsWith('.ts') ? '.ts' 
 /** Locate an installed package by walking up `node_modules` directories (Node resolution order). */
 function findPackage(name: string, from: string): { link: string; real: string } | null {
   let dir = from;
+
   for (;;) {
     if (path.basename(dir) !== 'node_modules') {
       const candidate = path.join(dir, 'node_modules', name);
+
       if (existsSync(path.join(candidate, 'package.json')))
         return { link: candidate, real: realpathSync(candidate) };
     }
     const parent = path.dirname(dir);
+
     if (parent === dir) return null;
     dir = parent;
   }
@@ -76,15 +79,18 @@ let toolchain: Toolchain | undefined;
 function locateToolchain(): Toolchain {
   if (toolchain) return toolchain;
   const fastCheck = findPackage('fast-check', here);
+
   if (!fastCheck) throw new Error('fast-check is not installed next to @under18dev/veritas-property-testing');
   const manifest = JSON.parse(readFileSync(path.join(fastCheck.real, 'package.json'), 'utf8')) as {
     exports?: { '.'?: { import?: { default?: string } } };
     dependencies?: Record<string, string>;
   };
   const entry = manifest.exports?.['.']?.import?.default;
+
   if (!entry) throw new Error('cannot locate the fast-check ESM entry point');
   const readPaths = new Set<string>([fastCheck.real]);
   const pending = [fastCheck.real];
+
   while (pending.length > 0) {
     const dir = pending.pop() as string;
     const deps = (
@@ -92,11 +98,14 @@ function locateToolchain(): Toolchain {
         dependencies?: Record<string, string>;
       }
     ).dependencies;
+
     for (const dep of Object.keys(deps ?? {})) {
       const found = findPackage(dep, dir);
+
       if (!found) throw new Error(`fast-check dependency ${dep} is not installed`);
       // Resolution stats the link path before following it to the real directory.
       readPaths.add(found.link);
+
       if (!readPaths.has(found.real)) {
         readPaths.add(found.real);
         pending.push(found.real);
@@ -105,17 +114,20 @@ function locateToolchain(): Toolchain {
   }
   const formalCore = findPackage('@under18dev/veritas-formal-core', here);
   const interpret = formalCore ? path.join(formalCore.real, 'dist', 'interpret.js') : null;
+
   if (!interpret || !existsSync(interpret)) {
     throw new Error(
       'cannot locate the @under18dev/veritas-formal-core interpreter (dist/interpret.js); build it first',
     );
   }
   toolchain = { fastCheckEntry: path.join(fastCheck.real, entry), interpret, readPaths: [...readPaths] };
+
   return toolchain;
 }
 
 function walk(expr: Expr, visit: (e: Expr) => void): void {
   visit(expr);
+
   if (expr.kind === 'unary') walk(expr.arg, visit);
   else if (expr.kind === 'binary') {
     walk(expr.left, visit);
@@ -133,40 +145,50 @@ function validate(ir: PropertyIR, bindings: Binding[]): string | null {
     if (p.sort !== 'int') continue;
     const lo = BigInt(p.domain.min);
     const hi = BigInt(p.domain.max);
+
     if (lo < -SAFE || hi > SAFE) return `domain of ${p.name} leaves the safe-integer range`;
   }
   const functions = new Map(ir.functions.map((f) => [f.name, f]));
   const boundNames = new Set<string>();
+
   for (const b of bindings) {
     const model = functions.get(b.modelName);
+
     if (!model) return `binding ${b.modelName} has no function model in the IR`;
+
     if (boundNames.has(b.modelName)) return `model ${b.modelName} is bound twice`;
     boundNames.add(b.modelName);
   }
   const roots = [ir.body, ...ir.preconditions, ...ir.functions.flatMap((f) => (f.body ? [f.body] : []))];
+
   for (const root of roots) {
     let problem: string | null = null;
     walk(root, (e) => {
       if (problem || e.kind !== 'call') return;
       const fn = functions.get(e.fn);
+
       if (!fn) problem = `call to unknown function ${e.fn}`;
       else if (!fn.body && !boundNames.has(e.fn)) problem = `function ${e.fn} is opaque and not bound`;
       else if (fn.params.length !== e.args.length)
         problem = `call to ${e.fn} has the wrong number of arguments`;
     });
+
     if (problem) return problem;
   }
+
   return null;
 }
 
 /** Boundary values per integer parameter (domain ends, 0, ±1 and IR literals ±1), mixed into generation. */
 export function boundaryValues(ir: PropertyIR): Record<string, string[]> {
   const out: Record<string, string[]> = {};
+
   for (const p of ir.params) {
     if (p.sort !== 'int') continue;
     const values = differentialInputs({ ...ir, params: [p] }, ir.functions, 256).map((i) => i[p.name]);
     out[p.name] = values.filter((v): v is string => typeof v === 'string');
   }
+
   return out;
 }
 
@@ -219,7 +241,9 @@ interface RunnerOutput {
 function parseOutput(stdout: string, nonce: string): RunnerOutput | null {
   const marker = `@@veritas-pbt:${nonce}@@`;
   const line = stdout.split('\n').find((l) => l.startsWith(marker));
+
   if (!line) return null;
+
   try {
     return JSON.parse(line.slice(marker.length)) as RunnerOutput;
   } catch {
@@ -260,16 +284,19 @@ async function execute(
       durationMs: fields.durationMs ?? Date.now() - started,
     });
     options.store?.write(`pbt/${id}.json`, PbtResult, result);
+
     return result;
   };
 
   if (options.signal?.aborted) return finish('cancelled', { error: 'aborted before the run started' });
   const problem = options.reject ?? validate(options.ir, options.bindings);
+
   if (problem) return finish('error', { error: problem });
 
   let root: string;
   let bindings: Binding[];
   let tools: Toolchain;
+
   try {
     root = realpathSync(options.root);
     // Real paths: the permission model compares real locations (e.g. /var vs /private/var on macOS).
@@ -284,6 +311,7 @@ async function execute(
 
   const sandbox = sandboxRuntime();
   const refusal = sandboxRefusal(sandbox, options.allowNetworkWithoutIsolation);
+
   if (refusal) return finish('error', { error: refusal });
   const nonce = randomBytes(16).toString('hex');
   const memoryMb = runContext()?.memoryMb;
@@ -316,30 +344,38 @@ async function execute(
     envAllowlist: ['PATH', 'SYSTEMROOT', 'TEMP', 'TMP'],
   });
   const durationMs = result.durationMs;
+
   if (options.signal?.aborted) return finish('cancelled', { durationMs, error: 'run was cancelled' });
+
   if (result.timedOut) {
     return finish('timeout', { durationMs, error: `property run exceeded ${options.timeoutMs} ms` });
   }
+
   if (result.spawnError) return finish('error', { durationMs, error: result.spawnError });
   const output = parseOutput(result.stdout, nonce);
+
   if (!output && outOfMemory(result.stderr))
     return finish('error', {
       durationMs,
       error: `property runner ran out of memory (limit ${memoryMb ?? 'default'} MiB, limits.memoryMb)`,
     });
+
   if (!output) {
     const detail = result.stderr.split('\n').find((l) => /Error/.test(l)) ?? result.stderr.slice(0, 500);
+
     return finish('error', {
       durationMs,
       error: `property runner failed (exit ${result.exitCode}): ${detail.trim()}`,
     });
   }
+
   if (!output.ok) return finish('error', { durationMs, error: output.error ?? 'property runner failed' });
   const runFields = {
     durationMs,
     runsExecuted: output.runsExecuted ?? null,
     shrinks: output.shrinks ?? 0,
   };
+
   if (!output.failed) return finish('passed', runFields);
   const failing = {
     ...runFields,
@@ -348,12 +384,14 @@ async function execute(
     path: output.path ?? null,
     replayCommand: replayCommand(id),
   };
+
   if (output.error || !output.counterexample) {
     return finish('error', {
       ...failing,
       error: output.error ?? 'fast-check failed without a counterexample',
     });
   }
+
   if (output.modelError) {
     return finish('error', {
       ...failing,
@@ -361,6 +399,7 @@ async function execute(
       error: `the property IR could not be evaluated: ${output.modelError}`,
     });
   }
+
   return finish('counterexample', { ...failing, failure: output.failure ?? { reason: 'property_violated' } });
 }
 
@@ -371,10 +410,13 @@ async function execute(
  */
 export async function runPropertyTest(options: RunPropertyTestOptions): Promise<PbtResult> {
   const parsed = PropertyIR.safeParse(options.ir);
+
   if (!parsed.success) throw new TypeError(`invalid property IR: ${parsed.error.message}`);
+
   if (!Number.isInteger(options.numRuns) || options.numRuns < 1) {
     throw new TypeError('numRuns must be a positive integer');
   }
+
   if (
     options.seed !== undefined &&
     (!Number.isInteger(options.seed) || Math.abs(options.seed) > 0x7fffffff)
@@ -382,6 +424,7 @@ export async function runPropertyTest(options: RunPropertyTestOptions): Promise<
     throw new TypeError('seed must be a 32-bit integer');
   }
   const seed = options.seed ?? randomInt(-0x7fffffff, 0x7fffffff);
+
   return execute({ ...options, replayPath: null }, seed);
 }
 
@@ -392,6 +435,7 @@ export async function runPropertyTest(options: RunPropertyTestOptions): Promise<
 export async function replayPropertyTest(record: PbtResult, options: ReplayOptions): Promise<PbtResult> {
   const stored = PbtResult.parse(record);
   const parsed = PropertyIR.safeParse(options.ir);
+
   if (!parsed.success) throw new TypeError(`invalid property IR: ${parsed.error.message}`);
   const common = {
     root: options.root,
@@ -405,6 +449,7 @@ export async function replayPropertyTest(record: PbtResult, options: ReplayOptio
     allowNetworkWithoutIsolation: options.allowNetworkWithoutIsolation,
   };
   const domainsDiffer = JSON.stringify(stored.domains) !== JSON.stringify(options.ir.params);
+
   return execute(
     {
       ...common,

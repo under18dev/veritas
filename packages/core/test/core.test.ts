@@ -55,6 +55,7 @@ describe('config', () => {
   it('bounds the modelled array length', () => {
     expect(parseConfig({}, null).formal.maxArrayLength).toBe(3);
     expect(parseConfig({ formal: { maxArrayLength: 8 } }, null).formal.maxArrayLength).toBe(8);
+
     for (const maxArrayLength of [0, 9, 2.5])
       expect(() => parseConfig({ formal: { maxArrayLength } }, null), String(maxArrayLength)).toThrow(
         /maxArrayLength/,
@@ -310,6 +311,7 @@ describe('run store', () => {
     writeFileSync(env.VERITAS_CACHE_KEY_FILE, Buffer.alloc(32, 3), { mode: 0o644 });
     chmodSync(env.VERITAS_CACHE_KEY_FILE, 0o644);
     expect(openCache(tmp(), { cache: { enabled: true } }, env).cache).toBeInstanceOf(ContentCache);
+
     if (process.platform !== 'win32') expect(statSync(env.VERITAS_CACHE_KEY_FILE).mode & 0o777).toBe(0o600);
   });
 
@@ -342,6 +344,7 @@ describe('run store', () => {
 describe('pipeline', () => {
   const baseCtx = () => {
     const root = tmp();
+
     return {
       root,
       config: VeritasConfig.parse({}),
@@ -381,6 +384,7 @@ describe('pipeline', () => {
         dependsOn: ['index'],
         run: async (c) => {
           seen = c.outputs.get('index');
+
           return { status: 'succeeded' };
         },
       },

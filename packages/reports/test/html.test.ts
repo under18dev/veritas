@@ -18,6 +18,7 @@ const headings = [
 function html(): string {
   return renderHtml(fixture());
 }
+
 function attrs(name: string): string[] {
   return [...html().matchAll(new RegExp(`${name}="([^"]*)"`, 'g'))].map((match) => match[1] ?? '');
 }
@@ -28,6 +29,7 @@ describe('HTML report', () => {
     expect(
       headings.every((heading, index) => {
         const previous = headings[index - 1];
+
         return (
           output.indexOf(`<h2>${heading}</h2>`) > (previous ? output.indexOf(`<h2>${previous}</h2>`) : -1)
         );
@@ -49,6 +51,7 @@ describe('HTML report', () => {
       output.indexOf('id="finding-confirmed"'),
       output.indexOf('</article>', output.indexOf('id="finding-confirmed"')),
     );
+
     for (const id of ['source-1', 'property-1', 'test-1', 'mutant-1', 'claim-1'])
       expect(finding).toContain(`href="#${id}"`);
     expect(output).toContain('README.md:7');

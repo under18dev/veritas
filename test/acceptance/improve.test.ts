@@ -61,21 +61,27 @@ function gitStatus(dir: string): string {
 function analyzed(name: string, accept = true): string {
   const dir = copyFixture(name, { git: true, linkDeps: true });
   const init = runCli(['init', '--yes'], dir);
+
   if (init.status !== 0) throw new Error(init.stderr);
   const run = runCli(['run', '--profile', 'deep', '--include-proposed', '--json'], dir);
+
   if (run.status !== 0 && run.status !== 1) throw new Error(run.stderr);
+
   if (accept) {
     const list = JSON.parse(runCli(['spec', 'list', '--json'], dir).stdout) as {
       properties: { id: string; origin: string; status: string }[];
     };
+
     for (const p of list.properties.filter((x) => x.origin === 'normative' && x.status === 'proposed')) {
       const decided = runCli(
         ['spec', 'accept', p.id, '--reason', 'matches the README', '--actor', 'reviewer'],
         dir,
       );
+
       if (decided.status !== 0) throw new Error(decided.stderr);
     }
   }
+
   return dir;
 }
 
@@ -136,9 +142,11 @@ describe('improve on agent-loop', () => {
     const file = path.join(dir, '.veritas/improvements', plan.planId, 'plan.json');
     const original = readFileSync(file, 'utf8');
     const hash = projectHash(dir);
+
     try {
       const envelope = JSON.parse(original);
       envelope.data.tests[0].expected = !envelope.data.tests[0].expected;
+
       for (const f of envelope.data.files) f.content = f.content.replace('toBe(true)', 'toBe(false)');
       writeFileSync(file, JSON.stringify(envelope));
       const token = approvalTokenFor(readPlan(dir, plan.planId));

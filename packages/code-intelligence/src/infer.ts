@@ -47,6 +47,7 @@ const COMMUTATIVE_NAME =
 export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
   const out: BehaviorCandidate[] = [];
   const exported = index.functions.filter((f) => f.exported);
+
   for (const fn of exported) {
     const notes = commonNotes(fn);
     const seen = new Set<string>();
@@ -68,8 +69,10 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
       const operator = paramOnLeft ? c.operator : FLIPPED[c.operator];
       const other = paramOnLeft ? c.right : c.left;
       const at = `line ${c.location.range?.start}`;
+
       if (c.literal !== null) {
         const basis: CandidateBasis[] = ['implementation'];
+
         if (fn.jsdoc && new RegExp(`(^|[^\\d])${escapeRegExp(c.literal)}([^\\d]|$)`).test(fn.jsdoc)) {
           basis.push('comment');
         }
@@ -81,6 +84,7 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
             other.calls.includes(fn.symbol) &&
             other.comparisons.some((oc) => oc.literal === literal),
         );
+
         if (callers.length) basis.push('usage');
         add(`boundary:${c.param}:${operator}:${c.literal}`, {
           template: 'boundary',
@@ -100,6 +104,7 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
     for (const p of fn.params) {
       const parts = unionParts(p.type);
       const base = parts.filter((t) => t !== 'undefined' && t !== 'null');
+
       if (p.optional || parts.includes('undefined')) {
         add(`undefined:${p.name}`, {
           template: 'boundary',
@@ -107,6 +112,7 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
           basis: ['type'],
         });
       }
+
       if (parts.includes('null')) {
         add(`null:${p.name}`, {
           template: 'boundary',
@@ -114,6 +120,7 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
           basis: ['type'],
         });
       }
+
       if (base.length === 1 && base[0] === 'string') {
         add(`empty-string:${p.name}`, {
           template: 'boundary',
@@ -121,6 +128,7 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
           basis: ['type'],
         });
       }
+
       if (base.length === 1 && isArrayType(base[0] as string)) {
         add(`empty-array:${p.name}`, {
           template: 'boundary',
@@ -128,6 +136,7 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
           basis: ['type'],
         });
       }
+
       if (base.length > 0 && base.every(isNumericType)) {
         add(`negative:${p.name}`, {
           template: 'boundary',
@@ -135,6 +144,7 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
           basis: ['type'],
         });
       }
+
       if (base.length > 0 && base.every((t) => t === 'number')) {
         // `number` admits fractions, NaN, ±Infinity, -0 and values beyond the safe integer range.
         add(`non-integer:${p.name}`, {
@@ -143,6 +153,7 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
           basis: ['type'],
         });
       }
+
       if (base.length === 1 && isArrayType(base[0] as string) && fn.purity === 'pure') {
         add(`order:${p.name}`, {
           template: 'custom',
@@ -161,6 +172,7 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
     }
 
     const [first, second] = fn.params;
+
     if (
       fn.params.length === 2 &&
       first &&
@@ -182,6 +194,7 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
         .filter((b) => (b.location.range?.start ?? 0) <= line && (b.location.range?.end ?? 0) >= line)
         .sort((a, b) => span(a.location) - span(b.location))[0];
       const basis: CandidateBasis[] = ['implementation'];
+
       if (fn.jsdoc && /@throws|\bthrows?\b/i.test(fn.jsdoc)) basis.push('comment');
       add(`throws:${line}:${t.expression}`, {
         template: 'exception_condition',
@@ -193,6 +206,7 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
     }
 
     const partner = roundTripPartner(fn, exported);
+
     if (partner) {
       add(`round-trip:${partner.symbol}`, {
         template: 'round_trip',
@@ -214,22 +228,27 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
       });
     }
   }
+
   return out;
 }
 
 function commonNotes(fn: FunctionInfo): string[] {
   const notes = ['inferred from code only; not a specification until reviewed and accepted'];
+
   if (fn.purity !== 'pure') notes.push(`purity is ${fn.purity}; results may depend on state or I/O`);
+
   if (fn.unsupported.length > 0) {
     const reasons = [...new Set(fn.unsupported.map((u) => u.reason))].join(', ');
     notes.push(`contains constructs outside the supported subset: ${reasons}`);
   }
+
   return notes;
 }
 
 function roundTripPartner(fn: FunctionInfo, all: FunctionInfo[]): FunctionInfo | null {
   if (fn.params.length !== 1 || fn.purity !== 'pure') return null;
   const local = fn.name.split('.').pop() ?? fn.name;
+
   for (const [pattern, replacement] of ROUND_TRIP_PAIRS) {
     if (!pattern.test(local)) continue;
     const wanted = local.replace(pattern, replacement);
@@ -243,8 +262,10 @@ function roundTripPartner(fn: FunctionInfo, all: FunctionInfo[]): FunctionInfo |
         other.params[0]?.type === fn.returnType &&
         other.returnType === fn.params[0]?.type,
     );
+
     if (partner) return partner;
   }
+
   return null;
 }
 
@@ -253,9 +274,12 @@ function unionParts(type: string): string[] {
   const parts: string[] = [];
   let depth = 0;
   let current = '';
+
   for (const ch of type) {
     if ('<([{'.includes(ch)) depth++;
+
     if ('>)]}'.includes(ch)) depth--;
+
     if (ch === '|' && depth === 0) {
       parts.push(current.trim());
       current = '';
@@ -264,6 +288,7 @@ function unionParts(type: string): string[] {
     }
   }
   parts.push(current.trim());
+
   return parts.filter(Boolean);
 }
 
@@ -292,9 +317,11 @@ export function markChangedCandidates(
 ): BehaviorCandidate[] {
   const touches = (file: string, start: number, end: number) =>
     (changed[file] ?? []).some((r) => r.start <= end && r.end >= start);
+
   return candidates.map((c) => {
     const fn = index.functions.find((f) => f.symbol === c.symbol);
     const range = fn?.location.range;
+
     if (!fn || !range || !touches(fn.file, range.start, range.end)) return c;
     const comparisonChanged =
       c.boundary !== undefined &&
@@ -304,6 +331,7 @@ export function markChangedCandidates(
           cmp.literal === c.boundary?.value &&
           touches(fn.file, cmp.location.range?.start ?? 0, cmp.location.range?.end ?? 0),
       );
+
     return {
       ...c,
       basis: c.basis.includes('git_diff') ? c.basis : [...c.basis, 'git_diff'],
@@ -321,13 +349,16 @@ export function markChangedCandidates(
 export function parseChangedLines(diff: string): ChangedLines {
   const out: ChangedLines = {};
   let file: string | null = null;
+
   for (const line of diff.split('\n')) {
     const header = /^\+\+\+ (?:b\/(.*)|\/dev\/null)$/.exec(line);
+
     if (header) {
       file = header[1] ?? null;
       continue;
     }
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
+
     if (hunk && file) {
       const start = Number(hunk[1]);
       const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
@@ -339,5 +370,6 @@ export function parseChangedLines(diff: string): ChangedLines {
       });
     }
   }
+
   return out;
 }

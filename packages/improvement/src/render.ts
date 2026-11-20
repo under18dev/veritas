@@ -14,6 +14,7 @@ export function importSpecifier(testFile: string, module: string): string {
     .replace(/\.(m|c)?tsx?$/, (ext) =>
       ext.startsWith('.m') ? '.mjs' : ext.startsWith('.c') ? '.cjs' : '.js',
     );
+
   return rel.startsWith('.') ? rel : `./${rel}`;
 }
 
@@ -24,7 +25,9 @@ export function callText(test: ProposedTest): string {
 /** Render one Vitest file for the tests of a single property. Every expected value is a spec-derived literal. */
 export function renderTestFile(file: string, propertyId: string, tests: ProposedTest[]): string {
   const first = tests[0];
+
   if (!first) throw new Error('no test to render');
+
   if (!IDENTIFIER.test(first.exportName) || tests.some((t) => t.exportName !== first.exportName)) {
     throw new Error(`cannot render tests for export ${JSON.stringify(first.exportName)}`);
   }
@@ -35,6 +38,7 @@ export function renderTestFile(file: string, propertyId: string, tests: Proposed
     "import { expect, it } from 'vitest';",
     `import { ${first.exportName} } from ${JSON.stringify(importSpecifier(file, first.module))};`,
   ];
+
   for (const t of tests) {
     const call = callText(t);
     const why = t.origin === 'survived_mutant' ? 'distinguishes a surviving mutant' : 'boundary of the rule';
@@ -45,6 +49,7 @@ export function renderTestFile(file: string, propertyId: string, tests: Proposed
       '});',
     );
   }
+
   return `${lines.join('\n')}\n`;
 }
 
@@ -53,6 +58,7 @@ export function unifiedDiff(files: PatchFile[]): string {
   return files
     .map((f) => {
       const lines = f.content.endsWith('\n') ? f.content.slice(0, -1).split('\n') : f.content.split('\n');
+
       return [
         `--- /dev/null`,
         `+++ b/${f.path}`,

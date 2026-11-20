@@ -40,10 +40,13 @@ interface Located {
 /** Walk up from `start` looking for `node_modules/@mizchi/mutator`, as Node's resolver would. */
 function findPackageDir(start: string): string | null {
   let dir = path.resolve(start);
+
   for (;;) {
     const candidate = path.join(dir, 'node_modules', '@mizchi', 'mutator', 'package.json');
+
     if (existsSync(candidate)) return path.dirname(candidate);
     const parent = path.dirname(dir);
+
     if (parent === dir) return null;
     dir = parent;
   }
@@ -53,11 +56,14 @@ function adapterPackageDir(): string | null {
   try {
     const entry = createRequire(import.meta.url).resolve('@mizchi/mutator');
     let dir = path.dirname(entry);
+
     while (!existsSync(path.join(dir, 'package.json'))) {
       const parent = path.dirname(dir);
+
       if (parent === dir) return null;
       dir = parent;
     }
+
     return dir;
   } catch {
     // Not installed next to the adapter: the caller reports the binary as unavailable.
@@ -72,11 +78,15 @@ function fromPackageDir(dir: string, origin: MutatorOrigin): Located | null {
       version?: string;
       bin?: string | Record<string, string>;
     };
+
     if (pkg.name !== '@mizchi/mutator') return null;
     const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.mutator;
+
     if (!bin) return null;
     const binPath = path.resolve(dir, bin);
+
     if (!existsSync(binPath)) return null;
+
     return { binPath, version: typeof pkg.version === 'string' ? pkg.version : null, origin };
   } catch {
     // An unreadable or malformed package.json means this candidate is not a usable mutator.
@@ -90,19 +100,24 @@ export function locateMutator(root: string, options: DetectOptions = {}): Locate
     if (!existsSync(options.binPath)) return null;
     const pkgDir = path.dirname(path.dirname(options.binPath));
     const fromPkg = fromPackageDir(pkgDir, 'explicit');
+
     return { binPath: path.resolve(options.binPath), version: fromPkg?.version ?? null, origin: 'explicit' };
   }
   const projectDir = findPackageDir(root);
   const project = projectDir ? fromPackageDir(projectDir, 'project') : null;
+
   if (project) return project;
+
   if (options.fallbackToAdapter === false) return null;
   const adapterDir = adapterPackageDir();
+
   return adapterDir ? fromPackageDir(adapterDir, 'adapter') : null;
 }
 
 /** Find mutator and confirm, from its own `--help`, which flags it supports. */
 export async function detectMutator(root: string, options: DetectOptions = {}): Promise<MutatorDetection> {
   const located = locateMutator(root, options);
+
   if (!located) {
     return {
       available: false,
@@ -121,8 +136,10 @@ export async function detectMutator(root: string, options: DetectOptions = {}): 
     timeoutMs: options.timeoutMs ?? 30_000,
   });
   const base = { version: located.version, binPath: located.binPath, origin: located.origin };
+
   if (help.spawnError || help.timedOut || help.exitCode !== 0) {
     const why = help.spawnError ?? (help.timedOut ? 'timed out' : `exit code ${help.exitCode}`);
+
     return {
       ...base,
       available: false,
@@ -139,6 +156,7 @@ export async function detectMutator(root: string, options: DetectOptions = {}): 
     located.version === PINNED_MUTATOR_VERSION
       ? `pinned version ${PINNED_MUTATOR_VERSION}`
       : `version ${located.version ?? 'unknown'} differs from the pinned ${PINNED_MUTATOR_VERSION}`;
+
   if (missing.length > 0) {
     return {
       ...base,
@@ -147,6 +165,7 @@ export async function detectMutator(root: string, options: DetectOptions = {}): 
       detail: `mutator at ${located.binPath} lacks required flags: ${missing.join(', ')} (${versionNote})`,
     };
   }
+
   return {
     ...base,
     available: true,
@@ -159,5 +178,6 @@ export async function detectMutator(root: string, options: DetectOptions = {}): 
 export function summarize(text: string, maxLines = 15, maxChars = 2000): string {
   const lines = text.trim().split('\n');
   const tail = lines.slice(-maxLines).join('\n');
+
   return tail.length > maxChars ? tail.slice(-maxChars) : tail;
 }

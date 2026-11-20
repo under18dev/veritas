@@ -45,6 +45,7 @@ export class OpenAiProvider implements LlmProvider {
     request: LlmRequest<S>,
   ): Promise<Omit<LlmResult<z.output<S>>, 'inputHash'>> {
     const base = { provider: this.name, model: this.model };
+
     try {
       const response = await this.client.responses.parse(
         {
@@ -64,10 +65,13 @@ export class OpenAiProvider implements LlmProvider {
       const refusal = response.output
         .flatMap((item) => (item.type === 'message' ? item.content : []))
         .find((part) => part.type === 'refusal');
+
       if (refusal) return { ...base, status: 'refused', data: null, usage, error: refusal.refusal };
+
       if (response.incomplete_details?.reason === 'max_output_tokens')
         return { ...base, status: 'truncated', data: null, usage, error: 'output reached max_output_tokens' };
       const parsed = request.schema.safeParse(response.output_parsed);
+
       if (!parsed.success)
         return {
           ...base,
@@ -76,15 +80,20 @@ export class OpenAiProvider implements LlmProvider {
           usage,
           error: 'output did not match the schema',
         };
+
       return { ...base, status: 'ok', data: parsed.data as z.output<S>, usage, error: null };
     } catch (error) {
       const usage = { inputTokens: 0, outputTokens: 0 };
+
       if (error instanceof OpenAI.AuthenticationError)
         return { ...base, status: 'unavailable', data: null, usage, error: 'invalid API key' };
+
       if (error instanceof OpenAI.RateLimitError)
         return { ...base, status: 'error', data: null, usage, error: 'rate limited' };
+
       if (error instanceof OpenAI.APIError)
         return { ...base, status: 'error', data: null, usage, error: `API error ${error.status}` };
+
       return {
         ...base,
         status: 'error',

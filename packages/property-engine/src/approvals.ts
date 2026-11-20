@@ -14,8 +14,10 @@ export const APPROVALS_FILE = path.join('.veritas', 'approvals.json');
 
 export function loadApprovals(root: string): ApprovalLedger {
   const file = resolveInsideRoot(root, APPROVALS_FILE);
+
   if (!existsSync(file)) return { schemaVersion: SCHEMA_VERSION, approvals: [] };
   const parsed = ApprovalLedger.safeParse(JSON.parse(readFileSync(file, 'utf8')));
+
   if (!parsed.success) {
     throw new VeritasError(
       'user',
@@ -24,6 +26,7 @@ export function loadApprovals(root: string): ApprovalLedger {
       'restore it from version control',
     );
   }
+
   return parsed.data;
 }
 
@@ -43,6 +46,7 @@ export function recordDecision(
       'an approval needs an actor',
       'pass --actor or set git user.name',
     );
+
   if (!reason.trim())
     throw new VeritasError('user', 'APPROVAL_REASON', 'an approval needs a reason', 'pass --reason "<why>"');
   const ledger = loadApprovals(root);
@@ -66,6 +70,7 @@ export function recordDecision(
   const file = resolveInsideRoot(root, APPROVALS_FILE);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(ledger, null, 2)}\n`);
+
   return approval;
 }
 
@@ -81,32 +86,41 @@ export interface AppliedApprovals {
  */
 export function applyApprovals(properties: Property[], ledger: ApprovalLedger): AppliedApprovals {
   const latest = new Map<string, Approval>();
+
   for (const a of ledger.approvals) latest.set(a.propertyId, a);
   const staleApprovals: Approval[] = [];
   const out = properties.map((p) => ({ ...p }));
   const byId = new Map(out.map((p) => [p.id, p]));
+
   for (const p of out) {
     const a = latest.get(p.id);
+
     if (!a) continue;
+
     if (a.propertyVersion !== p.version) {
       staleApprovals.push(a);
       continue;
     }
     p.reviewedBy = a.actor;
+
     if (a.decision === 'accept') p.status = 'accepted';
     else if (a.decision === 'reject') p.status = 'rejected';
     else if (a.decision === 'review' && p.status === 'proposed') p.status = 'reviewed';
     else if (a.decision === 'supersede') p.status = 'superseded';
   }
+
   for (const p of out) {
     if (p.status !== 'accepted') continue;
+
     for (const other of p.conflictsWith) {
       const peer = byId.get(other);
+
       if (peer && peer.status === 'conflicted') {
         peer.status = 'superseded';
         peer.supersededBy = p.id;
       }
     }
   }
+
   return { properties: out, staleApprovals };
 }

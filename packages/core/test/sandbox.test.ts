@@ -15,6 +15,7 @@ function project(source: string): { root: string; file: string } {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-sandbox-')));
   const file = path.join(root, 'mod.ts');
   writeFileSync(file, source);
+
   return { root, file };
 }
 
@@ -119,6 +120,7 @@ describe('sandboxed execution', () => {
     const runtime = sandboxRuntime();
     expect(result.isolation.network).toBe(runtime.networkIsolated);
     expect(runtime.networkIsolated).toBe(sandboxBlocksNetwork(runtime.version));
+
     if (runtime.networkIsolated) expect(result.results[0]).toEqual({ t: 'boolean', v: false });
     else expect(sandboxRefusal(runtime)).toMatch(/cannot block network access/);
   });
@@ -175,11 +177,13 @@ setInterval(() => {}, 1000);
       pids.filter((pid) => {
         try {
           process.kill(pid, 0);
+
           return true;
         } catch {
           return false;
         }
       });
+
     for (let i = 0; i < 50 && alive().length > 0; i++) await new Promise((r) => setTimeout(r, 100));
     expect(alive()).toEqual([]);
   }, 30_000);
@@ -199,6 +203,7 @@ describe('sandbox runtime', () => {
     // The newest Node.js this machine offers (this one, or the one CI names in VERITAS_SANDBOX_NODE).
     const newer = sandboxRuntime();
     const runtime = sandboxRuntime({ PATH: '', VERITAS_SANDBOX_NODE: newer.node }, old);
+
     if (newer.networkIsolated) {
       expect(runtime).toEqual({ node: newer.node, version: newer.version, networkIsolated: true });
       expect(sandboxRefusal(runtime)).toBeNull();

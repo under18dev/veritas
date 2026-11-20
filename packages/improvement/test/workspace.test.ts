@@ -27,6 +27,7 @@ describe('workspace and repository writes', () => {
     const root = project({ 'src/a.ts': 'x', '.veritas/runs/r/x.json': '{}', '.git/HEAD': 'ref' });
     mkdirSync(path.join(root, 'node_modules/dep'), { recursive: true });
     const ws = createWorkspace(root);
+
     try {
       expect(readFileSync(path.join(ws, 'src/a.ts'), 'utf8')).toBe('x');
       expect(existsSync(path.join(ws, '.veritas'))).toBe(false);

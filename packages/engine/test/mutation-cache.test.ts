@@ -13,7 +13,9 @@ function project(git = true): string {
   writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'p', type: 'module' }));
   writeFileSync(path.join(root, 'src/a.ts'), 'export const a = (x: number) => x > 1;\n');
   writeFileSync(path.join(root, 'test/a.test.ts'), "it('a', () => {});\n");
+
   if (git) execFileSync('git', ['init', '-q'], { cwd: root });
+
   return root;
 }
 
@@ -30,6 +32,7 @@ describe('mutation cache key', () => {
     mkdirSync(path.join(root, '.veritas/runs'), { recursive: true });
     writeFileSync(path.join(root, '.veritas/runs/x.json'), '{}');
     expect(mutationCacheKey(cache, root, selection)).toBe(key);
+
     // Nor are tool state directories, even when they are not ignored.
     for (const dir of ['.mutator', 'node_modules/.vite']) {
       mkdirSync(path.join(root, dir), { recursive: true });

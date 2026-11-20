@@ -14,11 +14,13 @@ export function resolveInsideRoot(root: string, candidate: string): string {
   const resolved = path.resolve(path.resolve(root), candidate);
   // The real location is authoritative: it normalizes `..`, symlinked prefixes and symlinks pointing outside.
   assertContained(realRoot, realpathOfExistingPrefix(resolved), candidate);
+
   return resolved;
 }
 
 function isContained(root: string, target: string): boolean {
   const rel = path.relative(root, target);
+
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
@@ -31,12 +33,14 @@ function assertContained(root: string, target: string, original: string): void {
 function realpathOfExistingPrefix(target: string): string {
   let current = target;
   const rest: string[] = [];
+
   for (;;) {
     try {
       return path.join(realpathSync(current), ...rest);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       const parent = path.dirname(current);
+
       if (parent === current) return target;
       rest.unshift(path.basename(current));
       current = parent;

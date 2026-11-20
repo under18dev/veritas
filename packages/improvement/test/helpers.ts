@@ -30,6 +30,7 @@ export const DISCOUNT_SOURCE = `export function discountAmount(total: number): n
 
 export function project(files: Record<string, string>): string {
   const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-improvement-')));
+
   for (const [file, content] of Object.entries({
     '.veritas/config.json': '{}\n',
     'package.json': '{ "type": "module" }\n',
@@ -38,6 +39,7 @@ export function project(files: Record<string, string>): string {
     mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
     writeFileSync(path.join(dir, file), content);
   }
+
   return dir;
 }
 
@@ -60,6 +62,7 @@ export function thresholdPropertyOf(options: {
     exportName: options.exportName,
     domain: DOMAIN,
   });
+
   if (translated.status !== 'translated') throw new Error(`cannot translate: ${JSON.stringify(translated)}`);
   const ir = thresholdProperty({
     implementation: translated,
@@ -70,6 +73,7 @@ export function thresholdPropertyOf(options: {
     ...(options.whenFalse === undefined ? {} : { whenFalse: options.whenFalse }),
     domain: DOMAIN,
   });
+
   return {
     id: stableId('P', { file: options.file, value: options.value, op: options.operator }),
     version: 1,
@@ -223,5 +227,6 @@ export function writeRun(root: string, input: RunInput, runId = 'run-20260101T00
     warnings: [],
   });
   store.write(ARTIFACTS.findings.file, ARTIFACTS.findings.schema, []);
+
   return runId;
 }

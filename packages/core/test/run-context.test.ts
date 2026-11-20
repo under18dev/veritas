@@ -47,6 +47,7 @@ describe('run context', () => {
 
   it('never writes a trace larger than its cap in UTF-8 bytes, truncation line included', () => {
     const trace = traceCollector(1000);
+
     for (let i = 0; i < 50; i++)
       trace.sink({ time: 't', level: 'debug', message: `事象 ${i} ${'あ'.repeat(30)}` });
     const text = trace.text();
@@ -57,6 +58,7 @@ describe('run context', () => {
   it('stays within even a tiny cap', () => {
     for (const cap of [100, 200]) {
       const trace = traceCollector(cap);
+
       for (let i = 0; i < 10; i++) trace.sink({ time: 't', level: 'debug', message: `event ${i}` });
       expect(Buffer.byteLength(trace.text(), 'utf8')).toBeLessThanOrEqual(cap);
     }
@@ -64,6 +66,7 @@ describe('run context', () => {
 
   it('keeps a bounded trace and says how many events it dropped', () => {
     const trace = traceCollector(400);
+
     for (let i = 0; i < 20; i++) trace.sink({ time: 't', level: 'debug', message: `event ${i}` });
     const lines = trace.text().trim().split('\n');
     expect(lines.length).toBeLessThan(20);

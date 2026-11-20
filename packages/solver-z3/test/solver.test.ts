@@ -147,6 +147,7 @@ describe('Z3 (wasm) execution', () => {
     const smt = conformanceQuery(boundaryIR('>'), 5000);
     const run = await solveSmtLib(smt, { timeoutMs: 1 });
     expect(['timeout', 'sat']).toContain(run.verdict);
+
     if (run.verdict === 'timeout') expect(run.error).toMatch(/wall-clock/);
   }, 60_000);
 

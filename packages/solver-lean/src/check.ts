@@ -111,6 +111,7 @@ function scanSources(dir: string): SourceScan {
         continue;
       }
       const isLean = entry.name.endsWith('.lean');
+
       if (!isLean && relPath !== 'lakefile.toml') continue;
       const raw = readFileSync(path.join(dir, relPath), 'utf8');
       // Lean sources are judged without comments and string literals, over the whole file, so a command split
@@ -118,30 +119,39 @@ function scanSources(dir: string): SourceScan {
       const text = isLean ? stripLean(raw) : raw;
       const lineAt = (offset: number) => text.slice(0, offset).split('\n').length;
       const tokens = [...(isLean ? text.matchAll(FORBIDDEN) : []), ...text.matchAll(KERNEL_BYPASS)];
+
       for (const match of tokens)
         findings.push(`${relPath}:${lineAt(match.index ?? 0)}: forbidden token \`${match[0]}\``);
+
       if (!isLean) continue;
+
       if (relPath === 'lakefile.lean') continue;
       leanTexts.push({ relPath, text });
       const segments = relPath.slice(0, -'.lean'.length).split('/');
+
       if (segments.every((s) => MODULE_SEGMENT.test(s))) modules.push(segments.join('.'));
     }
   };
   walk('');
+
   // Imports: only the project's own modules and the core library; options: only the allowlisted ones.
   for (const { relPath, text } of leanTexts) {
     const lineAt = (offset: number) => text.slice(0, offset).split('\n').length;
+
     for (const m of text.matchAll(/(?<![\p{L}\p{N}_'.])import\s+(?:runtime\s+)?(\S+)/gu)) {
       const mod = (m[1] ?? '').replace(/[«»]/g, '');
+
       if (!modules.includes(mod) && !ALLOWED_IMPORT_ROOTS.has(mod.split('.')[0] ?? ''))
         findings.push(
           `${relPath}:${lineAt(m.index ?? 0)}: import of \`${mod}\` is not allowed (only the project's modules, Init and Std)`,
         );
     }
+
     for (const m of text.matchAll(/(?<![\p{L}\p{N}_'.])set_option\s+(\S+)/gu))
       if (!ALLOWED_OPTIONS.has(m[1] ?? ''))
         findings.push(`${relPath}:${lineAt(m.index ?? 0)}: \`set_option ${m[1]}\` is not allowed`);
   }
+
   return { modules, findings };
 }
 
@@ -157,9 +167,11 @@ export function stripLean(source: string): string {
   };
   const identChar = (ch: string | undefined) => ch !== undefined && /[\p{L}\p{N}_'!?]/u.test(ch);
   let i = 0;
+
   while (i < source.length) {
     const ch = source[i] as string;
     const next = source[i + 1];
+
     if (ch === '-' && next === '-') {
       const end = source.indexOf('\n', i);
       const stop = end === -1 ? source.length : end;
@@ -168,6 +180,7 @@ export function stripLean(source: string): string {
     } else if (ch === '/' && next === '-') {
       let depth = 0;
       let j = i;
+
       while (j < source.length) {
         if (source[j] === '/' && source[j + 1] === '-') {
           depth++;
@@ -175,6 +188,7 @@ export function stripLean(source: string): string {
         } else if (source[j] === '-' && source[j + 1] === '/') {
           depth--;
           j += 2;
+
           if (depth === 0) break;
         } else j++;
       }
@@ -184,12 +198,15 @@ export function stripLean(source: string): string {
       const hashes = (/^r(#*)"/.exec(source.slice(i, i + 260))?.[1] ?? '').length;
       const close = `"${'#'.repeat(hashes)}`;
       const end = source.indexOf(close, i + 2 + hashes);
+
       if (end === -1) break; // unterminated: keep the rest as code
       blank(i, end + close.length);
       i = end + close.length;
     } else if (ch === '"') {
       let j = i + 1;
+
       while (j < source.length && source[j] !== '"') j += source[j] === '\\' ? 2 : 1;
+
       if (j >= source.length) break; // unterminated: keep the rest as code
       blank(i, j + 1);
       i = j + 1;
@@ -198,12 +215,14 @@ export function stripLean(source: string): string {
       const literal = /^'(?:\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|.)|[^\\'\n])'/u.exec(
         source.slice(i, i + 12),
       );
+
       if (literal) {
         blank(i, i + literal[0].length);
         i += literal[0].length;
       } else i++;
     } else i++;
   }
+
   return out.join('');
 }
 
@@ -221,8 +240,10 @@ export function parseAxioms(output: string): Record<string, string[]> {
   const add = (name: string, axioms: string[]) => {
     const key = stripQuotes(name);
     result[key] ??= new Set();
+
     for (const a of axioms) result[key].add(stripQuotes(a));
   };
+
   for (const m of output.matchAll(/'([^'\n]+)' depends on axioms: \[([^\]]*)\]/g)) {
     add(
       m[1] as string,
@@ -232,14 +253,18 @@ export function parseAxioms(output: string): Record<string, string[]> {
         .filter(Boolean),
     );
   }
+
   for (const m of output.matchAll(/'([^'\n]+)' does not depend on any axioms/g)) add(m[1] as string, []);
+
   return Object.fromEntries(Object.entries(result).map(([k, v]) => [k, [...v].sort()]));
 }
 
 function describeAxiom(name: string): string {
   if (name === 'sorryAx') return 'sorryAx (the proof contains `sorry`/`admit` or an elaboration error)';
+
   if (name === 'Lean.ofReduceBool' || name === 'Lean.trustCompiler' || /\._native\.|native_decide/.test(name))
     return `${name} (native_decide / compiler-trusted evaluation)`;
+
   return `${name} (not one of Lean's standard axioms)`;
 }
 
@@ -268,30 +293,39 @@ export async function checkLeanProject(dir: string, options: CheckLeanProjectOpt
 
   if (options.theorems.length === 0) {
     reasons.push('no theorems to check');
+
     return result('error', {}, null);
   }
   const badName = options.theorems.find((t) => !THEOREM.test(t));
+
   if (badName !== undefined) {
     reasons.push(`invalid theorem name ${JSON.stringify(badName)}`);
+
     return result('error', {}, null);
   }
   let scan: SourceScan;
+
   try {
     scan = scanSources(dir);
   } catch (error) {
     reasons.push(`cannot read the project: ${(error as Error).message}`);
+
     return result('error', {}, null);
   }
   const rejectedBySource = scan.findings.length > 0;
   reasons.push(...scan.findings);
+
   if (scan.modules.length === 0) {
     reasons.push('no Lean modules found');
+
     return result(rejectedBySource ? 'rejected' : 'error', {}, null);
   }
 
   const lean = options.installation ?? (await detectLean(options));
+
   if (!lean.available || !lean.lake) {
     reasons.push(`Lean unavailable: ${lean.detail}`);
+
     return result(rejectedBySource ? 'rejected' : 'unavailable', {}, lean.version);
   }
   const binDir = path.dirname(lean.lean as string);
@@ -308,20 +342,28 @@ export async function checkLeanProject(dir: string, options: CheckLeanProjectOpt
   const failure = (step: string, r: CommandResult): LeanCheckStatus | null => {
     if (r.timedOut) {
       reasons.push(`${step} timed out after ${r.durationMs} ms`);
+
       return 'timeout';
     }
+
     if (options.signal?.aborted) {
       reasons.push(`${step} was cancelled`);
+
       return 'error';
     }
+
     if (r.spawnError) {
       reasons.push(`${step} could not start: ${r.spawnError}`);
+
       return 'error';
     }
+
     if (r.exitCode !== 0) {
       reasons.push(`${step} failed with exit code ${r.exitCode ?? `signal ${r.signal}`}`);
+
       return 'failed';
     }
+
     return null;
   };
   const final = (status: LeanCheckStatus, axioms: Record<string, string[]> = {}) =>
@@ -331,18 +373,22 @@ export async function checkLeanProject(dir: string, options: CheckLeanProjectOpt
   stdout += `$ lake build\n${build.stdout}`;
   stderr += build.stderr;
   const buildFailure = failure('lake build', build);
+
   if (buildFailure) {
     const errors = `${build.stdout}\n${build.stderr}`
       .split('\n')
       .filter((l) => /error/i.test(l))
       .slice(0, 20);
     reasons.push(...errors.map((l) => l.trim()));
+
     return final(buildFailure);
   }
 
   const remaining = options.timeoutMs - (Date.now() - started);
+
   if (remaining <= 0) {
     reasons.push('time budget exhausted before the axiom audit');
+
     return final('timeout');
   }
   const sentinel = `veritas-axiom-audit-${randomBytes(12).toString('hex')}`;
@@ -366,6 +412,7 @@ export async function checkLeanProject(dir: string, options: CheckLeanProjectOpt
   const relevant = Object.fromEntries(
     options.theorems.flatMap((t) => (axioms[t] ? [[t, axioms[t]] as const] : [])),
   );
+
   if (checkFailure) {
     reasons.push(
       ...`${check.stdout}\n${check.stderr}`
@@ -374,14 +421,18 @@ export async function checkLeanProject(dir: string, options: CheckLeanProjectOpt
         .slice(0, 20)
         .map((l) => l.trim()),
     );
+
     return final(checkFailure, relevant);
   }
+
   if (!check.stdout.includes(sentinel)) {
     reasons.push('the axiom audit did not run to completion');
+
     return final('failed', relevant);
   }
   let missing = false;
   let disallowed = false;
+
   for (const theorem of options.theorems) {
     if (!(theorem in axioms)) {
       reasons.push(`no axiom report for ${theorem}`);
@@ -389,10 +440,12 @@ export async function checkLeanProject(dir: string, options: CheckLeanProjectOpt
       continue;
     }
     const extra = (axioms[theorem] ?? []).filter((a) => !(ALLOWED_AXIOMS as readonly string[]).includes(a));
+
     if (extra.length > 0) {
       reasons.push(`${theorem} depends on ${extra.map(describeAxiom).join(', ')}`);
       disallowed = true;
     }
   }
+
   return final(disallowed ? 'rejected' : missing ? 'failed' : 'kernel_checked', relevant);
 }

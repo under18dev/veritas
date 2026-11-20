@@ -16,11 +16,17 @@ type Encoded =
 
 function encode(value: unknown): Encoded {
   if (typeof value === 'number') return { t: 'number', v: Object.is(value, -0) ? '-0' : String(value) };
+
   if (typeof value === 'boolean') return { t: 'boolean', v: value };
+
   if (typeof value === 'string') return { t: 'string', v: value };
+
   if (typeof value === 'bigint') return { t: 'bigint', v: value.toString() };
+
   if (value === undefined) return { t: 'undefined' };
+
   if (value === null) return { t: 'null' };
+
   return { t: 'other', v: Object.prototype.toString.call(value) };
 }
 
@@ -46,10 +52,12 @@ function decode(arg: Encoded): unknown {
 }
 
 let input = '';
+
 for await (const chunk of process.stdin) input += chunk;
 const job = JSON.parse(input) as { module: string; exportName: string; calls: Encoded[][] };
 const mod = (await import(pathToFileURL(job.module).href)) as Record<string, unknown>;
 const fn = mod[job.exportName];
+
 if (typeof fn !== 'function') {
   process.stdout.write(JSON.stringify({ ok: false, error: `export ${job.exportName} is not a function` }));
 } else {

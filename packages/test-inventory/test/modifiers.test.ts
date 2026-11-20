@@ -20,7 +20,9 @@ describe('Vitest registration modifiers', () => {
     const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
     const byName = (name: string) => {
       const test = inventory.tests.find((candidate) => candidate.name === name);
+
       if (!test) throw new Error(`missing test: ${name}`);
+
       return test;
     };
 
@@ -46,6 +48,7 @@ describe('Vitest registration modifiers', () => {
     });
     const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
     const testCase = inventory.tests.at(0);
+
     if (!testCase) throw new Error('missing generated test');
 
     expect(testCase.suitePath).toEqual(['generated']);

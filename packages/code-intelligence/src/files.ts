@@ -30,11 +30,13 @@ export function selectFiles(root: string, config: VeritasConfig, explicit?: stri
   const diagnostics: Selection['diagnostics'] = [];
   const excluded = [...config.analysis.exclude, ...ALWAYS_EXCLUDED];
   let candidates: string[];
+
   if (explicit) {
     candidates = explicit.map((file) => {
       if (path.isAbsolute(file) || path.win32.isAbsolute(file)) {
         throw new VeritasError('user', 'PATH_NOT_RELATIVE', `expected a project-relative path: ${file}`);
       }
+
       return path.posix.normalize(toPosix(file));
     });
   } else {
@@ -43,11 +45,13 @@ export function selectFiles(root: string, config: VeritasConfig, explicit?: stri
 
   const seen = new Set<string>();
   const files: SelectedFile[] = [];
+
   for (const file of [...candidates].sort()) {
     if (seen.has(file)) continue;
     seen.add(file);
     // Throws for traversal and symlinks escaping the root; explicit paths are user input.
     let absolute: string;
+
     try {
       absolute = resolveInsideRoot(root, file);
     } catch (error) {
@@ -55,19 +59,23 @@ export function selectFiles(root: string, config: VeritasConfig, explicit?: stri
       diagnostics.push({ file, message: `skipped: ${(error as Error).message}` });
       continue;
     }
+
     if (!SOURCE_EXTENSIONS.test(file) || DECLARATION_FILE.test(file)) {
       if (explicit) diagnostics.push({ file, message: 'skipped: not a TypeScript/JavaScript source file' });
       continue;
     }
+
     if (matchesAny(file, config.analysis.testInclude)) {
       if (explicit) diagnostics.push({ file, message: 'skipped: test file, not analyzed as source' });
       continue;
     }
+
     if (matchesAny(file, excluded)) {
       if (explicit) diagnostics.push({ file, message: 'skipped: matches analysis.exclude' });
       continue;
     }
     let content: string;
+
     try {
       if (!statSync(absolute).isFile()) {
         diagnostics.push({ file, message: 'skipped: not a regular file' });
@@ -83,5 +91,6 @@ export function selectFiles(root: string, config: VeritasConfig, explicit?: stri
     }
     files.push({ path: file, absolute, content });
   }
+
   return { files, diagnostics };
 }

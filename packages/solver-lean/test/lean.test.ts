@@ -51,7 +51,9 @@ function discountIR(relativeFile: string): PropertyIR {
     exportName: 'discountAmount',
     domain: { min: '-1000000', max: '1000000' },
   });
+
   if (translated.status !== 'translated') throw new Error(`translation failed: ${translated.status}`);
+
   return thresholdProperty({
     implementation: translated,
     param: 'total',
@@ -74,6 +76,7 @@ function project(source: string): string {
     'name = "proj"\ndefaultTargets = ["Proj"]\n\n[[lean_lib]]\nname = "Proj"\n',
   );
   writeFileSync(path.join(dir, 'Proj.lean'), source);
+
   return dir;
 }
 
@@ -87,6 +90,7 @@ describe('irToLean', () => {
       exportName: 'pay',
       domain: { min: '-10', max: '10' },
     });
+
     if (t.status !== 'translated') throw new Error(JSON.stringify(t));
     const ir = thresholdProperty({
       implementation: t,
@@ -269,6 +273,7 @@ describe('checkLeanProject (real Lean)', () => {
       const check = await checkLeanProject(dir, { theorems: ['ok', 'ok2'], timeoutMs: LEAN_TIMEOUT });
       expect(LeanCheck.parse(check).status).toBe('kernel_checked');
       expect(check.leanVersion).toMatch(/^Lean/);
+
       for (const axioms of Object.values(check.axioms)) {
         expect(axioms.every((a) => (ALLOWED_AXIOMS as readonly string[]).includes(a))).toBe(true);
       }
@@ -379,6 +384,7 @@ describe('checkLeanProject (real Lean)', () => {
       ['import Mathlib\ntheorem ok : 1 = 1 := rfl\n', /import of `Mathlib` is not allowed/],
       ['import Lean.Elab\ntheorem ok : 1 = 1 := rfl\n', /import of `Lean\.Elab` is not allowed/],
     ];
+
     for (const [source, reason] of cases) {
       const check = await checkLeanProject(project(source), {
         theorems: ['ok'],
@@ -410,6 +416,7 @@ describe('checkLeanProject (real Lean)', () => {
       ['def c := \'"\'\ntheorem ok : 1 = 1 := by sorry\ndef d := "x"\n', /`sorry`/],
       ['/- outer /- inner -/ still comment -/ #eval 1\ntheorem ok : 1 = 1 := rfl\n', /`#eval`/],
     ];
+
     for (const [source, reason] of rejected) {
       const result = await check(source);
       expect(result.status, source).toBe('rejected');

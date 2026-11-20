@@ -40,5 +40,6 @@ export function prove(options: StageOptions): Promise<RunSummary> {
 /** Run the whole pipeline for a profile (`veritas run`). */
 export function run(options: StageOptions & { profile?: Profile }): Promise<RunSummary> {
   const profile = options.profile ?? 'standard';
+
   return runVeritas({ ...options, profile, command: 'run', stages: [...PROFILE_STAGES[profile]] });
 }

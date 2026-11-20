@@ -67,6 +67,7 @@ export class ClaudeCodeProvider implements LlmProvider {
     const base = { provider: this.name, model: this.model };
     const empty = { inputTokens: 0, outputTokens: 0 };
     const cwd = mkdtempSync(path.join(tmpdir(), 'veritas-claude-code-'));
+
     try {
       const args = [
         '-p',
@@ -85,6 +86,7 @@ export class ClaudeCodeProvider implements LlmProvider {
         ...(this.explicitModel ? ['--model', this.explicitModel] : []),
       ];
       const resolved = resolveCommand(this.command);
+
       if (!resolved)
         return {
           ...base,
@@ -100,6 +102,7 @@ export class ClaudeCodeProvider implements LlmProvider {
         input: renderPrompt(request),
         ...(request.signal ? { signal: request.signal } : {}),
       });
+
       if (run.spawnError)
         return {
           ...base,
@@ -108,13 +111,16 @@ export class ClaudeCodeProvider implements LlmProvider {
           usage: empty,
           error: `cannot run ${this.command}: ${run.spawnError}`,
         };
+
       if (run.timedOut)
         return { ...base, status: 'error', data: null, usage: empty, error: `${this.command} timed out` };
       let parsed: ClaudeCodeResult;
+
       try {
         parsed = JSON.parse(run.stdout) as ClaudeCodeResult;
       } catch {
         const detail = (run.stderr || run.stdout).trim().split('\n').slice(-3).join(' ');
+
         return {
           ...base,
           status: run.exitCode === 0 ? 'invalid_output' : 'error',
@@ -129,16 +135,21 @@ export class ClaudeCodeProvider implements LlmProvider {
           (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0),
         outputTokens: u.output_tokens ?? 0,
       };
+
       if (parsed.is_error || parsed.subtype !== 'success') {
         const message = parsed.result ?? parsed.subtype ?? 'error';
         const loggedOut = /log ?in|auth|credential/i.test(message);
+
         return { ...base, status: loggedOut ? 'unavailable' : 'error', data: null, usage, error: message };
       }
+
       if (parsed.stop_reason === 'refusal')
         return { ...base, status: 'refused', data: null, usage, error: 'refused' };
+
       if (parsed.stop_reason === 'max_tokens')
         return { ...base, status: 'truncated', data: null, usage, error: 'output reached max_tokens' };
       const result = request.schema.safeParse(parsed.structured_output);
+
       if (!result.success)
         return {
           ...base,
@@ -147,6 +158,7 @@ export class ClaudeCodeProvider implements LlmProvider {
           usage,
           error: 'output did not match the schema',
         };
+
       return { ...base, status: 'ok', data: result.data as z.output<S>, usage, error: null };
     } finally {
       rmSync(cwd, { recursive: true, force: true });

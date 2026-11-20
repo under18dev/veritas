@@ -21,11 +21,13 @@ function snapshot(dir: string): Record<string, string> {
     for (const entry of readdirSync(path.join(dir, rel), { withFileTypes: true })) {
       if (['.veritas', '.mutator', 'node_modules', '.git'].includes(entry.name)) continue;
       const child = rel ? `${rel}/${entry.name}` : entry.name;
+
       if (entry.isDirectory()) walk(child);
       else out[child] = readFileSync(path.join(dir, child), 'utf8');
     }
   };
   walk('');
+
   return out;
 }
 
@@ -41,7 +43,9 @@ function hostileProject(): string {
     pricing,
     readFileSync(pricing, 'utf8').replace('/** Flat discount applied at checkout. */', `/** ${HOSTILE} */`),
   );
+
   if (runCli(['init', '--yes'], dir).status !== 0) throw new Error('init failed');
+
   return dir;
 }
 
@@ -65,6 +69,7 @@ describe('instructions inside collected content', () => {
         env: getDefaultEnvironment(),
       }),
     );
+
     try {
       for (const name of ['discover_specs', 'list_properties', 'analyze_tests'])
         expect((await client.callTool({ name, arguments: {} })).isError, name).not.toBe(true);
@@ -83,6 +88,7 @@ describe('instructions inside collected content', () => {
     expect(evidence.networkRequests).toBe(0);
     const hostile = evidence.statements.filter((s) => /ignore previous instructions/i.test(s.quote));
     expect(hostile.length).toBeGreaterThanOrEqual(2);
+
     for (const s of hostile) expect(s.flags).toContain('instruction_like');
     const properties = read('properties.json').properties as {
       status: string;
@@ -94,12 +100,14 @@ describe('instructions inside collected content', () => {
     const fromHostile = properties.filter((p) =>
       p.statementIds.some((id) => hostile.some((s) => s.id === id)),
     );
+
     for (const p of fromHostile) {
       expect(p.experimental).toBe(true);
       expect(p.assumptions.join(' ')).toMatch(/instruction-like content; treated as data only/);
     }
     // The policy is the configured one: the text asked for inconclusive runs to pass, and they do not.
     const run = read('run.json') as { verdict: string; stages: { status: string }[] };
+
     if (run.stages.some((s) => s.status !== 'succeeded')) expect(run.verdict).not.toBe('pass');
   }, 300_000);
 
@@ -123,6 +131,7 @@ describe('instructions inside collected content', () => {
       fetch: async (input) => {
         const url = String(input);
         requested.push(url);
+
         if (url.startsWith('https://api.github.com/'))
           return Response.json([
             {
@@ -132,6 +141,7 @@ describe('instructions inside collected content', () => {
               body: HOSTILE,
             },
           ]);
+
         if (url === 'https://docs.example.test/rules')
           return new Response(`<p>${HOSTILE}</p><a href="https://evil.test/x">x</a>`);
         throw new Error(`unexpected request ${url}`);
@@ -146,7 +156,9 @@ describe('instructions inside collected content', () => {
     expect(new Set(hostile.map((s) => discovery.sources.find((x) => x.id === s.sourceId)?.kind))).toEqual(
       new Set(['issue', 'web']),
     );
+
     for (const s of hostile) expect(s.flags).toContain('instruction_like');
+
     for (const source of discovery.sources) expect(source.trust).toBe('untrusted_data');
     const registry = buildRegistry({
       discovery,

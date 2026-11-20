@@ -77,11 +77,13 @@ function optional<N extends ArtifactName>(root: string, runId: string, name: N):
 
 function scalarInput(raw: Record<string, unknown>): Record<string, ScalarValue> | null {
   const out: Record<string, ScalarValue> = {};
+
   for (const [k, v] of Object.entries(raw)) {
     if (typeof v === 'boolean' || (typeof v === 'string' && /^-?\d+$/.test(v))) out[k] = v;
     else if (typeof v === 'number' && Number.isSafeInteger(v)) out[k] = String(v);
     else return null;
   }
+
   return out;
 }
 
@@ -95,29 +97,38 @@ export function boundaryValues(operator: string, value: string): string[] {
     '<': [v - 1n, v],
     '==': [v - 1n, v, v + 1n],
   };
+
   return (around[operator] ?? []).map(String);
 }
 
 function sameScalar(expected: ScalarValue, js: EncodedValue | undefined): boolean {
   if (!js) return false;
+
   if (typeof expected === 'boolean') return js.t === 'boolean' && js.v === expected;
+
   return js.t === 'number' && js.v === expected;
 }
 
 function describeEncoded(js: EncodedValue | undefined): string {
   if (!js) return 'no result';
+
   if (js.t === 'undefined' || js.t === 'null') return js.t;
+
   if (js.t === 'throw') return `throws ${js.v}`;
+
   return String(js.v);
 }
 
 /** Where new test files go: the most common top-level directory of existing test files, else `test`. */
 function testDirectory(tests: TestCase[]): string {
   const counts = new Map<string, number>();
+
   for (const t of tests) {
     const parts = t.file.split('/');
+
     if (parts.length > 1 && parts[0]) counts.set(parts[0], (counts.get(parts[0]) ?? 0) + 1);
   }
+
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? 'test';
 }
 
@@ -141,6 +152,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
   const loaded = await loadConfig(root, { allowCodeConfig: options.allowCodeConfig ?? false });
   const config = loaded.config;
   const runId = options.runId ?? latestRunWith(root, 'findings');
+
   if (!runId) {
     throw new VeritasError(
       'user',
@@ -150,6 +162,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
     );
   }
   const maxIterations = options.maxIterations ?? config.improvement.maxIterations;
+
   if (!Number.isInteger(maxIterations) || maxIterations < 1 || maxIterations > 20) {
     throw new VeritasError('user', 'BUDGET_INVALID', 'max iterations must be an integer from 1 to 20');
   }
@@ -173,7 +186,9 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
   const findings = optional(root, runId, 'findings') ?? [];
   const reasons: string[] = [];
   const skipped: SkippedTarget[] = [];
+
   if (!mutation) reasons.push(`run ${runId} has no mutation results; only boundary gaps were considered`);
+
   if (!testMap) reasons.push(`run ${runId} has no test map; boundary coverage of existing tests is unknown`);
 
   const staleStatements = new Set(mapping.filter((m) => m.status === 'stale').map((m) => m.statementId));
@@ -182,27 +197,36 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
   /** Why a property cannot supply expected values, or null when it can. */
   const ineligible = (p: Property): string | null => {
     if (!p.ir) return 'the property has no formal model';
+
     if (p.status === 'rejected' || p.status === 'superseded') return `the property is ${p.status}`;
+
     if (p.status !== 'accepted' && p.status !== 'conflicted' && !includeProposed) {
       return `${UNACCEPTED}: the property is ${p.status}; accept it with \`veritas spec accept ${p.id}\` or pass --include-proposed`;
     }
+
     if (p.origin === 'inferred' || p.origin === 'observed') {
       return `the property is ${p.origin} from the implementation; it cannot supply expected values`;
     }
+
     if (p.statementIds.length > 0 && p.statementIds.every((s) => staleStatements.has(s))) {
       return 'every source statement of the property is marked stale';
     }
+
     if (p.targetSymbols.length !== 1) return 'the property does not target exactly one function';
+
     if (p.ir.functions.some((f) => f.jsParams?.some((j) => j.kind !== 'scalar')))
       return 'the function takes a record or array; generated tests cover integer and boolean parameters only';
+
     return null;
   };
 
   // 1. Collect targets.
   const targets: Target[] = [];
+
   for (const m of mutation?.mutants ?? []) {
     if (m.status !== 'survived' || m.relevance !== 'spec_relevant') continue;
     const claim = claims.find((c) => c.kind === 'bounded_equivalence' && c.mutantId === m.id);
+
     if (claim?.status !== 'counterexample_found' || !claim.counterexample) {
       skipped.push({
         propertyId: claim?.propertyId ?? null,
@@ -215,6 +239,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
     }
     const property = byId.get(claim.propertyId);
     const input = scalarInput(claim.counterexample);
+
     if (!property || !input) {
       skipped.push({
         propertyId: claim.propertyId,
@@ -233,6 +258,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
       gap: `${m.original} -> ${m.replacement} at ${m.location.file}:${m.location.range?.start ?? '?'} survives every test; ${JSON.stringify(input)} distinguishes it (${claim.id})`,
     });
   }
+
   for (const p of properties) {
     if (!p.ir || !p.predicate || p.ir.params.length !== 1) continue;
     const symbol = p.targetSymbols[0];
@@ -243,6 +269,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
           .map((c) => c.args[0] as string),
       ),
     );
+
     for (const value of boundaryValues(p.predicate.operator, p.predicate.value)) {
       if (testMap && covered.has(value)) continue;
       const input = { [p.predicate.param]: value };
@@ -262,13 +289,16 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
   // 2. Drop properties that cannot supply expected values; stop on any specification conflict.
   const stops: string[] = [];
   const usable: Target[] = [];
+
   for (const t of targets) {
     const why = ineligible(t.property);
+
     if (why) {
       skipped.push({ propertyId: t.property.id, mutantId: t.mutant?.id, input: t.input, reason: why });
       continue;
     }
     const conflict = conflictOf(t.property, conflicts);
+
     if (t.property.status === 'conflicted' || conflict) {
       stops.push(conflictReason(t.property, conflict, byId));
       continue;
@@ -290,9 +320,11 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
     runSourceHash: propertiesArtifact.meta.sourceHash,
   };
   const unaccepted = skipped.filter((x) => x.reason.startsWith(UNACCEPTED));
+
   if (usable.length === 0 && unaccepted.length > 0) {
     stops.push(...[...new Set(unaccepted.map((x) => x.reason))]);
   }
+
   if (stops.length > 0) {
     return finish(root, context, {
       ...budgetedDoc,
@@ -313,6 +345,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
 
   // 3. Expected values from the specification model only.
   const tests = new Map<string, ProposedTest>();
+
   for (const t of usable) {
     const p = t.property;
     const ir = p.ir as NonNullable<Property['ir']>;
@@ -322,10 +355,12 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
       // A value the formalizer only assumed (not stated by the source) is not used as an expected value.
       exclude: (c: SpecClause) => assumedNegative && c.guard?.kind === 'unary' && c.guard.op === 'not',
     });
+
     if (expectation.status !== 'expected') {
       skipped.push({ propertyId: p.id, mutantId: t.mutant?.id, input: t.input, reason: expectation.reason });
       continue;
     }
+
     if (expectation.clause.fn !== exportName) {
       skipped.push({
         propertyId: p.id,
@@ -335,6 +370,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
       continue;
     }
     const key = canonicalJson({ p: p.id, input: t.input });
+
     if (tests.has(key)) continue;
     tests.set(key, {
       id: stableId('PT', { propertyId: p.id, input: t.input }),
@@ -361,13 +397,16 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
   const candidates: SpecViolationCandidate[] = [];
   const proposals: ImplementationFixProposal[] = [];
   const byModule = new Map<string, ProposedTest[]>();
+
   for (const t of tests.values()) {
     const k = `${t.module}#${t.exportName}`;
     byModule.set(k, [...(byModule.get(k) ?? []), t]);
   }
+
   for (const group of byModule.values()) {
     const first = group[0] as ProposedTest;
     let modulePath: string;
+
     try {
       modulePath = resolveInsideRoot(root, first.module);
     } catch (error) {
@@ -383,6 +422,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
           calls: group.map((t) =>
             t.params.map((name): EncodedValue => {
               const v = t.input[name] as ScalarValue;
+
               return typeof v === 'boolean' ? { t: 'boolean', v } : { t: 'number', v };
             }),
           ),
@@ -391,8 +431,10 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
           ...(options.signal ? { signal: options.signal } : {}),
         })
       : null;
+
     if (sandbox?.status !== 'ok') {
       const why = sandbox ? `${sandbox.status}: ${sandbox.error}` : `${first.module} does not exist`;
+
       for (const t of group) {
         skipped.push({
           propertyId: t.propertyId,
@@ -404,8 +446,10 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
     }
     group.forEach((t, i) => {
       const actual = sandbox.results[i];
+
       if (sameScalar(t.expected, actual)) {
         passing.push(t);
+
         return;
       }
       const candidateId = stableId('SVC', { test: t.id, actual });
@@ -441,13 +485,16 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
   // 5. One new file per property, within the file budget.
   const dir = testDirectory(testMap?.tests ?? []);
   const perProperty = new Map<string, ProposedTest[]>();
+
   for (const t of passing) perProperty.set(t.propertyId, [...(perProperty.get(t.propertyId) ?? []), t]);
   const files: PatchFile[] = [];
   const planned: ProposedTest[] = [];
   const fileByTest = new Map<string, string>();
+
   for (const [propertyId, group] of perProperty) {
     const ext = /\.(m|c)?tsx?$/.test(group[0]?.module ?? '') ? 'ts' : 'js';
     const file = `${dir}/veritas-${propertyId}.test.${ext}`;
+
     if (files.length >= budget.maxPatchFiles) {
       for (const t of group)
         skipped.push({
@@ -457,6 +504,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
         });
       continue;
     }
+
     if (existsSync(path.join(root, file))) {
       for (const t of group)
         skipped.push({
@@ -467,6 +515,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
       continue;
     }
     files.push({ operation: 'add', path: file, content: renderTestFile(file, propertyId, group) });
+
     for (const t of group) fileByTest.set(t.id, file);
     planned.push(...group);
   }
@@ -477,9 +526,12 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
     implementationFixProposals: proposals,
     skipped,
   };
+
   for (const c of candidates) reasons.push(`spec violation candidate: ${c.reason}`);
+
   if (planned.length === 0) {
     const outcome: PlanOutcome = candidates.length > 0 ? 'needs_spec_decision' : 'no_safe_improvement';
+
     return finish(root, context, {
       ...common,
       outcome,
@@ -502,6 +554,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
     maxPatchFiles: budget.maxPatchFiles,
   });
   const plan = buildPlan(planned, fileByTest, files, budget, usable, byId);
+
   if (problems.length > 0) {
     return finish(root, context, {
       ...common,
@@ -512,6 +565,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
       reasons: ['the generated patch fails the safety checks', ...problems, ...reasons],
     });
   }
+
   return finish(root, context, {
     ...common,
     outcome: 'planned',
@@ -524,6 +578,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
 
 function findingFor(findings: Finding[], match: (f: Finding) => boolean): { finding?: Finding } {
   const finding = findings.find(match);
+
   return finding ? { finding } : {};
 }
 
@@ -538,6 +593,7 @@ function conflictReason(p: Property, conflict: Conflict | undefined, byId: Map<s
   const members = conflict.propertyIds
     .map((id) => `${id} (${byId.get(id)?.citations.join(', ') || byId.get(id)?.description || 'unknown'})`)
     .join(' vs ');
+
   return `conflict ${conflict.id} on ${conflict.symbol} (${conflict.param}): ${members}; ${conflict.rationale.join('; ')}`;
 }
 
@@ -552,6 +608,7 @@ function buildPlan(
   const mutants = new Set(tests.flatMap((t) => (t.mutantId ? [t.mutantId] : [])));
   const propertyIds = [...new Set(tests.map((t) => t.propertyId))];
   const gaps = new Map<string, string>();
+
   for (const t of targets) {
     if (
       !tests.some((x) => x.propertyId === t.property.id && canonicalJson(x.input) === canonicalJson(t.input))
@@ -561,6 +618,7 @@ function buildPlan(
     gaps.set(`${id}:${t.gap}`, id);
   }
   const notAccepted = propertyIds.filter((id) => byId.get(id)?.status !== 'accepted');
+
   return {
     id: 'IP-pending',
     goal: `Add ${tests.length} test(s) whose expected values come from the specification, to kill ${mutants.size} surviving specification-relevant mutant(s) and check uncovered boundaries`,
@@ -615,10 +673,12 @@ function finish(root: string, context: StoreContext, draft: DraftDocument): Plan
     ...draft,
     plan: draft.plan ? { ...draft.plan, id: planId } : null,
   };
+
   if (doc.plan) {
     doc.plan.commands = doc.plan.commands.map((c) => c.replace('<plan-id>', planId));
   }
   const planFile = writePlanArtifact(root, planId, 'plan.json', PlanDocumentSchema, doc, context);
+
   if (doc.implementationFixProposals.length > 0) {
     writePlanArtifact(
       root,
@@ -631,6 +691,7 @@ function finish(root: string, context: StoreContext, draft: DraftDocument): Plan
   }
   // The token covers exactly what was persisted (after validation and redaction).
   const persisted = readPlan(root, planId);
+
   return {
     planId,
     runId: doc.runId,

@@ -9,6 +9,7 @@ const SEED = 20251119;
 
 function generated(root: string, file: string, experimental: boolean, importPath: string): string {
   const { ir } = discountProperty(root, file);
+
   return generateVitestFile({
     propertyId: 'P-discount-threshold',
     ir,
@@ -34,6 +35,7 @@ function project(): string {
     path.join(modules, 'fast-check'),
     'dir',
   );
+
   return root;
 }
 

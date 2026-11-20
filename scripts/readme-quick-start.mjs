@@ -12,15 +12,19 @@ import path from 'node:path';
  */
 export function quickStartCommands(markdown) {
   const section = markdown.split(/^## /m).find((part) => /^Quick start\b/i.test(part));
+
   if (!section) throw new Error('README has no "Quick start" section');
   const block = /```[a-z]*\r?\n([\s\S]*?)```/.exec(section)?.[1];
+
   if (!block) throw new Error('README quick start has no code block');
   const commands = [];
+
   for (const line of block.split(/\r?\n/)) {
     const args =
       /^\s*(?:npx\s+|pnpm\s+exec\s+)?(?:veritas|node\s+\S*packages\/cli\/dist\/bin\.js)\s+(.*)$/.exec(
         line,
       )?.[1];
+
     if (args)
       commands.push(
         args
@@ -29,7 +33,9 @@ export function quickStartCommands(markdown) {
           .split(/\s+/),
       );
   }
+
   if (commands.length === 0) throw new Error('README quick start runs no veritas command');
+
   return commands;
 }
 

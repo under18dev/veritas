@@ -13,9 +13,11 @@ function fakeProvider(output: unknown, usage = { inputTokens: 100, outputTokens:
     model: 'fake-1',
     async complete(request) {
       seen.push({ instructions: request.instructions, documents: request.documents });
+
       return { provider: 'fake', model: 'fake-1', status: 'ok', data: output as never, usage, error: null };
     },
   };
+
   return { provider, seen };
 }
 

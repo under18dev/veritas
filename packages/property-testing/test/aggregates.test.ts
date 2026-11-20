@@ -19,6 +19,7 @@ export function head(xs: readonly number[]): number {
 function project(): string {
   const root = fixture();
   writeFileSync(path.join(root, 'src/order.ts'), SOURCE);
+
   return root;
 }
 
@@ -30,7 +31,9 @@ function translated(exportName: string) {
     domain: DOMAIN,
     maxArrayLength: 2,
   });
+
   if (t.status !== 'translated') throw new Error(JSON.stringify(t));
+
   return t;
 }
 
@@ -49,6 +52,7 @@ function discountIr(): PropertyIR {
 function headIr(): PropertyIR {
   const t = translated('head');
   const v = (name: string) => ({ kind: 'var' as const, name });
+
   return {
     irVersion: 1,
     params: t.params,
@@ -122,6 +126,7 @@ describe('property-based tests over records and arrays', () => {
       ['gen/order.test.ts', discountIr(), 'discount', false],
       ['gen/head.test.ts', headIr(), 'head', true],
     ];
+
     for (const [file, ir, exportName] of files) {
       const source = generateVitestFile({
         propertyId: `P-${exportName}`,
@@ -131,11 +136,13 @@ describe('property-based tests over records and arrays', () => {
         numRuns: 300,
         experimental: false,
       });
+
       if (exportName === 'discount')
         expect(source).toContain('impl0({ "total": arg(p_order__total), "vip": p_order__vip })');
       else expect(source).toContain('impl0([arg(p_xs__0), arg(p_xs__1)].slice(0, Number(p_xs__length)))');
       writeFileSync(path.join(root, file), source);
     }
+
     for (const [file, , , green] of files) {
       const run = spawnSync(process.execPath, [path.join(modules, 'vitest/vitest.mjs'), 'run', file], {
         cwd: root,

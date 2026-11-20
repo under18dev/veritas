@@ -52,16 +52,19 @@ export function sandboxRuntime(
 ): SandboxRuntime {
   const key = `${self.node}|${self.version}|${env.VERITAS_SANDBOX_NODE ?? ''}|${env.PATH ?? env.Path ?? ''}`;
   const cached = runtimes.get(key);
+
   if (cached) return cached;
   let runtime: SandboxRuntime = {
     node: self.node,
     version: self.version,
     networkIsolated: sandboxBlocksNetwork(self.version),
   };
+
   if (!runtime.networkIsolated) {
     const candidates = [env.VERITAS_SANDBOX_NODE, resolveCommand('node', { env })?.command].filter(
       (c): c is string => Boolean(c),
     );
+
     for (const node of candidates) {
       const probe = spawnSync(node, ['--version'], {
         encoding: 'utf8',
@@ -70,6 +73,7 @@ export function sandboxRuntime(
         env,
       });
       const version = probe.status === 0 ? probe.stdout.trim().replace(/^v/, '') : '';
+
       if (version && sandboxBlocksNetwork(version)) {
         runtime = { node, version, networkIsolated: true };
         break;
@@ -77,12 +81,14 @@ export function sandboxRuntime(
     }
   }
   runtimes.set(key, runtime);
+
   return runtime;
 }
 
 /** Why sandboxed execution is refused, or null when it may run. */
 export function sandboxRefusal(runtime: SandboxRuntime, allowNetworkWithoutIsolation = false): string | null {
   if (runtime.networkIsolated || allowNetworkWithoutIsolation) return null;
+
   return `project code is not run: Node.js ${runtime.version} cannot block network access from it; use Node.js 25+ (or set VERITAS_SANDBOX_NODE to one), or set sandbox.allowNetworkWithoutIsolation`;
 }
 
@@ -113,12 +119,14 @@ export async function callInSandbox(options: {
     durationMs: result.durationMs,
     ...(result.error ? { error: result.error } : {}),
   });
+
   return result;
 }
 
 async function sandboxCall(options: Parameters<typeof callInSandbox>[0]): Promise<SandboxResult> {
   const sandbox = sandboxRuntime();
   const refusal = sandboxRefusal(sandbox, options.allowNetworkWithoutIsolation);
+
   if (refusal)
     return {
       status: 'error',
@@ -161,12 +169,17 @@ async function sandboxCall(options: Parameters<typeof callInSandbox>[0]): Promis
     network: sandbox.networkIsolated,
   };
   const base = { isolation, durationMs: result.durationMs, results: [] as EncodedValue[] };
+
   if (result.timedOut)
     return { ...base, status: 'timeout', error: `execution exceeded ${options.timeoutMs} ms` };
+
   if (result.spawnError) return { ...base, status: 'error', error: result.spawnError };
+
   try {
     const parsed = JSON.parse(result.stdout) as { ok: boolean; results?: EncodedValue[]; error?: string };
+
     if (!parsed.ok) return { ...base, status: 'error', error: parsed.error ?? 'sandbox failed' };
+
     return { ...base, status: 'ok', results: parsed.results ?? [], error: null };
   } catch {
     if (outOfMemory(result.stderr))
@@ -176,6 +189,7 @@ async function sandboxCall(options: Parameters<typeof callInSandbox>[0]): Promis
         error: `sandboxed execution ran out of memory (limit ${memoryMb ?? 'default'} MiB, limits.memoryMb)`,
       };
     const detail = result.stderr.split('\n').find((l) => /Error/.test(l)) ?? result.stderr.slice(0, 500);
+
     return {
       ...base,
       status: 'error',

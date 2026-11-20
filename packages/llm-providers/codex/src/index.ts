@@ -56,6 +56,7 @@ export class CodexProvider implements LlmProvider {
     const work = path.join(dir, 'work');
     const schemaFile = path.join(dir, 'schema.json');
     const outFile = path.join(dir, 'out.json');
+
     try {
       writeFileSync(schemaFile, JSON.stringify(jsonSchemaOf(request.schema)));
       mkdirSync(work);
@@ -87,6 +88,7 @@ export class CodexProvider implements LlmProvider {
         '-',
       ];
       const resolved = resolveCommand(this.command);
+
       if (!resolved)
         return {
           ...base,
@@ -102,6 +104,7 @@ export class CodexProvider implements LlmProvider {
         input: `${SYSTEM_PREAMBLE}\n\n${renderPrompt(request)}`,
         ...(request.signal ? { signal: request.signal } : {}),
       });
+
       if (run.spawnError)
         return {
           ...base,
@@ -110,12 +113,15 @@ export class CodexProvider implements LlmProvider {
           usage: empty,
           error: `cannot run ${this.command}: ${run.spawnError}`,
         };
+
       if (run.timedOut)
         return { ...base, status: 'error', data: null, usage: empty, error: `${this.command} timed out` };
       const usage = usageFrom(run.stdout);
+
       if (run.exitCode !== 0) {
         const detail = (run.stderr || run.stdout).trim().split('\n').slice(-3).join(' ');
         const loggedOut = /log ?in|auth|credential|unauthori[sz]ed/i.test(detail);
+
         return {
           ...base,
           status: loggedOut ? 'unavailable' : 'error',
@@ -125,12 +131,14 @@ export class CodexProvider implements LlmProvider {
         };
       }
       let output: unknown;
+
       try {
         output = JSON.parse(readFileSync(outFile, 'utf8'));
       } catch {
         return { ...base, status: 'invalid_output', data: null, usage, error: 'no JSON final message' };
       }
       const result = request.schema.safeParse(output);
+
       if (!result.success)
         return {
           ...base,
@@ -139,6 +147,7 @@ export class CodexProvider implements LlmProvider {
           usage,
           error: 'output did not match the schema',
         };
+
       return { ...base, status: 'ok', data: result.data as z.output<S>, usage, error: null };
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -150,13 +159,16 @@ export class CodexProvider implements LlmProvider {
 function usageFrom(stdout: string): { inputTokens: number; outputTokens: number } {
   let inputTokens = 0;
   let outputTokens = 0;
+
   for (const line of stdout.split('\n')) {
     if (!line.startsWith('{')) continue;
+
     try {
       const event = JSON.parse(line) as {
         type?: string;
         usage?: { input_tokens?: number; output_tokens?: number };
       };
+
       if (event.type === 'turn.completed') {
         inputTokens += event.usage?.input_tokens ?? 0;
         outputTokens += event.usage?.output_tokens ?? 0;
@@ -165,5 +177,6 @@ function usageFrom(stdout: string): { inputTokens: number; outputTokens: number 
       // not an event line
     }
   }
+
   return { inputTokens, outputTokens };
 }

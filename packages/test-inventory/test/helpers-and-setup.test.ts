@@ -14,9 +14,12 @@ export class Counter { count = 0; inc(): void { this.count++; } }
 function inventory(testSource: string, extra: Record<string, string> = {}) {
   const root = tempProject({ 'src/math.ts': math, 'test/case.test.ts': testSource, ...extra });
   const result = inventoryTests({ root, config: VeritasConfig.parse({}) });
+
   return (name: string) => {
     const test = result.tests.find((candidate) => candidate.name === name);
+
     if (!test) throw new Error(`missing test: ${name}`);
+
     return {
       symbols: test.calledSymbols,
       asserted: test.targetCalls.some((call) => call.asserted),
@@ -120,6 +123,7 @@ describe('test registration', () => {
       it('options', { timeout: 10_000 }, () => { expect(fn(1)).toBe(2); });
       describe('suite with options', () => { it('inner', () => { expect(fn(1)).toBe(2); }); }, 10_000);
     `);
+
     for (const name of ['timeout', 'options', 'inner'])
       expect(byName(name), name).toMatchObject({ assertionCount: 1, asserted: true });
   });

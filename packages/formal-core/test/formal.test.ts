@@ -32,11 +32,13 @@ function fixture(): string {
     recursive: true,
     filter: (src) => !src.includes('node_modules') && !src.includes('.mutator'),
   });
+
   return dir;
 }
 
 function translated(result: TranslationResult) {
   if (result.status !== 'translated') throw new Error(`expected translation, got ${JSON.stringify(result)}`);
+
   return result;
 }
 
@@ -111,6 +113,7 @@ describe('translation of the supported subset', () => {
   ])('reports %s as unsupported with a line number', (_name, source, construct) => {
     const result = inline(source);
     expect(result.status).toBe('unsupported');
+
     if (result.status === 'unsupported') {
       expect(result.reasons[0]?.construct).toBe(construct);
       expect(result.reasons[0]?.line).toBeGreaterThan(0);
@@ -460,6 +463,7 @@ describe('solver result cache', () => {
     });
   const proveDiscount = (root: string, cache: ContentCache, timeoutMs = 10_000) => {
     const runStore = store(root);
+
     return proveProperty({
       kind: 'conformance',
       propertyId: 'P-discount',
@@ -543,6 +547,7 @@ describe('solver result cache', () => {
 describe('distinguishability and property detection', () => {
   const mutantOf = (root: string, replacement: string, modelName: string) => {
     const source = readFileSync(path.join(root, 'src/pricing.ts'), 'utf8');
+
     return translated(
       translateFunction({
         file: 'src/pricing.ts',
@@ -636,6 +641,7 @@ describe('distinguishability and property detection', () => {
     );
     const body = detection.body as Extract<typeof detection.body, { kind: 'binary' }>;
     const both = { kind: 'binary', op: 'and', left: body.left, right: body.right } as const;
+
     for (const forged of [
       { ...body, left: both, right: both },
       { ...body, left: body.right, right: body.left },

@@ -35,6 +35,7 @@ async function connect(root: string, extraArgs: string[] = []): Promise<Client> 
     }),
   );
   clients.push(client);
+
   return client;
 }
 
@@ -44,7 +45,9 @@ function data(result: unknown): Record<string, unknown> {
     structuredContent?: Record<string, unknown>;
     content: { text: string }[];
   };
+
   if (r.isError) throw new Error(r.content[0]?.text);
+
   return r.structuredContent ?? JSON.parse(r.content[0]?.text ?? '{}');
 }
 
@@ -112,6 +115,7 @@ describe('MCP server', () => {
       'run_mutation',
       'verify_property',
     ]);
+
     for (const t of (await client.listTools()).tools) expect(t.annotations?.readOnlyHint).toBe(true);
 
     const discovered = data(await client.callTool({ name: 'discover_specs', arguments: {} }));
@@ -153,6 +157,7 @@ describe('MCP server', () => {
     const dir = copyFixture('discount-boundary', { git: true, linkDeps: true });
     expect(runCli(['init', '--yes'], dir).status).toBe(0);
     const client = await connect(dir);
+
     for (const args of [
       { findingId: '../../etc/passwd' },
       { findingId: 'F-zz' },
@@ -168,6 +173,7 @@ describe('MCP server', () => {
       arguments: { since: '--upload-pack=evil' },
     })) as { isError?: boolean };
     expect(bad.isError).toBe(true);
+
     for (const args of [
       { reportFile: '../outside.json' },
       { scope: '/etc' },
@@ -255,6 +261,7 @@ describe('MCP server', () => {
     // Cancel once mutator has been started (its report directory is created right before it is spawned).
     const poll = setInterval(() => {
       if (!existsSync(runsDir)) return;
+
       if (readdirSync(runsDir).some((r) => existsSync(path.join(runsDir, r, 'mutation')))) {
         clearInterval(poll);
         controller.abort('cancelled by the acceptance test');
@@ -305,6 +312,7 @@ describe('MCP server', () => {
     const discovered = data(await client.callTool({ name: 'discover_specs', arguments: {} }));
     const sources = discovered.sources as Record<string, unknown>[];
     expect(sources.length).toBeGreaterThan(0);
+
     for (const s of sources)
       expectValid(
         EvidenceSource.pick({ id: true, kind: true, locator: true, summary: true, trust: true }),
@@ -314,6 +322,7 @@ describe('MCP server', () => {
     const verified = data(
       await client.callTool({ name: 'verify_property', arguments: { includeProposed: true } }),
     );
+
     for (const c of verified.claims as unknown[]) expectValid(FormalClaim, c);
     const finding = (verified.findings as { id: string; kind: string }[]).find(
       (f) => f.kind === 'spec_implementation_mismatch',
@@ -323,9 +332,11 @@ describe('MCP server', () => {
     const properties = (listed.properties as unknown[]).map((p) => Property.parse(p));
     const normative = properties.filter((p) => p.origin === 'normative');
     expect(normative.length).toBeGreaterThan(0);
+
     for (const p of normative) {
       expect(p.sourceIds.length).toBeGreaterThan(0);
       expect(p.citations.length).toBeGreaterThan(0);
+
       for (const c of p.citations) expect(c).toMatch(/^README\.md:\d+$/);
     }
 
@@ -336,21 +347,28 @@ describe('MCP server', () => {
     const f = Finding.parse(evidence.finding);
     expect(f.id).toBe(finding?.id);
     expect(f.sourceIds.length).toBeGreaterThan(0);
+
     for (const p of evidence.properties as unknown[]) expectValid(Property, p);
     const evidenceSources = (evidence.sources as unknown[]).map((s) => EvidenceSource.parse(s));
     expect(evidenceSources.map((s) => s.id)).toEqual(expect.arrayContaining(f.sourceIds));
     expect(evidenceSources.find((s) => s.locator === 'README.md')?.contentHash).toMatch(/^[0-9a-f]{64}$/);
     const statements = evidence.statements as { sourceId: string; quote: string; range: { start: number } }[];
     expect(statements.some((s) => s.range.start === 7 && /1000 or more/.test(s.quote))).toBe(true);
+
     for (const s of statements) expect(evidenceSources.map((x) => x.id)).toContain(s.sourceId);
+
     for (const t of evidence.tests as unknown[]) expectValid(TestCase, t);
+
     for (const m of evidence.mutants as unknown[]) expectValid(Mutant, m);
+
     for (const c of evidence.claims as unknown[]) expectValid(FormalClaim, c);
     expect((evidence.claims as unknown[]).length).toBeGreaterThan(0);
+
     for (const a of evidence.assessments as unknown[]) expectValid(TestAssessment, a);
 
     const analyzed = data(await client.callTool({ name: 'analyze_tests', arguments: {} }));
     expect((analyzed.assessments as unknown[]).length).toBe(5);
+
     for (const a of analyzed.assessments as unknown[]) expectValid(TestAssessment, a);
 
     const status = data(await client.callTool({ name: 'get_run_status', arguments: {} }));

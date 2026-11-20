@@ -20,6 +20,7 @@ function outsideDir(): string {
     'export function leaked(x: number): number { return x > 1 ? 1 : 0; }\n',
   );
   writeFileSync(path.join(dir, 'NOTES.md'), 'Values of 5 or more are leaked.\n');
+
   return dir;
 }
 
@@ -61,8 +62,10 @@ describe('project root containment', () => {
     const runs = existsSync(path.join(dir, '.veritas/runs'))
       ? readdirSync(path.join(dir, '.veritas/runs'))
       : [];
+
     for (const r of runs) {
       const index = path.join(dir, '.veritas/runs', r, 'code-index.json');
+
       if (existsSync(index)) expect(readFileSync(index, 'utf8')).not.toContain('leaked');
     }
     expect([0, 2, 3]).toContain(run.status);

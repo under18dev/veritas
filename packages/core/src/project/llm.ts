@@ -48,10 +48,12 @@ export async function llmAvailability(
         : { state: 'unavailable', detail: 'openai configured but OPENAI_API_KEY is not set' };
     case 'claude-code': {
       const run = await runCli('claude', ['auth', 'status'], cwd);
+
       if (!run)
         return { state: 'unavailable', detail: 'claude-code configured but `claude` is not installed' };
       let loggedIn = false;
       let method = 'unknown';
+
       try {
         const status = JSON.parse(run.stdout) as { loggedIn?: boolean; authMethod?: string };
         loggedIn = status.loggedIn === true;
@@ -59,6 +61,7 @@ export async function llmAvailability(
       } catch {
         loggedIn = false;
       }
+
       return loggedIn
         ? { state: 'available', detail: `claude-code configured, \`claude\` is logged in (${method})` }
         : {
@@ -74,8 +77,10 @@ export async function llmAvailability(
             'codex configured but not enabled: its read-only shell can read local files, so set llm.allowCodexFileReads to use it',
         };
       const run = await runCli('codex', ['login', 'status'], cwd);
+
       if (!run) return { state: 'unavailable', detail: 'codex configured but `codex` is not installed' };
       const text = `${run.stdout}\n${run.stderr}`;
+
       return run.exitCode === 0 && /logged in/i.test(text) && !/not logged in/i.test(text)
         ? { state: 'available', detail: 'codex configured, `codex` is logged in' }
         : {
@@ -89,11 +94,13 @@ export async function llmAvailability(
 /** Run a provider CLI status command; `null` when the CLI is not installed or cannot be started without a shell. */
 async function runCli(name: string, args: string[], cwd: string) {
   const resolved = resolveCommand(name);
+
   if (!resolved) return null;
   const run = await runCommand(resolved.command, [...resolved.prefix, ...args], {
     cwd,
     timeoutMs: 30_000,
     envAllowlist: LLM_CLI_ENV_ALLOWLIST,
   });
+
   return run.spawnError ? null : run;
 }

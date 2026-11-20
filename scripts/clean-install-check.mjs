@@ -19,10 +19,12 @@ const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 const run = (cmd, args, cwd) => {
   const result = spawnSync(cmd, args, { cwd, encoding: 'utf8', shell: process.platform === 'win32' });
   process.stdout.write(`$ ${cmd} ${args.join(' ')} -> ${result.status}\n`);
+
   if (result.status !== 0) {
     process.stdout.write(result.stdout + result.stderr);
     process.exit(1);
   }
+
   return result.stdout;
 };
 
@@ -44,12 +46,15 @@ run(
 );
 // pnpm names a tarball after the package: `@scope/name@1.2.3` becomes `scope-name-1.2.3.tgz`.
 const tarballs = {};
+
 for (const { manifest } of workspacePackages(repo)) {
   if (manifest.private) continue;
   const file = `${manifest.name.replace(/^@/, '').replace('/', '-')}-${manifest.version}.tgz`;
+
   if (!readdirSync(tgz).includes(file)) throw new Error(`missing tarball ${file} for ${manifest.name}`);
   tarballs[manifest.name] = `file:${path.join(tgz, file).split(path.sep).join('/')}`;
 }
+
 for (const part of ['src', 'test', 'README.md'])
   cpSync(path.join(repo, 'fixtures/discount-boundary', part), path.join(project, part), { recursive: true });
 writeFileSync(
@@ -84,28 +89,36 @@ const veritas = (...args) => run(pnpm, ['exec', 'veritas', ...args], project);
 // The README quick start, in order. `run` also prints JSON so its findings can be checked and used for
 // placeholders of later commands.
 let mismatch = null;
+
 for (const command of readmeQuickStart(repo)) {
   const args = command.map((arg) => {
     if (arg !== '<finding-id>') return arg;
+
     if (!mismatch) throw new Error('the README quick start uses <finding-id> before `run`');
+
     return mismatch.id;
   });
   const placeholder = args.find((arg) => /^<.*>$/.test(arg));
+
   if (placeholder) throw new Error(`unknown placeholder ${placeholder} in the README quick start`);
+
   if (args[0] !== 'run') {
     veritas(...args);
     continue;
   }
   const output = JSON.parse(veritas(...args, '--json'));
   mismatch = output.findings.find((f) => f.kind === 'spec_implementation_mismatch');
+
   if (!mismatch || !output.findings.some((f) => f.kind === 'survived_mutant')) {
     console.error('expected findings missing', output.findings);
     process.exit(1);
   }
 }
+
 if (!mismatch) throw new Error('the README quick start never runs `veritas run`');
 // Beyond the quick start: the markdown report renders from the installed packages, and the MCP server starts.
 veritas('report', '--format', 'markdown');
+
 if (!run(pnpm, ['exec', 'veritas-mcp', '--help'], project).includes('Usage: veritas-mcp'))
   throw new Error('veritas-mcp is not usable from the main package');
 console.log(`clean install check passed in ${project}`);

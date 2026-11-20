@@ -44,6 +44,7 @@ process.exit(${options.exitCode ?? 0});
       stdin: string;
       schema: string;
     };
+
   return { provider, recorded };
 }
 
@@ -52,6 +53,7 @@ describe('CodexProvider', () => {
     const { provider, recorded } = fakeCli(JSON.stringify({ operator: '>=', value: '1000' }));
     const previous = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = 'sk-should-not-leak';
+
     try {
       const result = await provider.complete(request);
       expect(result).toMatchObject({
@@ -69,6 +71,7 @@ describe('CodexProvider', () => {
     expect(call.args[call.args.indexOf('--sandbox') + 1]).toBe('read-only');
     expect(call.args).toContain('--ephemeral');
     expect(call.args).toEqual(expect.arrayContaining(['--ignore-user-config', '--ignore-rules']));
+
     for (const feature of ['browser_use', 'in_app_browser', 'apps'])
       expect(call.args[call.args.indexOf(feature) - 1]).toBe('--disable');
     expect(call.args[call.args.indexOf('web_search=disabled') - 1]).toBe('-c');

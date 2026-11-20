@@ -44,20 +44,25 @@ export function leanToolCandidates(tool: 'lean' | 'lake', env: NodeJS.ProcessEnv
   const home = env.HOME || env.USERPROFILE || homedir();
   const dirs = [env.ELAN_HOME ? path.join(env.ELAN_HOME, 'bin') : null, path.join(home, '.elan', 'bin')];
   const candidates = [tool, ...dirs.filter((d): d is string => d !== null).map((d) => path.join(d, exe))];
+
   return [...new Set(candidates)];
 }
 
 async function firstVersion(candidates: string[], args: string[], root: string): Promise<string | null> {
   for (const command of candidates) {
     const version = await versionOf(command, args, root);
+
     if (version) return version;
   }
+
   return null;
 }
 
 async function versionOf(command: string, args: string[], root: string): Promise<string | null> {
   const result = await runCommand(command, args, { cwd: root, timeoutMs: 10_000 });
+
   if (result.spawnError || result.exitCode !== 0) return null;
+
   return (result.stdout || result.stderr).trim().split('\n')[0] ?? null;
 }
 
@@ -67,8 +72,10 @@ function packageVersion(
   name: string,
 ): { version: string | null; from: 'project' | 'veritas' | null } {
   const fromProject = resolvePackageVersion(root, name);
+
   if (fromProject) return { version: fromProject, from: 'project' };
   const fromSelf = resolvePackageVersion(path.dirname(fileURLToPath(import.meta.url)), name);
+
   return fromSelf ? { version: fromSelf, from: 'veritas' } : { version: null, from: null };
 }
 
@@ -182,6 +189,7 @@ export async function runDoctor(
   );
 
   let sandboxOk = false;
+
   try {
     const dir = mkdtempSync(path.join(tmpdir(), 'veritas-doctor-'));
     accessSync(dir, constants.W_OK);
@@ -210,6 +218,7 @@ export async function runDoctor(
   const features: FeatureStatus[] = Object.entries(FEATURES).map(([feature, deps]) => {
     const missingRequired = deps.required.filter((n) => !usable(n));
     const missingOptional = deps.optional.filter((n) => stateOf.get(n) !== 'available');
+
     return {
       feature,
       state: missingRequired.length ? 'disabled' : missingOptional.length ? 'degraded' : 'enabled',

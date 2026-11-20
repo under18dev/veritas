@@ -11,6 +11,7 @@ describe('createServer', () => {
     writeFileSync(file, 'x');
     expect(() => createServer({ root: path.join(dir, 'missing') })).toThrow(/does not exist/);
     expect(() => createServer({ root: file })).toThrow(/not a directory/);
+
     for (const maxConcurrent of [0, 1.5, Number.NaN, 17])
       expect(() => createServer({ root: dir, maxConcurrent })).toThrow(/maxConcurrent/);
     expect(createServer({ root: dir, maxConcurrent: 2 })).toBeTruthy();

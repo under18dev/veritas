@@ -35,6 +35,7 @@ function mentionsCall(expr: Expr): boolean {
 /** `call(fn, params in order) == spec` (either side). */
 function asConstraint(expr: Expr, params: string[]): { fn: string; documented: Expr } | null {
   if (expr.kind !== 'binary' || expr.op !== '==') return null;
+
   for (const [call, other] of [
     [expr.left, expr.right],
     [expr.right, expr.left],
@@ -48,6 +49,7 @@ function asConstraint(expr: Expr, params: string[]): { fn: string; documented: E
       return { fn: call.fn, documented: other };
     }
   }
+
   return null;
 }
 
@@ -60,17 +62,23 @@ export function specClauses(ir: PropertyIR): SpecClause[] {
   const out: SpecClause[] = [];
   const visit = (expr: Expr): boolean => {
     if (expr.kind === 'binary' && expr.op === 'and') return visit(expr.left) && visit(expr.right);
+
     if (expr.kind === 'binary' && expr.op === 'implies' && !mentionsCall(expr.left)) {
       const c = asConstraint(expr.right, params);
+
       if (!c) return false;
       out.push({ guard: expr.left, ...c });
+
       return true;
     }
     const c = asConstraint(expr, params);
+
     if (!c) return false;
     out.push({ guard: null, ...c });
+
     return true;
   };
+
   return visit(ir.body) ? out : [];
 }
 
@@ -92,15 +100,20 @@ export function expectedFromSpec(
   options: { exclude?: (clause: SpecClause) => boolean } = {},
 ): Expectation {
   const env = new Map<string, IRValue>();
+
   for (const p of ir.params) {
     const v = input[p.name];
+
     if (v === undefined) return { status: 'none', reason: `no value for parameter ${p.name}` };
+
     if (p.sort === 'int') {
       if (typeof v !== 'string') return { status: 'none', reason: `${p.name} must be an integer` };
       const n = BigInt(v);
+
       if (n < BigInt(p.domain.min) || n > BigInt(p.domain.max)) {
         return { status: 'none', reason: `${p.name}=${v} is outside the model domain` };
       }
+
       if (n > BigInt(Number.MAX_SAFE_INTEGER) || n < BigInt(Number.MIN_SAFE_INTEGER)) {
         return { status: 'none', reason: `${p.name}=${v} is not a safe integer` };
       }
@@ -110,18 +123,23 @@ export function expectedFromSpec(
     env.set(p.name, toIR(v));
   }
   const noFunctions = new Map();
+
   try {
     for (const pre of ir.preconditions) {
       if (mentionsCall(pre)) return { status: 'none', reason: 'a precondition refers to a function model' };
+
       if (evaluate(pre, env, noFunctions) !== true)
         return { status: 'none', reason: 'precondition is false' };
     }
     const clauses = specClauses(ir);
+
     if (clauses.length === 0) return { status: 'none', reason: 'the property documents no concrete value' };
     const applicable: { value: ScalarValue; clause: SpecClause }[] = [];
     let excluded = 0;
+
     for (const clause of clauses) {
       if (clause.guard && evaluate(clause.guard, env, noFunctions) !== true) continue;
+
       if (options.exclude?.(clause)) {
         excluded++;
         continue;
@@ -129,6 +147,7 @@ export function expectedFromSpec(
       applicable.push({ value: fromIR(evaluate(clause.documented, env, noFunctions)), clause });
     }
     const first = applicable[0];
+
     if (!first) {
       return {
         status: 'none',
@@ -138,9 +157,11 @@ export function expectedFromSpec(
             : 'no documented clause applies to this input',
       };
     }
+
     if (applicable.some((a) => a.value !== first.value)) {
       return { status: 'none', reason: 'documented clauses disagree for this input' };
     }
+
     return { status: 'expected', value: first.value, clause: first.clause };
   } catch (error) {
     return { status: 'none', reason: `cannot evaluate the specification: ${(error as Error).message}` };

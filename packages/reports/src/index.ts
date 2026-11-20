@@ -107,6 +107,7 @@ function safe(input: ReportInput): ReportInput {
   const parsed = redactDeep(ReportInput.parse(input)) as ReportInput;
   const byId = <T extends { id: string }>(items: T[]): T[] =>
     [...items].sort((a, b) => a.id.localeCompare(b.id));
+
   return {
     ...parsed,
     sources: byId(parsed.sources),
@@ -138,6 +139,7 @@ function claimText(claim: FormalClaim, artifactBase: string): string {
   const artifact = claim.solverInputArtifact
     ? `, solver input ${safeArtifactHref(artifactBase, claim.solverInputArtifact) ?? '(unsafe location omitted)'}`
     : '';
+
   return `${claim.kind}: ${statusText(claim.status)}${domain}; assurance ${claim.assurance}; scope ${scope}; assumptions ${claim.assumptions.join('; ') || 'none'}; semantic gaps ${claim.semanticGaps.join('; ') || 'none'}; counterexample ${claim.counterexample ? JSON.stringify(claim.counterexample) : 'none'}${artifact}; reproduction ${claim.reproduction ?? 'none'}`;
 }
 
@@ -185,6 +187,7 @@ function propertyEvidence(i: ReportInput, p: Property): string {
   const detectionText = detection.length
     ? `; detects ${detected} of ${detection.length} mutant(s) of its function within the model${undecided ? ` (${undecided} undecided)` : ''}`
     : '';
+
   return `${p.id} [${p.status}, ${p.origin}]: static comparison with the code ${p.implementationAgreement}; observed ${observed.join(', ') || 'not run'}; tests ${tests.map((e) => `${e.testId} (${e.evidence.map((x) => x.kind).join('+') || 'none'})`).join(', ') || 'none'}; mutants ${killed} killed, ${survived} survived of ${mutants.length}${detectionText}`;
 }
 
@@ -198,8 +201,10 @@ function sections(input: ReportInput): string[] {
     .filter((status) => alwaysShown.has(status) || i.mutants.some((m) => m.status === status))
     .map((status) => {
       const members = i.mutants.filter((m) => m.status === status);
+
       return `${status} (${members.length}): ${members.map((m) => `${m.id} ${m.original} -> ${m.replacement}`).join('; ') || 'none'}`;
     });
+
   return [
     `1. Run metadata/environment/scope\nrun ${run.id}; command ${run.command} ${run.args.join(' ')}; profile ${run.profile ?? 'none'}; git commit ${i.meta.gitCommit ?? 'none (not a git repository)'}${run.scope.since ? `; changes since ${run.scope.since}` : ''}; Veritas ${i.meta.toolVersion}; schema ${i.meta.schemaVersion}; config hash ${i.meta.configHash}; source hash ${i.meta.sourceHash}; OS ${run.environment.os}; Node ${run.environment.node}; verdict ${run.verdict ?? 'none'}; exit code ${run.exitCode ?? 'none'}; scope ${run.scope.root} (${run.scope.paths.join(', ') || 'all'}); policy reasons ${run.policyReasons.join('; ') || 'none'}; replay with \`${run.replay}\``,
     `2. Collected evidence with provenance\n${
@@ -262,8 +267,10 @@ function sections(input: ReportInput): string[] {
         .map((a) => {
           const formal = a.vector.formalEvidence.map((id) => {
             const c = i.claims.find((x) => x.id === id);
+
             return c ? `${id} ${statusText(c.status)} (${c.kind}, assurance ${c.assurance})` : id;
           });
+
           return `${a.testId}: ${a.outcome}; rationale ${a.rationale.join('; ')}; formal evidence ${formal.join(', ') || 'none'}; unknowns ${a.vector.unknowns.join('; ') || 'none'}`;
         })
         .join('\n') || 'none'
@@ -279,6 +286,7 @@ export function renderText(input: ReportInput): string {
 
 export function renderJson(input: ReportInput): string {
   const parsed = ReportDocument.parse({ ...safe(input), schemaVersion: '1.0.0' });
+
   return `${JSON.stringify(parsed, null, 2)}\n`;
 }
 
@@ -294,9 +302,11 @@ export function renderMarkdown(input: ReportInput): string {
   const body = sections(i)
     .map((s) => {
       const [title, ...rest] = s.split('\n');
+
       return `## ${title}\n\n${rest.join('\n')}`;
     })
     .join('\n\n');
+
   return `# Veritas report: ${i.run.id}\n\n${body.replaceAll('<', '&lt;').replaceAll('>', '&gt;')}\n`;
 }
 
@@ -313,6 +323,7 @@ export function safeArtifactHref(base: string, artifact: string): string | null 
 
 function artifactLink(base: string, artifact: string): string {
   const href = safeArtifactHref(base, artifact);
+
   return href
     ? `<p><a href="${htmlEscape(href)}">solver input artifact</a></p>`
     : `<p>solver input artifact: ${htmlEscape(artifact)} (link omitted: unsafe location)</p>`;
@@ -326,9 +337,11 @@ function htmlEscape(value: unknown): string {
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
 }
+
 function anchor(id: string): string {
   return `<a id="${htmlEscape(id)}"></a>`;
 }
+
 function relationLinks(ids: string[], label: string): string {
   return ids.length
     ? `<p>${label}: ${ids.map((id) => `<a href="#${htmlEscape(id)}">${htmlEscape(id)}</a>`).join(', ')}</p>`
@@ -414,12 +427,14 @@ function withoutDanglingLinks(html: string): string {
 
 function sarifLevel(f: Finding): 'error' | 'warning' | 'note' {
   if (f.certainty !== 'confirmed') return 'note';
+
   return f.kind === 'spec_implementation_mismatch' ? 'error' : 'warning';
 }
 
 export function renderSarif(input: ReportInput): SarifLog {
   const i = safe(input);
   const kinds = [...new Set(i.findings.map((f) => f.kind))];
+
   return {
     version: '2.1.0',
     $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
@@ -472,6 +487,7 @@ export function validateSarif(log: SarifLog): { valid: boolean; errors: string[]
   const ajv = new Draft4Ajv({ allErrors: true, strict: false });
   const validate = ajv.compile(schema);
   const valid = validate(log);
+
   return {
     valid: Boolean(valid),
     errors: valid

@@ -10,6 +10,7 @@ const repo = path.resolve(import.meta.dirname, '../../../');
 const fixture = (name: string) => {
   const root = mkdtempSync(path.join(tmpdir(), `veritas-discovery-${name}-`));
   cpSync(path.join(repo, 'fixtures', name), root, { recursive: true });
+
   return root;
 };
 const config = (overrides: Record<string, unknown> = {}) =>
@@ -93,11 +94,13 @@ describe('discoverEvidence', () => {
     const fetcher: typeof fetch = async (input) => {
       calls++;
       const url = String(input);
+
       if (url.endsWith('/start'))
         return new Response('<p>At least 5 items are required. token=ghp_abcdefghijklmnopqrstuvwxyz</p>', {
           status: 200,
           headers: { 'content-type': 'text/html' },
         });
+
       return new Response('', { status: 302, headers: { location: 'https://evil.test/' } });
     };
     const result = await discoverEvidence({
@@ -132,6 +135,7 @@ describe('discoverEvidence', () => {
     let calls = 0;
     const fetcher: typeof fetch = async () => {
       calls++;
+
       return new Response('');
     };
     const disabled = await discoverEvidence({

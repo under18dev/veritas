@@ -6,9 +6,12 @@ import { tempProject } from './helpers.js';
 function inventory(files: Record<string, string>) {
   return inventoryTests({ root: tempProject(files), config: VeritasConfig.parse({}) });
 }
+
 function byName(result: ReturnType<typeof inventory>, name: string) {
   const test = result.tests.find((candidate) => candidate.name === name);
+
   if (!test) throw new Error(`missing test: ${name}`);
+
   return test;
 }
 
@@ -218,10 +221,12 @@ describe('mock detection is scoped to the test and to real Vitest mock APIs', ()
         });
       `,
     });
+
     for (const name of ['vi.fn', 'spy only', 'other spy mocked']) {
       expect(byName(result, name).usesMocks).toBe(true);
       expect(byName(result, name).suspicions).not.toContain('unconditional_mock');
     }
+
     for (const name of ['spy variable', 'vi.mocked']) {
       expect(byName(result, name).usesMocks).toBe(true);
       expect(byName(result, name).suspicions).toContain('unconditional_mock');

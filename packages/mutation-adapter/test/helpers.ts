@@ -21,10 +21,12 @@ export function copyDiscountFixture(): string {
     recursive: true,
     filter: (src) => {
       const rel = path.relative(FIXTURE, src);
+
       return rel !== 'node_modules' && rel !== '.mutator' && rel !== '.veritas';
     },
   });
   symlinkSync(path.join(FIXTURE, 'node_modules'), path.join(dir, 'node_modules'), 'dir');
+
   return dir;
 }
 

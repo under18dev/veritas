@@ -25,6 +25,7 @@ describe('module resolution without a tsconfig', () => {
       'test/shipping.test.ts': shippingTest('../src/shipping'),
     });
     const testCase = result.tests.at(0);
+
     if (!testCase) throw new Error('missing shipping test');
 
     expect(testCase.calledSymbols).toEqual(['src/shipping.ts#shippingCents']);
@@ -89,6 +90,7 @@ describe('module resolution that fails', () => {
       'test/shipping.test.ts': shippingTest('../src/shipping'),
     });
     const testCase = result.tests.at(0);
+
     if (!testCase) throw new Error('missing shipping test');
 
     expect(testCase.calledSymbols).toEqual([]);

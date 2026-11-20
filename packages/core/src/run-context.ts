@@ -29,6 +29,7 @@ const storage = new AsyncLocalStorage<RunContext>();
 
 export function withRunContext<T>(context: Partial<RunContext>, fn: () => T): T {
   const parent = storage.getStore();
+
   return storage.run(
     {
       root: context.root ?? parent?.root,
@@ -46,6 +47,7 @@ export function runContext(): RunContext | undefined {
 /** Send an event to the sinks of the current run context (none outside one). Never throws. */
 export function logEvent(level: LogLevel, message: string, fields: Record<string, unknown> = {}): void {
   const sinks = storage.getStore()?.sinks ?? [];
+
   if (sinks.length === 0) return;
   const event = {
     ...(redactDeep(fields) as Record<string, unknown>),
@@ -53,6 +55,7 @@ export function logEvent(level: LogLevel, message: string, fields: Record<string
     level,
     message: redact(message),
   };
+
   for (const sink of sinks) {
     try {
       sink(event);
@@ -65,8 +68,10 @@ export function logEvent(level: LogLevel, message: string, fields: Record<string
 /** `file` relative to the run's root when it is inside it, POSIX style; otherwise as given. */
 export function relativeToRoot(file: string): string {
   const root = storage.getStore()?.root;
+
   if (!root) return file;
   const rel = path.relative(root, path.resolve(root, file));
+
   return rel.startsWith('..') || path.isAbsolute(rel) ? file : rel.split(path.sep).join('/') || '.';
 }
 
@@ -92,12 +97,15 @@ export function traceCollector(maxBytes = 4 * 1024 * 1024): { sink: LogSink; tex
   let dropped = 0;
   // UTF-8 bytes, with room kept for the closing "truncated" line so the file never exceeds maxBytes.
   const reserve = Math.min(512, Math.floor(maxBytes / 4));
+
   return {
     sink: (event) => {
       const line = JSON.stringify(event);
       const size = Buffer.byteLength(line, 'utf8') + 1;
+
       if (dropped > 0 || bytes + size > maxBytes - reserve) {
         dropped++;
+
         return;
       }
       lines.push(line);
@@ -117,11 +125,13 @@ export function traceCollector(maxBytes = 4 * 1024 * 1024): { sink: LogSink; tex
           : [];
       // Drop kept events from the end until everything, the closing line included, fits the cap.
       let out = `${[...kept, ...closing()].join('\n')}\n`;
+
       while (Buffer.byteLength(out, 'utf8') > maxBytes && kept.length > 0) {
         kept.pop();
         dropped++;
         out = `${[...kept, ...closing()].join('\n')}\n`;
       }
+
       return Buffer.byteLength(out, 'utf8') <= maxBytes ? out : '';
     },
   };

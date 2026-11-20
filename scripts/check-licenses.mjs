@@ -26,6 +26,7 @@ const ALLOWED = new Set([
 /** Accepts an SPDX expression when every AND term has at least one allowed OR alternative. */
 function isAllowed(expression) {
   const clean = expression.replace(/[()]/g, '').trim();
+
   return clean
     .split(/\s+AND\s+/)
     .every((term) => term.split(/\s+OR\s+/).some((license) => ALLOWED.has(license.trim())));
@@ -38,31 +39,39 @@ function listLicenses(args) {
     shell: process.platform === 'win32',
     maxBuffer: 64 * 1024 * 1024,
   });
+
   if (result.status !== 0) throw new Error(`pnpm licenses list failed:\n${result.stderr}`);
+
   return JSON.parse(result.stdout);
 }
 
 const problems = [];
 const seen = new Map();
+
 for (const args of [[], ['-r', '--prod']]) {
   for (const [license, packages] of Object.entries(listLicenses(args))) {
     for (const pkg of packages) seen.set(`${pkg.name}@${pkg.versions?.join(',') ?? ''}`, license);
   }
 }
+
 for (const [pkg, license] of seen) {
   if (!isAllowed(license)) problems.push(`${pkg}: license "${license}" is not on the allowlist`);
 }
 
 const rootLicense = readFileSync(path.join(repo, 'LICENSE'), 'utf8');
+
 for (const { dir, manifest } of workspacePackages(repo)) {
   if (manifest.license !== 'Apache-2.0') problems.push(`${manifest.name}: license field must be Apache-2.0`);
+
   if (manifest.private) continue;
   let copy;
+
   try {
     copy = readFileSync(path.join(repo, dir, 'LICENSE'), 'utf8');
   } catch {
     copy = undefined;
   }
+
   if (copy !== rootLicense)
     problems.push(`${manifest.name}: ${dir}/LICENSE must be a copy of the root LICENSE`);
 }

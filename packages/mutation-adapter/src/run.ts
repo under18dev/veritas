@@ -58,12 +58,14 @@ export function timeBudgetSeconds(timeoutMs: number): number {
 export function buildMutatorArgs(options: RunMutationOptions): string[] {
   const args = ['--root', path.resolve(options.root), '--reporter', 'json', '--reporter', 'agent'];
   args.push('--report-dir', options.reportDir);
+
   if (options.since !== undefined) {
     if (options.since === '' || options.since.startsWith('-') || /[\s\0]/.test(options.since)) {
       throw new TypeError(`invalid git ref for --since: ${JSON.stringify(options.since)}`);
     }
     args.push('--since', options.since);
   }
+
   for (const glob of options.scope ?? []) {
     if (
       glob === '' ||
@@ -77,14 +79,19 @@ export function buildMutatorArgs(options: RunMutationOptions): string[] {
     }
     args.push('--include', glob);
   }
+
   if (options.configPath !== undefined) args.push('--config', options.configPath);
+
   if (options.noTypecheck) args.push('--no-typecheck');
+
   if (options.killMatrix) args.push('--kill-matrix');
+
   for (const key of options.only ?? []) {
     if (!MUTANT_KEY.test(key)) throw new TypeError(`invalid mutant key for --only: ${JSON.stringify(key)}`);
     args.push('--only', key);
   }
   args.push('--time-budget', String(timeBudgetSeconds(options.config.mutation.timeoutMs)));
+
   return args;
 }
 
@@ -94,6 +101,7 @@ export function buildMutatorArgs(options: RunMutationOptions): string[] {
  */
 export function rootTsconfigHasNoFiles(root: string): boolean {
   let text: string;
+
   try {
     text = readFileSync(path.join(root, 'tsconfig.json'), 'utf8');
   } catch {
@@ -103,8 +111,10 @@ export function rootTsconfigHasNoFiles(root: string): boolean {
   const json = text
     .replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (m) => (m.startsWith('"') ? m : ''))
     .replace(/,(\s*[}\]])/g, '$1');
+
   try {
     const config = JSON.parse(json) as Record<string, unknown>;
+
     return (
       Array.isArray(config.files) &&
       config.files.length === 0 &&
@@ -125,6 +135,7 @@ export function rootTsconfigHasNoFiles(root: string): boolean {
 function confineReportDir(root: string, reportDir: string): string {
   const relative = path.relative(path.resolve(root), path.resolve(reportDir));
   let resolved: string | null = null;
+
   if (relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)) {
     try {
       resolved = resolveInsideRoot(root, relative);
@@ -132,6 +143,7 @@ function confineReportDir(root: string, reportDir: string): string {
       resolved = null;
     }
   }
+
   if (resolved === null) {
     throw new VeritasError(
       'user',
@@ -139,6 +151,7 @@ function confineReportDir(root: string, reportDir: string): string {
       `reportDir must be a directory inside the project root: ${reportDir}`,
     );
   }
+
   return resolved;
 }
 
@@ -170,20 +183,25 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   // Checked before anything is created or spawned: mutator writes wherever --report-dir points.
   const reportDir = confineReportDir(options.root, options.reportDir);
   const noTypecheck = options.noTypecheck ?? rootTsconfigHasNoFiles(options.root);
+
   if (noTypecheck && options.noTypecheck === undefined)
     warnings.push(
       'tsconfig.json at the root only references other projects, and mutator type-checks against that file alone: mutants were not type-checked, so some survivors may be type errors',
     );
+
   if (options.testFiles?.length === 0) {
     warnings.push('no test imports the code in scope; mutation was not run');
+
     return result('succeeded', { detail: 'no test can kill these mutants' });
   }
   let args: string[];
+
   try {
     args = buildMutatorArgs({ ...options, reportDir, noTypecheck });
   } catch (error) {
     return result('error', { detail: (error as Error).message });
   }
+
   if (options.signal?.aborted) return result('cancelled', { detail: 'aborted before mutator started' });
 
   const detection = await detectMutator(options.root, {
@@ -191,12 +209,15 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     fallbackToAdapter: !options.projectMutatorOnly,
   });
   const backend = { name: 'mizchi' as const, version: detection.version };
+
   if (!detection.available || detection.binPath === null) {
     return result('unsupported', { backend, detail: detection.detail });
   }
+
   if (detection.origin === 'adapter') {
     warnings.push(`the project has no @mizchi/mutator; using the adapter's own copy at ${detection.binPath}`);
   }
+
   if (detection.version !== PINNED_MUTATOR_VERSION) {
     warnings.push(
       `mutator ${detection.version ?? 'of unknown version'} differs from the pinned ${PINNED_MUTATOR_VERSION}`,
@@ -214,17 +235,20 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     'json',
   ].filter((f): f is string => typeof f === 'string');
   const missing = needed.filter((flag) => !detection.capabilities.includes(flag));
+
   if (missing.length > 0) {
     return result('unsupported', {
       backend,
       detail: `mutator ${detection.version ?? ''} does not support: ${missing.join(', ')}`,
     });
   }
+
   if (options.config.mutation.mode === 'diff' && options.since === undefined) {
     warnings.push('mutation.mode is "diff" but no --since ref was given: all mutants in scope were run');
   }
 
   mkdirSync(reportDir, { recursive: true });
+
   if (options.testFiles !== undefined) {
     const configPath = writeNarrowedVitestConfig({
       root: options.root,
@@ -246,6 +270,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
 
   if (run.spawnError)
     return result('error', { ...common, detail: `could not start mutator: ${run.spawnError}` });
+
   if (run.timedOut) {
     return result('timeout', {
       ...common,
@@ -256,25 +281,30 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       }`,
     });
   }
+
   if (options.signal?.aborted)
     return result('cancelled', { ...common, detail: 'aborted while mutator was running' });
+
   if (run.exitCode === EXIT_BASELINE_FAILED) {
     return result('failed', {
       ...common,
       detail: `tests fail without mutants (baseline, exit 4): ${summarize(redact(run.stderr))}`,
     });
   }
+
   if (run.exitCode !== 0 && run.exitCode !== EXIT_GATE_FAILED) {
     return result('error', {
       ...common,
       detail: `mutator exited with ${run.exitCode ?? `signal ${run.signal}`}: ${summarize(redact(run.stderr))}`,
     });
   }
+
   if (run.exitCode === EXIT_GATE_FAILED) {
     warnings.push('a quality gate in the project mutator config failed (exit 2); results are reported as-is');
   }
 
   let agentReport: unknown = null;
+
   try {
     agentReport = redactDeep(JSON.parse(run.stdout) as unknown);
   } catch {
@@ -294,6 +324,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     return result('error', { ...common, agentReport, detail: `mutator did not write ${reportPath}` });
   }
   let mutants: Mutant[];
+
   try {
     const json: unknown = JSON.parse(readFileSync(rawReportPath, 'utf8'));
     mutants = importMutationReport(json, { root: options.root, source: 'mutator', childProcessKeys });
@@ -304,15 +335,18 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       detail: `could not parse ${rawReportPath}: ${redact((error as Error).message)}`,
     });
   }
+
   if (options.killMatrix && agent?.killMatrix === undefined) {
     warnings.push('--kill-matrix was requested but the agent report has no killMatrix');
   }
   const counts = countMutants(mutants);
+
   if (counts.pending > 0) {
     warnings.push(
       `${counts.pending} mutant(s) are pending (not run: outside --since, or over the time budget)`,
     );
   }
+
   return result('succeeded', {
     ...common,
     mutants,
@@ -330,6 +364,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
 export function importMutationResult(options: { root: string; reportFile: string }): MutationRunResult {
   const file = resolveInsideRoot(options.root, options.reportFile);
   let json: unknown;
+
   try {
     json = JSON.parse(readFileSync(file, 'utf8'));
   } catch (error) {
@@ -340,6 +375,7 @@ export function importMutationResult(options: { root: string; reportFile: string
     );
   }
   let mutants: Mutant[];
+
   try {
     mutants = importMutationReport(json, { root: options.root, source: 'mutation-testing-elements' });
   } catch (error) {
@@ -347,6 +383,7 @@ export function importMutationResult(options: { root: string; reportFile: string
   }
   const framework = (json as { framework?: { name?: unknown; version?: unknown } }).framework;
   const counts = countMutants(mutants);
+
   return {
     status: 'succeeded',
     detail: null,

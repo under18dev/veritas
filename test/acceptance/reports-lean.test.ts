@@ -6,7 +6,9 @@ import { copyFixture, json, runCli } from './helpers.js';
 
 function setup(name: string): string {
   const dir = copyFixture(name, { git: true, linkDeps: true });
+
   if (runCli(['init', '--yes'], dir).status !== 0) throw new Error('init failed');
+
   return dir;
 }
 
@@ -22,16 +24,19 @@ describe('reports from a real run', () => {
     const anchors = [...html.matchAll(/href="#([^"]+)"/g)].map((m) => m[1]);
     expect(anchors.length).toBeGreaterThan(0);
     expect(anchors.filter((a) => !ids.has(a))).toEqual([]);
+
     for (const f of run.findings) expect(ids.has(f.id)).toBe(true);
     expect(html).not.toMatch(/<script\s+src|<link\s/i);
     const smtLinks = [...html.matchAll(/href="([^"#][^"]*\.smt2)"/g)].map((m) => m[1] as string);
     expect(smtLinks.length).toBeGreaterThan(0);
+
     for (const link of smtLinks)
       expect(readFileSync(path.join(runDir, link), 'utf8')).toContain('(check-sat)');
 
     const sarif = JSON.parse(readFileSync(path.join(runDir, 'report.sarif'), 'utf8'));
     expect(validateSarif(sarif)).toEqual({ valid: true, errors: [] });
     const results = sarif.runs[0].results as { level: string; properties?: { certainty?: string } }[];
+
     for (const r of results) if (r.properties?.certainty === 'suspected') expect(r.level).toBe('note');
 
     const markdown = runCli(['report', '--format', 'markdown'], dir);
@@ -94,9 +99,11 @@ describe('HTML evidence chain', () => {
     const testIds = linksIn(propertyBody, 'Tests');
     expect(testIds.length).toBeGreaterThan(0);
     const mutantIds = new Set<string>();
+
     for (const t of testIds) {
       const testBody = articles.get(t) as string;
       expect(testBody).toContain('discount');
+
       for (const m of linksIn(testBody, 'Mutants')) mutantIds.add(m);
     }
     expect(mutantIds.size).toBeGreaterThan(0);

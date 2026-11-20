@@ -18,6 +18,7 @@ function project(): string {
     'export function isLongEnough(length: number): boolean {\n  return length >= 8;\n}\n',
   );
   initProject(root);
+
   return root;
 }
 

@@ -21,6 +21,7 @@ describe('text and markdown reports', () => {
     expect(
       headings.every((heading, index) => {
         const previous = headings[index - 1];
+
         return output.indexOf(heading) > (previous ? output.indexOf(previous) : -1);
       }),
     ).toBe(true);
@@ -31,6 +32,7 @@ describe('text and markdown reports', () => {
     expect(
       headings.every((heading, index) => {
         const previous = headings[index - 1];
+
         return output.indexOf(`## ${heading}`) > (previous ? output.indexOf(`## ${previous}`) : -1);
       }),
     ).toBe(true);
@@ -96,6 +98,7 @@ describe('text and markdown reports', () => {
   it('names the formal claims behind each test assessment', () => {
     const input = fixture();
     const first = input.assessments[0];
+
     if (!first) throw new Error('fixture has no assessment');
     first.vector.formalEvidence = ['claim-1'];
     expect(renderText(input)).toMatch(/formal evidence claim-1 [^(]+\(conformance, assurance \w+\)/);
@@ -114,6 +117,7 @@ describe('text and markdown reports', () => {
   it('shows the replay command in the run metadata of text and markdown', () => {
     const input = fixture();
     input.run.replay = 'veritas replay run-1';
+
     for (const output of [renderText(input), renderMarkdown(input)])
       expect(output).toContain('replay with `veritas replay run-1`');
   });
@@ -139,6 +143,7 @@ describe('mutation outcomes', () => {
   it('names every mutant status instead of folding undecided ones together', () => {
     const input = fixture();
     const base = input.mutants[0];
+
     if (!base) throw new Error('fixture has no mutant');
     input.mutants = [
       base,
@@ -163,6 +168,7 @@ describe('property detection', () => {
   it('says how many mutants of its function each property detects', () => {
     const input = fixture();
     const base = input.claims[0];
+
     if (!base) throw new Error('fixture has no claim');
     input.claims = [
       ...input.claims,

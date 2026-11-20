@@ -25,6 +25,7 @@ describe('init and doctor', () => {
     }>(doctor);
     expect(report.configFound).toBe(true);
     const names = report.capabilities.map((c) => c.name);
+
     for (const required of ['node', 'git', 'vitest', 'mutator', 'z3', 'lean', 'llm', 'sandbox'])
       expect(names).toContain(required);
     // Dependencies were not installed in the copied fixture: mutation must be reported as disabled, not enabled.
@@ -102,6 +103,7 @@ describe('exit codes and output contract', () => {
 
   it('prints usage errors as JSON on stdout with --json', () => {
     const dir = copyFixture('discount-boundary');
+
     for (const args of [
       ['--json', 'no-such-command'],
       ['--json', 'prove', '--engine', 'coq'],
@@ -142,6 +144,7 @@ describe('exit codes and output contract', () => {
       [['analyze', 'src/no-such-file.ts'], 'PATH_NOT_FOUND'],
       [['mutate', '--scope', 'src/no-such-dir'], 'PATH_NOT_FOUND'],
     ];
+
     for (const [args, code] of cases) {
       const result = runCli(['--json', ...args], dir);
       expect(result.status, args.join(' ')).toBe(2);

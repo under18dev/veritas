@@ -39,6 +39,7 @@ export function interpretOutput(
   output: string,
 ): Pick<SolverRun, 'verdict' | 'model' | 'reasonUnknown' | 'error'> {
   let exprs: SExpr[];
+
   try {
     exprs = parseSExprs(output);
   } catch (error) {
@@ -57,6 +58,7 @@ export function interpretOutput(
       e[0] === 'error' &&
       !(head !== 'sat' && typeof e[1] === 'string' && /model is not available/.test(e[1])),
   );
+
   if (head !== 'sat' && head !== 'unsat' && head !== 'unknown') {
     return {
       verdict: 'error',
@@ -65,6 +67,7 @@ export function interpretOutput(
       error: `unexpected solver output: ${output.slice(0, 300)}`,
     };
   }
+
   if (solverError) {
     return {
       verdict: 'error',
@@ -78,12 +81,16 @@ export function interpretOutput(
     Array.isArray(reasonExpr) && typeof reasonExpr[1] === 'string'
       ? reasonExpr[1].replace(/^"|"$/g, '')
       : null;
+
   if (head === 'unknown') {
     const timedOut = reasonUnknown !== null && /timeout|canceled|cancelled|resource/i.test(reasonUnknown);
+
     return { verdict: timedOut ? 'timeout' : 'unknown', model: {}, reasonUnknown, error: null };
   }
+
   if (head === 'unsat') return { verdict: 'unsat', model: {}, reasonUnknown: null, error: null };
   const valueList = exprs.slice(1).find((e) => Array.isArray(e) && Array.isArray(e[0]));
+
   try {
     return {
       verdict: 'sat',
@@ -111,6 +118,7 @@ export function solverHeapLimit(memoryMb: number | undefined): number | undefine
 
 function runWasm(smt: string, options: SolveOptions): Promise<SolverRun> {
   const started = Date.now();
+
   return new Promise((resolve) => {
     // Load the worker next to this module; under tests this module is TypeScript, which Node 24+ runs natively.
     const ext = import.meta.url.endsWith('.ts') ? '.ts' : '.js';
@@ -180,8 +188,10 @@ async function runNative(smt: string, options: SolveOptions): Promise<SolverRun>
     output: result.stdout,
     durationMs: result.durationMs,
   };
+
   if (result.spawnError)
     return { ...base, verdict: 'error', model: {}, reasonUnknown: null, error: result.spawnError };
+
   if (result.timedOut) {
     return {
       ...base,
@@ -191,8 +201,10 @@ async function runNative(smt: string, options: SolveOptions): Promise<SolverRun>
       error: `wall-clock limit of ${options.timeoutMs} ms exceeded`,
     };
   }
+
   if (options.signal?.aborted)
     return { ...base, verdict: 'cancelled', model: {}, reasonUnknown: null, error: 'cancelled' };
+
   return { ...base, ...interpretOutput(result.stdout) };
 }
 
@@ -209,11 +221,13 @@ export async function solverEngineVersion(
   if (engine === 'z3-wasm') {
     try {
       const pkg = createRequire(import.meta.url)('z3-solver/package.json') as { version?: string };
+
       return pkg.version ? `z3-solver ${pkg.version}` : null;
     } catch {
       return null;
     }
   }
   const version = await runCommand(nativeBinary, ['--version'], { cwd: process.cwd(), timeoutMs: 10_000 });
+
   return version.exitCode === 0 ? version.stdout.trim() || null : null;
 }

@@ -13,10 +13,12 @@ const webConfig = (allowDomains: string[]) =>
 
 function recordingFetch(): { fetch: typeof fetch; requested: string[] } {
   const requested: string[] = [];
+
   return {
     requested,
     fetch: async (input) => {
       requested.push(String(input));
+
       return new Response('<p>The total must be at least 10.</p>');
     },
   };
@@ -30,6 +32,7 @@ describe('SSRF: DNS resolution before fetching', () => {
     const lookups: string[] = [];
     const lookup: Lookup = async (hostname) => {
       lookups.push(hostname);
+
       return [{ address: '127.0.0.1', family: 4 }];
     };
     const result = await discoverEvidence({
@@ -113,6 +116,7 @@ describe('SSRF: DNS resolution before fetching', () => {
       fetch: async () => {
         const response = new Response('<p>The total must be at least 10.</p>');
         Object.defineProperty(response, 'url', { value: 'https://internal.allowed.example/secret' });
+
         return response;
       },
       lookup: async (hostname) => [{ address: resolved[hostname] ?? '127.0.0.1', family: 4 }],
@@ -160,10 +164,12 @@ describe('SSRF: unsafe IP literal forms', () => {
     'localhost',
     'api.localhost',
   ];
+
   for (const host of unsafe)
     it(`treats ${host} as unsafe`, () => {
       expect(isUnsafeHost(host)).toBe(true);
     });
+
   for (const host of [
     '93.184.216.34',
     '172.32.0.1',
@@ -246,10 +252,12 @@ describe('network request accounting', () => {
       lookup: async () => [{ address: '93.184.216.34', family: 4 }],
       fetch: async (input, init) => {
         calls++;
+
         if (String(input).endsWith('/a')) throw new TypeError('network down');
         await new Promise<void>((_resolve, reject) =>
           init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))),
         );
+
         return new Response('never');
       },
     });

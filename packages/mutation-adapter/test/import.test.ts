@@ -92,6 +92,7 @@ describe('importMutationReport: status mapping', () => {
       { root, source: 'mutator' },
     );
     expect(mutants[0]?.status).toBe('survived');
+
     for (const m of mutants) expect(['equivalent_proven', 'suspected_equivalent']).not.toContain(m.status);
   });
 

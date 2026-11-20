@@ -10,13 +10,16 @@ export function workspacePackages(repo) {
     .map((line) => line.match(/^\s+-\s+['"]?(packages\/[^'"*]*)\*['"]?\s*$/)?.[1])
     .filter(Boolean);
   const packages = [];
+
   for (const parent of globs) {
     for (const entry of readdirSync(path.join(repo, parent), { withFileTypes: true })) {
       const dir = `${parent}${entry.name}`;
       const file = path.join(repo, dir, 'package.json');
+
       if (entry.isDirectory() && existsSync(file))
         packages.push({ dir, manifest: JSON.parse(readFileSync(file, 'utf8')) });
     }
   }
+
   return packages;
 }

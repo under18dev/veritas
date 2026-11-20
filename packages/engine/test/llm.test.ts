@@ -22,6 +22,7 @@ function project(): string {
     'export function isLongEnough(length: number): boolean {\n  return length >= 8;\n}\n',
   );
   initProject(root);
+
   return root;
 }
 
@@ -34,6 +35,7 @@ function provider(
     model: 'fake-1',
     async complete(request) {
       const ids = request.documents.map((d) => d.id);
+
       return {
         provider: 'fake',
         model: 'fake-1',
@@ -109,6 +111,7 @@ describe('LLM-assisted extraction', { timeout: 120_000 }, () => {
       model: p.model,
       complete: async (r) => {
         called = true;
+
         return p.complete(r);
       },
     };
@@ -131,6 +134,7 @@ describe('LLM-assisted extraction', { timeout: 120_000 }, () => {
     writeFileSync(configPath, JSON.stringify(config));
     const previous = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
+
     try {
       const summary = await runVeritas({ root, command: 'test', stages: ['discover'] });
       expect(summary.run.stages[0]?.status).toBe('succeeded');

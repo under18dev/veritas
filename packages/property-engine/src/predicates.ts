@@ -9,6 +9,7 @@ export interface Interval {
 /** Normalize `x op v` over the integers, e.g. `x > 1000` becomes [1001, +inf). */
 export function toInterval(op: Op, value: string): Interval {
   const v = BigInt(value);
+
   switch (op) {
     case '>':
       return { lo: v + 1n, hi: null };
@@ -30,7 +31,9 @@ export function sameInterval(a: Interval, b: Interval): boolean {
 /** The complement of a one-sided interval, so `if (x < 1000) return 0` agrees with `x >= 1000`. */
 export function complement(i: Interval): Interval | null {
   if (i.lo !== null && i.hi === null) return { lo: null, hi: i.lo - 1n };
+
   if (i.lo === null && i.hi !== null) return { lo: i.hi + 1n, hi: null };
+
   return null;
 }
 
@@ -40,7 +43,9 @@ const FLIP: Record<string, Op> = { '<': '>', '<=': '>=', '>': '<', '>=': '<=', '
 export function normalizeComparison(op: string, paramOnLeft: boolean): Op | null {
   const base: Record<string, Op> = { '<': '<', '<=': '<=', '>': '>', '>=': '>=', '===': '==', '==': '==' };
   const o = base[op];
+
   if (!o) return null;
+
   return paramOnLeft ? o : (FLIP[o] as Op);
 }
 

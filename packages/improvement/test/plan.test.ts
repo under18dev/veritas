@@ -46,11 +46,13 @@ function seniorProject(overrides = {}, extra: Partial<RunInput> = {}) {
     tests: [assertingTest('test/age.test.ts', 'src/age.ts#isSenior', '80')],
     ...extra,
   });
+
   return { root, property: p, mutant: m };
 }
 
 function filesUnder(root: string, dir: string): string[] {
   const abs = path.join(root, dir);
+
   return existsSync(abs) ? readdirSync(abs, { recursive: true }).map(String).sort() : [];
 }
 
@@ -241,6 +243,7 @@ describe('applyImprovement refusals', () => {
   async function planned() {
     const ctx = seniorProject();
     const result = await planImprovement({ root: ctx.root });
+
     return { ...ctx, result, hash: projectHash(ctx.root) };
   }
 

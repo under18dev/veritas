@@ -30,8 +30,10 @@ export function configureLogging(options: { debug?: boolean; format?: 'text' | '
  */
 export const stderrSink: LogSink = (event: LogEvent) => {
   if (event.level === 'debug' && !logging.debug) return;
+
   if (logging.format === 'json') {
     process.stderr.write(`${redact(JSON.stringify(event))}\n`);
+
     return;
   }
   const prefix = event.level === 'info' ? '' : `${event.level === 'warn' ? 'warning' : event.level}: `;
@@ -56,6 +58,7 @@ export function emitText(text: string): void {
 
 export function reportError(error: unknown, json: boolean | undefined): ExitCode {
   const code = exitCodeFor(error);
+
   if (json) {
     const body =
       error instanceof VeritasError
@@ -82,9 +85,11 @@ export function reportError(error: unknown, json: boolean | undefined): ExitCode
     });
   } else if (error instanceof VeritasError) {
     log(`error[${error.code}]: ${error.message}`);
+
     if (error.hint) log(`hint: ${error.hint}`);
   } else {
     log(`unexpected error: ${(error as Error)?.stack ?? String(error)}`);
   }
+
   return code ?? ExitCode.ToolError;
 }

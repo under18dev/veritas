@@ -14,6 +14,7 @@ function callOf(t: Translated): Expr {
 /** Apply the integer domain to every integer parameter except array lengths, which keep [0, maxArrayLength]. */
 function withDomain(params: Param[], domain: IntDomain | undefined, model: FunctionModel): Param[] {
   const lengths = new Set((model.jsParams ?? []).flatMap((p) => (p.kind === 'array' ? [p.length] : [])));
+
   return params.map((p) => (p.sort === 'int' && domain && !lengths.has(p.name) ? { ...p, domain } : p));
 }
 
@@ -31,6 +32,7 @@ export function thresholdProperty(options: {
   domain?: IntDomain;
 }): PropertyIR {
   const { implementation: impl } = options;
+
   if (!impl.params.some((p) => p.name === options.param && p.sort === 'int')) {
     throw new Error(`${options.param} is not an integer parameter of ${impl.model.name}`);
   }
@@ -61,6 +63,7 @@ export function thresholdProperty(options: {
             right: { kind: 'binary', op: '==', left: result, right: lit(options.whenFalse) },
           },
         };
+
   return {
     irVersion: 1,
     params: withDomain(impl.params, options.domain, impl.model),
@@ -84,6 +87,7 @@ export function equivalenceProperty(a: Translated, b: Translated, domain?: IntDo
     fn: t.model.name,
     args: a.params.map((p) => v(p.name)),
   });
+
   return {
     irVersion: 1,
     params: withDomain(a.params, domain, a.model),
@@ -100,11 +104,14 @@ export function applyMutation(
 ): string {
   const lines = source.split('\n');
   let offset = 0;
+
   for (let i = 0; i < mutation.line - 1; i++) offset += (lines[i]?.length ?? 0) + 1;
   offset += mutation.column - 1;
+
   if (source.slice(offset, offset + mutation.original.length) !== mutation.original) {
     throw new Error(`original text not found at ${mutation.line}:${mutation.column}`);
   }
+
   return source.slice(0, offset) + mutation.replacement + source.slice(offset + mutation.original.length);
 }
 
@@ -118,13 +125,16 @@ export function restrictToInputs(ir: PropertyIR, inputs: Record<string, string |
     ir.params
       .map((p): Expr => {
         const value = input[p.name];
+
         if (value === undefined || typeof value !== (p.sort === 'bool' ? 'boolean' : 'string'))
           throw new Error(`input does not give ${p.name} a ${p.sort} value`);
+
         return { kind: 'binary', op: '==', left: v(p.name), right: lit(value) };
       })
       .reduce((a, b): Expr => ({ kind: 'binary', op: 'and', left: a, right: b })),
   );
   const anyInput = equalities.reduce((a, b): Expr => ({ kind: 'binary', op: 'or', left: a, right: b }));
+
   return { ...ir, preconditions: [...ir.preconditions, anyInput] };
 }
 
@@ -162,6 +172,7 @@ export function renameCalls(expr: Expr, from: string, to: string): Expr {
 export function detectionProperty(ir: PropertyIR, original: string, mutant: Translated): PropertyIR {
   const current = ir.functions.find((f) => f.name === original);
   const m = mutant.model;
+
   if (
     !current ||
     m.name === original ||
@@ -171,6 +182,7 @@ export function detectionProperty(ir: PropertyIR, original: string, mutant: Tran
   ) {
     throw new Error(`the mutant of ${original} does not have the signature the property was written for`);
   }
+
   return {
     ...ir,
     functions: [...ir.functions, ...mutant.dependencies, m],

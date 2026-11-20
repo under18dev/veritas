@@ -19,7 +19,9 @@ const secrets = [
 describe('report safety and stability', () => {
   function first<T>(items: T[]): T {
     const item = items[0];
+
     if (item === undefined) throw new Error('expected an item');
+
     return item;
   }
 
@@ -28,6 +30,7 @@ describe('report safety and stability', () => {
     first(input.sources).summary = secrets.join(' ');
     first(input.properties).description = first(secrets);
     first(input.findings).title = secrets[1] ?? '';
+
     for (const output of [
       renderText(input),
       renderMarkdown(input),
@@ -76,6 +79,7 @@ describe('report safety and stability', () => {
       (value: typeof input) => JSON.stringify(renderSarif(value)),
       renderCiSummary,
     ];
+
     for (const render of renderers) expect(render(input)).toBe(render(input));
   });
 
@@ -90,6 +94,7 @@ describe('report safety and stability', () => {
       (value: typeof original) => JSON.stringify(renderSarif(value)),
       renderCiSummary,
     ];
+
     for (const render of renderers) expect(render(original)).toBe(render(reversed));
   });
 
@@ -131,6 +136,7 @@ describe('artifact links', () => {
   ])('never links to %s', (base) => {
     const html = renderHtml({ ...fixture(), artifactBase: base });
     const hrefs = [...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1] as string);
+
     for (const href of hrefs) {
       expect(href.startsWith('#') || !/^[a-z][a-z0-9+.-]*:|^\/|\\/i.test(href.replaceAll('&amp;', '&'))).toBe(
         true,

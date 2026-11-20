@@ -365,6 +365,7 @@ export function fixture(): ParsedReportInput {
 
 export function reversedFixture(): ParsedReportInput {
   const value = fixture();
+
   return {
     ...value,
     sources: [...value.sources].reverse(),

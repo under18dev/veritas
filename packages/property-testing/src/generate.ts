@@ -15,6 +15,7 @@ const IDENT = /^[A-Za-z_$][\w$]*$/;
 
 function ident(name: string, what: string): string {
   if (!IDENT.test(name)) throw new Error(`${what} ${JSON.stringify(name)} is not a valid identifier`);
+
   return name;
 }
 
@@ -73,13 +74,16 @@ const OPS: Record<string, string> = {
  */
 export function generateVitestFile(options: GenerateVitestOptions): string {
   const ir = PropertyIR.parse(options.ir);
+
   if (!Number.isInteger(options.seed)) throw new Error('seed must be an integer');
+
   if (!Number.isInteger(options.numRuns) || options.numRuns < 1) throw new Error('numRuns must be positive');
   const functions = new Map(ir.functions.map((f) => [f.name, f]));
   const bound = new Map<string, { local: string; model: FunctionModel }>();
   const imports: string[] = [];
   options.bindings.forEach((b, i) => {
     const model = functions.get(b.modelName);
+
     if (!model) throw new Error(`binding ${b.modelName} has no function model in the IR`);
     const local = `impl${i}`;
     bound.set(b.modelName, { local, model });
@@ -96,7 +100,9 @@ export function generateVitestFile(options: GenerateVitestOptions): string {
     switch (expr.kind) {
       case 'var': {
         const v = vars.get(expr.name);
+
         if (!v) throw new Error(`unbound variable ${expr.name}`);
+
         return v;
       }
       case 'int':
@@ -108,9 +114,13 @@ export function generateVitestFile(options: GenerateVitestOptions): string {
       case 'binary': {
         const l = code(expr.left, vars);
         const r = code(expr.right, vars);
+
         if (expr.op === 'implies') return `(!(${l}) || (${r}))`;
+
         if (expr.op === 'div') return `ediv(${l}, ${r})`;
+
         if (expr.op === 'mod') return `emod(${l}, ${r})`;
+
         return `(${l} ${OPS[expr.op]} ${r})`;
       }
       case 'ite':
@@ -118,6 +128,7 @@ export function generateVitestFile(options: GenerateVitestOptions): string {
       case 'call': {
         const args = expr.args.map((a) => code(a, vars));
         const b = bound.get(expr.fn);
+
         if (b) {
           const scalar = new Map(
             b.model.params.map((p, i) => [p.name, p.sort === 'int' ? `arg(${args[i]})` : `${args[i]}`]),
@@ -127,19 +138,24 @@ export function generateVitestFile(options: GenerateVitestOptions): string {
           const jsArgs = b.model.jsParams
             ? b.model.jsParams.map((j) => {
                 if (j.kind === 'scalar') return at(j.param);
+
                 if (j.kind === 'record')
                   return `{ ${j.fields.map((f) => `${JSON.stringify(f.key)}: ${at(f.param)}`).join(', ')} }`;
                 const length = args[b.model.params.findIndex((p) => p.name === j.length)];
+
                 return `[${j.elements.map(at).join(', ')}].slice(0, Number(${length}))`;
               })
             : b.model.params.map((p) => at(p.name));
           const check = b.model.returns === 'int' ? 'int' : 'bool';
+
           return `${check}(${b.local}(${jsArgs.join(', ')}), ${JSON.stringify(expr.fn)})`;
         }
         const local = modelNames.get(expr.fn);
+
         if (!local || !functions.get(expr.fn)?.body) {
           throw new Error(`function ${expr.fn} is opaque and not bound`);
         }
+
         return `${local}(${args.join(', ')})`;
       }
     }
@@ -151,7 +167,9 @@ export function generateVitestFile(options: GenerateVitestOptions): string {
       const vars = new Map(f.params.map((p) => [p.name, `a_${ident(p.name, 'parameter')}`]));
       const params = f.params.map((p) => `a_${p.name}: ${p.sort === 'int' ? 'bigint' : 'boolean'}`);
       const body = f.body ? code(f.body, vars) : null;
+
       if (body === null) return null;
+
       return `// IR model of ${commentText(f.symbol || f.name)}\nfunction ${modelNames.get(f.name)}(${params.join(', ')}): ${f.returns === 'int' ? 'bigint' : 'boolean'} {\n  return ${body};\n}`;
     })
     .filter((m): m is string => m !== null);
@@ -160,11 +178,13 @@ export function generateVitestFile(options: GenerateVitestOptions): string {
   const boundaries = boundaryValues(ir);
   const arbitraries = ir.params.map((p) => {
     if (p.sort === 'bool') return `  ${p.name}: fc.boolean(),`;
+
     if (!Number.isSafeInteger(Number(p.domain.min)) || !Number.isSafeInteger(Number(p.domain.max))) {
       throw new Error(`domain of ${p.name} leaves the safe-integer range`);
     }
     const base = `fc.integer({ min: ${p.domain.min}, max: ${p.domain.max} })`;
     const extras = boundaries[p.name] ?? [];
+
     return extras.length > 0
       ? `  ${p.name}: fc.oneof(${base}, fc.constantFrom(${extras.join(', ')})),`
       : `  ${p.name}: ${base},`;

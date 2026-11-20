@@ -51,13 +51,16 @@ export function runCommand(
   options: RunCommandOptions,
 ): Promise<CommandResult> {
   const env: Record<string, string> = {};
+
   for (const name of options.envAllowlist ?? DEFAULT_ENV_ALLOWLIST) {
     const value = process.env[name];
+
     if (value !== undefined) env[name] = value;
   }
   Object.assign(env, options.env ?? {});
   const max = options.maxOutputBytes ?? 10 * 1024 * 1024;
   const started = Date.now();
+
   return new Promise((resolve) => {
     let stdout = '';
     let stderr = '';
@@ -124,6 +127,7 @@ export function runCommand(
     child.stderr?.on('data', (d: Buffer) => {
       if (stderr.length < max) stderr += d.toString();
     });
+
     if (options.input !== undefined) child.stdin?.end(options.input);
     child.on('error', (error) => finish({ spawnError: error.message }));
     child.on('close', (exitCode, signal) => finish({ exitCode, signal }));
@@ -133,12 +137,14 @@ export function runCommand(
 /** Children in their own process group do not get the terminal's signals; end them when Veritas exits. */
 const running = new Set<ChildProcess>();
 let exitHookInstalled = false;
+
 function installExitHook(): void {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
   process.once('exit', () => {
     for (const child of running) killTree(child);
   });
+
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
       for (const child of running) killTree(child);
@@ -152,6 +158,7 @@ function installExitHook(): void {
  * before this runs (a daemon whose parent already exited) can no longer be found. */
 function killTree(child: ChildProcess): void {
   if (child.pid === undefined) return;
+
   try {
     if (process.platform === 'win32') {
       spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
@@ -162,6 +169,7 @@ function killTree(child: ChildProcess): void {
         } catch {
           // not a group leader
         }
+
         try {
           process.kill(pid, 'SIGKILL');
         } catch {
@@ -179,22 +187,28 @@ function killTree(child: ChildProcess): void {
 /** Every process below `root` by parent pid (POSIX `ps`). */
 function descendants(root: number): number[] {
   const ps = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 5_000 });
+
   if (ps.status !== 0) return [];
   const children = new Map<number, number[]>();
+
   for (const line of ps.stdout.split('\n')) {
     const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+
     if (!pid || ppid === undefined || Number.isNaN(ppid)) continue;
     children.set(ppid, [...(children.get(ppid) ?? []), pid]);
   }
   const out: number[] = [];
   const queue = [root];
+
   while (queue.length > 0) {
     const next = queue.shift() as number;
+
     for (const pid of children.get(next) ?? []) {
       out.push(pid);
       queue.push(pid);
     }
   }
+
   return out;
 }
 
@@ -216,25 +230,34 @@ export function resolveCommand(
   options: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv } = {},
 ): ResolvedCommand | null {
   const platform = options.platform ?? process.platform;
+
   if (platform !== 'win32') return { command: name, prefix: [] };
   const ext = path.extname(name).toLowerCase();
+
   if (ext === '.cmd' || ext === '.bat') {
     // An explicit batch file: only an npm/pnpm shim can be run (through its Node.js script).
     const script = existsSync(name) ? shimTarget(name) : null;
+
     return script ? { command: process.execPath, prefix: [script] } : null;
   }
+
   if (/[\\/]/.test(name) || ext) return { command: name, prefix: [] };
   const env = options.env ?? process.env;
   const dirs = (env.PATH ?? env.Path ?? '').split(';').filter(Boolean);
+
   for (const dir of dirs) {
     for (const ext of ['.exe', '.com', '.cmd']) {
       const file = path.join(dir, `${name}${ext}`);
+
       if (!existsSync(file)) continue;
+
       if (ext !== '.cmd') return { command: file, prefix: [] };
       const script = shimTarget(file);
+
       return script ? { command: process.execPath, prefix: [script] } : null;
     }
   }
+
   return null;
 }
 
@@ -242,8 +265,10 @@ export function resolveCommand(
 function shimTarget(file: string): string | null {
   const text = readFileSync(file, 'utf8');
   const match = /"%(?:~dp0|dp0%)\\?([^"%]+\.[cm]?js)"\s+%\*/i.exec(text);
+
   if (!match?.[1]) return null;
   const script = path.resolve(path.dirname(file), ...match[1].split('\\'));
+
   return existsSync(script) ? script : null;
 }
 
@@ -261,6 +286,7 @@ export async function runProjectTests(
   // NODE_OPTIONS is not in the environment allowlist, so the user's own value never reaches the tests; the
   // memory limit (limits.memoryMb) is the only option set, and every Node.js process the runner starts inherits it.
   const memory = nodeMemoryFlags(options.memoryMb);
+
   try {
     return await runCommand(command, args, {
       ...options,

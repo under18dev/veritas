@@ -23,6 +23,7 @@ export interface FindingInput {
 
 function functionLocation(symbol: string, functions: FunctionInfo[]): Location[] {
   const fn = functions.find((f) => f.symbol === symbol);
+
   return fn ? [fn.location] : [];
 }
 
@@ -42,6 +43,7 @@ export function deriveFindings(input: FindingInput): Finding[] {
     const cex = claims.find(
       (c) => c.status === 'counterexample_found' && c.semanticValidation === 'confirmed',
     );
+
     if (p.implementationAgreement !== 'disagree' && !cex) continue;
     const accepted = p.status === 'accepted';
     const certainty: Finding['certainty'] = cex && accepted ? 'confirmed' : 'suspected';
@@ -51,10 +53,12 @@ export function deriveFindings(input: FindingInput): Finding[] {
         ? 'implementation compares the same parameter against a different boundary'
         : 'implementation comparison not matched statically',
     ];
+
     if (cex)
       explanation.push(
         `solver counterexample ${JSON.stringify(cex.counterexample)} reproduced in JavaScript (${cex.id})`,
       );
+
     if (!accepted)
       explanation.push(`property status is ${p.status}; accept it to make this a confirmed violation`);
     findings.push({
@@ -154,6 +158,7 @@ export function deriveFindings(input: FindingInput): Finding[] {
   }
 
   const testsById = new Map(input.tests.map((t) => [t.id, t]));
+
   for (const a of input.assessments) {
     if (a.outcome !== 'tautological_or_disconnected') continue;
     const t = testsById.get(a.testId);
@@ -173,5 +178,6 @@ export function deriveFindings(input: FindingInput): Finding[] {
       nextActions: ['assert on the result of the function under test, or remove the test'],
     });
   }
+
   return findings.sort((a, b) => a.id.localeCompare(b.id));
 }

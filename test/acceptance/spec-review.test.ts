@@ -12,7 +12,9 @@ interface RunJson {
 
 function setup(name: string): string {
   const dir = copyFixture(name, { git: true, linkDeps: true });
+
   if (runCli(['init', '--yes'], dir).status !== 0) throw new Error('init failed');
+
   return dir;
 }
 

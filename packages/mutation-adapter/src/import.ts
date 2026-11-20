@@ -68,6 +68,7 @@ export function mutatorTestRef(name: string): { file: string; suitePath: string[
   const full = (hash < 0 ? name : name.slice(hash + 1)).replace(/^\[[^\]]*\] /, '');
   const parts = full.split(' > ');
   const testName = parts.pop() ?? '';
+
   return { file, suitePath: parts, name: testName };
 }
 
@@ -89,6 +90,7 @@ export interface ImportOptions {
  */
 export function importMutationReport(json: unknown, options: ImportOptions): Mutant[] {
   const parsed = MutationTestingReport.safeParse(json);
+
   if (!parsed.success) {
     throw new VeritasError(
       'tool',
@@ -99,21 +101,26 @@ export function importMutationReport(json: unknown, options: ImportOptions): Mut
   const report = parsed.data;
   const realRoot = realpathSync(options.root);
   const testNames = new Map<string, string>();
+
   for (const [file, { tests }] of Object.entries(report.testFiles ?? {})) {
     for (const t of tests) testNames.set(t.id, options.source === 'mutator' ? t.id : `${file}#${t.name}`);
   }
   const testRef = (id: string): string => {
     if (options.source === 'mutator') return mutatorTestId(id);
     const raw = testNames.get(id) ?? id;
+
     // Raw refs are exposed as-is, so redact them; long ones are hashed (the hash reveals nothing).
     return raw.length <= 200 ? redact(raw) : stableId('TR', raw);
   };
 
   const mutants: Mutant[] = [];
+
   for (const fileKey of Object.keys(report.files).sort()) {
     const entry = report.files[fileKey];
+
     if (!entry) continue;
     const file = toPosixRelative(realRoot, resolveInsideRoot(realRoot, fileKey));
+
     for (const m of entry.mutants) {
       const { status, statusReason } = mapStatus(
         m.status,
@@ -147,6 +154,7 @@ export function importMutationReport(json: unknown, options: ImportOptions): Mut
       );
     }
   }
+
   return mutants;
 }
 
@@ -156,6 +164,7 @@ function mapStatus(
   childProcessFlag: boolean | undefined,
 ): { status: MutantStatus; statusReason?: string } {
   const status = Object.hasOwn(STATUS_MAP, raw) ? STATUS_MAP[raw] : undefined;
+
   if (status === undefined) {
     return {
       status: 'unknown',
@@ -163,9 +172,11 @@ function mapStatus(
     };
   }
   const undetected = status === 'survived' || status === 'no_coverage';
+
   if (undetected && (childProcessFlag || reason?.includes(CHILD_PROCESS_MARKER))) {
     return { status: 'unknown', statusReason: reason ?? `${CHILD_PROCESS_MARKER} (backend status ${raw})` };
   }
+
   return reason === undefined ? { status } : { status, statusReason: reason };
 }
 
@@ -178,12 +189,16 @@ function sliceSource(
   const offset = (line: number, column: number): number | undefined => {
     if (line > lines.length) return undefined;
     let at = 0;
+
     for (let i = 0; i < line - 1; i++) at += (lines[i]?.length ?? 0) + 1;
+
     return at + Math.max(0, column - 1);
   };
   const start = offset(loc.start.line, loc.start.column);
   const end = offset(loc.end.line, loc.end.column);
+
   if (start === undefined || end === undefined || end < start) return '';
+
   return source.slice(start, end);
 }
 
@@ -203,10 +218,13 @@ function reproductionFor(
   loc: { start: { line: number; column: number }; end: { line: number; column: number } },
 ): string {
   if (source === 'mutator') return ['mutator', '--root', root, '--only', key].map(shellQuote).join(' ');
+
   if (source === 'stryker') {
     const range = `${file}:${loc.start.line}:${loc.start.column}-${loc.end.line}:${loc.end.column}`;
+
     return ['npx', 'stryker', 'run', '--mutate', range].map(shellQuote).join(' ');
   }
+
   return `unavailable: report from an unidentified backend (mutant ${key} in ${file})`;
 }
 

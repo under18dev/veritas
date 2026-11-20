@@ -65,9 +65,11 @@ describe('buildMutatorArgs', () => {
     expect(() => buildMutatorArgs({ ...base, since: '--output=/tmp/x' })).toThrow(/invalid git ref/);
     expect(() => buildMutatorArgs({ ...base, since: '' })).toThrow(/invalid git ref/);
     expect(() => buildMutatorArgs({ ...base, since: 'main extra' })).toThrow(/invalid git ref/);
+
     for (const glob of ['../secret/**', '/etc/**', '--config-file=evil.js', 'src/../../x', 'C:/x', '']) {
       expect(() => buildMutatorArgs({ ...base, scope: [glob] })).toThrow(/relative to the project root/);
     }
+
     for (const key of ['--plugin', 'a b', 'x;rm', '']) {
       expect(() => buildMutatorArgs({ ...base, only: [key] })).toThrow(/invalid mutant key/);
     }
@@ -187,6 +189,7 @@ describe('runMutation failures', () => {
       ].join('\n'),
     );
     writeFileSync(path.join(root, 'package.json'), '{"type":"commonjs"}');
+
     return { root, bin };
   }
 
@@ -305,9 +308,11 @@ describe('runMutation on the discount fixture (real mutator)', () => {
         (m) => m.location.range?.start === 11 && /total (>|<) 5000/.test(m.replacement),
       );
       expect(shippingBoundary.map((m) => m.replacement).sort()).toEqual(['total < 5000', 'total > 5000']);
+
       for (const m of shippingBoundary) {
         expect(m.status).toBe('killed');
         expect(m.killedBy.length).toBeGreaterThan(0);
+
         for (const t of m.killedBy) {
           expect([
             shipping('charges shipping just below the threshold'),

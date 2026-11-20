@@ -8,6 +8,7 @@ import { shapeArguments } from './interpret.js';
  */
 export function shapeInput(ir: PropertyIR, input: Record<string, string | boolean>): Record<string, unknown> {
   const model = ir.functions.find((f) => f.jsParams && f.params.every((p) => p.name in input));
+
   if (!model?.jsParams) return input;
   const values = new Map(Object.entries(input));
   const shaped = shapeArguments(
@@ -21,7 +22,9 @@ export function shapeInput(ir: PropertyIR, input: Record<string, string | boolea
     out[p.name] = shaped[i];
   });
   const covered = new Set(model.params.map((p) => p.name));
+
   for (const [k, v] of Object.entries(input)) if (!covered.has(k)) out[k] = v;
+
   return out;
 }
 
@@ -58,22 +61,28 @@ export function outOfBoundsProperty(ir: PropertyIR): PropertyIR | null {
     switch (expr.kind) {
       case 'unary':
         visit(expr.arg);
+
         return;
       case 'binary':
         visit(expr.left);
         visit(expr.right);
+
         return;
       case 'ite':
         visit(expr.cond);
         visit(expr.whenTrue);
         visit(expr.whenFalse);
+
         return;
       case 'call': {
         for (const a of expr.args) visit(a);
         const fn = table.get(expr.fn);
+
         if (!fn?.outOfBounds?.length) return;
         const subst = new Map(fn.params.map((p, i) => [p.name, expr.args[i] as Expr]));
+
         for (const c of fn.outOfBounds) conditions.push(substitute(c, subst));
+
         return;
       }
       default:
@@ -81,8 +90,11 @@ export function outOfBoundsProperty(ir: PropertyIR): PropertyIR | null {
     }
   };
   visit(ir.body);
+
   for (const pre of ir.preconditions) visit(pre);
+
   if (conditions.length === 0) return null;
   const any = conditions.reduce((a, b): Expr => ({ kind: 'binary', op: 'or', left: a, right: b }));
+
   return { ...ir, body: { kind: 'unary', op: 'not', arg: any } };
 }

@@ -175,7 +175,9 @@ interface SpecOutput {
 
 function previousProperties(root: string): Property[] {
   const runId = latestRunWith(root, 'properties');
+
   if (!runId) return [];
+
   try {
     return readArtifact(root, runId, 'properties').data.properties;
   } catch {
@@ -185,7 +187,9 @@ function previousProperties(root: string): Property[] {
 
 function tally(values: string[]): Record<string, number> {
   const out: Record<string, number> = {};
+
   for (const v of values) out[v] = (out[v] ?? 0) + 1;
+
   return out;
 }
 
@@ -198,9 +202,12 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
   // also receive the events (logger) or, as before, only the plain messages (log).
   const trace = traceCollector();
   const sinks: LogSink[] = [trace.sink];
+
   if (options.logger) sinks.push(options.logger);
   const legacy = options.log;
+
   if (legacy) sinks.push((event) => event.level !== 'debug' && legacy(event.message));
+
   return withRunContext({ root: options.root, memoryMb: config.limits.memoryMb, sinks }, () =>
     runInContext(options, config, configHash, trace),
   );
@@ -233,6 +240,7 @@ async function runInContext(
         'command-line options',
       )
     : config;
+
   // A ref is passed to git as an argument: refuse anything that could be read as an option.
   if (
     options.since !== undefined &&
@@ -255,8 +263,10 @@ async function runInContext(
       if (path.isAbsolute(entry) || entry.split(/[\\/]/).includes('..')) {
         throw new VeritasError('user', 'SCOPE_OUTSIDE_ROOT', `scope escapes the project root: ${entry}`);
       }
+
       return null;
     }
+
     return toPosixRelative(root, resolveInsideRoot(root, entry));
   });
   const fullIndex = analyzeCode({ root, config });
@@ -275,6 +285,7 @@ async function runInContext(
     ...(options.gitRoot ? { gitCommit: gitCommit(options.gitRoot) } : {}),
   });
   const { cache, message: cacheMessage } = openCache(root, config);
+
   if (cacheMessage) log(cacheMessage);
   const signal = options.signal ?? new AbortController().signal;
   const wanted = new Set(options.stages);
@@ -291,6 +302,7 @@ async function runInContext(
   const add = (stage: Stage) => wanted.has(stage.name) && stages.push(stage);
   const mutationTestFiles = (mapped: TestInventory | undefined): string[] | undefined => {
     if (config.analysis.testFramework !== 'vitest') return undefined;
+
     try {
       return selectMutationTestFiles(mapped ?? inventoryTests({ root, config }), config, options.scope);
     } catch {
@@ -320,6 +332,7 @@ async function runInContext(
         options.since && diff !== null
           ? markChangedCandidates(inferred, code0, parseChangedLines(diff), options.since)
           : inferred;
+
       return {
         status: 'succeeded',
         output: { code: code0, candidates },
@@ -347,6 +360,7 @@ async function runInContext(
       let llmTokens = 0;
       const llmMessages: string[] = [];
       let provider: LlmProvider | null = null;
+
       if (options.offline) {
         if (options.llmProvider || config.llm.provider !== 'none')
           llmMessages.push('llm: skipped because the run is offline');
@@ -355,8 +369,10 @@ async function runInContext(
       } else {
         const created = await createLlmProvider(config, root);
         provider = created.provider;
+
         if (created.message) llmMessages.push(created.message);
       }
+
       if (provider) {
         const client = new LlmClient(provider, {
           tokenBudget: config.llm.maxTokensPerRun,
@@ -372,7 +388,9 @@ async function runInContext(
         ...llmMessages,
         `${result.sources.length} source(s), ${result.statements.length} statement(s), ${result.networkRequests} network request(s)`,
       ];
+
       for (const s of result.skipped) messages.push(`skipped ${s.source}: ${s.reason}`);
+
       return {
         status: 'succeeded',
         output: result,
@@ -405,9 +423,11 @@ async function runInContext(
         status: 'formalized' | 'not_formalizable';
         detail: string;
       }[] = [];
+
       for (const p of applied.properties) {
         if (!p.predicate || p.targetSymbols.length !== 1) continue;
         const fn = index.code.functions.find((f) => f.symbol === p.targetSymbols[0]);
+
         if (!fn) continue;
         const quote = discovery.statements.find((s) => p.statementIds.includes(s.id))?.quote;
         const result = formalizeProperty({
@@ -418,6 +438,7 @@ async function runInContext(
           maxArrayLength: config.formal.maxArrayLength,
           ...(quote ? { quote } : {}),
         });
+
         if (result.status === 'formalized') {
           formalized.set(p.id, result);
           p.ir = result.ir;
@@ -440,6 +461,7 @@ async function runInContext(
         staleApprovals: applied.staleApprovals.map((a) => a.id),
       });
       const counts = tally(applied.properties.map((p) => p.status));
+
       return {
         status: 'succeeded',
         output: {
@@ -458,6 +480,7 @@ async function runInContext(
     dependsOn: [],
     run: async () => {
       const inventory = inventoryTests({ root, config });
+
       return {
         status: 'succeeded',
         output: inventory,
@@ -475,6 +498,7 @@ async function runInContext(
         // A report says nothing about which mutants a --since change covers, so pending ones stay undecided.
         const { status, undecided, empty } = mutationStageStatus(result, { incremental: false });
         mutationAvailable = !empty;
+
         return {
           status,
           output: result,
@@ -512,9 +536,11 @@ async function runInContext(
           ...(options.killMatrix ? { killMatrix: true } : {}),
           ...(testFiles ? { testFiles } : {}),
         }));
+
       // Only a complete mutation run is reused; a failed or unsupported one is always retried.
       if (!cached && cache && cacheKey && result.status === 'succeeded')
         cache.set('mutation', cacheKey, result);
+
       if (cached) result.rawReportPath = null;
       mutants = result.mutants;
       // The mutator writes its own report files; index them so they carry the run metadata and a hash.
@@ -523,6 +549,7 @@ async function runInContext(
         incremental: Boolean(options.since),
       });
       mutationAvailable = result.status === 'succeeded' && !empty;
+
       return {
         status,
         output: result,
@@ -557,8 +584,10 @@ async function runInContext(
     run: async (ctx) => {
       const spec = ctx.outputs.get('spec') as SpecOutput;
       const messages: string[] = [];
+
       for (const p of eligible(spec)) {
         const f = spec.formalized.get(p.id);
+
         if (!f) continue;
         // A fixed default seed per property keeps runs reproducible; config.pbt.seed overrides it.
         const seed = config.pbt.seed ?? defaultSeed(p.id);
@@ -587,6 +616,7 @@ async function runInContext(
       const bad = pbtResults.filter(
         (r) => r.status === 'error' || r.status === 'timeout' || r.status === 'cancelled',
       );
+
       return {
         status: bad.length ? 'partial' : 'succeeded',
         artifacts: [ARTIFACTS.pbt.file],
@@ -603,6 +633,7 @@ async function runInContext(
       const messages: string[] = [];
       let solverMs = 0;
       const toProve = eligible(spec);
+
       // Properties selected for verification that fall outside the formal subset are reported, not skipped silently.
       for (const p of spec.properties.filter((x) => spec.notFormalized.has(x.id) && wantedStatus(x))) {
         const reason = spec.notFormalized.get(p.id) as string;
@@ -623,9 +654,12 @@ async function runInContext(
         });
         messages.push(`${p.id}: unsupported (${reason})`);
       }
+
       for (const p of toProve) {
         const f = spec.formalized.get(p.id);
+
         if (!f) continue;
+
         if ((options.formalEngine ?? config.formal.backend) === 'lean') {
           const { claim } = await proveWithLean({
             propertyId: p.id,
@@ -664,6 +698,7 @@ async function runInContext(
         );
       }
       const skipped = spec.properties.filter((p) => spec.formalized.has(p.id) && !toProve.includes(p));
+
       if (skipped.length)
         messages.push(
           `${skipped.length} formalized propert(y/ies) not verified: not accepted (use --include-proposed)`,
@@ -681,10 +716,13 @@ async function runInContext(
             line >= (f.location.range?.start ?? 0) &&
             line <= (f.location.range?.end ?? 0),
         );
+
         if (!fn || line === undefined || !fn.exported) return null;
         const source = readFileSync(path.join(root, fn.file), 'utf8');
         const column = (source.split('\n')[line - 1] ?? '').indexOf(m.original) + 1;
+
         if (column <= 0) return null;
+
         try {
           const mutated = applyMutation(source, {
             line,
@@ -692,6 +730,7 @@ async function runInContext(
             original: m.original,
             replacement: m.replacement,
           });
+
           return { fn, source, mutated };
         } catch {
           return null;
@@ -701,8 +740,10 @@ async function runInContext(
         string,
         { fn: FunctionInfo; orig: Translated; mut: Translated; propertyId: string }
       >();
+
       for (const m of mutants.filter((m) => m.status === 'survived')) {
         const found = mutantSource(m);
+
         if (!found) continue;
         const { fn, source, mutated } = found;
         const orig = translateFunction({
@@ -721,6 +762,7 @@ async function runInContext(
           maxArrayLength: config.formal.maxArrayLength,
           modelName: 'mutant',
         });
+
         if (orig.status !== 'translated' || mut.status !== 'translated') {
           messages.push(`mutant ${m.id}: equivalence not checked (outside the formal subset)`);
           continue;
@@ -749,6 +791,7 @@ async function runInContext(
         });
         claims.push(claim);
         solverMs += claim.durationMs;
+
         if (claim.status === 'proven_within_model') {
           m.status = 'equivalent_proven';
           m.statusReason = `bounded equivalence within ${JSON.stringify(domain)} (${claim.id})`;
@@ -766,22 +809,28 @@ async function runInContext(
       const spend = (): boolean => {
         if (budget > 0) {
           budget--;
+
           return true;
         }
 
         overBudget++;
+
         return false;
       };
 
       // Relation 2: can the inputs a test already uses tell a surviving mutant from the original?
       const inventory = ctx.outputs.get('map') as TestInventory | undefined;
+
       for (const [mutantId, { fn, orig, mut, propertyId }] of pairs) {
         const byInputs = new Map<string, { inputs: Record<string, string | boolean>[]; testIds: string[] }>();
+
         for (const test of inventory?.tests ?? []) {
           const inputs = test.targetCalls
             .filter((c) => c.symbol === fn.symbol)
             .map((c) => literalInput(orig.params, c.args, domain, orig.model.jsParams));
+
           if (inputs.length === 0) continue;
+
           if (inputs.some((i) => i === null)) {
             messages.push(
               `mutant ${mutantId}: inputs of ${test.id} are not all integer or boolean literals in the domain`,
@@ -794,6 +843,7 @@ async function runInContext(
           group.testIds.push(test.id);
           byInputs.set(key, group);
         }
+
         for (const { inputs, testIds } of byInputs.values()) {
           if (!spend()) continue;
           const { claim } = await proveProperty({
@@ -828,9 +878,12 @@ async function runInContext(
       // Relation 4: which mutants of its function does each verified property detect?
       for (const p of toProve) {
         const f = spec.formalized.get(p.id);
+
         if (!f) continue;
+
         for (const m of mutants.filter((m) => m.status !== 'pending' && m.status !== 'ignored')) {
           const found = mutantSource(m);
+
           if (!found || found.fn.symbol !== p.targetSymbols[0]) continue;
           const mut = translateFunction({
             file: found.fn.file,
@@ -841,6 +894,7 @@ async function runInContext(
             modelName: `${f.exportName}__mutant`,
           });
           let ir: PropertyIR;
+
           try {
             if (mut.status !== 'translated') throw new Error('outside the formal subset');
             ir = detectionProperty(f.ir, f.exportName, mut);
@@ -848,6 +902,7 @@ async function runInContext(
             messages.push(`${p.id} vs mutant ${m.id}: detection not checked (${(error as Error).message})`);
             continue;
           }
+
           if (!spend()) continue;
           const { claim } = await proveProperty({
             kind: 'property_detection',
@@ -875,6 +930,7 @@ async function runInContext(
           );
         }
       }
+
       if (overBudget > 0)
         messages.push(
           `${overBudget} distinguishability/property-detection check(s) skipped: limit of ${MAX_RELATION_CLAIMS} per run`,
@@ -883,6 +939,7 @@ async function runInContext(
       const undecided = claims.filter(
         (c) => c.status === 'timeout' || c.status === 'unknown' || c.status === 'error',
       );
+
       return {
         status: undecided.length ? 'partial' : 'succeeded',
         usage: { solverMs },
@@ -920,6 +977,7 @@ async function runInContext(
         assessments,
         functions,
       });
+
       for (const r of pbtResults.filter((r) => r.status === 'counterexample')) {
         const p = spec.properties.find((x) => x.id === r.propertyId);
         findings.push({
@@ -952,10 +1010,12 @@ async function runInContext(
         store.write(ARTIFACTS.assessments.file, ARTIFACTS.assessments.schema, assessments),
         store.write(ARTIFACTS.findings.file, ARTIFACTS.findings.schema, findings),
       ];
+
       if (wanted.has('mutate')) {
         const mutation = ctx.outputs.get('mutate') as
           | import('@under18dev/veritas-mutation-adapter').MutationRunResult
           | undefined;
+
         if (mutation)
           artifacts.push(
             store.write(ARTIFACTS.mutation.file, ARTIFACTS.mutation.schema, {
@@ -965,6 +1025,7 @@ async function runInContext(
           );
       }
       const outcomes = tally(assessments.map((a) => a.outcome));
+
       return {
         status: 'succeeded',
         artifacts,
@@ -1026,8 +1087,10 @@ async function runInContext(
     partial: results.some((r) => r.status !== 'succeeded'),
   };
   store.write(ARTIFACTS.run.file, ARTIFACTS.run.schema, run);
+
   if (wanted.has('report')) {
     const input = buildReportInput(root, runId);
+
     for (const format of config.reports.formats) {
       if (format === 'text') continue;
       store.writeText(REPORT_FILES[format], renderReport(input, format));
@@ -1035,6 +1098,7 @@ async function runInContext(
   }
   log(`run ${runId}: ${decision.verdict}`);
   store.writeText('trace.jsonl', trace.text());
+
   return { runId, dir: store.dir, run, findings, decision };
 }
 
@@ -1066,6 +1130,7 @@ export function selectMutationTestFiles(
   const opaque = new Set(
     inventory.tests.filter((test) => test.suspicions.includes('opaque_call')).map((test) => test.file),
   );
+
   return inventory.files
     .filter((file) =>
       file.dependencies.some(isSource) ? file.dependencies.some(inScope) : !opaque.has(file.path),
@@ -1085,10 +1150,12 @@ export function mutationCacheKey(
   },
 ): string | null {
   const listed = gitOutput(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
+
   if (listed === null) return null;
   const since = selection.since
     ? gitOutput(root, ['rev-parse', '--verify', `${selection.since}^{commit}`])
     : null;
+
   if (selection.since && since === null) return null;
   // Tool state is not an input: Veritas runs and cache, mutator's working directory and installed dependencies
   // (`node_modules`, where Vitest also keeps its cache; dependencies count through the lockfile and versions).
@@ -1107,6 +1174,7 @@ export function mutationCacheKey(
     }
   });
   const mutator = locateMutator(root);
+
   return cache.key({
     mutation: contents,
     mutator: mutator ? { version: mutator.version, origin: mutator.origin } : null,
@@ -1142,50 +1210,66 @@ export function literalInput(
   const input: Record<string, string | boolean> = {};
   const set = (param: string, value: unknown, range = domain): boolean => {
     const sort = sortOf.get(param);
+
     if (sort === 'bool') {
       if (typeof value !== 'boolean') return false;
       input[param] = value;
+
       return true;
     }
+
     if (sort !== 'int' || typeof value !== 'string' || !/^-?\d+$/.test(value)) return false;
     const n = BigInt(value);
+
     if (n < BigInt(range.min) || n > BigInt(range.max)) return false;
     input[param] = n.toString();
+
     return true;
   };
   const scalar = (raw: string): unknown => (raw === 'true' ? true : raw === 'false' ? false : raw);
   // Without jsParams every JavaScript argument is the model parameter of the same position.
   const shapes: JsParam[] = jsParams ?? params.map((p) => ({ kind: 'scalar', name: p.name, param: p.name }));
+
   if (args.length !== shapes.length) return null;
+
   for (const [i, shape] of shapes.entries()) {
     const raw = args[i]?.trim() ?? null;
+
     if (raw === null) return null;
+
     if (shape.kind === 'scalar') {
       if (!set(shape.param, scalar(raw))) return null;
       continue;
     }
     let value: unknown;
+
     try {
       value = JSON.parse(raw);
     } catch {
       return null;
     }
+
     if (shape.kind === 'record') {
       if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
       const record = value as Record<string, unknown>;
+
       if (Object.keys(record).length !== shape.fields.length) return null;
+
       for (const f of shape.fields) if (!set(f.param, record[f.key])) return null;
     } else {
       if (!Array.isArray(value) || value.length > shape.elements.length) return null;
+
       // The length ranges over [0, number of slots], not over the integer domain of the elements.
       if (!set(shape.length, String(value.length), { min: '0', max: String(shape.elements.length) }))
         return null;
+
       // Slots beyond the length do not affect the result in the model; give them a fixed value.
       for (const [k, param] of shape.elements.entries())
         if (!set(param, k < value.length ? value[k] : sortOf.get(param) === 'bool' ? false : domain.min))
           return null;
     }
   }
+
   return input;
 }
 
@@ -1203,6 +1287,8 @@ export function mutationStageStatus(
     (m) => m.status === 'unknown' || (m.status === 'pending' && !options.incremental),
   ).length;
   const empty = result.mutants.length === 0 && !options.incremental;
+
   if (result.status !== 'succeeded') return { status: result.status, undecided, empty };
+
   return { status: undecided > 0 || empty ? 'partial' : 'succeeded', undecided, empty };
 }

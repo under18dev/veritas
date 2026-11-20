@@ -25,6 +25,7 @@ function stubCli(body: string): { root: string; bin: string; marker: string } {
     ].join('\n'),
   );
   writeFileSync(path.join(root, 'package.json'), '{"type":"commonjs"}');
+
   return { root, bin, marker };
 }
 
@@ -41,6 +42,7 @@ describe('runMutation confines reportDir to the project root', () => {
 
   it('rejects traversal out of the root and the root itself', async () => {
     const { root, bin, marker } = stubCli("console.log('{}');");
+
     for (const reportDir of [path.join(root, '..', 'escape'), root]) {
       await expect(runMutation({ root, config: config(), reportDir, mutatorBin: bin })).rejects.toMatchObject(
         {
@@ -107,9 +109,11 @@ describe('report-derived strings are redacted', () => {
 
   it('redacts original, replacement, operator, statusReason and test refs of imported mutants', () => {
     const root = tempDir('review-redact');
+
     for (const source of ['mutator', 'stryker'] as const) {
       const mutants = importMutationReport(report, { root, source });
       const text = JSON.stringify(mutants);
+
       for (const secret of [
         'supersecret',
         'othersecret',
@@ -141,6 +145,7 @@ describe('report-derived strings are redacted', () => {
     });
     expect(r.status).toBe('succeeded');
     const text = JSON.stringify(r);
+
     for (const secret of ['supersecret', 'othersecret', 'hunter2hunter2', 'MIIEow'])
       expect(text).not.toContain(secret);
   });

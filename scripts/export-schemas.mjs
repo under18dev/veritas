@@ -6,6 +6,7 @@ import { exportJsonSchemas } from '../packages/core/dist/index.js';
 
 const out = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'schemas');
 mkdirSync(out, { recursive: true });
+
 for (const [name, schema] of Object.entries(exportJsonSchemas())) {
   writeFileSync(path.join(out, `${name}.json`), `${JSON.stringify(schema, null, 2)}\n`);
 }

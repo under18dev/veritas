@@ -22,6 +22,7 @@ export async function openProject(
   options: OpenOptions = {},
 ): Promise<{ root: string; config: VeritasConfig; configHash: string }> {
   const loaded = await loadConfig(root, options);
+
   return { root, config: loaded.config, configHash: loaded.hash };
 }
 
@@ -30,6 +31,7 @@ export function latestRunWith(root: string, artifact: ArtifactName): string | nu
   for (const runId of listRuns(root)) {
     if (existsSync(path.join(root, RUNS_DIR, runId, ARTIFACTS[artifact].file))) return runId;
   }
+
   return null;
 }
 
@@ -41,6 +43,7 @@ export function readArtifact<N extends ArtifactName>(
   if (!/^run-[A-Za-z0-9-]+$/.test(runId))
     throw new VeritasError('user', 'RUN_ID_INVALID', `invalid run id: ${runId}`);
   const file = resolveInsideRoot(root, path.join(RUNS_DIR, runId, ARTIFACTS[name].file));
+
   if (!existsSync(file)) {
     throw new VeritasError(
       'user',
@@ -49,6 +52,7 @@ export function readArtifact<N extends ArtifactName>(
       'run the stage that produces it',
     );
   }
+
   return readEnvelope(file, ARTIFACTS[name].schema) as { meta: ArtifactMeta; data: ArtifactData<N> };
 }
 
@@ -58,6 +62,7 @@ export function readLatest<N extends ArtifactName>(
   name: N,
 ): { runId: string; meta: ArtifactMeta; data: ArtifactData<N> } {
   const runId = latestRunWith(root, name);
+
   if (!runId) {
     throw new VeritasError(
       'user',
@@ -66,6 +71,7 @@ export function readLatest<N extends ArtifactName>(
       'run `veritas run` or the matching stage first',
     );
   }
+
   return { runId, ...readArtifact(root, runId, name) };
 }
 

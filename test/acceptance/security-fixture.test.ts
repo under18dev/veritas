@@ -35,18 +35,22 @@ function outsideDir(): { dir: string; snapshot: () => Record<string, string> } {
     const walk = (rel: string) => {
       for (const entry of readdirSync(path.join(dir, rel), { withFileTypes: true })) {
         const child = rel ? `${rel}/${entry.name}` : entry.name;
+
         if (entry.isDirectory()) walk(child);
         else out[child] = readFileSync(path.join(dir, child), 'utf8');
       }
     };
     walk('');
+
     return out;
   };
+
   return { dir, snapshot };
 }
 
 function codeIndexDiagnostics(dir: string, runId: string): { file: string; message: string }[] {
   const file = path.join(dir, '.veritas/runs', runId, 'code-index.json');
+
   return (
     JSON.parse(readFileSync(file, 'utf8')) as { data: { diagnostics: { file: string; message: string }[] } }
   ).data.diagnostics;
@@ -54,7 +58,9 @@ function codeIndexDiagnostics(dir: string, runId: string): { file: string; messa
 
 function runArtifacts(dir: string): string {
   const runs = path.join(dir, '.veritas/runs');
+
   if (!existsSync(runs)) return '';
+
   return readdirSync(runs)
     .flatMap((run) =>
       readdirSync(path.join(runs, run))
@@ -116,6 +122,7 @@ describe('security fixture: traversal and symlink escapes', () => {
       ['testInclude', (c) => (c.analysis = { ...c.analysis, testInclude: [`${relOutside}/test/**/*.ts`] })],
       ['tsconfig', (c) => (c.project = { ...c.project, tsconfig: `${relOutside}/config/tsconfig.json` })],
     ];
+
     for (const [name, patch] of patches) {
       const changed = JSON.parse(config) as Record<string, Record<string, unknown>>;
       patch(changed);
@@ -133,8 +140,10 @@ describe('security fixture: traversal and symlink escapes', () => {
         name,
       ).toEqual([]);
       const messages = codeIndexDiagnostics(dir, runId).map((d) => d.message);
+
       if (name === 'include')
         expect(messages.some((m) => m.startsWith('skipped: path escapes the project root'))).toBe(true);
+
       if (name === 'tsconfig')
         expect(messages).toContain('tsconfig outside the project root ignored; using defaults');
     }
@@ -142,6 +151,7 @@ describe('security fixture: traversal and symlink escapes', () => {
 
     // Skipped paths may be named in diagnostics, but nothing behind them is read.
     const artifacts = runArtifacts(dir);
+
     for (const content of ['x > 3 ? 7', 'escaped-marker', 'escaped test', 'function escaped'])
       expect(artifacts).not.toContain(content);
     expect(outside.snapshot()).toEqual(before);

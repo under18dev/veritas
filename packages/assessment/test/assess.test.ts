@@ -56,6 +56,7 @@ function input(overrides: Partial<AssessInput> = {}): AssessInput {
   const edges: TestPropertyEdge[] = ['T-a', 'T-b', 'T-c'].map(
     (testId) => ({ testId, propertyId: 'P-discount' }) as unknown as TestPropertyEdge,
   );
+
   return {
     tests: [],
     edges,

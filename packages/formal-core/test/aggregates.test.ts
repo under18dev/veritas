@@ -43,6 +43,7 @@ function project(): string {
   mkdirSync(path.join(root, 'src'));
   writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
   writeFileSync(path.join(root, 'src/order.ts'), SOURCE);
+
   return root;
 }
 
@@ -58,6 +59,7 @@ function translate(exportName: string, source = SOURCE, maxArrayLength?: number)
 
 function translated(result: TranslationResult) {
   if (result.status !== 'translated') throw new Error(`expected translation, got ${JSON.stringify(result)}`);
+
   return result;
 }
 
@@ -122,9 +124,11 @@ describe('records and arrays in the formal subset', () => {
       ['export function f(xs: number[]): number { return xs[5]; }', /beyond the 3 element slot/],
       ['export function f(o: { a: number }): number { const p = o; return p.a; }', /can only be read/],
     ];
+
     for (const [source, reason] of cases) {
       const result = translateFunction({ file: 'src/x.ts', source, exportName: 'f', domain: DOMAIN });
       expect(result.status, source).toBe('unsupported');
+
       if (result.status === 'unsupported') expect(result.reasons[0]?.reason, source).toMatch(reason);
     }
   });
