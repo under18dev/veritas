@@ -369,6 +369,32 @@ describe('checkLeanProject (real Lean)', () => {
     LEAN_TIMEOUT,
   );
 
+  it('rejects #eval, options outside the allowlist and imports beyond the project, Init and Std', async () => {
+    const cases: [string, RegExp][] = [
+      ['#eval IO.println "side effect"\ntheorem ok : 1 = 1 := rfl\n', /forbidden token `#eval`/],
+      [
+        'set_option debug.byAsSorry true\ntheorem ok : 1 = 1 := rfl\n',
+        /set_option debug\.byAsSorry` is not allowed/,
+      ],
+      ['import Mathlib\ntheorem ok : 1 = 1 := rfl\n', /import of `Mathlib` is not allowed/],
+      ['import Lean.Elab\ntheorem ok : 1 = 1 := rfl\n', /import of `Lean\.Elab` is not allowed/],
+    ];
+    for (const [source, reason] of cases) {
+      const check = await checkLeanProject(project(source), {
+        theorems: ['ok'],
+        timeoutMs: LEAN_TIMEOUT,
+        leanPath: missingBinary,
+      });
+      expect(check.status, source).toBe('rejected');
+      expect(check.reasons.join('\n'), source).toMatch(reason);
+    }
+    const allowed = await checkLeanProject(
+      project('import Std\nset_option maxHeartbeats 400000\ntheorem ok : 1 = 1 := rfl\n'),
+      { theorems: ['ok'], timeoutMs: LEAN_TIMEOUT, leanPath: missingBinary },
+    );
+    expect(allowed.reasons.join('\n')).not.toMatch(/not allowed|forbidden/);
+  });
+
   it('rejects symbolic links inside the project', async () => {
     const dir = project('theorem ok : 1 = 1 := rfl\n');
     const outside = tmp();

@@ -55,7 +55,15 @@ export const FORBIDDEN_TOKENS = [
   'run_cmd',
   'run_elab',
   'run_meta',
+  '#eval',
+  '#exit',
+  '#reduce',
 ] as const;
+
+/** `set_option` keys a proof may use; any other option (debug, compiler, kernel switches) is refused. */
+const ALLOWED_OPTIONS = new Set(['maxHeartbeats', 'maxRecDepth', 'linter.unusedVariables', 'autoImplicit']);
+/** Library roots a checked project may import besides its own modules. */
+const ALLOWED_IMPORT_ROOTS = new Set(['Init', 'Std']);
 
 const FORBIDDEN = new RegExp(
   `(?<![A-Za-z0-9_'.])(${FORBIDDEN_TOKENS.map((t) => t.replace('.', '\\.')).join('|')})(?![A-Za-z0-9_'])`,
@@ -86,6 +94,7 @@ interface SourceScan {
 function scanSources(dir: string): SourceScan {
   const modules: string[] = [];
   const findings: string[] = [];
+  const leanTexts: { relPath: string; text: string }[] = [];
   const walk = (rel: string) => {
     for (const entry of readdirSync(path.join(dir, rel), { withFileTypes: true }).sort((a, b) =>
       a.name.localeCompare(b.name),
@@ -109,11 +118,26 @@ function scanSources(dir: string): SourceScan {
       });
       if (!isLean) continue;
       if (relPath === 'lakefile.lean') continue;
+      leanTexts.push({ relPath, text });
       const segments = relPath.slice(0, -'.lean'.length).split('/');
       if (segments.every((s) => MODULE_SEGMENT.test(s))) modules.push(segments.join('.'));
     }
   };
   walk('');
+  // Imports: only the project's own modules and the core library; options: only the allowlisted ones.
+  for (const { relPath, text } of leanTexts) {
+    text.split('\n').forEach((line, i) => {
+      const imported = /^\s*import\s+(.+)$/.exec(line)?.[1];
+      for (const mod of imported?.trim().split(/\s+/) ?? [])
+        if (!modules.includes(mod) && !ALLOWED_IMPORT_ROOTS.has(mod.split('.')[0] ?? ''))
+          findings.push(
+            `${relPath}:${i + 1}: import of \`${mod}\` is not allowed (only the project's modules, Init and Std)`,
+          );
+      for (const m of line.matchAll(/\bset_option\s+([A-Za-z0-9_.]+)/g))
+        if (!ALLOWED_OPTIONS.has(m[1] ?? ''))
+          findings.push(`${relPath}:${i + 1}: \`set_option ${m[1]}\` is not allowed`);
+    });
+  }
   return { modules, findings };
 }
 
