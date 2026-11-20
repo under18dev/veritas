@@ -263,15 +263,19 @@ export function observe(x: { a: number }) { return x.a > 0; }
 export function touch(x: { a: number }) { x.a += 1; }
 export function apply(xs: number[], fn: (n: number) => number) { return xs.map((n) => fn(n)); }
 export function run(options: { cb: () => void }) { options.cb(); }
+export function runWith(options: { cb: (n: number) => number }) { return options.cb(1); }
+export function inspect(fn: (n: number) => number) { return typeof fn.call; }
 `,
     };
     const byName = inventory(
       `import { expect, it } from 'vitest';
-import { apply, double, observe, register, run, touch } from '../src/store.js';
+import { apply, double, inspect, observe, register, run, runWith, touch } from '../src/store.js';
 it('stored', () => { expect(register(double)).toBe(true); });
 it('read only', () => { const x = { a: 1 }; observe(x); expect(x).toEqual({ a: 1 }); });
 it('changed', () => { const x = { a: 1 }; touch(x); expect(x).toEqual({ a: 2 }); });
 it('called', () => { expect(apply([1], double)).toEqual([2]); });
+it('options function', () => { expect(runWith({ cb: double })).toBe(2); });
+it('inspected', () => { expect(inspect(double)).toBe('function'); });
 it('options callback', () => { let count = 0; run({ cb: () => { count++; } }); expect(count).toBe(1); });
 `,
       extra,
@@ -281,6 +285,9 @@ it('options callback', () => { let count = 0; run({ cb: () => { count++; } }); e
     // apply calls the function it is given, and run calls a callback given in an options object.
     expect(byName('called').symbols).toEqual(['src/store.ts#apply', 'src/store.ts#double']);
     expect(byName('options callback')).toMatchObject({ symbols: ['src/store.ts#run'], asserted: true });
+    expect(byName('options function').symbols).toEqual(['src/store.ts#runWith', 'src/store.ts#double']);
+    // Reading `fn.call` does not call fn.
+    expect(byName('inspected').symbols).toEqual(['src/store.ts#inspect']);
     // observe only reads x, so asserting on x checks nothing observe produced.
     expect(byName('read only').asserted).toBe(false);
     expect(byName('changed').asserted).toBe(true);

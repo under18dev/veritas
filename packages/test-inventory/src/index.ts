@@ -1006,18 +1006,35 @@ function passedProjectFunctions(node: Invocation, ctx: Ctx, projectReceives: boo
   // `expect(fn)` compares the function as a value; it does not run it.
   if (ts.isCallExpression(node) && isAssertionChainCall(node)) return found;
 
-  for (const [index, argument] of argumentsOf(node).entries()) {
+  // A function given directly, or as a value in an object or array literal (`run({ cb: double })`).
+  const given = (argument: ts.Expression): ts.Expression[] => {
     const value = skipParens(argument);
 
-    if (!ts.isIdentifier(value) && !ts.isPropertyAccessExpression(value)) continue;
+    if (ts.isObjectLiteralExpression(value))
+      return value.properties.flatMap((p) =>
+        ts.isPropertyAssignment(p)
+          ? given(p.initializer)
+          : ts.isShorthandPropertyAssignment(p)
+            ? [p.name]
+            : [],
+      );
 
-    if (ctx.checker.getTypeAtLocation(value).getCallSignatures().length === 0) continue;
+    if (ts.isArrayLiteralExpression(value)) return value.elements.flatMap(given);
 
-    if (projectReceives && !mayCallArgument(node, index, ctx.checker)) continue;
-    const id = projectSymbolId(aliasTarget(value, ctx.checker), ctx.checker, ctx.projectSet, ctx.root);
+    return [value];
+  };
 
-    if (id) found.push(id);
-  }
+  for (const [index, argument] of argumentsOf(node).entries())
+    for (const value of given(argument)) {
+      if (!ts.isIdentifier(value) && !ts.isPropertyAccessExpression(value)) continue;
+
+      if (ctx.checker.getTypeAtLocation(value).getCallSignatures().length === 0) continue;
+
+      if (projectReceives && !mayCallArgument(node, index, ctx.checker)) continue;
+      const id = projectSymbolId(aliasTarget(value, ctx.checker), ctx.checker, ctx.projectSet, ctx.root);
+
+      if (id) found.push(id);
+    }
 
   return found;
 }
@@ -1133,10 +1150,17 @@ function mayCallArgument(node: Invocation, index: number, checker: ts.TypeChecke
       use = use.parent;
     const parent = use.parent;
 
-    // `cb(...)`, `cb?.(...)`, `cb.call(...)`, `cb.apply(...)`.
+    // `cb(...)`, `cb?.(...)`, and a call through a member: `cb.call(...)`, `cb.apply(...)`, `options.cb()`.
     if (ts.isCallExpression(parent) && parent.expression === use) return true;
 
-    if (ts.isPropertyAccessExpression(parent) && ['call', 'apply'].includes(parent.name.text)) return true;
+    if (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) {
+      let access: ts.Node = parent;
+
+      while (ts.isPropertyAccessExpression(access.parent) || ts.isElementAccessExpression(access.parent))
+        access = access.parent;
+
+      return ts.isCallExpression(access.parent) && access.parent.expression === access;
+    }
 
     if (
       (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
