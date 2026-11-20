@@ -163,6 +163,10 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
       .option('--apply', 'apply an approved plan (needs --plan and --approve; refused in CI)')
       .option('--plan <id>', 'plan id printed by the dry run')
       .option('--approve <token>', 'approval token printed by the dry run')
+      .option(
+        '--actor <name>',
+        'who approves, recorded with the plan (default: VERITAS_ACTOR, then git user.name)',
+      )
       .option('--run <run-id>', 'plan from this run instead of the latest one')
       .option('--max-iterations <n>', 'maximum apply attempts for the plan (1-20)'),
     (o) => improveCommand(o),

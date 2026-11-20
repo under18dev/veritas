@@ -78,7 +78,7 @@ See the [support matrix](docs/support-matrix.md) for what is available in the cu
 ## Agents and MCP
 
 - Agent Skill: [`skills/veritas/SKILL.md`](skills/veritas/SKILL.md)
-- MCP server: `veritas-mcp --root <project>` (read-only analysis tools; `--allow-write` adds the tool that applies an approved improvement plan)
+- MCP server: `veritas-mcp --root <project>` (read-only analysis tools; `--allow-write` adds the tool that applies an approved improvement plan). Each client session runs its own server process over stdio; every tool call writes a new run directory, at most `--max-concurrent` long operations run at once (others wait or are cancelled), and applying a plan measures it in a fresh temporary copy that is deleted afterwards.
 - GitHub Action: [docs/github-action.md](docs/github-action.md)
 - Node API: [docs/api.md](docs/api.md) (`import { analyze } from '@under18dev/veritas'`)
 

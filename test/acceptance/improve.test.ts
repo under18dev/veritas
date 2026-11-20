@@ -34,8 +34,18 @@ interface AttemptJson {
   attempt: {
     outcome: string;
     rolledBack: boolean;
-    before: { mutantsKilled: number; mutantsSurvived: number; testsPassed: number } | null;
-    after: { mutantsKilled: number; mutantsSurvived: number; testsPassed: number } | null;
+    before: {
+      mutantsKilled: number;
+      mutantsSurvived: number;
+      testsPassed: number;
+      claimStatuses: Record<string, string>;
+    } | null;
+    after: {
+      mutantsKilled: number;
+      mutantsSurvived: number;
+      testsPassed: number;
+      claimStatuses: Record<string, string>;
+    } | null;
     reasons: string[];
   };
 }
@@ -178,16 +188,38 @@ describe('improve on agent-loop', () => {
     'applies with the token, kills the surviving mutant and adds only the new test file',
     () => {
       const result = runCli(
-        ['improve', '--apply', '--plan', plan.planId, '--approve', plan.approvalToken as string, '--json'],
+        [
+          'improve',
+          '--apply',
+          '--plan',
+          plan.planId,
+          '--approve',
+          plan.approvalToken as string,
+          '--actor',
+          'Reviewer A',
+          '--json',
+        ],
         dir,
       );
       expect(result.status, result.stderr + result.stdout).toBe(0);
+      // Who approved this exact plan, when and how is recorded; the token itself is not.
+      const planDir = path.join(dir, '.veritas/improvements', plan.planId);
+      const approvals = readdirSync(planDir)
+        .filter((f) => f.startsWith('approval-'))
+        .map((f) => JSON.parse(readFileSync(path.join(planDir, f), 'utf8')).data);
+      expect(approvals).toContainEqual(
+        expect.objectContaining({ planId: plan.planId, actor: 'Reviewer A', via: 'cli' }),
+      );
+      expect(JSON.stringify(approvals)).not.toContain(plan.approvalToken as string);
       const { attempt } = json<AttemptJson>(result);
       expect(attempt.outcome).toBe('improved');
       expect(attempt.rolledBack).toBe(false);
       expect(attempt.before && attempt.after).toBeTruthy();
       expect(attempt.after?.mutantsKilled).toBeGreaterThan(attempt.before?.mutantsKilled ?? Infinity);
       expect(attempt.after?.mutantsSurvived).toBeLessThan(attempt.before?.mutantsSurvived ?? -1);
+      // Formal and property-based results are carried over: only test files were added.
+      expect(Object.keys(attempt.after?.claimStatuses ?? {}).length).toBeGreaterThan(0);
+      expect(attempt.after?.claimStatuses).toEqual(attempt.before?.claimStatuses);
       const added = plan.plan?.proposedTestCases[0]?.file as string;
       expect(readFileSync(path.join(dir, added), 'utf8')).toContain('expect(isSenior(65)).toBe(true);');
       expect(projectStatus(dir)).toEqual([`?? ${added}`]);

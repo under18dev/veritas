@@ -126,6 +126,8 @@ export async function improveCommand(opts: Opts): Promise<ExitCode> {
     planId: opts.plan,
     approvalToken: typeof opts.approve === 'string' ? opts.approve : '',
     allowCodeConfig: Boolean(opts.allowCodeConfig),
+    ...(typeof opts.actor === 'string' ? { actor: opts.actor } : {}),
+    via: 'cli',
   });
   const exitCode = improveExitCode(attempt.outcome);
   if (opts.json) emitJson({ status: attempt.outcome, exitCode, attempt });

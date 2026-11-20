@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import {
   gitCommit,
+  gitOutput,
   type ImprovementOutcome,
   loadConfig,
   type MeasurementSnapshot,
@@ -18,7 +19,7 @@ import { type MutationRunResult, runMutation } from '@under18dev/veritas-mutatio
 import { applyApprovals, loadApprovals } from '@under18dev/veritas-property-engine';
 import { expectedFromSpec } from './oracle.js';
 import { renderTestFile } from './render.js';
-import type { PlanDocument } from './schema.js';
+import { ImprovementApproval, type PlanDocument } from './schema.js';
 import { approvalTokenFor, assertPlanId, attemptCount, readPlan, writePlanArtifact } from './store.js';
 import { validatePatch } from './validate.js';
 import { runVitest, type VitestRun } from './vitest.js';
@@ -48,6 +49,10 @@ export interface ApplyOptions {
    * approved plan content.
    */
   afterPatchInWorkspace?: (workspace: string) => void | Promise<void>;
+  /** Who approves (recorded); defaults to VERITAS_ACTOR, then the git user name. */
+  actor?: string;
+  /** Entry point recorded with the approval (default `api`). */
+  via?: 'cli' | 'mcp' | 'api';
 }
 
 /** Hard cap on apply attempts per plan, matching the configuration limit. */
@@ -114,15 +119,37 @@ function planProblems(root: string, doc: PlanDocument, config: VeritasConfig): s
   return problems;
 }
 
-function snapshot(tests: VitestRun & { status: 'ok' }, mutation: MutationRunResult): MeasurementSnapshot {
+function snapshot(
+  tests: VitestRun & { status: 'ok' },
+  mutation: MutationRunResult,
+  claimStatuses: Record<string, string>,
+): MeasurementSnapshot {
   return {
     testsPassed: tests.passed,
     testsFailed: tests.failed,
     mutantsKilled: mutation.counts.killed ?? 0,
     mutantsSurvived: mutation.counts.survived ?? 0,
-    // Formal claims are not re-run: only test files change, so implementation claims cannot change.
-    claimStatuses: {},
+    claimStatuses,
   };
+}
+
+/**
+ * Formal and property-based results of the run the plan was made from. They are about the implementation, which
+ * a plan never changes (only new test files are allowed), so they hold before and after the patch as recorded.
+ */
+function recordedClaimStatuses(root: string, runId: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  try {
+    for (const c of readArtifact(root, runId, 'claims').data) out[c.id] = c.status;
+  } catch {
+    /* the run had no prove stage */
+  }
+  try {
+    for (const r of readArtifact(root, runId, 'pbt').data) out[r.id] = r.status;
+  } catch {
+    /* the run had no property-based tests */
+  }
+  return out;
 }
 
 /**
@@ -186,6 +213,28 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
       ? { implementationFixProposalId: doc.implementationFixProposals[0].id }
       : {}),
   };
+  // The approval is recorded before anything runs: who approved this exact content, when and how.
+  const env = options.env ?? process.env;
+  const actor =
+    options.actor?.trim() ||
+    env.VERITAS_ACTOR?.trim() ||
+    gitOutput(root, ['config', 'user.name'])?.trim() ||
+    'unknown';
+  writePlanArtifact(
+    root,
+    planId,
+    `approval-${n}.json`,
+    ImprovementApproval,
+    {
+      approvalId: base.approvalId,
+      planId,
+      tokenSha256: sha256(options.approvalToken),
+      actor,
+      approvedAt: new Date().toISOString(),
+      via: options.via ?? 'api',
+    },
+    { runId: doc.runId, configHash: loaded.hash, sourceHash: doc.runSourceHash, gitCommit: gitCommit(root) },
+  );
   const persist = (attempt: PatchAttempt): PatchAttempt => {
     writePlanArtifact(root, planId, `attempt-${n}.json`, PatchAttempt, attempt, {
       runId: doc.runId,
@@ -272,7 +321,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         { workspace, rolledBack: false },
       );
     }
-    const before = snapshot(testsBefore, mutationBefore);
+    const before = snapshot(testsBefore, mutationBefore, recordedClaimStatuses(root, doc.runId));
 
     // Patched.
     writeNewFiles(workspace, doc.files);
@@ -319,7 +368,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         { workspace, before, rolledBack: true },
       );
     }
-    const after = snapshot(testsAfter, mutationAfter);
+    const after = snapshot(testsAfter, mutationAfter, recordedClaimStatuses(root, doc.runId));
     const killedBefore = new Set(
       mutationBefore.mutants.filter((m) => m.status === 'killed').map((m) => m.id),
     );
@@ -390,7 +439,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         `killed mutants ${before.mutantsKilled} -> ${after.mutantsKilled}, survived ${before.mutantsSurvived} -> ${after.mutantsSurvived}`,
         ...(newlyKilled.length ? [`newly killed: ${newlyKilled.map((m) => m.id).join(', ')}`] : []),
         `added: ${doc.files.map((f) => f.path).join(', ')}`,
-        'formal claims were not re-evaluated: only test files were added, so the implementation is unchanged',
+        `formal and property-based results carried over from ${doc.runId} unchanged: only test files were added, so the implementation they check is the same`,
       ],
       { workspace, before, after, rolledBack: false },
     );

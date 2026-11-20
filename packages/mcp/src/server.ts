@@ -352,7 +352,8 @@ export function createServer(options: ServerOptions): McpServer {
     },
     async (_args, extra) => {
       try {
-        const result = await gate.run((extra as unknown as Extra).signal, () => planImprovement({ root }));
+        const { signal } = extra as unknown as Extra;
+        const result = await gate.run(signal, () => planImprovement({ root, signal }));
         return ok(result);
       } catch (error) {
         return fail(error);
@@ -369,6 +370,12 @@ export function createServer(options: ServerOptions): McpServer {
         inputSchema: {
           planId: z.string().regex(/^IP-[0-9a-f]{6,64}$/, 'expected an IP-<hex> plan id'),
           approvalToken: z.string().regex(/^[0-9a-f]{64}$/, 'expected the 64-character approval token'),
+          actor: z
+            .string()
+            .min(1)
+            .max(200)
+            .optional()
+            .describe('the person who approved the plan (recorded)'),
         },
         annotations: {
           readOnlyHint: false,
@@ -377,10 +384,18 @@ export function createServer(options: ServerOptions): McpServer {
           openWorldHint: false,
         },
       },
-      async ({ planId, approvalToken }, extra) => {
+      async ({ planId, approvalToken, actor }, extra) => {
         try {
-          const attempt = await gate.run((extra as unknown as Extra).signal, () =>
-            applyImprovement({ root, planId, approvalToken, signal: (extra as unknown as Extra).signal }),
+          const { signal } = extra as unknown as Extra;
+          const attempt = await gate.run(signal, () =>
+            applyImprovement({
+              root,
+              planId,
+              approvalToken,
+              signal,
+              via: 'mcp',
+              ...(actor ? { actor } : {}),
+            }),
           );
           return ok({ attempt });
         } catch (error) {

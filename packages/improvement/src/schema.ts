@@ -100,6 +100,18 @@ export const PlanDocument = z.object({
 });
 export type PlanDocument = z.infer<typeof PlanDocument>;
 
+/** Who approved applying a plan, when, and through which entry point. The token itself is not stored. */
+export const ImprovementApproval = z.object({
+  approvalId: Id,
+  planId: Id,
+  /** SHA-256 of the approval token, so the record names exactly the plan content that was approved. */
+  tokenSha256: Sha256,
+  actor: z.string().min(1),
+  approvedAt: z.iso.datetime({ offset: true }),
+  via: z.enum(['cli', 'mcp', 'api']),
+});
+export type ImprovementApproval = z.infer<typeof ImprovementApproval>;
+
 export const PlanResult = z.object({
   planId: Id,
   runId: Id,
