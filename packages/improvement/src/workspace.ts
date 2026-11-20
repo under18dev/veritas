@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { hashValue, resolveInsideRoot, sha256 } from '@under18dev/veritas-core';
+import { hashValue, resolveInsideRoot, sha256, VeritasError } from '@under18dev/veritas-core';
 import type { PatchFile } from './schema.js';
 
 /** Directories that are tool state or dependencies, not project content. */
@@ -73,9 +73,37 @@ export function createWorkspace(root: string): string {
       return rel === '' || !rel.split(path.sep).some((s) => IGNORED_DIRS.has(s));
     },
   });
+  const escaping = linksLeaving(dir);
+  if (escaping.length > 0) {
+    removeWorkspace(dir);
+    throw new VeritasError(
+      'user',
+      'IMPROVE_UNSAFE_LINK',
+      `the project has links outside the project, which the isolated run could write through: ${escaping.join(', ')}`,
+      'replace them with real files or directories before applying an improvement',
+    );
+  }
   const modules = path.join(realRoot, 'node_modules');
   if (existsSync(modules)) linkPackages(modules, path.join(dir, 'node_modules'));
   return dir;
+}
+
+/** Copied symbolic links (kept verbatim) whose target is not inside `dir`, as `path -> target`. */
+function linksLeaving(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (current: string) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const abs = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) {
+        const target = readlinkSync(abs);
+        const rel = path.relative(dir, path.resolve(current, target));
+        if (rel.startsWith('..') || path.isAbsolute(rel))
+          out.push(`${path.relative(dir, abs).split(path.sep).join('/')} -> ${target}`);
+      } else if (entry.isDirectory()) walk(abs);
+    }
+  };
+  walk(dir);
+  return out;
 }
 
 export function removeWorkspace(dir: string): void {

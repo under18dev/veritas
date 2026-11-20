@@ -1,4 +1,14 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -32,6 +42,35 @@ describe('workspace and repository writes', () => {
       removeWorkspace(ws);
     }
     expect(existsSync(ws)).toBe(false);
+  });
+
+  it('refuses a project with a link leaving it, which the isolated run could write through', () => {
+    const outside = mkdtempSync(path.join(tmpdir(), 'veritas-outside-'));
+    writeFileSync(path.join(outside, 'shared.test.ts'), 'outside');
+    const root = project({ 'src/a.ts': 'x' });
+    symlinkSync(outside, path.join(root, 'test'), process.platform === 'win32' ? 'junction' : 'dir');
+    const before = readdirSync(tmpdir()).filter((d) => d.startsWith('veritas-improve-')).length;
+    expect(() => createWorkspace(root)).toThrow(/links outside the project/);
+    // The partial copy is removed.
+    expect(readdirSync(tmpdir()).filter((d) => d.startsWith('veritas-improve-')).length).toBe(before);
+  });
+
+  it('keeps links that stay inside the copy', () => {
+    const root = project({ 'src/a.ts': 'x' });
+    let linked = true;
+    try {
+      symlinkSync('src', path.join(root, 'lib'), 'dir');
+    } catch {
+      // Relative directory links need extra privileges on some Windows runners.
+      linked = false;
+    }
+    const ws = createWorkspace(root);
+    try {
+      if (linked) expect(readFileSync(path.join(ws, 'lib/a.ts'), 'utf8')).toBe('x');
+      expect(readFileSync(path.join(ws, 'src/a.ts'), 'utf8')).toBe('x');
+    } finally {
+      removeWorkspace(ws);
+    }
   });
 
   it('creates files exclusively and removes everything it wrote when one write fails', () => {
