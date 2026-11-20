@@ -220,10 +220,29 @@ export function lostResults(
     .map(([id, status]) => `${id}: ${status} -> ${after[id] ?? 'not produced'}`);
 }
 
+type MeasuredMutant = { id: string; status: string; killedBy: string[]; coveredBy: string[] };
+
+/**
+ * Ids of the mutants the added tests kill: killed after the patch but not before, by at least one test that the
+ * baseline mutation run did not know. A mutant that only an existing test happened to kill this time is not counted.
+ */
+export function killedByNewTests(before: MeasuredMutant[], after: MeasuredMutant[]): Set<string> {
+  const known = new Set(before.flatMap((m) => [...m.killedBy, ...m.coveredBy]));
+  const killedBefore = new Set(before.filter((m) => m.status === 'killed').map((m) => m.id));
+
+  return new Set(
+    after
+      .filter(
+        (m) => m.status === 'killed' && !killedBefore.has(m.id) && m.killedBy.some((t) => !known.has(t)),
+      )
+      .map((m) => m.id),
+  );
+}
+
 /**
  * Claims of a run that the patched copy must produce again: conformance claims (about the implementation itself) and
- * claims about a mutant, except a mutant the new tests kill, whose claims change with its status. A mutant that was
- * already killed before the patch keeps its claims.
+ * claims about a mutant, except a mutant the new tests kill (see `killedByNewTests`), whose claims change with its
+ * status. A mutant that was already killed before the patch keeps its claims.
  */
 export function requiredClaimIds(
   claims: { id: string; kind: string; mutantId?: string | undefined }[],
@@ -538,7 +557,10 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
     const lost = lostResults(
       before.claimStatuses,
       reassessed.statuses,
-      requiredClaimIds(runClaims(root, doc.runId), new Set(newlyKilled.map((m) => m.id))),
+      requiredClaimIds(
+        runClaims(root, doc.runId),
+        killedByNewTests(mutationBefore.mutants, mutationAfter.mutants),
+      ),
     );
     if (lost.length > 0) {
       return end(

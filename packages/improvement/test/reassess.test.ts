@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lostResults, requiredClaimIds } from '../src/apply.js';
+import { killedByNewTests, lostResults, requiredClaimIds } from '../src/apply.js';
 
 describe('lostResults', () => {
   it('lists results that were decided before the patch and are undecided after it', () => {
@@ -62,5 +62,26 @@ describe('lostResults', () => {
     expect(lostResults(before, { 'C-conf': 'proven_within_model' }, required)).toEqual([
       'C-m2: proven_within_model -> not produced',
     ]);
+  });
+
+  it('counts a mutant as killed by the new tests only when a test unknown to the baseline kills it', () => {
+    const m = (id: string, status: string, killedBy: string[], coveredBy: string[] = killedBy) => ({
+      id,
+      status,
+      killedBy,
+      coveredBy,
+    });
+    const before = [
+      m('M-0', 'killed', ['T-old']),
+      m('M-1', 'survived', [], ['T-old']),
+      m('M-2', 'survived', [], ['T-old']),
+    ];
+    const after = [
+      m('M-0', 'killed', ['T-old', 'T-new']),
+      // An existing test happened to kill M-1 this time: not counted.
+      m('M-1', 'killed', ['T-old']),
+      m('M-2', 'killed', ['T-new']),
+    ];
+    expect([...killedByNewTests(before, after)]).toEqual(['M-2']);
   });
 });
