@@ -1,6 +1,6 @@
 # レポートと成果物
 
-実行のたびに、その根拠を `.veritas/runs/<run-id>/` に書き出します。レポートはこれらのファイルから描画され、CLI、Node API、MCP サーバー、GitHub Action のどれから実行しても同じファイルができます。レポートの内容の読み取り方は[結果の読み方](/ja/guide/reading-results)を参照してください。
+レポートの形式と節、`.veritas/runs/<run-id>/` にできるファイル、各ファイルが持つメタデータ、秘密情報の扱いをまとめます。CLI、Node API、MCP サーバー、GitHub Action のどれから実行しても、同じファイルができます。レポートの読み取り方は[結果の読み方](/ja/guide/reading-results)を参照してください。
 
 ## レポートの形式
 
@@ -84,7 +84,7 @@ mutation の結果をキャッシュから再利用したときは、`mutation/`
 | `artifact-index.json` | エンベロープを持てないファイルの、パス、種類、SHA-256、サイズ、作成日時                                                                                                                                                                    |
 | `trace.jsonl`         | ログのイベントを 1 行に 1 つの JSON で記録します（`time`、`level`、`message` と、`event`、`stage` などのフィールド）。上限は 4 MB で、最後の行に捨てたイベントの数を書きます                                                               |
 
-実行ディレクトリをいくつ残すかは `storage.retainRuns`（既定は 20）で決まります。実行が終わるたびに、この数を超えた古い実行を削除します。終わった実行とみなすのは、`artifact-index.json` に `trace.jsonl`（実行が最後に書くファイル）が載っているものです。実行中のディレクトリ、シンボリックリンク、そのほかのエントリは残します。
+Veritas は、終わった実行のうち新しいものを `storage.retainRuns` 個（既定は 20）残し、実行が終わるたびにそれより古いものを削除します。実行中のものは削除しません。
 
 `.veritas/` にはほかに次のファイルがあります。
 
@@ -125,11 +125,11 @@ JSON の成果物は、すべて `{ "meta": { ... }, "data": ... }` という形
 | `configHash`    | 検証済みの設定のハッシュ                           |
 | `sourceHash`    | 索引にしたソースファイルのハッシュ                 |
 
-エンベロープを持てないファイル（ソルバーの入出力、Lean のソース、描画したレポート、mutator 自身のレポートのファイル）は、SHA-256 付きで `artifact-index.json` に載り、そのインデックスがメタデータを持ちます。描画したレポートにもメタデータを表示します。読み込むときはエンベロープをスキーマで検証し、[Node API](/ja/reference/api) の `readArtifact` はスキーマに合わないファイルを拒否します。
+エンベロープを持てないファイル（ソルバーの入出力、Lean のソース、描画したレポート、mutator 自身のレポートのファイル）は、SHA-256 付きで `artifact-index.json` に載り、そのインデックスがメタデータを持ちます。描画したレポートにもメタデータを表示します。[Node API](/ja/reference/api) の `readArtifact` は、ファイルをスキーマで検証し、合わなければ拒否します。
 
 ## JSON Schema
 
-設定とドメインの型の JSON Schema は、リポジトリの [`schemas/`](https://github.com/under18dev/veritas/tree/main/schemas) にあり、core パッケージの Zod の定義から生成しています。
+設定と、成果物に含まれるレコードの JSON Schema は、リポジトリの [`schemas/`](https://github.com/under18dev/veritas/tree/main/schemas) にあります。
 
 | スキーマ                                      | 対象                                       |
 | --------------------------------------------- | ------------------------------------------ |
@@ -147,7 +147,7 @@ JSON の成果物は、すべて `{ "meta": { ... }, "data": ... }` という形
 | `approval-ledger.json`                        | `.veritas/approvals.json`                  |
 | `improvement-plan.json`、`patch-attempt.json` | 改善計画と、その適用の記録                 |
 
-設計については [ADR 0002](/adr/0002-schemas-and-artifacts)（英語）を参照してください。
+設計の考え方は [ADR 0002](/adr/0002-schemas-and-artifacts)（英語）にあります。
 
 ## 秘密情報の秘匿
 

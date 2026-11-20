@@ -19,7 +19,7 @@ What the current release supports: features, the formal subset, environments and
 | Assessment and findings         | Evidence vectors; no single score                                                                                                                                                            |
 | Improvement                     | `improve` plans new test files only; applying needs the plan id and approval token, runs in an isolated copy and rolls back unless mutation results improve; refused in CI                   |
 | Reports                         | text, JSON, Markdown, self-contained HTML and SARIF 2.1.0                                                                                                                                    |
-| CLI                             | All commands                                                                                                                                                                                 |
+| CLI                             | The commands in the [CLI reference](/reference/cli)                                                                                                                                          |
 | MCP server                      | Read-only tools; applying an approved improvement plan only with `--allow-write`                                                                                                             |
 | GitHub Action                   | Offline engine for `pull_request`, incremental with `since`; see [GitHub Action](/reference/github-action)                                                                                   |
 | Agent Skill                     | `skills/veritas/SKILL.md`; see [Agents and MCP](/guide/agents)                                                                                                                               |
@@ -45,13 +45,13 @@ Lean proofs cover integer and boolean parameters only; a property over records o
 | Item        | Supported                                                                                                                                                                                    |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Node.js     | 24 or later; project code runs only under Node.js 25+ (network blocked), unless `sandbox.allowNetworkWithoutIsolation` is set: the running Node.js, `VERITAS_SANDBOX_NODE` or `node` on PATH |
-| OS          | Linux, macOS, Windows (CI matrix)                                                                                                                                                            |
+| OS          | Linux, macOS, Windows                                                                                                                                                                        |
 | Test runner | Vitest                                                                                                                                                                                       |
 | Languages   | TypeScript, JavaScript (ESM)                                                                                                                                                                 |
 
 ## External tools and licenses
 
-Veritas is licensed under Apache-2.0. `pnpm licenses:check` fails when an installed dependency uses a license outside the allowlist in `scripts/check-licenses.mjs`.
+Veritas is licensed under Apache-2.0. It uses these external tools:
 
 | Tool                          | License    | How it is used                                       |
 | ----------------------------- | ---------- | ---------------------------------------------------- |

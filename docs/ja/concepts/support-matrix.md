@@ -19,7 +19,7 @@
 | 評価と finding         | 証拠のベクトル。1 つのスコアにはまとめない                                                                                                                                                                 |
 | テストの改善           | `improve` が計画するのは新しいテストファイルだけ。適用には計画 ID と承認トークンが必要で、隔離したコピーで実行し、mutation の結果が改善しなければ元に戻す。CI では拒否する                                 |
 | レポート               | テキスト、JSON、Markdown、1 ファイルで完結する HTML、SARIF 2.1.0                                                                                                                                           |
-| CLI                    | すべてのコマンド                                                                                                                                                                                           |
+| CLI                    | [CLI リファレンス](/ja/reference/cli)にあるコマンド                                                                                                                                                        |
 | MCP サーバー           | 読み取り用のツール。承認済みの改善計画の適用は `--allow-write` を付けたときだけ                                                                                                                            |
 | GitHub Action          | `pull_request` 向けのオフラインのエンジン。`since` による差分の実行。[GitHub Action](/ja/reference/github-action)を参照                                                                                    |
 | Agent Skill            | `skills/veritas/SKILL.md`。[エージェントと MCP](/ja/guide/agents)を参照                                                                                                                                    |
@@ -45,13 +45,13 @@ Lean の証明が扱うのは整数と真偽値の引数だけで、レコード
 | 項目           | 対応                                                                                                                                                                                                                   |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Node.js        | 24 以上。プロジェクトのコードを実行するのは Node.js 25 以上（ネットワークを遮断）があるときだけ（実行中のもの、`VERITAS_SANDBOX_NODE`、PATH 上の `node`）。`sandbox.allowNetworkWithoutIsolation` を設定した場合を除く |
-| OS             | Linux、macOS、Windows（CI のマトリクス）                                                                                                                                                                               |
+| OS             | Linux、macOS、Windows                                                                                                                                                                                                  |
 | テストランナー | Vitest                                                                                                                                                                                                                 |
 | 言語           | TypeScript、JavaScript（ESM）                                                                                                                                                                                          |
 
 ## 外部ツールとライセンス
 
-Veritas のライセンスは Apache-2.0 です。`pnpm licenses:check` は、インストールされた依存パッケージが `scripts/check-licenses.mjs` の許可リストにないライセンスを使っていると失敗します。
+Veritas のライセンスは Apache-2.0 です。使っている外部ツールは次のとおりです。
 
 | ツール                      | ライセンス | 使い方                                           |
 | --------------------------- | ---------- | ------------------------------------------------ |

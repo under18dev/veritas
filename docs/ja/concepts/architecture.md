@@ -1,13 +1,13 @@
 # アーキテクチャ
 
-Veritas は、テストごとに次の問いに答えます。どの仕様から導かれたテストか、何を観測しているか、どの欠陥を検出するか、どのモデルと範囲のもとで何を形式的に確かめたか、何がまだ分かっていないか。どの答えにも、機械可読な根拠が付きます。このページではコードの構成を説明します。結果の意味は[セマンティクス](/ja/concepts/semantics)を参照してください。
+Veritas は、テストごとに次の問いに答えます。どの仕様から導かれたテストか、何を観測しているか、どの欠陥を検出するか、どのモデルと範囲のもとで何を形式的に確かめたか、何がまだ分かっていないか。どの答えにも、機械可読な根拠が付きます。このページでは、実行が Veritas のパッケージをどう流れるか、データをどこに保存するかを説明します。結果の意味は[セマンティクス](/ja/concepts/semantics)を参照してください。
 
 ## パイプライン
 
 ```text
 CLI / Node API / Agent Skill / MCP / GitHub Action
                        |
-            Orchestrator (engine, runStages)
+               Orchestrator (engine)
                        |
     +------------------+-------------------+
 Evidence collectors  Code intelligence  Test inventory
@@ -47,13 +47,12 @@ Evidence collectors  Code intelligence  Test inventory
 | `mcp`                      | MCP サーバー                                                                                                                                                                                             |
 | `github-action`            | CI との連携                                                                                                                                                                                              |
 
-各パッケージが何に対応しているかは[対応環境](/ja/concepts/support-matrix)を参照してください。
+各部分が何に対応しているかは[対応環境](/ja/concepts/support-matrix)にまとめています。
 
-## 規則
+## 各部分の関係
 
-- `core` は、ほかのワークスペースのパッケージにも、CLI のフレームワークにも、LLM の SDK にも依存しません（dependency-cruiser で強制しています）。パッケージの循環もありません。
-- CLI、Node API、MCP、Action のどれも同じパッケージの関数を呼び、同じ成果物を作ります。各コマンドのステージの列は 1 つの共有の表（`COMMAND_STAGES`、`PROFILE_STAGES`）にあるので、`veritas analyze`、`analyze()`、MCP のツール `analyze_tests` は同じステージを実行します。
-- ステージは `runStages` を通して実行します。投げられたエラーは `error` のステージの結果になり、失敗したステージに依存するステージは `skipped` になります。あるステージが、別のステージの代わりに成功を報告することはありません。
+- CLI、Node API、MCP サーバー、GitHub Action は、同じパッケージの関数を呼び出します。コマンドと、それに対応する API の関数や MCP のツールは、同じステージを実行して同じファイルを書きます。たとえば `veritas analyze`、`analyze()`、MCP のツール `analyze_tests` がそうです。
+- ステージは、それぞれ自分の結果だけを報告します。例外を投げたステージは `error` になり、失敗したステージに依存するステージは `skipped` になります。あるステージが、別のステージの代わりに成功を報告することはありません。
 
 ## 保存場所
 

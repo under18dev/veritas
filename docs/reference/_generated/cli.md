@@ -21,7 +21,7 @@ These options belong to `veritas` itself and apply to every command. Put them be
 | `veritas doctor`   | check tools, credentials and the restricted runner for project code; report disabled/degraded features                                                                                                                  |
 | `veritas discover` | collect specification evidence                                                                                                                                                                                          |
 | `veritas spec`     | review the property registry                                                                                                                                                                                            |
-| `veritas analyze`  | index code and tests, map them to properties and assess tests                                                                                                                                                           |
+| `veritas analyze`  | index code and tests, map them to properties and assess tests (only [path], if given)                                                                                                                                   |
 | `veritas mutate`   | run mutation testing and relate mutants to properties                                                                                                                                                                   |
 | `veritas test`     | property-based tests                                                                                                                                                                                                    |
 | `veritas prove`    | verify formalized properties with an SMT solver (bounded)                                                                                                                                                               |
@@ -61,12 +61,12 @@ collect specification evidence
 veritas discover [options]
 ```
 
-| Option                       | Description                                                                                   | Values | Default |
-| ---------------------------- | --------------------------------------------------------------------------------------------- | ------ | ------- |
-| `--offline`                  | Veritas makes no network requests (sources, LLM); project tests still run as with `pnpm test` |        |         |
-| `--sources <list>`           | comma-separated: local,github,web,all                                                         |        | `local` |
-| `--allow-domain <domain...>` | allow a web domain (also needs sources.web.enabled in config)                                 |        |         |
-| `--max-pages <n>`            | web page budget                                                                               |        |         |
+| Option                       | Description                                                   | Values | Default |
+| ---------------------------- | ------------------------------------------------------------- | ------ | ------- |
+| `--offline`                  | make no network requests: local sources only, no LLM          |        |         |
+| `--sources <list>`           | comma-separated: local,github,web,all                         |        | `local` |
+| `--allow-domain <domain...>` | allow a web domain (also needs sources.web.enabled in config) |        |         |
+| `--max-pages <n>`            | web page budget                                               |        |         |
 
 ### `veritas spec`
 
@@ -76,14 +76,14 @@ review the property registry
 veritas spec <command>
 ```
 
-| Subcommand            | Description                             |
-| --------------------- | --------------------------------------- |
-| `veritas spec list`   | list properties of the latest run       |
-| `veritas spec show`   |                                         |
-| `veritas spec accept` |                                         |
-| `veritas spec reject` |                                         |
-| `veritas spec diff`   | compare properties of the last two runs |
-| `veritas spec export` | print the registry as JSON              |
+| Subcommand            | Description                                                                  |
+| --------------------- | ---------------------------------------------------------------------------- |
+| `veritas spec list`   | list properties of the latest run                                            |
+| `veritas spec show`   | show a property, its sources and the decisions recorded for it               |
+| `veritas spec accept` | accept a property as the specification (recorded in .veritas/approvals.json) |
+| `veritas spec reject` | reject a property (recorded in .veritas/approvals.json)                      |
+| `veritas spec diff`   | compare properties of the last two runs                                      |
+| `veritas spec export` | print the registry as JSON                                                   |
 
 #### `veritas spec list`
 
@@ -95,6 +95,8 @@ veritas spec list
 
 #### `veritas spec show`
 
+show a property, its sources and the decisions recorded for it
+
 ```text
 veritas spec show <id>
 ```
@@ -104,6 +106,8 @@ veritas spec show <id>
 | `<id>`   | yes      |             |
 
 #### `veritas spec accept`
+
+accept a property as the specification (recorded in .veritas/approvals.json)
 
 ```text
 veritas spec accept <id> [options]
@@ -115,10 +119,12 @@ veritas spec accept <id> [options]
 
 | Option            | Description                                              | Values | Default      |
 | ----------------- | -------------------------------------------------------- | ------ | ------------ |
-| `--reason <text>` | why                                                      |        | **required** |
+| `--reason <text>` | reason recorded with the decision                        |        | **required** |
 | `--actor <name>`  | who decides (default: VERITAS_ACTOR, then git user.name) |        |              |
 
 #### `veritas spec reject`
+
+reject a property (recorded in .veritas/approvals.json)
 
 ```text
 veritas spec reject <id> [options]
@@ -130,7 +136,7 @@ veritas spec reject <id> [options]
 
 | Option            | Description                                              | Values | Default      |
 | ----------------- | -------------------------------------------------------- | ------ | ------------ |
-| `--reason <text>` | why                                                      |        | **required** |
+| `--reason <text>` | reason recorded with the decision                        |        | **required** |
 | `--actor <name>`  | who decides (default: VERITAS_ACTOR, then git user.name) |        |              |
 
 #### `veritas spec diff`
@@ -151,7 +157,7 @@ veritas spec export
 
 ### `veritas analyze`
 
-index code and tests, map them to properties and assess tests
+index code and tests, map them to properties and assess tests (only [path], if given)
 
 ```text
 veritas analyze [path] [options]
@@ -161,9 +167,9 @@ veritas analyze [path] [options]
 | -------- | -------- | ----------- |
 | `[path]` | no       |             |
 
-| Option          | Description | Values | Default |
-| --------------- | ----------- | ------ | ------- |
-| `--since <ref>` |             |        |         |
+| Option          | Description                                        | Values | Default |
+| --------------- | -------------------------------------------------- | ------ | ------- |
+| `--since <ref>` | mark candidates in code changed since this git ref |        |         |
 
 ### `veritas mutate`
 
@@ -175,8 +181,8 @@ veritas mutate [options]
 
 | Option            | Description                                                                       | Values | Default |
 | ----------------- | --------------------------------------------------------------------------------- | ------ | ------- |
-| `--since <ref>`   |                                                                                   |        |         |
-| `--scope <glob>`  |                                                                                   |        |         |
+| `--since <ref>`   | mutate only code changed since this git ref                                       |        |         |
+| `--scope <glob>`  | mutate only files matching this glob                                              |        |         |
 | `--import <file>` | normalize an existing mutation-testing-elements report instead of running mutator |        |         |
 | `--kill-matrix`   | run every covering test for every mutant and report the kill matrix (slower)      |        |         |
 
@@ -219,7 +225,7 @@ veritas test generate [options]
 
 | Option            | Description                                                       | Values | Default |
 | ----------------- | ----------------------------------------------------------------- | ------ | ------- |
-| `--property <id>` |                                                                   |        |         |
+| `--property <id>` | generate a test for this property only                            |        |         |
 | `--dry-run`       | print instead of writing                                          |        |         |
 | `--force`         | replace generated files that were changed since they were written |        |         |
 
@@ -233,9 +239,9 @@ veritas prove [options]
 
 | Option               | Description                                                | Values       | Default |
 | -------------------- | ---------------------------------------------------------- | ------------ | ------- |
-| `--property <id>`    |                                                            |              |         |
+| `--property <id>`    | verify this property only                                  |              |         |
 | `--include-proposed` | also check properties that are not accepted (experimental) |              |         |
-| `--engine <engine>`  |                                                            | `z3`, `lean` | `z3`    |
+| `--engine <engine>`  | z3 (bounded checks) or lean (kernel-checked proofs)        | `z3`, `lean` | `z3`    |
 
 ### `veritas improve`
 
@@ -264,10 +270,10 @@ print the latest results
 veritas report [options]
 ```
 
-| Option              | Description                              | Values                                      | Default |
-| ------------------- | ---------------------------------------- | ------------------------------------------- | ------- |
-| `--format <format>` |                                          | `text`, `json`, `markdown`, `html`, `sarif` |         |
-| `--run <run-id>`    | report on this run instead of the latest |                                             |         |
+| Option              | Description                                        | Values                                      | Default |
+| ------------------- | -------------------------------------------------- | ------------------------------------------- | ------- |
+| `--format <format>` | output format (default: text, or json with --json) | `text`, `json`, `markdown`, `html`, `sarif` |         |
+| `--run <run-id>`    | report on this run instead of the latest           |                                             |         |
 
 ### `veritas run`
 
@@ -279,9 +285,9 @@ veritas run [options]
 
 | Option                | Description                                                                                   | Values                      | Default    |
 | --------------------- | --------------------------------------------------------------------------------------------- | --------------------------- | ---------- |
-| `--profile <profile>` |                                                                                               | `quick`, `standard`, `deep` | `standard` |
+| `--profile <profile>` | quick (no project code), standard (+ mutation) or deep (+ property tests and proofs)          | `quick`, `standard`, `deep` | `standard` |
 | `--offline`           | Veritas makes no network requests (sources, LLM); project tests still run as with `pnpm test` |                             |            |
-| `--since <ref>`       |                                                                                               |                             |            |
+| `--since <ref>`       | limit mutation to code changed since this git ref                                             |                             |            |
 | `--include-proposed`  | also verify properties that are not accepted (experimental)                                   |                             |            |
 
 ### `veritas replay`

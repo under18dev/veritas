@@ -1,18 +1,10 @@
 # Configuration
 
-## Where configuration lives
-
-Veritas reads its configuration from `.veritas/config.json` in the project root. `veritas init` writes it with the detected package manager, `tsconfig.json`, and source and test globs; every other setting takes its default. The file is validated against [`schemas/config.json`](https://github.com/under18dev/veritas/blob/main/schemas/config.json), and an unknown key or an invalid value is a user error (`CONFIG_INVALID`, exit code 2) that lists each offending field.
-
-A configuration written in code, `veritas.config.ts`, `veritas.config.mjs` or `veritas.config.js` in the project root, is loaded only with the global `--allow-code-config` option, because loading it executes project code. Without that option the command fails with `CONFIG_CODE_NOT_ALLOWED`. The module's default export must be an object of the same shape as the JSON file. Having both a JSON and a code configuration is an error (`CONFIG_AMBIGUOUS`), and a configuration file that is a symbolic link pointing outside the project is refused.
-
-The configuration is hashed (`configHash`) into the metadata of every artifact, so a run always records which settings produced it.
-
-Commit `.veritas/config.json` and `.veritas/approvals.json`. The [GitHub Action](/reference/github-action) needs the configuration in the repository. Keep `.veritas/runs/` and `.veritas/cache/` out of version control: a cache tracked by git is ignored.
+This page describes where Veritas reads its configuration, every setting with its default and allowed values, and how the result cache works.
 
 ## Example
 
-`.veritas/config.json` only needs the settings that differ from the defaults. JSON has no comments, so the notes follow the example.
+`.veritas/config.json` needs only the settings that differ from the defaults:
 
 ```json
 {
@@ -34,13 +26,17 @@ Commit `.veritas/config.json` and `.veritas/approvals.json`. The [GitHub Action]
 }
 ```
 
-- `analysis.include` and `analysis.testInclude` are the globs `init` detected; adjust them when sources or tests live elsewhere.
-- `formal.integerDomain` widens the bounds of formal checks. Bounds are decimal strings so that they stay exact.
-- `policy.inconclusiveBehavior: "fail"` turns inconclusive results into exit code 4: claims that are `unknown`, `timeout`, `unsupported`, `semantic_mismatch` or `error`, and stages that are `partial`, `skipped`, `unsupported`, `timeout` or `cancelled`, which suits a CI gate.
+- `analysis.include` and `analysis.testInclude` select the source and test files. `veritas init` fills them in from what it detects.
+- `formal.integerDomain` sets the integer range of formal checks. The bounds are decimal strings.
+- `policy.inconclusiveBehavior: "fail"` makes inconclusive results end with exit code 4, which suits a CI gate.
 - `policy.maxNewSurvivors: 0` fails the run when any mutant in scope survives.
 - `storage.retainRuns: 10` keeps the ten most recent run directories.
 
-The same configuration as `veritas.config.ts` (loaded only with `--allow-code-config`):
+## Where configuration lives
+
+Veritas reads `.veritas/config.json` in the project root. `veritas init` creates it. The file is validated against [`schemas/config.json`](https://github.com/under18dev/veritas/blob/main/schemas/config.json); an unknown key or an invalid value fails with `CONFIG_INVALID` (exit code 2) and lists every invalid field.
+
+You can write the configuration as code instead, in `veritas.config.ts`, `veritas.config.mjs` or `veritas.config.js` in the project root, with the same shape as its default export. Loading it runs project code, so Veritas loads it only with the global `--allow-code-config` option and otherwise fails with `CONFIG_CODE_NOT_ALLOWED`. A project may have only one configuration file (`CONFIG_AMBIGUOUS` otherwise), and a configuration file that is a symbolic link to a location outside the project is refused.
 
 ```ts
 export default {
@@ -50,60 +46,62 @@ export default {
 };
 ```
 
-## All settings
+Commit `.veritas/config.json` and `.veritas/approvals.json`; the [GitHub Action](/reference/github-action) needs the configuration in the repository. Keep `.veritas/runs/` and `.veritas/cache/` out of version control.
 
-The tables below are generated from `schemas/config.json`.
+## All settings
 
 <!--@include: ./_generated/configuration.md-->
 
-## Important settings
+## What the main settings do
 
-| Setting                                                                      | Default                                | Meaning                                                                                                                                                                                                                                                                                                          |
-| ---------------------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sources.web.enabled`, `sources.github.enabled`                              | `false`                                | Network sources. The web source also needs `allowDomains`; the GitHub source reads `sources.github.repo` (`owner/name`). Neither runs with `--offline`                                                                                                                                                           |
-| `sources.web.maxPages`, `maxDepth`, `maxChars`, `timeoutMs`, `maxDurationMs` | `30`, `1`, `200000`, `30000`, `120000` | Crawl budgets: pages, link depth, characters kept, time per page (body included), and time for the whole crawl. Pages not fetched in time are reported as skipped                                                                                                                                                |
-| `analysis.inferSpecsFromCode`                                                | `true`                                 | Propose candidate properties inferred from the code. With `false`, code-inferred candidates are kept out of the registry and only documented sources produce properties                                                                                                                                          |
-| `mutation.mode`                                                              | `diff`                                 | The expected way of running mutation testing. `--since` is what limits mutants to a change, whatever the mode; with `diff` and no `--since`, the stage messages note that every mutant in scope ran. `full` drops that note                                                                                      |
-| `formal.integerDomain`                                                       | `-10000` to `10000`                    | Bounds for formal checks, inside the safe-integer range                                                                                                                                                                                                                                                          |
-| `formal.maxSolverMs`                                                         | `30000`                                | Solver time limit per query                                                                                                                                                                                                                                                                                      |
-| `formal.maxArrayLength`                                                      | `3`                                    | Element slots modelled for array parameters in formal checks (1 to 8); longer arrays are not covered                                                                                                                                                                                                             |
-| `pbt.numRuns`, `pbt.seed`                                                    | `1000`, derived per property           | Property-based testing. Without `seed`, each property gets a fixed seed derived from its id, so runs are reproducible                                                                                                                                                                                            |
-| `llm.provider`                                                               | `none`                                 | LLM-assisted extraction of free-text statements; see [LLM providers](/guide/llm-providers). `llm.maxTokensPerRun` caps the tokens of one run                                                                                                                                                                     |
-| `policy.confirmedViolation`                                                  | `fail`                                 | Exit 1 on confirmed violations; `warn` reports them as warnings                                                                                                                                                                                                                                                  |
-| `policy.inconclusiveBehavior`                                                | `warn`                                 | `fail` turns inconclusive results into exit 4. `warn` and `ignore` keep exit 0, but the verdict stays `pass_with_warnings` and lists every inconclusive item                                                                                                                                                     |
-| `policy.maxNewSurvivors`                                                     | unset                                  | Exit 1 when more mutants survive in this run's scope (the change with `--since`); inconclusive without mutation results                                                                                                                                                                                          |
-| `policy.minPropertyCoverage`                                                 | unset                                  | Exit 1 when the share (0 to 1) of accepted properties that have a `meaningful_with_evidence` test is lower; inconclusive without accepted properties                                                                                                                                                             |
-| `sandbox.allowNetworkWithoutIsolation`                                       | `false`                                | Run project code even when no Node.js 25+ is available to block its network access. Without it, such results stay inconclusive                                                                                                                                                                                   |
-| `storage.retainRuns`                                                         | `20`                                   | Run directories kept under `.veritas/runs/`. When a run finishes, older finished runs beyond this number are removed (the current run counts). Only real directories of finished runs, whose `artifact-index.json` lists `trace.jsonl`, are removed, so a run still in progress in another process is left alone |
-| `cache.enabled`                                                              | `true`                                 | Reuse results from `.veritas/cache/` (see below)                                                                                                                                                                                                                                                                 |
-| `limits.memoryMb`                                                            | `2048`                                 | V8 heap limit (MiB) for restricted calls of project code, property-based tests, the project's test runner and mutator, and the Z3 solver process (at least 256). Lean is not limited. Running out of memory is an `error`, never a result                                                                        |
+| Setting                                                                      | Default                                | Effect                                                                                                                                                                                                                          |
+| ---------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sources.web.enabled`, `sources.github.enabled`                              | `false`                                | Collect evidence from the web or from GitHub. The web source also needs `allowDomains`; the GitHub source reads `sources.github.repo` (`owner/name`). Neither runs with `--offline`                                             |
+| `sources.web.maxPages`, `maxDepth`, `maxChars`, `timeoutMs`, `maxDurationMs` | `30`, `1`, `200000`, `30000`, `120000` | Limits of the web crawl: pages, link depth, characters kept, time per page, and time for the whole crawl. Pages not fetched in time are reported as skipped                                                                     |
+| `analysis.inferSpecsFromCode`                                                | `true`                                 | Propose candidate properties inferred from the code. With `false`, only documented sources produce properties                                                                                                                   |
+| `mutation.mode`                                                              | `diff`                                 | `diff`: you are expected to pass `--since`; without it, all mutants in scope run and the stage messages say so. `full`: all mutants in scope run, without that message. In both modes, `--since` limits mutants to changed code |
+| `formal.integerDomain`                                                       | `-10000` to `10000`                    | Integer range of formal checks, within the safe-integer range                                                                                                                                                                   |
+| `formal.maxSolverMs`                                                         | `30000`                                | Solver time limit per query                                                                                                                                                                                                     |
+| `formal.maxArrayLength`                                                      | `3`                                    | Longest array (1 to 8) that formal checks cover; longer arrays are not covered                                                                                                                                                  |
+| `pbt.numRuns`, `pbt.seed`                                                    | `1000`, per property                   | Number of property-based test runs, and the seed. Without `seed`, each property gets a fixed seed derived from its id, so results are reproducible                                                                              |
+| `llm.provider`                                                               | `none`                                 | LLM used to read free-text statements; see [LLM providers](/guide/llm-providers). `llm.maxTokensPerRun` limits the tokens of one run                                                                                            |
+| `policy.confirmedViolation`                                                  | `fail`                                 | `fail`: a confirmed violation ends with exit code 1. `warn`: it is reported as a warning                                                                                                                                        |
+| `policy.inconclusiveBehavior`                                                | `warn`                                 | `fail`: inconclusive results end with exit code 4. `warn` and `ignore`: exit code 0, with the verdict `pass_with_warnings` and every inconclusive result listed                                                                 |
+| `policy.maxNewSurvivors`                                                     | unset                                  | Exit code 1 when more mutants survive in the run's scope (the changed code with `--since`). Inconclusive when there are no mutation results                                                                                     |
+| `policy.minPropertyCoverage`                                                 | unset                                  | Exit code 1 when the share (0 to 1) of accepted properties with a `meaningful_with_evidence` test is lower. Inconclusive when no property is accepted                                                                           |
+| `sandbox.allowNetworkWithoutIsolation`                                       | `false`                                | Run project code even without a Node.js 25 or later that can block its network access. Otherwise those results stay inconclusive                                                                                                |
+| `storage.retainRuns`                                                         | `20`                                   | Number of finished runs kept in `.veritas/runs/`, the current run included. Older finished runs are deleted when a run finishes; runs still in progress are kept                                                                |
+| `cache.enabled`                                                              | `true`                                 | Reuse results from `.veritas/cache/` (see [Caching](#caching))                                                                                                                                                                  |
+| `limits.memoryMb`                                                            | `2048`                                 | Memory limit (MiB, at least 256) for processes that run project code, the project's tests, mutator and Z3. Lean is not limited. Running out of memory is an `error`                                                             |
 
-The policy settings correspond to the CI policies of the specification: `block_on_confirmed_spec_violation` is `policy.confirmedViolation` (`fail` blocks), `max_new_survivors` is `policy.maxNewSurvivors`, `min_property_coverage` is `policy.minPropertyCoverage`, and `inconclusive_behavior` is `policy.inconclusiveBehavior`. The GitHub Action also takes `inconclusive` as an input.
+Inconclusive results are claims that are `unknown`, `timeout`, `unsupported`, `semantic_mismatch` or `error`, and stages that are `partial`, `skipped`, `unsupported`, `timeout` or `cancelled`.
 
 ## Settings with a single allowed value
 
-Some settings exist only to state a rule. They accept exactly one value, and any other value is rejected as invalid configuration:
+These settings state a rule and accept only one value. Any other value is an invalid configuration.
 
-| Setting                                      | Only value | Rule it states                                                            |
+| Setting                                      | Only value | Rule                                                                      |
 | -------------------------------------------- | ---------- | ------------------------------------------------------------------------- |
-| `analysis.requireApprovalForNormativeClaims` | `true`     | A property becomes `accepted` only through an explicit approval record    |
-| `improvement.testFilesOnly`                  | `true`     | `improve` only adds test files; production code is never edited           |
+| `analysis.requireApprovalForNormativeClaims` | `true`     | A property becomes `accepted` only through a recorded decision            |
+| `improvement.testFilesOnly`                  | `true`     | `improve` only adds test files and never edits production code            |
 | `improvement.autoApply`                      | `false`    | A plan is applied only with `--apply`, its plan id and its approval token |
-| `storage.storePrompts`                       | `false`    | Prompts sent to an LLM are not stored with the run artifacts              |
+| `storage.storePrompts`                       | `false`    | Prompts sent to an LLM are not stored                                     |
 | `formal.rejectUnsupportedSemantics`          | `true`     | Code outside the formal subset is `unsupported`, never approximated       |
 | `analysis.testFramework`                     | `vitest`   | Vitest is the supported test runner                                       |
-| `mutation.backend`                           | `mizchi`   | `@mizchi/mutator` is the mutation backend                                 |
+| `mutation.backend`                           | `mizchi`   | `@mizchi/mutator` runs mutation testing                                   |
 
 ## Caching
 
-The cache under `.veritas/cache/` keeps three kinds of results:
+Veritas keeps three kinds of results in `.veritas/cache/` and reuses them when the inputs are identical:
 
-| Kind                                 | Key                                                                                                                                      |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Decisive Z3 results (`sat`, `unsat`) | The SMT query, the solver build and the time limit                                                                                       |
-| Successful LLM responses             | The provider, the model and the exact request                                                                                            |
-| Complete mutation runs               | The content of every file `git ls-files` lists, the mutator, Vitest and Node.js versions, the configuration, and `--since` and the scope |
+| Result                              | Reused when these are identical                                                                                                      |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Decided Z3 results (`sat`, `unsat`) | The SMT query, the solver build and the time limit                                                                                   |
+| Successful LLM responses            | The provider, the model and the request                                                                                              |
+| Complete mutation runs              | The content of every file `git ls-files` lists, the mutator, Vitest and Node.js versions, the configuration, `--since` and the scope |
 
-Undecided or failed results are never reused. A reused counterexample is still replayed in JavaScript, and reuse is shown in the stage messages and the solver output. Without git, mutation results are not cached.
+Undecided or failed results are not reused. A reused counterexample is still replayed in JavaScript, and the stage messages say when a result was reused. Without git, mutation results are not cached.
 
-Entries are signed with a key kept outside the project: `~/.cache/veritas/cache-key`, `%LOCALAPPDATA%\veritas\cache-key` on Windows, or the file named by `VERITAS_CACHE_KEY_FILE`. Entries signed with another key, such as entries copied in with a repository or restored on a fresh CI runner without that key, are cache misses. A cache tracked by git is ignored entirely. The project's own tests, which mutation testing runs, could still read the key; set `cache.enabled: false` for code you do not trust (see [Security model](/concepts/security)).
+Entries are signed with a key stored outside the project, in `~/.cache/veritas/cache-key` (`%LOCALAPPDATA%\veritas\cache-key` on Windows) or the file named by `VERITAS_CACHE_KEY_FILE`. Entries signed with a different key, for example ones copied in with a repository or restored on a CI runner without the key, are ignored. A cache directory tracked by git is ignored as a whole.
+
+The project's own tests, which mutation testing runs, can read the key. For code you do not trust, set `cache.enabled: false` (see [Security model](/concepts/security)).

@@ -1,6 +1,6 @@
 # MCP server
 
-`veritas-mcp` serves Veritas over the Model Context Protocol on stdio, so that an agent can run analyses and read their evidence. It is installed with `@under18dev/veritas` next to the `veritas` command and calls the same engine: each tool writes the same artifacts under `.veritas/runs/<run-id>/` as the matching CLI command. See [Agents and MCP](/guide/agents) for how to connect it to a client.
+This page describes `veritas-mcp`, which serves Veritas to MCP clients such as coding agents: how to start it, each tool with its inputs and results, and how approvals, concurrency and cancellation work. The server is installed with `@under18dev/veritas`, and each tool writes the same files to `.veritas/runs/<run-id>/` as the matching `veritas` command. To connect it to a client, see [Agents and MCP](/guide/agents).
 
 ## Starting the server
 
@@ -46,7 +46,7 @@ All tools that run stages run **offline**: no GitHub or web sources and no LLM r
 | `plan_improvement`           | always               | no                    | yes (restricted calls of the functions under test) |
 | `apply_approved_improvement` | with `--allow-write` | yes (adds test files) | yes                                                |
 
-The read tools carry the MCP `readOnlyHint` annotation. "Read" means they never modify project sources; tools that run stages still write their run directory under `.veritas/`.
+All tools except `apply_approved_improvement` are marked read-only (`readOnlyHint`): they do not change project files, but the tools that run stages write a run directory under `.veritas/`.
 
 ### `discover_specs`
 
@@ -156,16 +156,16 @@ Results are returned both as `structuredContent` and as JSON text. Both are reda
 
 ## Errors
 
-A failing tool returns `isError: true` with a JSON body `{ "code", "category", "message", "hint" }`. `code` and `category` are those of the CLI (for example `NO_RUN` with category `user`); an unexpected exception has the code `UNEXPECTED` and the category `tool`. Inputs that do not match a tool's schema are rejected by the MCP SDK before the tool runs.
+A failing tool returns `isError: true` with a JSON body `{ "code", "category", "message", "hint" }`. `code` and `category` are those of the CLI (for example `NO_RUN` with category `user`); an unexpected exception has the code `UNEXPECTED` and the category `tool`. Inputs that do not match a tool's input schema are rejected before the tool runs.
 
 ## Approval tokens
 
-Changing project files takes two separate steps, and the server cannot take the second one on its own:
+Changing project files takes two steps:
 
 1. `plan_improvement` stores the plan under `.veritas/improvements/<plan-id>/` and returns `approvalToken`, the SHA-256 of the plan's canonical content.
-2. A person reviews the plan, for example with `veritas improve --dry-run` or by reading the plan file, and passes the plan id and the token to `apply_approved_improvement`.
+2. After a person has reviewed the plan (the `plan` field, or `plan.json` in that directory), the client passes the plan id and the token to `apply_approved_improvement`.
 
-A token matches exactly one plan content. A changed plan, a different plan id, a property rejected after planning or a server started without `--allow-write` refuses the apply. Each apply records `approval-<n>.json` with the approver, the time, the entry point (`mcp`) and the hash of the token. The approver comes from `actor`, then `VERITAS_ACTOR`, then the git `user.name`; it is what the client said, not an authenticated identity.
+A token matches exactly one plan content. The apply is refused when the plan has changed, the plan id does not match, or a property used by the plan was rejected after planning. Without `--allow-write`, the tool does not exist. Each apply records `approval-<n>.json` with the approver, the time, the entry point (`mcp`) and the hash of the token. The approver comes from `actor`, then `VERITAS_ACTOR`, then the git `user.name`; the name is recorded as given and is not authenticated.
 
 ## Concurrency and progress
 

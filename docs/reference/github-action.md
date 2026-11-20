@@ -1,6 +1,6 @@
 # GitHub Action
 
-The Veritas action runs the same engine as the CLI, offline, on a GitHub Actions runner. It is a composite action defined in [`packages/github-action/action.yml`](https://github.com/under18dev/veritas/blob/main/packages/github-action/action.yml). For how to fit it into a CI setup, see [CI and GitHub Action](/guide/ci).
+This page is the reference for the Veritas GitHub Action: an example workflow, how versions are pinned, the inputs and outputs, exit codes, supported events, and the rules that keep pull requests from forks safe. The action runs the same analysis as `veritas run`, offline. For how to fit it into a CI setup, see [CI and GitHub Action](/guide/ci).
 
 ## Example workflow
 
@@ -51,7 +51,7 @@ The project must contain a committed `.veritas/config.json` (create it with `ver
 
 ## Versions and Node.js
 
-The action is referenced by its path in the Veritas repository and a release tag: `under18dev/veritas/packages/github-action@v<version>`. Each tag's `action.yml` runs the published npm package of exactly that version, `npx --yes @under18dev/veritas-github-action@<version>`, so the tag you pin is the Veritas version that runs. The version is updated together with the packages at release time. To upgrade, change the tag.
+The action is referenced by its path in the Veritas repository and a release tag: `under18dev/veritas/packages/github-action@v<version>`. Each tag's `action.yml` runs the published npm package of exactly that version, `npx --yes @under18dev/veritas-github-action@<version>`, so the tag you pin is the Veritas version that runs. To upgrade, change the tag.
 
 Because the action is a composite action, it runs on the Node.js that the job set up with `actions/setup-node`, not on a runtime bundled with the action. Property-based tests and counterexample replay call project code only under a Node.js 25 or later, which can block its network access. With an older Node.js, those results are not produced and stay inconclusive, unless `sandbox.allowNetworkWithoutIsolation` is set. The step downloads the package from the npm registry when it starts; the analysis itself is offline.
 
@@ -92,13 +92,13 @@ A later step can read them through the step's `id`. Add `if: always()` so that t
 
 ## Exit codes
 
-| Code | Meaning                                                                                                                        |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `0`  | Passing, including warnings, documentation-only changes that were skipped, and degraded projects (below) under a `warn` policy |
-| `1`  | Confirmed policy failure                                                                                                       |
-| `2`  | Invalid or unsafe invocation: a refused event, an invalid `working-directory`, a missing or invalid configuration              |
-| `3`  | Tool error, including an unsupported event                                                                                     |
-| `4`  | Inconclusive with the `fail` policy                                                                                            |
+| Code | Meaning                                                                                                                                  |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | Passing, including warnings, documentation-only changes that were skipped, and degraded projects (below) unless `inconclusive` is `fail` |
+| `1`  | Confirmed policy failure                                                                                                                 |
+| `2`  | Invalid or unsafe invocation: a refused event, an invalid `working-directory`, a missing or invalid configuration                        |
+| `3`  | Tool error, including an unsupported event                                                                                               |
+| `4`  | Inconclusive with the `fail` policy                                                                                                      |
 
 The verdicts are the same as the CLI's (see [CLI reference](/reference/cli#verdicts)). A passing check is evidence about the configured checks and bounds, not a formal proof that the tests or the implementation are correct.
 
@@ -129,7 +129,7 @@ Unless `summary` is `"false"`, the step summary lists the verdict, the exit code
 
 Pull requests from forks are supported through the `pull_request` event, which GitHub runs without secrets and with a read-only token. The action itself never reads a token and never enables network sources.
 
-`pull_request_target`, and `workflow_run` triggered by a fork, are refused: they combine a privileged workflow context with code from the pull request. The workflow should grant only `contents: read` and check out with `persist-credentials: false`, as in the example. The action package contains a checker for these rules (`checkWorkflowSafety`), which Veritas's own tests apply to the example workflow:
+`pull_request_target`, and `workflow_run` triggered by a fork, are refused: they combine a privileged workflow context with code from the pull request. Write the workflow so that it follows these rules, as the example does:
 
 - a `pull_request` workflow declares top-level `permissions`, and they are read-only (`contents: read`, everything else `none`);
 - no job of a pull request workflow references `secrets.*` or the GitHub token;

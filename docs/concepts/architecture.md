@@ -1,13 +1,13 @@
 # Architecture
 
-Veritas answers, for each test, which specification it is derived from, what it observes, which faults it detects, what has been formally checked under which model and bounds, and what remains unknown. Every answer is backed by machine-readable evidence. This page describes how the code is organised; for what the results mean, see [Semantics](/concepts/semantics).
+Veritas answers, for each test, which specification it is derived from, what it observes, which faults it detects, what has been formally checked under which model and bounds, and what remains unknown. Every answer is backed by machine-readable evidence. This page shows how a run flows through the packages of Veritas and where it stores its data. For what the results mean, see [Semantics](/concepts/semantics).
 
 ## Pipeline
 
 ```text
 CLI / Node API / Agent Skill / MCP / GitHub Action
                        |
-            Orchestrator (engine, runStages)
+               Orchestrator (engine)
                        |
     +------------------+-------------------+
 Evidence collectors  Code intelligence  Test inventory
@@ -47,13 +47,12 @@ Evidence collectors  Code intelligence  Test inventory
 | `mcp`                      | MCP server                                                                                                                                                                       |
 | `github-action`            | CI integration                                                                                                                                                                   |
 
-See the [support matrix](/concepts/support-matrix) for what each package supports.
+What each part supports is listed in the [support matrix](/concepts/support-matrix).
 
-## Rules
+## How the pieces fit
 
-- `core` depends on no other workspace package, CLI framework or LLM SDK (enforced by dependency-cruiser). No package cycles.
-- Every entry point (CLI, Node API, MCP, Action) calls the same package functions and produces the same artifacts. The stage list of each command is one shared table (`COMMAND_STAGES`, `PROFILE_STAGES`), so `veritas analyze`, `analyze()` and the `analyze_tests` MCP tool run the same stages.
-- Stages run through `runStages`. A thrown error becomes an `error` stage result; dependents of a failed stage are `skipped`; nothing reports success on behalf of another stage.
+- The CLI, the Node API, the MCP server and the GitHub Action call the same package functions. A command and its API function or MCP tool run the same stages and write the same files; for example, `veritas analyze`, `analyze()` and the `analyze_tests` tool.
+- Each stage reports its own result. A stage that throws ends as `error`, stages that depend on a failed stage are `skipped`, and no stage reports success for another one.
 
 ## Storage
 

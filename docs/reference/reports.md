@@ -1,6 +1,6 @@
 # Reports and artifacts
 
-Every run writes its evidence to `.veritas/runs/<run-id>/`. The reports are rendered from these files, and every entry point (CLI, Node API, MCP server, GitHub Action) writes the same ones. For how to interpret what a report says, see [Reading results](/guide/reading-results).
+This page describes the report formats, the sections of a report, the files of a run directory under `.veritas/runs/<run-id>/`, the metadata every file carries, and how secrets are removed. The CLI, the Node API, the MCP server and the GitHub Action write the same files. For how to interpret a report, see [Reading results](/guide/reading-results).
 
 ## Report formats
 
@@ -84,7 +84,7 @@ The `mutation/` directory is absent when mutation results were reused from the c
 | `artifact-index.json` | Files that cannot carry an envelope, with path, kind, SHA-256, size and creation time                                                                                                                                                 |
 | `trace.jsonl`         | One JSON object per log event (`time`, `level`, `message`, and fields such as `event` and `stage`), at most 4 MB; a final line says how many events were dropped                                                                      |
 
-`storage.retainRuns` (default 20) limits how many run directories are kept: when a run finishes, older finished runs beyond that number are removed. A run counts as finished once its `artifact-index.json` lists `trace.jsonl`, which a run writes last; directories of runs still in progress, symbolic links and other entries are left alone.
+Veritas keeps the most recent `storage.retainRuns` finished runs (default 20) and deletes older ones when a run finishes. Runs still in progress are not deleted.
 
 Other files under `.veritas/`:
 
@@ -125,11 +125,11 @@ Every JSON artifact is an envelope `{ "meta": { ... }, "data": ... }`:
 | `configHash`    | Hash of the validated configuration                      |
 | `sourceHash`    | Hash of the indexed source files                         |
 
-Files that cannot hold an envelope (solver input and output, Lean sources, rendered reports, mutator's own report files) are listed in `artifact-index.json` with their SHA-256, and the index carries the metadata. The rendered reports show it too. Readers validate envelopes against their schema: `readArtifact` in the [Node API](/reference/api) rejects a file that does not match.
+Files that cannot hold an envelope (solver input and output, Lean sources, rendered reports, mutator's own report files) are listed in `artifact-index.json` with their SHA-256, and the index carries the metadata. The rendered reports show it too. `readArtifact` in the [Node API](/reference/api) validates a file against its schema and rejects it if it does not match.
 
 ## JSON Schemas
 
-The JSON Schemas of the configuration and the domain types are in [`schemas/`](https://github.com/under18dev/veritas/tree/main/schemas), generated from the Zod definitions in the core package:
+The JSON Schemas of the configuration and of the records in the artifacts are in [`schemas/`](https://github.com/under18dev/veritas/tree/main/schemas) in the repository:
 
 | Schema                                        | Describes                                     |
 | --------------------------------------------- | --------------------------------------------- |
@@ -147,7 +147,7 @@ The JSON Schemas of the configuration and the domain types are in [`schemas/`](h
 | `approval-ledger.json`                        | `.veritas/approvals.json`                     |
 | `improvement-plan.json`, `patch-attempt.json` | An improvement plan and an apply attempt      |
 
-See [ADR 0002](/adr/0002-schemas-and-artifacts) for the design.
+The design is explained in [ADR 0002](/adr/0002-schemas-and-artifacts).
 
 ## Redaction
 

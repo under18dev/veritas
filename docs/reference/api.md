@@ -1,6 +1,6 @@
 # Node API
 
-`@under18dev/veritas` exports the functions the CLI calls. They run the same stages, write the same artifacts under `.veritas/runs/<run-id>/` and return the same verdict and exit code as the matching command. Nothing in the API starts the CLI as a child process.
+This page lists what `@under18dev/veritas` exports for use from Node.js. The functions run the same stages as the matching `veritas` command, write the same files to `.veritas/runs/<run-id>/`, and return the same verdict and exit code.
 
 ```bash
 pnpm add -D @under18dev/veritas
@@ -31,35 +31,35 @@ console.log(deep.runId, deep.dir);
 | `run({ profile, ...options })` | `veritas run`      | the stages of the profile (`quick`, `standard` by default, `deep`) | `false`           |
 | `runVeritas(options)`          | none               | any list of stages; dependencies listed earlier run too            | `false`           |
 
-The stage lists are exported as `COMMAND_STAGES` (for `discover`, `analyze`, `mutate`, `prove`) and `PROFILE_STAGES` (for each profile). The CLI, the MCP server and these functions share both tables.
+`COMMAND_STAGES` (for `discover`, `analyze`, `mutate` and `prove`) and `PROFILE_STAGES` (for each profile) hold these stage lists.
 
 ### Options
 
 `discover`, `analyze`, `mutate`, `prove` and `run` take `StageOptions`, which is `RunOptions` without `command` and `stages`. `runVeritas` takes the full `RunOptions`.
 
-| Option             | Type                                             | Meaning                                                                                           |
-| ------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| `root`             | `string`                                         | Project root. Required                                                                            |
-| `command`          | `string`                                         | Name recorded in `run.json` (`runVeritas` only)                                                   |
-| `stages`           | `StageName[]`                                    | Stages to run (`runVeritas` only)                                                                 |
-| `profile`          | `'quick' \| 'standard' \| 'deep'`                | Recorded profile; `run` selects its stages from it                                                |
-| `offline`          | `boolean`                                        | Make no network request: no GitHub or web sources, no LLM                                         |
-| `localSourcesOnly` | `boolean`                                        | Collect only local sources but still allow a configured LLM                                       |
-| `sources`          | `('local' \| 'github' \| 'web')[]`               | Sources to collect; by default local plus the network sources enabled in the configuration        |
-| `web`              | `{ allowDomains?: string[]; maxPages?: number }` | Web discovery overrides, like `--allow-domain` and `--max-pages`                                  |
-| `since`            | `string`                                         | Git ref; limits mutation testing to the change, like `--since`                                    |
-| `scope`            | `string[]`                                       | Source globs to mutate, like `--scope`                                                            |
-| `mutationReport`   | `string`                                         | Import this mutation-testing-elements report (path inside the project) instead of running mutator |
-| `killMatrix`       | `boolean`                                        | Run every covering test for every mutant (slower)                                                 |
-| `includeProposed`  | `boolean`                                        | Also verify properties that are not accepted; their results stay experimental                     |
-| `formalEngine`     | `'z3' \| 'lean'`                                 | Backend for conformance claims (mutant equivalence always uses Z3). Default: `formal.backend`     |
-| `propertyIds`      | `string[]`                                       | Limit verification to these properties                                                            |
-| `allowCodeConfig`  | `boolean`                                        | Allow loading `veritas.config.{ts,mjs,js}`, which executes project code                           |
-| `gitRoot`          | `string`                                         | Repository whose git revision and log describe `root` when `root` is a copy without `.git`        |
-| `signal`           | `AbortSignal`                                    | Cancels running stages and their child processes                                                  |
-| `log`              | `(message: string) => void`                      | Progress messages (info level and above)                                                          |
-| `logger`           | `LogSink`                                        | Every structured event, debug level included                                                      |
-| `llmProvider`      | `LlmProvider \| null`                            | Inject an LLM provider (tests); by default the configured provider is used when available         |
+| Option             | Type                                             | Meaning                                                                                             |
+| ------------------ | ------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `root`             | `string`                                         | Project root. Required                                                                              |
+| `command`          | `string`                                         | Name recorded in `run.json` (`runVeritas` only)                                                     |
+| `stages`           | `StageName[]`                                    | Stages to run (`runVeritas` only)                                                                   |
+| `profile`          | `'quick' \| 'standard' \| 'deep'`                | Recorded profile; `run` selects its stages from it                                                  |
+| `offline`          | `boolean`                                        | Make no network request: no GitHub or web sources, no LLM                                           |
+| `localSourcesOnly` | `boolean`                                        | Collect only local sources but still allow a configured LLM                                         |
+| `sources`          | `('local' \| 'github' \| 'web')[]`               | Sources to collect; by default local plus the network sources enabled in the configuration          |
+| `web`              | `{ allowDomains?: string[]; maxPages?: number }` | Web discovery overrides, like `--allow-domain` and `--max-pages`                                    |
+| `since`            | `string`                                         | Git ref; limits mutation testing to the change, like `--since`                                      |
+| `scope`            | `string[]`                                       | Source globs to mutate, like `--scope`                                                              |
+| `mutationReport`   | `string`                                         | Import this mutation-testing-elements report (path inside the project) instead of running mutator   |
+| `killMatrix`       | `boolean`                                        | Run every covering test for every mutant (slower)                                                   |
+| `includeProposed`  | `boolean`                                        | Also check properties that are not accepted; findings from them are at most `suspected`             |
+| `formalEngine`     | `'z3' \| 'lean'`                                 | Backend for conformance claims (mutant equivalence always uses Z3). Default: `formal.backend`       |
+| `propertyIds`      | `string[]`                                       | Limit verification to these properties                                                              |
+| `allowCodeConfig`  | `boolean`                                        | Allow loading `veritas.config.{ts,mjs,js}`, which executes project code                             |
+| `gitRoot`          | `string`                                         | Repository whose git revision and log describe `root` when `root` is a copy without `.git`          |
+| `signal`           | `AbortSignal`                                    | Cancels running stages and their child processes                                                    |
+| `log`              | `(message: string) => void`                      | Progress messages (info level and above)                                                            |
+| `logger`           | `LogSink`                                        | Every structured event, debug level included                                                        |
+| `llmProvider`      | `LlmProvider \| null`                            | An LLM provider to use instead of the configured one, for example in tests; `null` disables the LLM |
 
 ### Result
 
@@ -92,18 +92,18 @@ try {
 
 ## Reading results
 
-| Export                            | Purpose                                                                                                                   |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `readArtifact(root, runId, name)` | Read and validate one artifact of a run; returns `{ meta, data }`                                                         |
-| `readLatest(root, name)`          | The same for the most recent run that has the artifact; returns `{ runId, meta, data }`                                   |
-| `latestRunWith(root, name)`       | Id of the most recent run that has the artifact, or `null`                                                                |
-| `ARTIFACTS`                       | Artifact names with their file names and schemas                                                                          |
-| `explainFinding(root, findingId)` | The evidence chain of a finding (`veritas explain`): sources, statements, properties, tests, assessments, mutants, claims |
-| `buildReportInput(root, runId?)`  | Collect the data of a report from a run (default: the latest)                                                             |
-| `renderReport(input, format)`     | Render it as `text`, `json`, `markdown`, `html` or `sarif`                                                                |
-| `renderCiSummary`                 | The short Markdown summary used for CI                                                                                    |
-| `REPORT_FILES`                    | File names of the rendered reports in a run directory                                                                     |
-| `improvementsFor(root, runId)`    | Improvement plans made from a run, with their apply attempts                                                              |
+| Export                                     | Purpose                                                                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `readArtifact(root, runId, name)`          | Read and validate one artifact of a run; returns `{ meta, data }`                                                         |
+| `readLatest(root, name)`                   | The same for the most recent run that has the artifact; returns `{ runId, meta, data }`                                   |
+| `latestRunWith(root, name)`                | Id of the most recent run that has the artifact, or `null`                                                                |
+| `ARTIFACTS`                                | Artifact names with their file names and schemas                                                                          |
+| `explainFinding(root, findingId)`          | The evidence chain of a finding (`veritas explain`): sources, statements, properties, tests, assessments, mutants, claims |
+| `buildReportInput(root, runId?)`           | Collect the data of a report from a run (default: the latest)                                                             |
+| `renderReport(input, format)`              | Render it as `text`, `json`, `markdown`, `html` or `sarif`                                                                |
+| `renderCiSummary(input, { artifactUrl? })` | Render a short Markdown summary for CI, with an optional link to the uploaded run                                         |
+| `REPORT_FILES`                             | File names of the rendered reports in a run directory                                                                     |
+| `improvementsFor(root, runId)`             | Improvement plans made from a run, with their apply attempts                                                              |
 
 Artifact names for `readArtifact` and `readLatest` are `run`, `evidence`, `codeIndex`, `properties`, `testMap`, `mutation`, `claims`, `pbt`, `assessments`, `findings` and `artifactIndex`. The data is typed by name (`ArtifactData<'findings'>`). See [Reports and artifacts](/reference/reports) for the files.
 
@@ -141,21 +141,17 @@ const markdown = renderReport(buildReportInput('/path/to/project'), 'markdown');
 
 ## Project setup
 
-| Export                                    | CLI equivalent   | Purpose                                                                                                                                                                                      |
-| ----------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `initProject(root, { force?, dryRun? })`  | `veritas init`   | Detect the project and write `.veritas/config.json`; returns the config and next steps                                                                                                       |
-| `loadConfig(root, { allowCodeConfig? })`  | none             | Load and validate the configuration; returns `{ config, file, hash }`                                                                                                                        |
-| `openProject(root, { allowCodeConfig? })` | none             | Load the configuration; returns `{ root, config, configHash }`                                                                                                                               |
-| `runDoctor(root, config, env?, bundled?)` | `veritas doctor` | Check capabilities and features; pass `null` as `config` to check without a configuration. Pass `bundledTools()` as `bundled`, as the CLI does, so that tools shipped with Veritas are found |
-| `bundledTools()`                          | none             | Versions of `@mizchi/mutator`, fast-check and `z3-solver` that this Veritas installation brings (`null` when one cannot be resolved)                                                         |
+| Export                                    | CLI equivalent   | Purpose                                                                                                                                                                                                    |
+| ----------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `initProject(root, { force?, dryRun? })`  | `veritas init`   | Detect the project and write `.veritas/config.json`; returns the config and next steps                                                                                                                     |
+| `loadConfig(root, { allowCodeConfig? })`  | none             | Load and validate the configuration; returns `{ config, file, hash }`                                                                                                                                      |
+| `openProject(root, { allowCodeConfig? })` | none             | Load the configuration; returns `{ root, config, configHash }`                                                                                                                                             |
+| `runDoctor(root, config, env?, bundled?)` | `veritas doctor` | Check capabilities and features; pass `null` as `config` to check without a configuration. Pass `bundledTools()` as `bundled` so that the tools installed with Veritas are found, as `veritas doctor` does |
+| `bundledTools()`                          | none             | Versions of `@mizchi/mutator`, fast-check and `z3-solver` installed with Veritas (`null` for a tool that cannot be found)                                                                                  |
 
 ## CLI program
 
-`buildProgram(setExit, writeOut?)` returns the Commander program of the `veritas` command, and `main(argv)` runs it and resolves to the exit code. They are what the `veritas` executable uses.
-
-## Lower-level exports
-
-`recordedRunOptions`, `selectMutationTestFiles`, `mutationCacheKey`, `mutationStageStatus`, `literalInput` and `MAX_RELATION_CLAIMS` are internal building blocks shared with other Veritas packages. Prefer the functions above.
+`main(argv)` runs the `veritas` command with the given arguments and resolves to its exit code. `buildProgram(setExit, writeOut?)` returns the underlying Commander program.
 
 ## Types
 

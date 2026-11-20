@@ -1,6 +1,6 @@
 # Node API
 
-`@under18dev/veritas` は、CLI が呼び出す関数をそのまま公開しています。対応するコマンドと同じステージを実行し、`.veritas/runs/<run-id>/` に同じ成果物を書き、同じ verdict と終了コードを返します。API の中で CLI を子プロセスとして起動することはありません。
+`@under18dev/veritas` が Node.js 向けに公開している関数と型をまとめます。各関数は、対応する `veritas` コマンドと同じステージを実行し、`.veritas/runs/<run-id>/` に同じファイルを書き、同じ verdict と終了コードを返します。
 
 ```bash
 pnpm add -D @under18dev/veritas
@@ -31,7 +31,7 @@ console.log(deep.runId, deep.dir);
 | `run({ profile, ...options })` | `veritas run`      | プロファイル（`quick`、既定の `standard`、`deep`）のステージ | `false`          |
 | `runVeritas(options)`          | なし               | 任意のステージの列。列の前にある依存ステージも実行する       | `false`          |
 
-ステージの列は `COMMAND_STAGES`（`discover`、`analyze`、`mutate`、`prove`）と `PROFILE_STAGES`（プロファイルごと）として公開しています。CLI、MCP サーバー、これらの関数は、この 2 つの表を共有しています。
+`COMMAND_STAGES`（`discover`、`analyze`、`mutate`、`prove`）と `PROFILE_STAGES`（プロファイルごと）に、これらのステージの列が入っています。
 
 ### オプション
 
@@ -51,7 +51,7 @@ console.log(deep.runId, deep.dir);
 | `scope`            | `string[]`                                       | mutation の対象にするソースの glob。`--scope` に当たる                                          |
 | `mutationReport`   | `string`                                         | mutator を実行する代わりに取り込む mutation-testing-elements のレポート（プロジェクト内のパス） |
 | `killMatrix`       | `boolean`                                        | すべての mutant に対して、それを通るテストをすべて実行する（遅い）                              |
-| `includeProposed`  | `boolean`                                        | accepted でない Property も検証する。その結果は実験的な扱いのまま                               |
+| `includeProposed`  | `boolean`                                        | accepted でない Property も検査する。そこから出た finding は `suspected` 以下                   |
 | `formalEngine`     | `'z3' \| 'lean'`                                 | 適合性の主張に使うバックエンド（mutant の等価性は常に Z3）。既定は `formal.backend`             |
 | `propertyIds`      | `string[]`                                       | 検証する Property を絞る                                                                        |
 | `allowCodeConfig`  | `boolean`                                        | プロジェクトのコードを実行する `veritas.config.{ts,mjs,js}` の読み込みを許可する                |
@@ -59,7 +59,7 @@ console.log(deep.runId, deep.dir);
 | `signal`           | `AbortSignal`                                    | 実行中のステージと、それが起動した子プロセスを中止する                                          |
 | `log`              | `(message: string) => void`                      | 進捗のメッセージ（info レベル以上）                                                             |
 | `logger`           | `LogSink`                                        | debug レベルを含む、すべての構造化イベント                                                      |
-| `llmProvider`      | `LlmProvider \| null`                            | LLM プロバイダーを差し込む（テスト用）。既定では、設定したプロバイダーが使えれば使う            |
+| `llmProvider`      | `LlmProvider \| null`                            | 設定したものの代わりに使う LLM プロバイダー（テストなど）。`null` を渡すと LLM を使わない       |
 
 ### 戻り値
 
@@ -92,18 +92,18 @@ try {
 
 ## 結果を読む
 
-| エクスポート                      | 用途                                                                                      |
-| --------------------------------- | ----------------------------------------------------------------------------------------- |
-| `readArtifact(root, runId, name)` | 実行の成果物を 1 つ読み、スキーマで検証する。`{ meta, data }` を返す                      |
-| `readLatest(root, name)`          | その成果物を持つ最新の実行から同じように読む。`{ runId, meta, data }` を返す              |
-| `latestRunWith(root, name)`       | その成果物を持つ最新の実行の ID。なければ `null`                                          |
-| `ARTIFACTS`                       | 成果物の名前と、そのファイル名・スキーマ                                                  |
-| `explainFinding(root, findingId)` | finding の根拠の連鎖（`veritas explain`）。出典、文、Property、テスト、評価、mutant、主張 |
-| `buildReportInput(root, runId?)`  | 実行からレポートのデータを集める（既定は最新の実行）                                      |
-| `renderReport(input, format)`     | `text`、`json`、`markdown`、`html`、`sarif` のいずれかで描画する                          |
-| `renderCiSummary`                 | CI 向けの短い Markdown の要約                                                             |
-| `REPORT_FILES`                    | 実行ディレクトリにある、描画済みレポートのファイル名                                      |
-| `improvementsFor(root, runId)`    | その実行から作った改善計画と、その適用の記録                                              |
+| エクスポート                               | 用途                                                                                      |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `readArtifact(root, runId, name)`          | 実行の成果物を 1 つ読み、スキーマで検証する。`{ meta, data }` を返す                      |
+| `readLatest(root, name)`                   | その成果物を持つ最新の実行から同じように読む。`{ runId, meta, data }` を返す              |
+| `latestRunWith(root, name)`                | その成果物を持つ最新の実行の ID。なければ `null`                                          |
+| `ARTIFACTS`                                | 成果物の名前と、そのファイル名・スキーマ                                                  |
+| `explainFinding(root, findingId)`          | finding の根拠の連鎖（`veritas explain`）。出典、文、Property、テスト、評価、mutant、主張 |
+| `buildReportInput(root, runId?)`           | 実行からレポートのデータを集める（既定は最新の実行）                                      |
+| `renderReport(input, format)`              | `text`、`json`、`markdown`、`html`、`sarif` のいずれかで描画する                          |
+| `renderCiSummary(input, { artifactUrl? })` | CI 向けの短い Markdown の要約を作る。アップロードした実行へのリンクも付けられる           |
+| `REPORT_FILES`                             | 実行ディレクトリにある、描画済みレポートのファイル名                                      |
+| `improvementsFor(root, runId)`             | その実行から作った改善計画と、その適用の記録                                              |
 
 `readArtifact` と `readLatest` に渡す成果物の名前は、`run`、`evidence`、`codeIndex`、`properties`、`testMap`、`mutation`、`claims`、`pbt`、`assessments`、`findings`、`artifactIndex` です。データには名前ごとに型が付きます（`ArtifactData<'findings'>`）。各ファイルについては[レポートと成果物](/ja/reference/reports)を参照してください。
 
@@ -141,21 +141,17 @@ const markdown = renderReport(buildReportInput('/path/to/project'), 'markdown');
 
 ## プロジェクトの準備
 
-| エクスポート                              | 対応する CLI     | 用途                                                                                                                                                                    |
-| ----------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `initProject(root, { force?, dryRun? })`  | `veritas init`   | プロジェクトを検出して `.veritas/config.json` を書く。設定と次の手順を返す                                                                                              |
-| `loadConfig(root, { allowCodeConfig? })`  | なし             | 設定を読み込んで検証する。`{ config, file, hash }` を返す                                                                                                               |
-| `openProject(root, { allowCodeConfig? })` | なし             | 設定を読み込む。`{ root, config, configHash }` を返す                                                                                                                   |
-| `runDoctor(root, config, env?, bundled?)` | `veritas doctor` | ケイパビリティと機能を調べる。設定なしで調べるときは `config` に `null` を渡す。CLI と同じく `bundled` に `bundledTools()` を渡すと、Veritas に同梱したツールも見つかる |
-| `bundledTools()`                          | なし             | この Veritas のインストールに含まれる `@mizchi/mutator`、fast-check、`z3-solver` のバージョン（解決できないものは `null`）                                              |
+| エクスポート                              | 対応する CLI     | 用途                                                                                                                                                                                                  |
+| ----------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `initProject(root, { force?, dryRun? })`  | `veritas init`   | プロジェクトを検出して `.veritas/config.json` を書く。設定と次の手順を返す                                                                                                                            |
+| `loadConfig(root, { allowCodeConfig? })`  | なし             | 設定を読み込んで検証する。`{ config, file, hash }` を返す                                                                                                                                             |
+| `openProject(root, { allowCodeConfig? })` | なし             | 設定を読み込む。`{ root, config, configHash }` を返す                                                                                                                                                 |
+| `runDoctor(root, config, env?, bundled?)` | `veritas doctor` | ケイパビリティと機能を調べる。設定なしで調べるときは `config` に `null` を渡す。`bundled` に `bundledTools()` を渡すと、`veritas doctor` と同じく、Veritas と一緒にインストールされたツールも見つかる |
+| `bundledTools()`                          | なし             | Veritas と一緒にインストールされた `@mizchi/mutator`、fast-check、`z3-solver` のバージョン（見つからないものは `null`）                                                                               |
 
 ## CLI のプログラム
 
-`buildProgram(setExit, writeOut?)` は `veritas` コマンドの Commander のプログラムを返し、`main(argv)` はそれを実行して終了コードを返します。`veritas` の実行ファイルはこの 2 つを使っています。
-
-## 低レベルのエクスポート
-
-`recordedRunOptions`、`selectMutationTestFiles`、`mutationCacheKey`、`mutationStageStatus`、`literalInput`、`MAX_RELATION_CLAIMS` は、ほかの Veritas のパッケージと共有している内部の部品です。上に挙げた関数を使ってください。
+`main(argv)` は、指定した引数で `veritas` コマンドを実行し、終了コードを返します。`buildProgram(setExit, writeOut?)` は、その元になる Commander のプログラムを返します。
 
 ## 型
 

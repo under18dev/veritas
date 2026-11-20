@@ -1,18 +1,10 @@
 # 設定
 
-## 設定ファイルの場所
-
-Veritas は、プロジェクトのルートにある `.veritas/config.json` から設定を読みます。`veritas init` は、検出したパッケージマネージャー、`tsconfig.json`、ソースとテストの glob をこのファイルに書き、それ以外の設定には既定値を使います。ファイルは [`schemas/config.json`](https://github.com/under18dev/veritas/blob/main/schemas/config.json) で検証され、未知のキーや不正な値はユーザーエラー（`CONFIG_INVALID`、終了コード 2）になります。エラーメッセージには、問題のあるフィールドがすべて並びます。
-
-コードで書いた設定（プロジェクトのルートの `veritas.config.ts`、`veritas.config.mjs`、`veritas.config.js`）は、グローバルオプション `--allow-code-config` を付けたときだけ読み込みます。読み込むとプロジェクトのコードが実行されるためです。このオプションがなければ `CONFIG_CODE_NOT_ALLOWED` で失敗します。モジュールの default export は、JSON ファイルと同じ形のオブジェクトにします。JSON の設定とコードの設定が両方あるとエラー（`CONFIG_AMBIGUOUS`）になり、プロジェクトの外を指すシンボリックリンクの設定ファイルは読み込みを拒否します。
-
-設定のハッシュ（`configHash`）はすべての成果物のメタデータに入るので、どの設定で実行したかが必ず記録に残ります。
-
-`.veritas/config.json` と `.veritas/approvals.json` はコミットしてください。[GitHub Action](/ja/reference/github-action) はリポジトリにある設定を使います。一方、`.veritas/runs/` と `.veritas/cache/` はバージョン管理に入れないでください。git で管理されているキャッシュは無視されます。
+Veritas が設定を読む場所、すべての設定の既定値と使える値、結果のキャッシュの仕組みをまとめます。
 
 ## 設定例
 
-`.veritas/config.json` には、既定値と違う設定だけを書けば足ります。JSON にはコメントを書けないので、説明は例の後に置きます。
+`.veritas/config.json` には、既定値と違う設定だけを書きます。
 
 ```json
 {
@@ -34,13 +26,17 @@ Veritas は、プロジェクトのルートにある `.veritas/config.json` か
 }
 ```
 
-- `analysis.include` と `analysis.testInclude` は `init` が検出した glob です。ソースやテストが別の場所にあるときに変更します。
-- `formal.integerDomain` は形式検証の範囲を広げます。範囲を正確に保つため、境界は 10 進数の文字列で書きます。
-- `policy.inconclusiveBehavior: "fail"` にすると、判定できない結果が終了コード 4 になります。対象は、`unknown`、`timeout`、`unsupported`、`semantic_mismatch`、`error` の主張と、`partial`、`skipped`、`unsupported`、`timeout`、`cancelled` のステージです。CI のゲートに向いています。
+- `analysis.include` と `analysis.testInclude` で、対象にするソースとテストのファイルを選びます。`veritas init` が検出した値を書き込みます。
+- `formal.integerDomain` は、形式検証で使う整数の範囲です。境界は 10 進数の文字列で書きます。
+- `policy.inconclusiveBehavior: "fail"` にすると、判定できない結果があれば終了コード 4 になります。CI のゲートに向いています。
 - `policy.maxNewSurvivors: 0` にすると、範囲内の mutant が 1 つでも生き残れば失敗します。
 - `storage.retainRuns: 10` で、新しいほうから 10 個の実行ディレクトリを残します。
 
-同じ設定を `veritas.config.ts` で書くと次のようになります（`--allow-code-config` を付けたときだけ読み込みます）。
+## 設定ファイルの場所
+
+Veritas は、プロジェクトのルートにある `.veritas/config.json` を読みます。このファイルは `veritas init` で作ります。内容は [`schemas/config.json`](https://github.com/under18dev/veritas/blob/main/schemas/config.json) で検証し、未知のキーや不正な値があれば `CONFIG_INVALID`（終了コード 2）で失敗して、問題のあるフィールドをすべて表示します。
+
+設定はコードでも書けます。プロジェクトのルートに `veritas.config.ts`、`veritas.config.mjs`、`veritas.config.js` のいずれかを置き、同じ形のオブジェクトを default export します。読み込むとプロジェクトのコードが実行されるので、グローバルオプション `--allow-code-config` を付けたときだけ読み込み、付けなければ `CONFIG_CODE_NOT_ALLOWED` で失敗します。設定ファイルは 1 つだけにしてください（複数あると `CONFIG_AMBIGUOUS`）。プロジェクトの外を指すシンボリックリンクの設定ファイルは読み込みません。
 
 ```ts
 export default {
@@ -50,60 +46,64 @@ export default {
 };
 ```
 
+`.veritas/config.json` と `.veritas/approvals.json` はコミットしてください。[GitHub Action](/ja/reference/github-action) は、リポジトリにある設定を使います。`.veritas/runs/` と `.veritas/cache/` はバージョン管理に入れないでください。
+
 ## すべての設定
 
-次の表は `schemas/config.json` から生成しています。生成部分は英語のままです。
+次の表は設定のスキーマから生成しているため、英語のままです。
 
 <!--@include: ../../reference/_generated/configuration.md-->
 
-## 主な設定
+## 主な設定の働き
 
-| 設定                                                                         | 既定値                                 | 意味                                                                                                                                                                                                                                                                             |
-| ---------------------------------------------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sources.web.enabled`、`sources.github.enabled`                              | `false`                                | ネットワーク上のソース。Web には `allowDomains` も必要で、GitHub は `sources.github.repo`（`owner/name`）を読みます。どちらも `--offline` では使いません                                                                                                                         |
-| `sources.web.maxPages`、`maxDepth`、`maxChars`、`timeoutMs`、`maxDurationMs` | `30`、`1`、`200000`、`30000`、`120000` | クロールの上限。ページ数、リンクの深さ、保持する文字数、1 ページあたりの時間（本文の取得を含む）、クロール全体の時間です。時間内に取得できなかったページは skipped として報告します                                                                                              |
-| `analysis.inferSpecsFromCode`                                                | `true`                                 | コードから推測した Property の候補を提案します。`false` にすると、コードから推測した候補は登録されず、ドキュメントなどの出典だけから Property を作ります                                                                                                                         |
-| `mutation.mode`                                                              | `diff`                                 | mutation testing の想定する実行方法。変更範囲に絞るのは、モードによらず `--since` です。`diff` で `--since` がないときは、範囲内の全 mutant を実行したことをステージのメッセージに残します。`full` ではこのメッセージを出しません                                                |
-| `formal.integerDomain`                                                       | `-10000` から `10000`                  | 形式検証で使う整数の範囲。安全な整数の範囲内で指定します                                                                                                                                                                                                                         |
-| `formal.maxSolverMs`                                                         | `30000`                                | クエリ 1 件あたりのソルバーの制限時間                                                                                                                                                                                                                                            |
-| `formal.maxArrayLength`                                                      | `3`                                    | 形式検証で配列の引数に用意する要素数（1〜8）。それより長い配列は検証の対象外です                                                                                                                                                                                                 |
-| `pbt.numRuns`、`pbt.seed`                                                    | `1000`、Property ごとに導出            | Property-based テスト。`seed` を指定しなければ、Property の ID から決まる固定の seed を使うので、実行結果を再現できます                                                                                                                                                          |
-| `llm.provider`                                                               | `none`                                 | LLM による自由記述の抽出。[LLM プロバイダー](/ja/guide/llm-providers)を参照してください。`llm.maxTokensPerRun` は 1 回の実行で使うトークンの上限です                                                                                                                             |
-| `policy.confirmedViolation`                                                  | `fail`                                 | 確定した違反で終了コード 1 にします。`warn` にすると警告として報告します                                                                                                                                                                                                         |
-| `policy.inconclusiveBehavior`                                                | `warn`                                 | `fail` にすると、判定できない結果で終了コード 4 になります。`warn` と `ignore` では終了コードは 0 ですが、verdict は `pass_with_warnings` のままで、判定できない項目をすべて並べます                                                                                             |
-| `policy.maxNewSurvivors`                                                     | なし                                   | この実行の範囲（`--since` を付けたときはその変更）で生き残った mutant がこの数を超えると、終了コード 1 にします。mutation の結果がなければ判定できない扱いです                                                                                                                   |
-| `policy.minPropertyCoverage`                                                 | なし                                   | accepted の Property のうち、`meaningful_with_evidence` のテストがあるものの割合（0〜1）がこれを下回ると、終了コード 1 にします。accepted の Property がなければ判定できない扱いです                                                                                             |
-| `sandbox.allowNetworkWithoutIsolation`                                       | `false`                                | ネットワークを遮断できる Node.js 25 以上がなくても、プロジェクトのコードを実行します。指定しなければ、その結果は判定できないままです                                                                                                                                             |
-| `storage.retainRuns`                                                         | `20`                                   | `.veritas/runs/` に残す実行ディレクトリの数。実行が終わるたびに、この数を超えた古い実行を削除します（今回の実行も数に含みます）。削除するのは、`artifact-index.json` に `trace.jsonl` が載っている、終わった実行の実ディレクトリだけなので、別のプロセスで実行中のものは残ります |
-| `cache.enabled`                                                              | `true`                                 | `.veritas/cache/` の結果を再利用します（後述）                                                                                                                                                                                                                                   |
-| `limits.memoryMb`                                                            | `2048`                                 | プロジェクトのコードの制限付き呼び出し、property-based テスト、プロジェクトのテストランナーと mutator、Z3 ソルバーのプロセスに設定する V8 ヒープの上限（MiB、256 以上）。Lean には制限をかけません。メモリが足りなくなった場合は `error` になり、結果としては扱いません          |
+| 設定                                                                         | 既定値                                 | 働き                                                                                                                                                                                                                                                                      |
+| ---------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sources.web.enabled`、`sources.github.enabled`                              | `false`                                | Web や GitHub から根拠を集めます。Web には `allowDomains` も必要です。GitHub は `sources.github.repo`（`owner/name`）を読みます。どちらも `--offline` では使いません                                                                                                      |
+| `sources.web.maxPages`、`maxDepth`、`maxChars`、`timeoutMs`、`maxDurationMs` | `30`、`1`、`200000`、`30000`、`120000` | Web の収集の上限です。ページ数、リンクの深さ、残す文字数、1 ページの時間、全体の時間を指定します。時間内に取得できなかったページは skipped として報告します                                                                                                               |
+| `analysis.inferSpecsFromCode`                                                | `true`                                 | コードから推測した Property の候補を提案します。`false` にすると、ドキュメントなどの出典だけから Property を作ります                                                                                                                                                      |
+| `mutation.mode`                                                              | `diff`                                 | `diff` は `--since` を付けて使う前提のモードで、`--since` がなければ範囲内のすべての mutant を実行し、そのことをステージのメッセージに書きます。`full` はすべての mutant をメッセージなしで実行します。どちらのモードでも、`--since` を付ければ変更されたコードに絞ります |
+| `formal.integerDomain`                                                       | `-10000` から `10000`                  | 形式検証で使う整数の範囲です。安全な整数の範囲内で指定します                                                                                                                                                                                                              |
+| `formal.maxSolverMs`                                                         | `30000`                                | クエリ 1 件あたりのソルバーの制限時間です                                                                                                                                                                                                                                 |
+| `formal.maxArrayLength`                                                      | `3`                                    | 形式検証で扱う配列の最大の長さ（1〜8）です。これより長い配列は検証しません                                                                                                                                                                                                |
+| `pbt.numRuns`、`pbt.seed`                                                    | `1000`、Property ごと                  | property-based テストの実行回数と seed です。`seed` を指定しなければ、Property の ID から決まる固定の seed を使うので、結果を再現できます                                                                                                                                 |
+| `llm.provider`                                                               | `none`                                 | 自由記述の文を読むのに使う LLM です。[LLM プロバイダー](/ja/guide/llm-providers)を参照してください。`llm.maxTokensPerRun` は 1 回の実行で使うトークンの上限です                                                                                                           |
+| `policy.confirmedViolation`                                                  | `fail`                                 | `fail` では、確定した違反で終了コード 1 になります。`warn` では警告として報告します                                                                                                                                                                                       |
+| `policy.inconclusiveBehavior`                                                | `warn`                                 | `fail` では、判定できない結果で終了コード 4 になります。`warn` と `ignore` では終了コード 0 で、verdict は `pass_with_warnings` になり、判定できない結果をすべて並べます                                                                                                  |
+| `policy.maxNewSurvivors`                                                     | なし                                   | 実行の範囲（`--since` を付けたときは変更されたコード）で、生き残った mutant がこの数を超えると終了コード 1 になります。mutation の結果がなければ判定できない扱いです                                                                                                      |
+| `policy.minPropertyCoverage`                                                 | なし                                   | accepted の Property のうち、`meaningful_with_evidence` のテストがあるものの割合（0〜1）がこれを下回ると終了コード 1 になります。accepted の Property がなければ判定できない扱いです                                                                                      |
+| `sandbox.allowNetworkWithoutIsolation`                                       | `false`                                | ネットワークを遮断できる Node.js 25 以上がなくても、プロジェクトのコードを実行します。指定しなければ、その結果は判定できないままです                                                                                                                                      |
+| `storage.retainRuns`                                                         | `20`                                   | `.veritas/runs/` に残す、終わった実行の数です（今回の実行を含みます）。実行が終わるたびに、それより古い実行を削除します。実行中のものは削除しません                                                                                                                       |
+| `cache.enabled`                                                              | `true`                                 | `.veritas/cache/` の結果を再利用します（[キャッシュ](#キャッシュ)を参照）                                                                                                                                                                                                 |
+| `limits.memoryMb`                                                            | `2048`                                 | プロジェクトのコード、プロジェクトのテスト、mutator、Z3 を実行するプロセスのメモリの上限（MiB、256 以上）です。Lean には上限をかけません。メモリが足りなくなると `error` になります                                                                                       |
 
-ポリシーの設定は、仕様書にある CI のポリシーを camelCase にしたものです。`block_on_confirmed_spec_violation` が `policy.confirmedViolation`（`fail` でブロック）、`max_new_survivors` が `policy.maxNewSurvivors`、`min_property_coverage` が `policy.minPropertyCoverage`、`inconclusive_behavior` が `policy.inconclusiveBehavior` に当たります。GitHub Action では `inconclusive` を入力としても指定できます。
+判定できない結果とは、`unknown`、`timeout`、`unsupported`、`semantic_mismatch`、`error` の主張と、`partial`、`skipped`、`unsupported`、`timeout`、`cancelled` のステージのことです。
 
 ## 値が 1 つしかない設定
 
-いくつかの設定は、規則を明示するためだけにあり、受け付ける値は 1 つだけです。ほかの値を書くと、不正な設定として拒否します。
+次の設定は規則を明示するためのもので、受け付ける値は 1 つだけです。ほかの値を書くと、不正な設定になります。
 
-| 設定                                         | 受け付ける値 | 表している規則                                                       |
+| 設定                                         | 受け付ける値 | 規則                                                                 |
 | -------------------------------------------- | ------------ | -------------------------------------------------------------------- |
-| `analysis.requireApprovalForNormativeClaims` | `true`       | Property が `accepted` になるのは、明示的な承認の記録があるときだけ  |
+| `analysis.requireApprovalForNormativeClaims` | `true`       | Property が `accepted` になるのは、判断を記録したときだけ            |
 | `improvement.testFilesOnly`                  | `true`       | `improve` はテストファイルを追加するだけで、本番のコードは編集しない |
-| `improvement.autoApply`                      | `false`      | 計画を適用するには `--apply`、計画 ID、承認トークンが必要            |
-| `storage.storePrompts`                       | `false`      | LLM に送ったプロンプトは実行の成果物に保存しない                     |
-| `formal.rejectUnsupportedSemantics`          | `true`       | 形式検証の対象外のコードは `unsupported` とし、近似で済ませない      |
+| `improvement.autoApply`                      | `false`      | 計画の適用には `--apply`、計画 ID、承認トークンが必要                |
+| `storage.storePrompts`                       | `false`      | LLM に送ったプロンプトは保存しない                                   |
+| `formal.rejectUnsupportedSemantics`          | `true`       | 形式検証の対象外のコードは `unsupported` とし、近似では扱わない      |
 | `analysis.testFramework`                     | `vitest`     | 対応するテストランナーは Vitest                                      |
-| `mutation.backend`                           | `mizchi`     | mutation のバックエンドは `@mizchi/mutator`                          |
+| `mutation.backend`                           | `mizchi`     | mutation testing は `@mizchi/mutator` で実行する                     |
 
 ## キャッシュ
 
-`.veritas/cache/` には 3 種類の結果を保存します。
+Veritas は 3 種類の結果を `.veritas/cache/` に保存し、入力が同じなら再利用します。
 
-| 種類                                   | キー                                                                                                               |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| 結論の出た Z3 の結果（`sat`、`unsat`） | SMT クエリ、ソルバーのビルド、制限時間                                                                             |
-| 成功した LLM の応答                    | プロバイダー、モデル、リクエストの内容そのもの                                                                     |
-| 完了した mutation の実行               | `git ls-files` が列挙するすべてのファイルの内容、mutator・Vitest・Node.js のバージョン、設定、`--since` とスコープ |
+| 結果                                   | 再利用の条件（次がすべて同じとき）                                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| 結論の出た Z3 の結果（`sat`、`unsat`） | SMT クエリ、ソルバーのビルド、制限時間                                                                        |
+| 成功した LLM の応答                    | プロバイダー、モデル、リクエスト                                                                              |
+| 完了した mutation の実行               | `git ls-files` が列挙するすべてのファイルの内容、mutator・Vitest・Node.js のバージョン、設定、`--since`、範囲 |
 
-結論の出なかった結果や失敗した結果は再利用しません。再利用した反例も JavaScript で再生し、再利用したことはステージのメッセージとソルバーの出力に残します。git がなければ mutation の結果はキャッシュしません。
+結論の出なかった結果や失敗した結果は再利用しません。再利用した反例も JavaScript で再生し、再利用したことはステージのメッセージに表示します。git がなければ、mutation の結果はキャッシュしません。
 
-エントリには、プロジェクトの外に置いた鍵で署名します。鍵の場所は `~/.cache/veritas/cache-key`（Windows では `%LOCALAPPDATA%\veritas\cache-key`）か、`VERITAS_CACHE_KEY_FILE` で指定したファイルです。別の鍵で署名されたエントリ（リポジトリと一緒に持ち込まれたもの、鍵のない新しい CI ランナーに復元したものなど）は、キャッシュにないものとして扱います。git で管理されているキャッシュは丸ごと無視します。ただし、mutation testing で実行するプロジェクト自身のテストからは鍵を読めてしまいます。信頼できないコードに対しては `cache.enabled: false` にしてください（[セキュリティモデル](/ja/concepts/security)を参照）。
+エントリには、プロジェクトの外に置いた鍵で署名します。鍵は `~/.cache/veritas/cache-key`（Windows では `%LOCALAPPDATA%\veritas\cache-key`）か、`VERITAS_CACHE_KEY_FILE` で指定したファイルです。別の鍵で署名されたエントリ（リポジトリと一緒に持ち込まれたもの、鍵のない CI ランナーに復元したものなど）は使いません。git で管理されているキャッシュのディレクトリは、丸ごと使いません。
+
+mutation testing で実行するプロジェクト自身のテストからは、この鍵を読めます。信頼できないコードを分析するときは `cache.enabled: false` にしてください（[セキュリティモデル](/ja/concepts/security)を参照）。

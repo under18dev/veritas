@@ -1,6 +1,6 @@
 # MCP サーバー
 
-`veritas-mcp` は、Model Context Protocol で Veritas を stdio 経由で提供します。エージェントは、これを通じて分析を実行し、その根拠を読めます。`@under18dev/veritas` をインストールすると `veritas` コマンドと一緒に入り、同じエンジンを呼び出します。各ツールは、対応する CLI のコマンドと同じ成果物を `.veritas/runs/<run-id>/` に書きます。クライアントへの接続方法は[エージェントと MCP](/ja/guide/agents)を参照してください。
+コーディングエージェントなどの MCP クライアントに Veritas を提供する `veritas-mcp` について、起動方法、各ツールの入力と戻り値、承認・同時実行・キャンセルの仕組みをまとめます。サーバーは `@under18dev/veritas` と一緒にインストールされ、各ツールは対応する `veritas` コマンドと同じファイルを `.veritas/runs/<run-id>/` に書きます。クライアントへの接続方法は[エージェントと MCP](/ja/guide/agents)を参照してください。
 
 ## サーバーの起動
 
@@ -46,7 +46,7 @@ veritas-mcp [--root <dir>] [--max-concurrent <n>] [--allow-write]
 | `plan_improvement`           | 常に                   | なし                         | あり（テスト対象の関数の制限付き呼び出し） |
 | `apply_approved_improvement` | `--allow-write` のとき | あり（テストファイルの追加） | あり                                       |
 
-読み取り用のツールには、MCP の `readOnlyHint` アノテーションが付いています。ここでの「読み取り」は、プロジェクトのソースを変更しないという意味です。ステージを実行するツールは、`.veritas/` の下に実行ディレクトリを書きます。
+`apply_approved_improvement` 以外のツールには、読み取り専用を表す `readOnlyHint` が付いています。プロジェクトのファイルは変更しませんが、ステージを実行するツールは `.veritas/` の下に実行ディレクトリを書きます。
 
 ### `discover_specs`
 
@@ -156,16 +156,16 @@ finding のある最新の実行から、テストだけを対象にした改善
 
 ## エラー
 
-ツールが失敗すると、`isError: true` と JSON の本文 `{ "code", "category", "message", "hint" }` を返します。`code` と `category` は CLI と同じです（たとえば `NO_RUN` と `user`）。想定外の例外は、`code` が `UNEXPECTED`、`category` が `tool` になります。ツールのスキーマに合わない入力は、ツールが動く前に MCP SDK が拒否します。
+ツールが失敗すると、`isError: true` と JSON の本文 `{ "code", "category", "message", "hint" }` を返します。`code` と `category` は CLI と同じです（たとえば `NO_RUN` と `user`）。想定外の例外は、`code` が `UNEXPECTED`、`category` が `tool` になります。ツールの入力スキーマに合わない入力は、ツールが動く前に拒否されます。
 
 ## 承認トークン
 
-プロジェクトのファイルを変更するには 2 つの手順が必要で、2 つ目をサーバーが自分で行うことはできません。
+プロジェクトのファイルを変更するには、2 つの手順を踏みます。
 
 1. `plan_improvement` が計画を `.veritas/improvements/<plan-id>/` に保存し、計画の正規化した内容の SHA-256 である `approvalToken` を返します。
-2. 人が計画をレビューし（たとえば `veritas improve --dry-run` で表示する、計画のファイルを読む）、計画 ID とトークンを `apply_approved_improvement` に渡します。
+2. 人が計画（`plan` フィールド、またはそのディレクトリの `plan.json`）をレビューしたあとで、クライアントが計画 ID とトークンを `apply_approved_improvement` に渡します。
 
-トークンは計画の内容 1 つにだけ一致します。計画が変わった、計画 ID が違う、計画の後に Property が rejected になった、サーバーを `--allow-write` なしで起動した、のいずれかに当たると適用を拒否します。適用のたびに、承認した人、日時、呼び出し元（`mcp`）、トークンのハッシュを `approval-<n>.json` に記録します。承認した人は `actor`、`VERITAS_ACTOR`、git の `user.name` の順に決まります。これはクライアントが申告した名前で、認証された本人確認ではありません。
+トークンは計画の内容 1 つにだけ一致します。計画が変わった、計画 ID が一致しない、計画に使った Property が後から rejected になった、のいずれかに当たると適用を拒否します。`--allow-write` を付けずに起動したサーバーには、このツール自体がありません。適用のたびに、承認した人、日時、呼び出し元（`mcp`）、トークンのハッシュを `approval-<n>.json` に記録します。承認した人は `actor`、`VERITAS_ACTOR`、git の `user.name` の順に決まります。名前は渡されたとおりに記録し、認証はしません。
 
 ## 同時実行と進捗
 

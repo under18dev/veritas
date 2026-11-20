@@ -1,6 +1,6 @@
 # GitHub Action
 
-Veritas の Action は、CLI と同じエンジンを GitHub Actions のランナー上でオフラインで動かします。[`packages/github-action/action.yml`](https://github.com/under18dev/veritas/blob/main/packages/github-action/action.yml) で定義した composite action です。CI への組み込み方は [CI と GitHub Action](/ja/guide/ci) を参照してください。
+Veritas の GitHub Action について、ワークフローの例、バージョンの固定方法、入力と出力、終了コード、対応するイベント、フォークからのプルリクエストを安全に扱うための規則をまとめます。Action は `veritas run` と同じ分析をオフラインで実行します。CI への組み込み方は [CI と GitHub Action](/ja/guide/ci) を参照してください。
 
 ## ワークフローの例
 
@@ -51,7 +51,7 @@ jobs:
 
 ## バージョンと Node.js
 
-Action は、Veritas のリポジトリ内のパスとリリースのタグで指定します（`under18dev/veritas/packages/github-action@v<version>`）。各タグの `action.yml` は、同じバージョンの公開済み npm パッケージを `npx --yes @under18dev/veritas-github-action@<version>` で実行します。つまり、固定したタグがそのまま実行される Veritas のバージョンです。このバージョンはリリースのときにパッケージと一緒に更新されます。新しいバージョンにするときは、タグを変えてください。
+Action は、Veritas のリポジトリ内のパスとリリースのタグで指定します（`under18dev/veritas/packages/github-action@v<version>`）。各タグの `action.yml` は、同じバージョンの公開済み npm パッケージを `npx --yes @under18dev/veritas-github-action@<version>` で実行します。つまり、固定したタグがそのまま実行される Veritas のバージョンです。新しいバージョンにするときは、タグを変えてください。
 
 composite action なので、Action に同梱したランタイムではなく、ジョブで `actions/setup-node` が用意した Node.js で動きます。property-based テストと反例の再生では、ネットワークを遮断できる Node.js 25 以上があるときだけプロジェクトのコードを呼び出します。それより古い Node.js では、これらの結果は作られず、判定できないままです（`sandbox.allowNetworkWithoutIsolation` を設定した場合を除く）。ステップの開始時に npm のレジストリからパッケージをダウンロードしますが、分析そのものはオフラインです。
 
@@ -92,13 +92,13 @@ composite action なので、Action に同梱したランタイムではなく�
 
 ## 終了コード
 
-| コード | 意味                                                                                                      |
-| ------ | --------------------------------------------------------------------------------------------------------- |
-| `0`    | 合格。警告がある場合、ドキュメントだけの変更で省略した場合、`warn` のもとで縮退した場合（後述）を含みます |
-| `1`    | ポリシー違反が確定した                                                                                    |
-| `2`    | 不正または安全でない呼び出し。拒否するイベント、不正な `working-directory`、設定がない・不正              |
-| `3`    | ツールのエラー。対応していないイベントを含みます                                                          |
-| `4`    | `fail` のポリシーで判定できなかった                                                                       |
+| コード | 意味                                                                                                                    |
+| ------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `0`    | 合格。警告がある場合、ドキュメントだけの変更で省略した場合、`inconclusive` が `fail` でないときの縮退（後述）を含みます |
+| `1`    | ポリシー違反が確定した                                                                                                  |
+| `2`    | 不正または安全でない呼び出し。拒否するイベント、不正な `working-directory`、設定がない・不正                            |
+| `3`    | ツールのエラー。対応していないイベントを含みます                                                                        |
+| `4`    | `fail` のポリシーで判定できなかった                                                                                     |
 
 verdict は CLI と同じです（[CLI リファレンス](/ja/reference/cli#verdict)を参照）。チェックに通ったことは、設定したチェックと範囲についての根拠であって、テストや実装が正しいことの形式的な証明ではありません。
 
@@ -129,7 +129,7 @@ verdict は CLI と同じです（[CLI リファレンス](/ja/reference/cli#ver
 
 フォークからのプルリクエストには `pull_request` イベントで対応します。このイベントでは、GitHub は秘密情報を渡さず、トークンも読み取り専用にします。Action 自身もトークンを読まず、ネットワーク上のソースも有効にしません。
 
-`pull_request_target` と、フォークによって起動された `workflow_run` は拒否します。どちらも、権限のあるワークフローの文脈とプルリクエストのコードを組み合わせてしまうためです。ワークフローでは、例と同じく `contents: read` だけを許可し、`persist-credentials: false` でチェックアウトしてください。Action のパッケージには、次の規則を確かめる検査（`checkWorkflowSafety`）が含まれており、Veritas 自身のテストで例のワークフローに適用しています。
+`pull_request_target` と、フォークによって起動された `workflow_run` は拒否します。どちらも、権限のあるワークフローの文脈とプルリクエストのコードを組み合わせてしまうためです。ワークフローは、例と同じく次の規則を守るように書いてください。
 
 - `pull_request` のワークフローは、トップレベルに `permissions` を宣言し、読み取り専用にしている（`contents: read`、ほかはすべて `none`）
 - プルリクエストのワークフローのジョブは、`secrets.*` や GitHub のトークンを参照しない
