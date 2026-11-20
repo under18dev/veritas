@@ -4,6 +4,7 @@ import {
   conformanceQuery,
   interpretOutput,
   MIN_SOLVER_HEAP_MB,
+  nativeZ3Args,
   safeRangeQuery,
   solverHeapLimit,
   solveSmtLib,
@@ -146,6 +147,11 @@ describe('Z3 (wasm) execution', () => {
     expect(['timeout', 'sat']).toContain(run.verdict);
     if (run.verdict === 'timeout') expect(run.error).toMatch(/wall-clock/);
   }, 60_000);
+
+  it('limits the memory of the native z3 binary as well', () => {
+    expect(nativeZ3Args(1024)).toEqual(['-in', '-smt2', '-memory:1024']);
+    expect(nativeZ3Args(undefined)).toEqual(['-in', '-smt2']);
+  });
 
   it('reports a missing native binary as an error, not a verdict', async () => {
     const run = await solveSmtLib(conformanceQuery(boundaryIR('>'), 1000), {

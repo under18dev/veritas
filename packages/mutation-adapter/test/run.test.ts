@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { stableId } from '@under18dev/veritas-core';
+import { stableId, VeritasConfig } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import {
   buildMutatorArgs,
@@ -200,6 +200,22 @@ describe('runMutation failures', () => {
     expect(r.rawReportPath).toBe(path.join(reportDir, 'mutation.json'));
     expect(r.detail).toMatch(/could not parse/);
     expect(r.mutants).toEqual([]);
+  });
+
+  it('runs mutator with the heap limit of limits.memoryMb', async () => {
+    const { root, bin } = stubCli(
+      "fs.writeFileSync(dir + '/node-options.txt', process.env.NODE_OPTIONS ?? ''); console.log('{}');",
+    );
+    const reportDir = path.join(root, 'out');
+    await runMutation({
+      root,
+      config: VeritasConfig.parse({ limits: { memoryMb: 768 } }),
+      reportDir,
+      mutatorBin: bin,
+    });
+    expect(readFileSync(path.join(reportDir, 'node-options.txt'), 'utf8')).toContain(
+      '--max-old-space-size=768',
+    );
   });
 
   it('is an error when mutator exits 0 without writing a report', async () => {

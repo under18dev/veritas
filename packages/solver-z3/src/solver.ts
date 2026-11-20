@@ -24,7 +24,10 @@ export interface SolveOptions {
   timeoutMs: number;
   signal?: AbortSignal;
   nativeBinary?: string;
-  /** JavaScript heap limit of the solver worker in MiB; defaults to the run's `limits.memoryMb`. */
+  /**
+   * Memory limit in MiB, defaulting to the run's `limits.memoryMb`: the JavaScript heap of the WebAssembly worker,
+   * or z3's own `-memory:` limit for the native binary.
+   */
   memoryMb?: number;
 }
 
@@ -156,11 +159,16 @@ function runWasm(smt: string, options: SolveOptions): Promise<SolverRun> {
   });
 }
 
+/** Arguments of the native z3 binary: SMT-LIB on stdin, and z3's own memory limit (MiB) when one is set. */
+export function nativeZ3Args(memoryMb: number | undefined): string[] {
+  return ['-in', '-smt2', ...(memoryMb ? [`-memory:${Math.floor(memoryMb)}`] : [])];
+}
+
 async function runNative(smt: string, options: SolveOptions): Promise<SolverRun> {
   const binary = options.nativeBinary ?? 'z3';
   const version = await runCommand(binary, ['--version'], { cwd: process.cwd(), timeoutMs: 10_000 });
   const engineVersion = version.exitCode === 0 ? version.stdout.trim() : 'unknown';
-  const result = await runCommand(binary, ['-in', '-smt2'], {
+  const result = await runCommand(binary, nativeZ3Args(options.memoryMb ?? runContext()?.memoryMb), {
     cwd: process.cwd(),
     timeoutMs: options.timeoutMs,
     input: smt,

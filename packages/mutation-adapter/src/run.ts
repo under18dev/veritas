@@ -176,6 +176,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   const run = await runProjectTests(process.execPath, [detection.binPath, ...args], {
     cwd: options.root,
     timeoutMs: options.config.mutation.timeoutMs,
+    memoryMb: options.config.limits.memoryMb,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
   const reportPath = path.join(reportDir, 'mutation.json');
