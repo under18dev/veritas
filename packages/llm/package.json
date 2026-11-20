@@ -1,6 +1,6 @@
 {
   "name": "@under18dev/veritas-llm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Provider-neutral LLM interface for Veritas: budgets, redaction, input hashing",
   "license": "Apache-2.0",
   "repository": {
