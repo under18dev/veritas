@@ -1110,9 +1110,10 @@ async function runInContext(
  */
 /**
  * Test files mutator needs to run. A test file is left out only on evidence that it cannot kill these
- * mutants: it imports project sources, none of them in scope; or it imports none and only runs code out of
- * process (a child process or a dynamic import, which executes the build output, not the mutated source).
- * A test that imports no source at all is kept, so a failing baseline still shows.
+ * mutants: it imports project sources and none of them is in scope. A test whose reach static analysis cannot
+ * see is always kept: a child process or dynamic import may load the mutated source itself (plain JavaScript,
+ * a TypeScript loader), and an unresolved import may be the source in scope. A test that imports no source at
+ * all is kept too, so a failing baseline still shows.
  */
 export function selectMutationTestFiles(
   inventory: Pick<TestInventory, 'files' | 'tests'>,
@@ -1127,13 +1128,17 @@ export function selectMutationTestFiles(
     !matches(file, testInclude) &&
     !isTestSupportPath(file);
   const inScope = (file: string) => (scope?.length ? matches(file, scope) : isSource(file));
-  const opaque = new Set(
-    inventory.tests.filter((test) => test.suspicions.includes('opaque_call')).map((test) => test.file),
+  const unseen = new Set(
+    inventory.tests
+      .filter(
+        (test) => test.suspicions.includes('opaque_call') || test.suspicions.includes('unresolved_import'),
+      )
+      .map((test) => test.file),
   );
 
   return inventory.files
-    .filter((file) =>
-      file.dependencies.some(isSource) ? file.dependencies.some(inScope) : !opaque.has(file.path),
+    .filter(
+      (file) => unseen.has(file.path) || !file.dependencies.some(isSource) || file.dependencies.some(inScope),
     )
     .map((file) => file.path);
 }
