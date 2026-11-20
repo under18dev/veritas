@@ -9,7 +9,9 @@
       "!schemas",
       "!packages/*/schemas",
       "!tasks",
-      "!fixtures"
+      "!fixtures",
+      "!docs/index.md",
+      "!docs/ja/index.md"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },

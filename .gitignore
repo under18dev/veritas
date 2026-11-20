@@ -7,3 +7,6 @@ coverage/
 .mutator/
 .claude/
 veritas-runs/
+.vitepress/cache/
+docs/.vitepress/cache/
+docs/.vitepress/dist/

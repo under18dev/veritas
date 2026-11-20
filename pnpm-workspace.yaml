@@ -2,6 +2,8 @@ packages:
   - packages/*
   - packages/llm-providers/*
   - fixtures/*
+allowBuilds:
+  esbuild: false
 minimumReleaseAgeExclude:
   - "@mizchi/mutator-core@0.4.5"
   - "@mizchi/mutator-jest@0.4.5"

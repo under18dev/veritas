@@ -16,18 +16,23 @@
     "test:acceptance": "pnpm build && vitest run --project acceptance",
     "schemas": "pnpm build && node scripts/export-schemas.mjs",
     "licenses:check": "node scripts/check-licenses.mjs",
-    "clean": "tsc -b --clean"
+    "clean": "tsc -b --clean",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.8",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@types/node": "26.6.6",
+    "@under18dev/veritas": "workspace:*",
+    "@under18dev/veritas-core": "workspace:*",
+    "@under18dev/veritas-engine": "workspace:*",
+    "@under18dev/veritas-reports": "workspace:*",
     "dependency-cruiser": "18.8.0",
     "typescript": "6.0.3",
+    "vitepress": "1.6.4",
     "vitest": "5.1.1",
-    "@modelcontextprotocol/sdk": "1.32.2",
-    "@under18dev/veritas": "workspace:*",
-    "@under18dev/veritas-reports": "workspace:*",
-    "@under18dev/veritas-core": "workspace:*",
-    "@under18dev/veritas-engine": "workspace:*"
+    "yaml": "2.8.3"
   }
 }
