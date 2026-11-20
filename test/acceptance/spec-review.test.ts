@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ApprovalLedger, Property } from '@under18dev/veritas-core';
@@ -146,5 +147,33 @@ describe('configuration that changes what a run keeps', () => {
     const ids = [1, 2, 3].map(() => json<{ runId: string }>(runCli(['discover', '--json'], dir)).runId);
     const left = readdirSync(path.join(dir, '.veritas/runs')).filter((name) => name.startsWith('run-'));
     expect(left.sort()).toEqual(ids.slice(1).sort());
+  });
+});
+
+describe('decisions across commits', () => {
+  it('keeps an accepted property accepted after the project is committed again', () => {
+    const dir = setup('discount-boundary');
+    expect(runCli(['analyze', '--json'], dir).status).toBe(0);
+    const before = json<{ properties: { id: string; origin: string; predicate?: { value: string } }[] }>(
+      runCli(['spec', 'list', '--json'], dir),
+    );
+    const id = before.properties.find((p) => p.origin === 'normative' && p.predicate?.value === '1000')
+      ?.id as string;
+    expect(
+      runCli(['spec', 'accept', id, '--reason', 'README is authoritative', '--actor', 'reviewer'], dir)
+        .status,
+    ).toBe(0);
+    // Committing the decision (and anything else) must not orphan it.
+    writeFileSync(path.join(dir, 'CHANGES.txt'), 'unrelated change\n');
+    spawnSync('git', ['add', '-A'], { cwd: dir });
+    spawnSync('git', ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'decide'], {
+      cwd: dir,
+    });
+    expect(runCli(['analyze', '--json'], dir).status).toBe(0);
+    const after = json<{ properties: { id: string; status: string }[] }>(
+      runCli(['spec', 'list', '--json'], dir),
+    );
+    expect(after.properties.find((p) => p.id === id)?.status).toBe('accepted');
+    expect(runCli(['spec', 'show', id, '--json'], dir).status).toBe(0);
   });
 });

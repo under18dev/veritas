@@ -250,10 +250,11 @@ function exportedDocs(text: string): string {
 
 function sourceFrom(input: SourceInput, capturedAt: string): EvidenceSource {
   const contentHash = sha256(input.text);
+  // The id depends on what the source says, not on the commit it was read at: a commit that leaves the text
+  // unchanged must keep source, statement and property ids (and the approvals recorded against them).
   const id = stableId('src', {
     kind: input.kind,
     locator: input.locator,
-    revision: input.revision ?? null,
     contentHash,
   });
 
