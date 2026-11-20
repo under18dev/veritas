@@ -21,6 +21,7 @@ import {
   type RunSummary,
   readArtifact,
   readLatest,
+  recordedRunOptions,
   renderReport,
   replayPbt,
   runVeritas,
@@ -162,21 +163,11 @@ export async function replayCommand(opts: Opts, args: string[]): Promise<ExitCod
   if (run.options && !run.options.offline)
     log('note: replay runs offline; network sources and LLM extraction are skipped');
   const summary = await runVeritas({
+    ...recordedRunOptions(run),
     root: opts.root,
     command: run.command,
-    args: run.args,
     stages: run.stages.map((s) => s.stage),
-    ...(run.profile ? { profile: run.profile } : {}),
     offline: true,
-    includeProposed: run.options?.includeProposed ?? run.args.includes('--include-proposed'),
-    ...(run.options?.propertyIds ? { propertyIds: run.options.propertyIds } : {}),
-    ...(run.options?.formalEngine ? { formalEngine: run.options.formalEngine } : {}),
-    ...(run.options?.sources ? { sources: run.options.sources } : {}),
-    ...(run.options?.web ? { web: run.options.web } : {}),
-    ...(run.options?.mutationReport ? { mutationReport: run.options.mutationReport } : {}),
-    ...(run.options?.killMatrix ? { killMatrix: true } : {}),
-    ...(run.scope.paths.length ? { scope: run.scope.paths } : {}),
-    ...(run.scope.since ? { since: run.scope.since } : {}),
     allowCodeConfig: Boolean(opts.allowCodeConfig),
   });
   return summaryOut(opts, summary);

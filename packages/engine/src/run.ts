@@ -131,6 +131,26 @@ export interface RunSummary {
   decision: PolicyDecision;
 }
 
+/**
+ * The options a recorded run was made with, as `runVeritas` takes them, for re-running it (`veritas replay`, the
+ * re-evaluation of `improve`). Network sources are recorded too; callers that run offline skip them.
+ */
+export function recordedRunOptions(run: Run): Omit<RunOptions, 'root' | 'command' | 'stages'> {
+  return {
+    args: run.args,
+    ...(run.profile ? { profile: run.profile } : {}),
+    includeProposed: run.options?.includeProposed ?? run.args.includes('--include-proposed'),
+    ...(run.options?.propertyIds ? { propertyIds: run.options.propertyIds } : {}),
+    ...(run.options?.formalEngine ? { formalEngine: run.options.formalEngine } : {}),
+    ...(run.options?.sources ? { sources: run.options.sources } : {}),
+    ...(run.options?.web ? { web: run.options.web } : {}),
+    ...(run.options?.mutationReport ? { mutationReport: run.options.mutationReport } : {}),
+    ...(run.options?.killMatrix ? { killMatrix: true } : {}),
+    ...(run.scope.paths.length ? { scope: run.scope.paths } : {}),
+    ...(run.scope.since ? { since: run.scope.since } : {}),
+  };
+}
+
 export const PROFILE_STAGES: Record<Profile, StageName[]> = {
   quick: ['index', 'discover', 'spec', 'map', 'assess', 'report'],
   standard: ['index', 'discover', 'spec', 'map', 'mutate', 'assess', 'report'],
