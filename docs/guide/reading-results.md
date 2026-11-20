@@ -25,7 +25,7 @@ Each line of the run summary is a stage with a status. Only `succeeded` is a suc
 ## Findings
 
 ```text
-F-19b3dd55c936  [confirmed high] src/pricing.ts#discountAmount does not satisfy "total >= 1000" for {"total":"1000"} (within the model)
+F-89435b62ae1e  [confirmed high] src/pricing.ts#discountAmount does not satisfy "total >= 1000" for {"total":"1000"} (within the model)
 ```
 
 A finding has a stable ID, a kind, a certainty and a severity.
@@ -91,7 +91,7 @@ Each assessment in `assessments.json` carries these fields, with no combined sco
 The text report shows the same thing as a rationale line:
 
 ```text
-T-97fef42e4cf7: weak_or_incomplete; rationale boundary not exercised: total >= 1000 (decisive inputs 999, 1000; asserted: none); formal evidence C-87dadbbd7b6a counterexample_found (conformance, assurance none); unknowns no mutation results for this run; detection power not measured
+T-97fef42e4cf7: weak_or_incomplete; rationale boundary not exercised: total >= 1000 (decisive inputs 999, 1000; asserted: none); formal evidence C-8aad536f8e71 counterexample_found (conformance, assurance none); unknowns no mutation results for this run; detection power not measured
 ```
 
 ## Verification statuses

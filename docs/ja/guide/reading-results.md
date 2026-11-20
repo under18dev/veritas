@@ -25,7 +25,7 @@
 ## finding
 
 ```text
-F-19b3dd55c936  [confirmed high] src/pricing.ts#discountAmount does not satisfy "total >= 1000" for {"total":"1000"} (within the model)
+F-89435b62ae1e  [confirmed high] src/pricing.ts#discountAmount does not satisfy "total >= 1000" for {"total":"1000"} (within the model)
 ```
 
 finding には、変わらない ID、種類（kind）、確度（certainty）、重大度（severity）があります。
@@ -91,7 +91,7 @@ veritas explain <finding-id>
 テキストのレポートでは、同じ内容が理由の行として出ます。
 
 ```text
-T-97fef42e4cf7: weak_or_incomplete; rationale boundary not exercised: total >= 1000 (decisive inputs 999, 1000; asserted: none); formal evidence C-87dadbbd7b6a counterexample_found (conformance, assurance none); unknowns no mutation results for this run; detection power not measured
+T-97fef42e4cf7: weak_or_incomplete; rationale boundary not exercised: total >= 1000 (decisive inputs 999, 1000; asserted: none); formal evidence C-8aad536f8e71 counterexample_found (conformance, assurance none); unknowns no mutation results for this run; detection power not measured
 ```
 
 ## 検証の状態

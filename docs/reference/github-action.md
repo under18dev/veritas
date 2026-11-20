@@ -1,6 +1,6 @@
 # GitHub Action
 
-The Veritas action runs the same engine as the CLI, offline, on a GitHub Actions runner. It is defined in [`packages/github-action/action.yml`](https://github.com/under18dev/veritas/blob/main/packages/github-action/action.yml) and runs on the `node24` runtime. For how to fit it into a CI setup, see [CI and GitHub Action](/guide/ci).
+The Veritas action runs the same engine as the CLI, offline, on a GitHub Actions runner. It is a composite action defined in [`packages/github-action/action.yml`](https://github.com/under18dev/veritas/blob/main/packages/github-action/action.yml). For how to fit it into a CI setup, see [CI and GitHub Action](/guide/ci).
 
 ## Example workflow
 
@@ -18,16 +18,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # The base commit is needed to compare against it and to skip documentation-only changes.
+          fetch-depth: 0
           persist-credentials: false
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           # Node.js 25+ on PATH runs project code without network access.
           node-version: 26
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: veritas/github-action@v1
+      - uses: under18dev/veritas/packages/github-action@v0.1.1
         with:
           profile: standard
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: veritas-runs
           path: .veritas/runs
@@ -37,41 +42,46 @@ jobs:
 What each part is for:
 
 - `permissions: contents: read` and `persist-credentials: false` leave the job with a read-only token that is not stored in the checkout. Code from the pull request runs in this job, so it must not be able to push or read secrets.
-- The action itself runs on `node24`. Set up Node.js 25 or later in the job (the example uses 26): property-based tests and counterexample replay call project code only under a Node.js that can block its network access. Without one, those results are not produced and stay inconclusive, unless `sandbox.allowNetworkWithoutIsolation` is set.
-- Install the project's dependencies before the action: mutation testing runs the project's own Vitest suite.
-- Upload `.veritas/runs` as an artifact with a retention period, so that the evidence of a run can be inspected and the run replayed locally.
-
-Two adjustments are usually needed: the `pnpm install` step assumes pnpm is available on the runner (for example through `pnpm/action-setup`, or use your package manager's install command), and the `uses:` line must point to where you get the action from.
+- `fetch-depth: 0` fetches the history, so that the base commit of the pull request is available. The action lists the changed files with `git diff <since>...HEAD` and limits mutation testing to the change.
+- `pnpm/action-setup` and `pnpm install` install the project's dependencies: mutation testing runs the project's own Vitest suite. With another package manager, use its install command instead.
+- `actions/setup-node` provides the Node.js the action runs with (see below). Use Node.js 25 or later (the example uses 26).
+- `upload-artifact` with `if: always()` keeps `.veritas/runs` even when the Veritas step fails, so that the evidence of a failing run can be inspected and the run replayed locally. Set a retention period.
 
 The project must contain a committed `.veritas/config.json` (create it with `veritas init`); without it the action fails with `CONFIG_MISSING` (exit code 2).
 
+## Versions and Node.js
+
+The action is referenced by its path in the Veritas repository and a release tag: `under18dev/veritas/packages/github-action@v<version>`. Each tag's `action.yml` runs the published npm package of exactly that version, `npx --yes @under18dev/veritas-github-action@<version>`, so the tag you pin is the Veritas version that runs. The version is updated together with the packages at release time. To upgrade, change the tag.
+
+Because the action is a composite action, it runs on the Node.js that the job set up with `actions/setup-node`, not on a runtime bundled with the action. Property-based tests and counterexample replay call project code only under a Node.js 25 or later, which can block its network access. With an older Node.js, those results are not produced and stay inconclusive, unless `sandbox.allowNetworkWithoutIsolation` is set. The step downloads the package from the npm registry when it starts; the analysis itself is offline.
+
 ## Inputs
 
-| Input               | Default    | Meaning                                                                                                    |
-| ------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
-| `profile`           | `standard` | `quick`, `standard` or `deep`; the same stages as `veritas run --profile`                                  |
-| `working-directory` | `.`        | Project directory, relative to the workspace. A path outside the checked-out repository is refused         |
-| `since`             | `""`       | Base commit for incremental checks. Empty: the pull request's base SHA, or the previous commit of a push   |
-| `inconclusive`      | `warn`     | `warn`, `fail` or `ignore`. With `fail`, any inconclusive result makes the verdict `inconclusive` (exit 4) |
-| `summary`           | `"true"`   | Write a step summary; `"false"` turns it off                                                               |
+| Input               | Default    | Meaning                                                                                                                                                                              |
+| ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `profile`           | `standard` | `quick`, `standard` or `deep`; the same stages as `veritas run --profile`                                                                                                            |
+| `working-directory` | `.`        | Project directory, relative to the workspace. A path outside the checked-out repository is refused                                                                                   |
+| `since`             | `""`       | Base commit for incremental checks. Empty: the pull request's base SHA, or the commit before a push                                                                                  |
+| `inconclusive`      | `""`       | `warn`, `fail` or `ignore`. Empty: `policy.inconclusiveBehavior` from the configuration, else `warn`. With `fail`, any inconclusive result makes the verdict `inconclusive` (exit 4) |
+| `summary`           | `"true"`   | Write a step summary; `"false"` turns it off                                                                                                                                         |
 
-The run is always offline: no GitHub or web sources and no LLM, whatever the configuration says. The `inconclusive` input can only make the result stricter. If the configuration already has `policy.inconclusiveBehavior: "fail"`, inconclusive results end with exit code 4 even when the input is `warn`.
+The run is always offline: no GitHub or web sources and no LLM, whatever the configuration says. An explicit `inconclusive` input takes precedence over the configuration for the action's own decision. The engine still applies `policy.inconclusiveBehavior` from the configuration, so with `"fail"` in the configuration, inconclusive results end with exit code 4 even when the input is `warn`.
 
 ## Outputs
 
-| Output               | Meaning                                                                                                                        |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `verdict`            | `pass`, `pass_with_warnings`, `policy_failure`, `tool_error` or `inconclusive`; also `skipped` for a documentation-only change |
-| `exit-code`          | The exit code of the step                                                                                                      |
-| `run-id`             | The run id; empty when nothing ran                                                                                             |
-| `confirmed-findings` | Number of findings with certainty `confirmed`                                                                                  |
-| `report-path`        | Path of the run's `run.json`, relative to `working-directory`, with `/` separators; empty when nothing ran                     |
-| `from-fork`          | `true` for a pull request from a fork, otherwise `false`                                                                       |
+| Output               | Meaning                                                                                                                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verdict`            | `pass`, `pass_with_warnings`, `policy_failure`, `tool_error` or `inconclusive`; also `skipped` for a documentation-only change                                                                          |
+| `exit-code`          | The exit code of the step                                                                                                                                                                               |
+| `run-id`             | The run id; empty when nothing ran                                                                                                                                                                      |
+| `confirmed-findings` | Number of findings with certainty `confirmed`                                                                                                                                                           |
+| `report-path`        | Path of the run's `run.json`, relative to the workspace, with `/` separators. The reports (`report.json`, `report.md`, `report.html`, `report.sarif`) are in the same directory. Empty when nothing ran |
+| `from-fork`          | `true` for a pull request from a fork, otherwise `false`                                                                                                                                                |
 
-A later step can read them through the step's `id`:
+A later step can read them through the step's `id`. Add `if: always()` so that the step also runs when Veritas fails:
 
 ```yaml
-- uses: veritas/github-action@v1
+- uses: under18dev/veritas/packages/github-action@v0.1.1
   id: veritas
   with:
     profile: standard
@@ -103,7 +113,7 @@ The verdicts are the same as the CLI's (see [CLI reference](/reference/cli#verdi
 | `workflow_run` for a pull request from a fork          | Refused (exit 2)                                                                    |
 | Any other event                                        | Error (exit 3)                                                                      |
 
-The changed files are listed with `git diff <since>...HEAD`, so the base commit must be in the checkout (for example `fetch-depth: 0` on `actions/checkout`). If it is not, the action cannot list the changed files and does not apply the documentation-only skip below.
+The changed files are listed with `git diff <since>...HEAD`, so the base commit must be in the checkout (`fetch-depth: 0`, as in the example). If it is not, the action cannot list the changed files and does not apply the documentation-only skip below.
 
 ## Skipped and degraded runs
 

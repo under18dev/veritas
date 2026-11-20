@@ -34,7 +34,7 @@ A line of `trace.jsonl`:
 `replay` prints which run it replays and then runs it again:
 
 ```text
-replaying prove from run-20261120T100953080Z-000-c700bf (prove --include-proposed)
+replaying prove from run-20261120T104653570Z-000-cd8b2a (prove --include-proposed)
 ```
 
 ## Common problems
@@ -44,7 +44,7 @@ replaying prove from run-20261120T100953080Z-000-c700bf (prove --include-propose
 | `VITEST_NOT_FOUND`                                                | Install Vitest in the project (`pnpm add -D vitest`)                                                                                                                               |
 | `CONFIG_MISSING`                                                  | Run `veritas init --yes`, or commit `.veritas/config.json` so CI has it                                                                                                            |
 | `NO_RUN`                                                          | `spec`, `report`, `explain` and `improve` read the latest run; run `veritas run` first                                                                                             |
-| `mutate` disabled in `doctor`                                     | Install `@mizchi/mutator` in the project or install the project's dependencies                                                                                                     |
+| `mutate` disabled in `doctor`                                     | Vitest is not installed in the project; install it, or install the project's dependencies                                                                                          |
 | Mutation stage `failed`                                           | The project's own tests fail; fix the baseline first                                                                                                                               |
 | `semantic_mismatch`                                               | The integer model and JavaScript disagree (for example, overflow beyond safe integers); narrow `formal.integerDomain` or rely on tests                                             |
 | `unsupported` claims                                              | The function uses constructs outside the formal subset; see the [support matrix](/concepts/support-matrix)                                                                         |

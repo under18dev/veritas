@@ -84,7 +84,7 @@ The `mutation/` directory is absent when mutation results were reused from the c
 | `artifact-index.json` | Files that cannot carry an envelope, with path, kind, SHA-256, size and creation time                                                                                                                                                 |
 | `trace.jsonl`         | One JSON object per log event (`time`, `level`, `message`, and fields such as `event` and `stage`), at most 4 MB; a final line says how many events were dropped                                                                      |
 
-`storage.retainRuns` (default 20) limits how many run directories are kept: when a run finishes, older ones are removed.
+`storage.retainRuns` (default 20) limits how many run directories are kept: when a run finishes, older finished runs beyond that number are removed. A run counts as finished once its `artifact-index.json` lists `trace.jsonl`, which a run writes last; directories of runs still in progress, symbolic links and other entries are left alone.
 
 Other files under `.veritas/`:
 

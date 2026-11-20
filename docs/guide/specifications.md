@@ -12,7 +12,7 @@ Veritas checks tests against specifications, and it takes those specifications f
 | Documentation   | `docs/**/*.md`, `CHANGELOG*`, `RELEASE*`                                                      | On      |
 | Code comments   | JSDoc on exported declarations in the files matched by `analysis.include`                     | On      |
 | Schemas         | OpenAPI and JSON Schema bounds (`openapi.{json,yaml}`, `*.openapi.*`, `*.schema.*`)           | On      |
-| Git history     | `git log`                                                                                     | On      |
+| Git history     | `git log`, one source per commit (the last 50)                                                | On      |
 | Exported issues | JSON files under `.veritas-sources/issues/` and `.veritas-sources/pulls/`                     | On      |
 | GitHub API      | Issues and pull requests of `sources.github.repo`                                             | Off     |
 | Web             | Pages on the domains in `sources.web.allowDomains`, within page, depth, size and time budgets | Off     |
@@ -33,7 +33,7 @@ Statements are extracted with rules for English and Japanese threshold phrases (
 
 ```text
 quote   line 7: "Orders with a total of 1000 or more receive a flat discount of 100."
-property P-7f8d3341340c [proposed, normative] discountAmount: total >= 1000 -> Orders with a total of 1000 or more receive a flat discount of 100.
+property P-ee03e6e8b749 [proposed, normative] discountAmount: total >= 1000 -> Orders with a total of 1000 or more receive a flat discount of 100.
 ```
 
 Every property keeps its provenance: the source, the file and line (`README.md:7`), the quoted text, and the assumptions made when formalizing it. `veritas spec show <id>` prints them, together with the formal model. A statement that matches no function clearly stays unmapped and is reported as such; Veritas does not guess.
@@ -101,14 +101,14 @@ Decisions are appended to `.veritas/approvals.json`:
   "schemaVersion": "1.0.0",
   "approvals": [
     {
-      "id": "A-1ec8b553846d",
-      "propertyId": "P-7f8d3341340c",
+      "id": "A-aeaeacd1d243",
+      "propertyId": "P-ee03e6e8b749",
       "propertyVersion": 1,
       "decision": "accept",
       "actor": "you",
       "reason": "README is the pricing specification",
-      "decidedAt": "2026-11-20T10:09:52.777Z",
-      "sourceIds": ["src-bd85b3f2deb4"]
+      "decidedAt": "2026-11-20T10:46:53.311Z",
+      "sourceIds": ["src-fa35c6154f0b"]
     }
   ]
 }

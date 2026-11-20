@@ -1,6 +1,6 @@
 # GitHub Action
 
-Veritas の Action は、CLI と同じエンジンを GitHub Actions のランナー上でオフラインで動かします。定義は [`packages/github-action/action.yml`](https://github.com/under18dev/veritas/blob/main/packages/github-action/action.yml) にあり、`node24` のランタイムで動きます。CI への組み込み方は [CI と GitHub Action](/ja/guide/ci) を参照してください。
+Veritas の Action は、CLI と同じエンジンを GitHub Actions のランナー上でオフラインで動かします。[`packages/github-action/action.yml`](https://github.com/under18dev/veritas/blob/main/packages/github-action/action.yml) で定義した composite action です。CI への組み込み方は [CI と GitHub Action](/ja/guide/ci) を参照してください。
 
 ## ワークフローの例
 
@@ -18,16 +18,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # The base commit is needed to compare against it and to skip documentation-only changes.
+          fetch-depth: 0
           persist-credentials: false
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           # Node.js 25+ on PATH runs project code without network access.
           node-version: 26
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: veritas/github-action@v1
+      - uses: under18dev/veritas/packages/github-action@v0.1.1
         with:
           profile: standard
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: veritas-runs
           path: .veritas/runs
@@ -37,41 +42,46 @@ jobs:
 各部分の役割は次のとおりです。
 
 - `permissions: contents: read` と `persist-credentials: false` により、ジョブのトークンは読み取り専用になり、チェックアウトにも保存されません。このジョブではプルリクエストのコードが動くので、push や秘密情報の読み取りができないようにしておく必要があります。
-- Action 自体は `node24` で動きますが、ジョブには Node.js 25 以上を用意してください（例では 26）。property-based テストと反例の再生では、ネットワークを遮断できる Node.js があるときだけプロジェクトのコードを呼び出します。そうした Node.js がなければ、これらの結果は作られず、判定できないままです（`sandbox.allowNetworkWithoutIsolation` を設定した場合を除く）。
-- Action の前に、プロジェクトの依存パッケージをインストールします。mutation testing はプロジェクト自身の Vitest のテストを実行するためです。
-- `.veritas/runs` を保存期間付きの artifact としてアップロードしておくと、実行の根拠を後から確かめたり、手元で再実行したりできます。
-
-多くの場合、2 か所を書き換える必要があります。`pnpm install` の手順はランナーで pnpm が使えることを前提にしているので、`pnpm/action-setup` などで用意するか、使っているパッケージマネージャーのインストールコマンドに置き換えてください。また、`uses:` の行は、Action を取得する場所に合わせてください。
+- `fetch-depth: 0` で履歴を取得し、プルリクエストのベースのコミットを使えるようにします。Action は `git diff <since>...HEAD` で変更されたファイルを列挙し、mutation testing の対象を変更に絞ります。
+- `pnpm/action-setup` と `pnpm install` で、プロジェクトの依存パッケージをインストールします。mutation testing はプロジェクト自身の Vitest のテストを実行するためです。ほかのパッケージマネージャーを使う場合は、そのインストールコマンドに置き換えてください。
+- `actions/setup-node` で、Action が使う Node.js を用意します（後述）。Node.js 25 以上を使ってください（例では 26）。
+- `upload-artifact` に `if: always()` を付けると、Veritas のステップが失敗しても `.veritas/runs` が残り、失敗した実行の根拠を確かめたり、手元で再実行したりできます。保存期間も指定してください。
 
 プロジェクトには、コミット済みの `.veritas/config.json` が必要です（`veritas init` で作ります）。ない場合、Action は `CONFIG_MISSING`（終了コード 2）で失敗します。
 
+## バージョンと Node.js
+
+Action は、Veritas のリポジトリ内のパスとリリースのタグで指定します（`under18dev/veritas/packages/github-action@v<version>`）。各タグの `action.yml` は、同じバージョンの公開済み npm パッケージを `npx --yes @under18dev/veritas-github-action@<version>` で実行します。つまり、固定したタグがそのまま実行される Veritas のバージョンです。このバージョンはリリースのときにパッケージと一緒に更新されます。新しいバージョンにするときは、タグを変えてください。
+
+composite action なので、Action に同梱したランタイムではなく、ジョブで `actions/setup-node` が用意した Node.js で動きます。property-based テストと反例の再生では、ネットワークを遮断できる Node.js 25 以上があるときだけプロジェクトのコードを呼び出します。それより古い Node.js では、これらの結果は作られず、判定できないままです（`sandbox.allowNetworkWithoutIsolation` を設定した場合を除く）。ステップの開始時に npm のレジストリからパッケージをダウンロードしますが、分析そのものはオフラインです。
+
 ## 入力
 
-| 入力                | 既定値     | 意味                                                                                                                                  |
-| ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `profile`           | `standard` | `quick`、`standard`、`deep` のいずれか。`veritas run --profile` と同じステージを実行します                                            |
-| `working-directory` | `.`        | プロジェクトのディレクトリ（ワークスペースからの相対パス）。チェックアウトしたリポジトリの外は拒否します                              |
-| `since`             | `""`       | 差分チェックの基準のコミット。空なら、プルリクエストのベース SHA か、push の前のコミットを使います                                    |
-| `inconclusive`      | `warn`     | `warn`、`fail`、`ignore` のいずれか。`fail` では、判定できない結果が 1 つでもあれば verdict を `inconclusive`（終了コード 4）にします |
-| `summary`           | `"true"`   | ステップの要約を書きます。`"false"` で書きません                                                                                      |
+| 入力                | 既定値     | 意味                                                                                                                                                                                                                |
+| ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `profile`           | `standard` | `quick`、`standard`、`deep` のいずれか。`veritas run --profile` と同じステージを実行します                                                                                                                          |
+| `working-directory` | `.`        | プロジェクトのディレクトリ（ワークスペースからの相対パス）。チェックアウトしたリポジトリの外は拒否します                                                                                                            |
+| `since`             | `""`       | 差分チェックの基準のコミット。空なら、プルリクエストのベース SHA か、push の前のコミットを使います                                                                                                                  |
+| `inconclusive`      | `""`       | `warn`、`fail`、`ignore` のいずれか。空なら設定の `policy.inconclusiveBehavior`、それもなければ `warn` を使います。`fail` では、判定できない結果が 1 つでもあれば verdict を `inconclusive`（終了コード 4）にします |
+| `summary`           | `"true"`   | ステップの要約を書きます。`"false"` で書きません                                                                                                                                                                    |
 
-実行は常にオフラインで、設定にかかわらず GitHub や Web のソースも LLM も使いません。`inconclusive` の入力は、結果を厳しくする方向にしか働きません。設定に `policy.inconclusiveBehavior: "fail"` があれば、入力が `warn` でも、判定できない結果は終了コード 4 になります。
+実行は常にオフラインで、設定にかかわらず GitHub や Web のソースも LLM も使いません。Action 自身の判定では、明示した `inconclusive` の入力が設定より優先されます。ただし、エンジンは設定の `policy.inconclusiveBehavior` をそのまま適用するので、設定が `"fail"` なら、入力が `warn` でも判定できない結果は終了コード 4 になります。
 
 ## 出力
 
-| 出力                 | 意味                                                                                                               |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `verdict`            | `pass`、`pass_with_warnings`、`policy_failure`、`tool_error`、`inconclusive`。ドキュメントだけの変更では `skipped` |
-| `exit-code`          | ステップの終了コード                                                                                               |
-| `run-id`             | 実行の ID。何も実行しなかったときは空                                                                              |
-| `confirmed-findings` | certainty が `confirmed` の finding の数                                                                           |
-| `report-path`        | 実行の `run.json` のパス。`working-directory` からの相対パスで、区切りは `/`。何も実行しなかったときは空           |
-| `from-fork`          | フォークからのプルリクエストなら `true`、それ以外は `false`                                                        |
+| 出力                 | 意味                                                                                                                                                                                                  |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verdict`            | `pass`、`pass_with_warnings`、`policy_failure`、`tool_error`、`inconclusive`。ドキュメントだけの変更では `skipped`                                                                                    |
+| `exit-code`          | ステップの終了コード                                                                                                                                                                                  |
+| `run-id`             | 実行の ID。何も実行しなかったときは空                                                                                                                                                                 |
+| `confirmed-findings` | certainty が `confirmed` の finding の数                                                                                                                                                              |
+| `report-path`        | 実行の `run.json` のパス。ワークスペースからの相対パスで、区切りは `/`。レポート（`report.json`、`report.md`、`report.html`、`report.sarif`）は同じディレクトリにあります。何も実行しなかったときは空 |
+| `from-fork`          | フォークからのプルリクエストなら `true`、それ以外は `false`                                                                                                                                           |
 
-後のステップからは、ステップの `id` を通じて読めます。
+後のステップからは、ステップの `id` を通じて読めます。Veritas が失敗したときも実行されるよう、`if: always()` を付けてください。
 
 ```yaml
-- uses: veritas/github-action@v1
+- uses: under18dev/veritas/packages/github-action@v0.1.1
   id: veritas
   with:
     profile: standard
@@ -103,7 +113,7 @@ verdict は CLI と同じです（[CLI リファレンス](/ja/reference/cli#ver
 | フォークのプルリクエストから起動された `workflow_run`  | 拒否します（終了コード 2）                                                |
 | それ以外のイベント                                     | エラーにします（終了コード 3）                                            |
 
-変更されたファイルは `git diff <since>...HEAD` で列挙するので、基準のコミットがチェックアウトに含まれている必要があります（たとえば `actions/checkout` で `fetch-depth: 0` を指定します）。含まれていなければ変更されたファイルを列挙できず、次の節で説明するドキュメントだけの変更の省略も行いません。
+変更されたファイルは `git diff <since>...HEAD` で列挙するので、基準のコミットがチェックアウトに含まれている必要があります（例のように `fetch-depth: 0` を指定します）。含まれていなければ変更されたファイルを列挙できず、次の節で説明するドキュメントだけの変更の省略も行いません。
 
 ## 省略と縮退
 

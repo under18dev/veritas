@@ -59,9 +59,9 @@ veritas run --profile standard --offline --since origin/main
 
 ## The GitHub Action
 
-The action in `packages/github-action` runs the same engine as the CLI, offline. It runs on the `node24` runtime; set up Node.js 25 or later in the job (the example uses 26), so property-based tests and counterexample replay can run project code without network access. Without it they are not run and the results stay inconclusive.
+The action in `packages/github-action` runs the same engine as the CLI, offline. It is a composite action: it runs the published `@under18dev/veritas-github-action` package of the same version with the Node.js the job set up. Set up Node.js 25 or later in the job (the example uses 26), so property-based tests and counterexample replay can run project code without network access. Without it they are not run and the results stay inconclusive.
 
-The workflow in `packages/github-action/examples/pull-request.yml`:
+Reference the action by its path in the Veritas repository and a release tag, `under18dev/veritas/packages/github-action@v<version>`. The workflow in `packages/github-action/examples/pull-request.yml`:
 
 ```yaml
 name: veritas
@@ -75,25 +75,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # The base commit is needed to compare against it and to skip documentation-only changes.
+          fetch-depth: 0
           persist-credentials: false
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           # Node.js 25+ on PATH runs project code without network access.
           node-version: 26
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: veritas/github-action@v1
+      - uses: under18dev/veritas/packages/github-action@v0.1.1
         with:
           profile: standard
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: veritas-runs
           path: .veritas/runs
           retention-days: 14
 ```
 
-::: warning
-The example refers to the action as `veritas/github-action@v1`. Check the [GitHub Action reference](/reference/github-action) for how to reference the action in your workflow. If you cannot use the action, the [CLI workflow](#plain-cli-on-github-actions) below gives the same results with the npm package.
-:::
+`fetch-depth: 0` makes the base commit available, so the action can compare against it and skip documentation-only changes. `pnpm/action-setup` is needed only when the project uses pnpm. The [GitHub Action reference](/reference/github-action) lists every input and output in detail.
 
 ### Inputs and outputs
 
@@ -102,7 +105,7 @@ The example refers to the action as `veritas/github-action@v1`. Check the [GitHu
 | `profile`           | `standard` | `quick`, `standard` or `deep`                                                                                  |
 | `working-directory` | `.`        | Project directory                                                                                              |
 | `since`             | (empty)    | Base SHA. On `pull_request`, the base SHA of the pull request is used when empty; on `push`, the previous head |
-| `inconclusive`      | `warn`     | `warn`, `fail` or `ignore`. When not set, `policy.inconclusiveBehavior` from the configuration applies         |
+| `inconclusive`      | (empty)    | `warn`, `fail` or `ignore`. Empty uses `policy.inconclusiveBehavior` from the configuration                    |
 | `summary`           | `true`     | Write a step summary                                                                                           |
 
 | Output               | Contents                                                                                   |
@@ -111,7 +114,7 @@ The example refers to the action as `veritas/github-action@v1`. Check the [GitHu
 | `exit-code`          | The Veritas exit code                                                                      |
 | `run-id`             | The run ID                                                                                 |
 | `confirmed-findings` | Number of confirmed findings                                                               |
-| `report-path`        | Path to the run's `run.json`, relative to the workspace                                    |
+| `report-path`        | Path to the run's `run.json`, relative to the workspace; the reports are next to it        |
 | `from-fork`          | `true` for a pull request from a fork                                                      |
 
 A change that consists only of Markdown files, files under `docs/` or images is skipped with verdict `skipped` and exit code `0`. Each run records `veritas replay <run-id>`, so you can reproduce it locally from the uploaded artifact.

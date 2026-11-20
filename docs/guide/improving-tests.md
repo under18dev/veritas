@@ -20,27 +20,24 @@ veritas improve --dry-run
 `--dry-run` is the default; `veritas improve` alone does the same. The plan is built from the latest run, or from `--run <run-id>`. It is most useful after a run with mutation results (`--profile standard` or `deep`); without them, only boundary gaps are considered.
 
 ```text
-plan IP-8e4e9bf2a9de from run-20261120T101004941Z-000-d6fbb6: planned
+plan IP-24ed3c83a2e0 from run-20261120T104701460Z-000-7bcf92: planned
 
-goal: Add 1 test(s) whose expected values come from the specification, to kill 0 surviving specification-relevant mutant(s) and check uncovered boundaries
+goal: Add 1 test(s) whose expected values come from the specification and at decisive boundary inputs no test checks; applying measures which mutants they kill
 
 proposed tests (expected values from the specification):
-  test/veritas-P-7f8d3341340c.test.ts: discountAmount(1000) is 100
-      property P-7f8d3341340c (total >= 1000): the guarding condition holds for this input, so the specification documents 100
+  test/veritas-P-ee03e6e8b749.test.ts: discountAmount(1000) is 100
+      property P-ee03e6e8b749 (total >= 1000): the guarding condition holds for this input, so the specification documents 100
 
 gaps:
   F-e2324bef333e  boundary of total >= 1000: total=1000 is not checked by an asserting test
-
-risks:
-  - formal claims are not re-evaluated after the patch: only test files are added, so the implementation and its claims are unchanged
 
 budget: 3 iteration(s), 5 file(s), 900000 ms, 1 test retr(y/ies)
 
 patch preview:
 --- /dev/null
-+++ b/test/veritas-P-7f8d3341340c.test.ts
++++ b/test/veritas-P-ee03e6e8b749.test.ts
 @@ -0,0 +1,8 @@
-+// Added by `veritas improve` for property P-7f8d3341340c.
++// Added by `veritas improve` for property P-ee03e6e8b749.
 +// Expected values come from the specification (README.md:7), not from the implementation.
 +import { expect, it } from 'vitest';
 +import { discountAmount } from "../src/pricing.js";
@@ -49,13 +46,13 @@ patch preview:
 +  expect(discountAmount(1000)).toBe(100);
 +});
 [...]
-approval token for plan IP-8e4e9bf2a9de: 83afd043d0d924807dfadd0256ca9e58bcbabfa66be0508728286b83c1f3e695
-apply after review: veritas improve --apply --plan IP-8e4e9bf2a9de --approve 83afd043d0d924807dfadd0256ca9e58bcbabfa66be0508728286b83c1f3e695
+approval token for plan IP-24ed3c83a2e0: 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
+apply after review: veritas improve --apply --plan IP-24ed3c83a2e0 --approve 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
 
-plan: .veritas/improvements/IP-8e4e9bf2a9de/plan.json (no project file was written)
+plan: .veritas/improvements/IP-24ed3c83a2e0/plan.json (no project file was written)
 ```
 
-The plan lists the goal, each proposed test with the property and source its expected value comes from, the gaps it addresses, the risks, the budget, the full patch, the inputs it skipped and why, and the approval token. It is saved in `.veritas/improvements/<plan-id>/plan.json`.
+The plan lists the goal, each proposed test with the property and source its expected value comes from, the gaps it addresses, any risks, the budget, the full patch, the inputs it skipped and why, and the approval token. It is saved in `.veritas/improvements/<plan-id>/plan.json`.
 
 The token is bound to this plan. If the plan changes, or a property it relies on is rejected after planning, the token no longer matches and the plan has to be made again.
 
@@ -66,17 +63,17 @@ Read the patch preview. The token is your approval of exactly that patch. Pass `
 ## 3. Apply
 
 ```bash
-veritas improve --apply --plan IP-8e4e9bf2a9de --approve 83afd043d0d924807dfadd0256ca9e58bcbabfa66be0508728286b83c1f3e695
+veritas improve --apply --plan IP-24ed3c83a2e0 --approve 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
 ```
 
 ```text
-attempt PA-c3c9aa7bb43a for plan IP-8e4e9bf2a9de: improved
+attempt PA-8130e27f7148 for plan IP-24ed3c83a2e0: improved
 before: tests 5 passed / 0 failed, mutants 16 killed / 1 survived
 after:  tests 6 passed / 0 failed, mutants 17 killed / 0 survived
 note: killed mutants 16 -> 17, survived 1 -> 0
 note: newly killed: M-5b67ad8e53c8
-note: added: test/veritas-P-7f8d3341340c.test.ts
-note: formal and property-based results re-evaluated in run-20261120T101026573Z-000-f67be3 on the patched copy
+note: added: test/veritas-P-ee03e6e8b749.test.ts
+note: formal and property-based results re-evaluated in run-20261120T104711023Z-000-f78024 on the patched copy
 ```
 
 What happens during `--apply`:
@@ -108,11 +105,11 @@ A plan stops with `needs_spec_decision` in two situations:
 - **A test built from the specification fails against the code.** Veritas does not add it and does not change its expected value to make it pass. It reports a specification violation candidate and writes an implementation fix proposal:
 
 ```text
-plan IP-4dc3f2fb069b from run-20261120T100953080Z-000-c700bf: needs_spec_decision
+plan IP-0159001c54ab from run-20261120T104653570Z-000-cd8b2a: needs_spec_decision
 
 spec violation candidates (not added; expected values unchanged):
-  SVC-36462c8a0127  discountAmount(1000) returns 0, but the specification (README.md:7) documents 100; the test is not added and its expected value is not changed
-  implementation fix proposals: .veritas/improvements/IP-4dc3f2fb069b/implementation-fix-proposal.json
+  SVC-ec7787ca9234  discountAmount(1000) returns 0, but the specification (README.md:7) documents 100; the test is not added and its expected value is not changed
+  implementation fix proposals: .veritas/improvements/IP-0159001c54ab/implementation-fix-proposal.json
 ```
 
 Either the code or the specification is wrong. Fix the code yourself, or change the specification through review, then plan again.
@@ -127,7 +124,7 @@ hint: run `veritas improve --apply` locally after reviewing the plan
 `--apply` is refused whenever the `CI` environment variable is set to anything other than an empty value, `false` or `0`. Planning still works in CI.
 
 ```text
-error[APPROVAL_MISMATCH]: the approval token does not match plan IP-8e4e9bf2a9de (the plan changed or the token is wrong)
+error[APPROVAL_MISMATCH]: the approval token does not match plan IP-24ed3c83a2e0 (the plan changed or the token is wrong)
 hint: review the plan again with `veritas improve --dry-run` and use the token it prints
 ```
 

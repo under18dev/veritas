@@ -16,8 +16,8 @@ Veritas は三つの方法で Property を検査します。Z3 による範囲�
 
 ```text
 succeeded   prove
-            P-7f8d3341340c: counterexample_found {"total":"1000"}
-            P-abc66b51a716: proven_within_model
+            P-ee03e6e8b749: counterexample_found {"total":"1000"}
+            P-e3003339ad77: proven_within_model
 ```
 
 ### 対応している範囲
@@ -57,7 +57,7 @@ succeeded   prove
 `veritas prove` が検査するのは conformance です。残りの三つは mutation testing の結果が必要なので、`veritas run --profile deep` で実行されます。
 
 ```text
-P-7f8d3341340c vs mutant M-5b67ad8e53c8: detects it with {"total":"1000"}
+P-ee03e6e8b749 vs mutant M-5b67ad8e53c8: detects it with {"total":"1000"}
 ```
 
 distinguishability が使うのは、引数がすべて範囲内の整数か真偽値のリテラルであるテストの呼び出しだけです。distinguishability と property_detection の検査は、一回の実行で合わせて 40 件までです。見送った件数はステージのメッセージに出ます。
@@ -68,7 +68,7 @@ distinguishability が使うのは、引数がすべて範囲内の整数か真�
 
 ```text
 succeeded   pbt
-            P-7f8d3341340c: passed
+            P-ee03e6e8b749: passed
 ```
 
 シード、実行回数、失敗したときの反例と縮小（shrink）の経路は `pbt.json` に記録されます。実行回数は `pbt.numRuns`（既定 1000）、シードは `pbt.seed` を設定しない限り Property ごとに決まります。property-based testing が通ったことは、試した入力についての経験的な根拠で、証明ではありません。
@@ -76,11 +76,11 @@ succeeded   pbt
 ### property-based testing を再実行する
 
 ```bash
-veritas test replay PBT-3a3897350851
+veritas test replay PBT-ed9a14f78b2b
 ```
 
 ```text
-PBT-3a3897350851 (P-7f8d3341340c, run run-20261120T101037769Z-000-243d1b, seed 2143163210, 1000 runs)
+PBT-ed9a14f78b2b (P-ee03e6e8b749, run run-20261120T104714190Z-000-59c0fc, seed -1082472862, 1000 runs)
 recorded: passed
 replayed: passed
 reproduced
@@ -106,7 +106,7 @@ veritas prove --engine lean
 
 ```text
 succeeded   prove
-            P-7f8d3341340c (lean): proven_within_model [kernel_checked]
+            P-ee03e6e8b749 (lean): proven_within_model [kernel_checked]
 ```
 
 Lean のバックエンドは、関数の Lean モデルと Property の定理を生成し、`lake build` でビルドします。Lean 4 と Lake が必要で、[elan](https://github.com/leanprover/elan) で入れます。`veritas doctor` は `PATH` と `~/.elan/bin` を探します。見つからなければ、Lean の結果は理由付きで `unsupported` になります。

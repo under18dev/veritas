@@ -16,8 +16,8 @@ By default all three check accepted properties only. `--include-proposed` adds p
 
 ```text
 succeeded   prove
-            P-7f8d3341340c: counterexample_found {"total":"1000"}
-            P-abc66b51a716: proven_within_model
+            P-ee03e6e8b749: counterexample_found {"total":"1000"}
+            P-e3003339ad77: proven_within_model
 ```
 
 ### The supported subset
@@ -57,7 +57,7 @@ All formal claims use the same bounded query, "for all inputs within the domains
 `veritas prove` checks conformance. The other three need mutation results and run in `veritas run --profile deep`:
 
 ```text
-P-7f8d3341340c vs mutant M-5b67ad8e53c8: detects it with {"total":"1000"}
+P-ee03e6e8b749 vs mutant M-5b67ad8e53c8: detects it with {"total":"1000"}
 ```
 
 Distinguishability uses only test calls whose arguments are all integer or boolean literals inside the domain. At most 40 distinguishability and property-detection checks run per run; the stage messages say how many were skipped.
@@ -68,7 +68,7 @@ The `pbt` stage of `veritas run --profile deep` runs each formalized property as
 
 ```text
 succeeded   pbt
-            P-7f8d3341340c: passed
+            P-ee03e6e8b749: passed
 ```
 
 Each test records its seed, the number of runs and, on failure, the counterexample and the shrink path, in `pbt.json`. The number of runs is `pbt.numRuns` (default 1000); the seed is derived per property unless `pbt.seed` is set. A passing property-based test is empirical evidence about the sampled inputs, not a proof.
@@ -76,11 +76,11 @@ Each test records its seed, the number of runs and, on failure, the counterexamp
 ### Replaying a property-based test
 
 ```bash
-veritas test replay PBT-3a3897350851
+veritas test replay PBT-ed9a14f78b2b
 ```
 
 ```text
-PBT-3a3897350851 (P-7f8d3341340c, run run-20261120T101037769Z-000-243d1b, seed 2143163210, 1000 runs)
+PBT-ed9a14f78b2b (P-ee03e6e8b749, run run-20261120T104714190Z-000-59c0fc, seed -1082472862, 1000 runs)
 recorded: passed
 replayed: passed
 reproduced
@@ -106,7 +106,7 @@ veritas prove --engine lean
 
 ```text
 succeeded   prove
-            P-7f8d3341340c (lean): proven_within_model [kernel_checked]
+            P-ee03e6e8b749 (lean): proven_within_model [kernel_checked]
 ```
 
 The Lean backend generates a Lean model of the function and a theorem for the property, and builds it with `lake build`. It needs Lean 4 and Lake, installed with [elan](https://github.com/leanprover/elan); `veritas doctor` looks on `PATH` and in `~/.elan/bin`. Without them, Lean claims are `unsupported` with the reason.

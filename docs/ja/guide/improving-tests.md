@@ -20,27 +20,24 @@ veritas improve --dry-run
 `--dry-run` は既定の動作なので、`veritas improve` だけでも同じです。計画は最新の実行から、または `--run <run-id>` で指定した実行から作ります。mutation testing の結果がある実行（`--profile standard` か `deep`）から作ると効果的です。結果がない場合は、境界の穴だけを対象にします。
 
 ```text
-plan IP-8e4e9bf2a9de from run-20261120T101004941Z-000-d6fbb6: planned
+plan IP-24ed3c83a2e0 from run-20261120T104701460Z-000-7bcf92: planned
 
-goal: Add 1 test(s) whose expected values come from the specification, to kill 0 surviving specification-relevant mutant(s) and check uncovered boundaries
+goal: Add 1 test(s) whose expected values come from the specification and at decisive boundary inputs no test checks; applying measures which mutants they kill
 
 proposed tests (expected values from the specification):
-  test/veritas-P-7f8d3341340c.test.ts: discountAmount(1000) is 100
-      property P-7f8d3341340c (total >= 1000): the guarding condition holds for this input, so the specification documents 100
+  test/veritas-P-ee03e6e8b749.test.ts: discountAmount(1000) is 100
+      property P-ee03e6e8b749 (total >= 1000): the guarding condition holds for this input, so the specification documents 100
 
 gaps:
   F-e2324bef333e  boundary of total >= 1000: total=1000 is not checked by an asserting test
-
-risks:
-  - formal claims are not re-evaluated after the patch: only test files are added, so the implementation and its claims are unchanged
 
 budget: 3 iteration(s), 5 file(s), 900000 ms, 1 test retr(y/ies)
 
 patch preview:
 --- /dev/null
-+++ b/test/veritas-P-7f8d3341340c.test.ts
++++ b/test/veritas-P-ee03e6e8b749.test.ts
 @@ -0,0 +1,8 @@
-+// Added by `veritas improve` for property P-7f8d3341340c.
++// Added by `veritas improve` for property P-ee03e6e8b749.
 +// Expected values come from the specification (README.md:7), not from the implementation.
 +import { expect, it } from 'vitest';
 +import { discountAmount } from "../src/pricing.js";
@@ -49,13 +46,13 @@ patch preview:
 +  expect(discountAmount(1000)).toBe(100);
 +});
 [...]
-approval token for plan IP-8e4e9bf2a9de: 83afd043d0d924807dfadd0256ca9e58bcbabfa66be0508728286b83c1f3e695
-apply after review: veritas improve --apply --plan IP-8e4e9bf2a9de --approve 83afd043d0d924807dfadd0256ca9e58bcbabfa66be0508728286b83c1f3e695
+approval token for plan IP-24ed3c83a2e0: 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
+apply after review: veritas improve --apply --plan IP-24ed3c83a2e0 --approve 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
 
-plan: .veritas/improvements/IP-8e4e9bf2a9de/plan.json (no project file was written)
+plan: .veritas/improvements/IP-24ed3c83a2e0/plan.json (no project file was written)
 ```
 
-計画には、目的、提案するテストと期待値の出どころ（Property と出典）、対象の穴、リスク、予算、パッチの全文、見送った入力とその理由、承認トークンが含まれます。計画は `.veritas/improvements/<plan-id>/plan.json` に保存されます。
+計画には、目的、提案するテストと期待値の出どころ（Property と出典）、対象の穴、リスク（あれば）、予算、パッチの全文、見送った入力とその理由、承認トークンが含まれます。計画は `.veritas/improvements/<plan-id>/plan.json` に保存されます。
 
 トークンはこの計画に結び付いています。計画が変わったり、計画が頼っている Property を計画のあとで reject したりすると、トークンは合わなくなり、計画を立て直す必要があります。
 
@@ -66,17 +63,17 @@ plan: .veritas/improvements/IP-8e4e9bf2a9de/plan.json (no project file was writt
 ## 3. 適用する
 
 ```bash
-veritas improve --apply --plan IP-8e4e9bf2a9de --approve 83afd043d0d924807dfadd0256ca9e58bcbabfa66be0508728286b83c1f3e695
+veritas improve --apply --plan IP-24ed3c83a2e0 --approve 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
 ```
 
 ```text
-attempt PA-c3c9aa7bb43a for plan IP-8e4e9bf2a9de: improved
+attempt PA-8130e27f7148 for plan IP-24ed3c83a2e0: improved
 before: tests 5 passed / 0 failed, mutants 16 killed / 1 survived
 after:  tests 6 passed / 0 failed, mutants 17 killed / 0 survived
 note: killed mutants 16 -> 17, survived 1 -> 0
 note: newly killed: M-5b67ad8e53c8
-note: added: test/veritas-P-7f8d3341340c.test.ts
-note: formal and property-based results re-evaluated in run-20261120T101026573Z-000-f67be3 on the patched copy
+note: added: test/veritas-P-ee03e6e8b749.test.ts
+note: formal and property-based results re-evaluated in run-20261120T104711023Z-000-f78024 on the patched copy
 ```
 
 `--apply` の中で行われることです。
@@ -108,11 +105,11 @@ note: formal and property-based results re-evaluated in run-20261120T101026573Z-
 - **仕様から作ったテストが、今のコードでは失敗する。** Veritas はそのテストを追加せず、通るように期待値を変えることもしません。仕様違反の候補として報告し、実装の修正案を書き出します。
 
 ```text
-plan IP-4dc3f2fb069b from run-20261120T100953080Z-000-c700bf: needs_spec_decision
+plan IP-0159001c54ab from run-20261120T104653570Z-000-cd8b2a: needs_spec_decision
 
 spec violation candidates (not added; expected values unchanged):
-  SVC-36462c8a0127  discountAmount(1000) returns 0, but the specification (README.md:7) documents 100; the test is not added and its expected value is not changed
-  implementation fix proposals: .veritas/improvements/IP-4dc3f2fb069b/implementation-fix-proposal.json
+  SVC-ec7787ca9234  discountAmount(1000) returns 0, but the specification (README.md:7) documents 100; the test is not added and its expected value is not changed
+  implementation fix proposals: .veritas/improvements/IP-0159001c54ab/implementation-fix-proposal.json
 ```
 
 コードか仕様のどちらかが誤っています。コードを自分で直すか、レビューを通して仕様を変えてから、計画を立て直してください。
@@ -127,7 +124,7 @@ hint: run `veritas improve --apply` locally after reviewing the plan
 環境変数 `CI` が、空、`false`、`0` 以外の値に設定されていると、`--apply` は拒否されます。計画を立てることは CI の中でもできます。
 
 ```text
-error[APPROVAL_MISMATCH]: the approval token does not match plan IP-8e4e9bf2a9de (the plan changed or the token is wrong)
+error[APPROVAL_MISMATCH]: the approval token does not match plan IP-24ed3c83a2e0 (the plan changed or the token is wrong)
 hint: review the plan again with `veritas improve --dry-run` and use the token it prints
 ```
 

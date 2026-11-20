@@ -34,7 +34,7 @@ veritas --debug --log-format json run --profile standard 2> veritas-log.jsonl
 `replay` は、どの実行をやり直すかを表示してから実行します。
 
 ```text
-replaying prove from run-20261120T100953080Z-000-c700bf (prove --include-proposed)
+replaying prove from run-20261120T104653570Z-000-cd8b2a (prove --include-proposed)
 ```
 
 ## よくある問題
@@ -44,7 +44,7 @@ replaying prove from run-20261120T100953080Z-000-c700bf (prove --include-propose
 | `VITEST_NOT_FOUND`                                                           | プロジェクトに Vitest を入れてください（`pnpm add -D vitest`）                                                                                                                                                                         |
 | `CONFIG_MISSING`                                                             | `veritas init --yes` を実行するか、CI で使えるよう `.veritas/config.json` をコミットしてください                                                                                                                                       |
 | `NO_RUN`                                                                     | `spec`、`report`、`explain`、`improve` は最新の実行を読みます。先に `veritas run` を実行してください                                                                                                                                   |
-| `doctor` で `mutate` が disabled                                             | プロジェクトに `@mizchi/mutator` を入れるか、プロジェクトの依存をインストールしてください                                                                                                                                              |
+| `doctor` で `mutate` が disabled                                             | プロジェクトに Vitest が入っていません。Vitest を入れるか、プロジェクトの依存をインストールしてください                                                                                                                                |
 | mutation のステージが `failed`                                               | プロジェクトのテスト自体が失敗しています。まずそれを直してください                                                                                                                                                                     |
 | `semantic_mismatch`                                                          | 整数モデルと JavaScript の結果が食い違っています（安全な整数を超える桁あふれなど）。`formal.integerDomain` を狭めるか、テストで確かめてください                                                                                        |
 | 結果が `unsupported`                                                         | 関数が形式検証の対応範囲の外の構文を使っています。[対応環境](/ja/concepts/support-matrix)を参照してください                                                                                                                            |

@@ -74,7 +74,7 @@ veritas [グローバルオプション] <command> [オプション]
 
 ### セットアップ: `init`、`doctor`
 
-`init` はパッケージマネージャー、`tsconfig.json`、ソースとテストの glob を検出し、`.veritas/config.json` を書き出します。既存の設定は `--force` を付けない限り上書きしません。プロジェクトが Vitest を使っていなければ `VITEST_NOT_FOUND` で失敗します。`doctor` は各ケイパビリティ（`node`、`git`、`package_manager`、`typescript`、`vitest`、`mutator`、`fast_check`、`z3`、`lean`、`llm`、`network`、`sandbox`）の状態と、それぞれがどの機能に影響するかを一覧にします。LLM の CLI について読むのはログイン状態だけで、アカウントの詳細は読みません。
+`init` はパッケージマネージャー、`tsconfig.json`、ソースとテストの glob を検出し、`.veritas/config.json` を書き出します。既存の設定は `--force` を付けない限り上書きしません。プロジェクトが Vitest を使っていなければ `VITEST_NOT_FOUND` で失敗します。`doctor` は各ケイパビリティ（`node`、`git`、`package_manager`、`typescript`、`vitest`、`mutator`、`fast_check`、`z3`、`lean`、`llm`、`network`、`sandbox`）の状態と、それぞれがどの機能に影響するかを一覧にします。`mutator`、`fast_check`、`z3` は、まずプロジェクトから、なければ Veritas に同梱したものから探し、どちらを使ったかを詳細に表示します（`resolved from project` または `resolved from veritas`）。LLM の CLI について読むのはログイン状態だけで、アカウントの詳細は読みません。
 
 ### ステージ: `discover`、`analyze`、`mutate`、`prove`、`run`
 

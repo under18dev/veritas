@@ -74,7 +74,7 @@ The rest of this section is generated from the CLI itself, so it always matches 
 
 ### Setup: `init`, `doctor`
 
-`init` detects the package manager, `tsconfig.json`, source and test globs, and writes `.veritas/config.json`. It refuses to overwrite an existing configuration without `--force`, and fails with `VITEST_NOT_FOUND` when the project does not use Vitest. `doctor` lists each capability (`node`, `git`, `package_manager`, `typescript`, `vitest`, `mutator`, `fast_check`, `z3`, `lean`, `llm`, `network`, `sandbox`) with its state, and which features each one affects. It reads only the login state of LLM CLIs, never account details.
+`init` detects the package manager, `tsconfig.json`, source and test globs, and writes `.veritas/config.json`. It refuses to overwrite an existing configuration without `--force`, and fails with `VITEST_NOT_FOUND` when the project does not use Vitest. `doctor` lists each capability (`node`, `git`, `package_manager`, `typescript`, `vitest`, `mutator`, `fast_check`, `z3`, `lean`, `llm`, `network`, `sandbox`) with its state, and which features each one affects. `mutator`, `fast_check` and `z3` are resolved from the project first, then from the copies that ship with Veritas; the detail says which (`resolved from project` or `resolved from veritas`). It reads only the login state of LLM CLIs, never account details.
 
 ### Stages: `discover`, `analyze`, `mutate`, `prove`, `run`
 

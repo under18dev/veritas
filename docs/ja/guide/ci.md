@@ -59,9 +59,9 @@ veritas run --profile standard --offline --since origin/main
 
 ## GitHub Action
 
-`packages/github-action` の Action は、CLI と同じエンジンをオフラインで動かします。Action 自体は `node24` のランタイムで動きます。property-based testing と反例の再実行がネットワークなしでプロジェクトのコードを動かせるよう、ジョブで Node.js 25 以上を用意してください（例では 26 を使っています）。用意しないと、それらは実行されず、結果は inconclusive のままです。
+`packages/github-action` の Action は、CLI と同じエンジンをオフラインで動かします。composite action で、ジョブで用意した Node.js を使い、公開済みの同じバージョンの `@under18dev/veritas-github-action` パッケージを実行します。property-based testing と反例の再実行がネットワークなしでプロジェクトのコードを動かせるよう、ジョブで Node.js 25 以上を用意してください（例では 26 を使っています）。用意しないと、それらは実行されず、結果は inconclusive のままです。
 
-`packages/github-action/examples/pull-request.yml` のワークフローです。
+Action は、Veritas リポジトリ内のパスとリリースのタグで `under18dev/veritas/packages/github-action@v<version>` のように参照します。`packages/github-action/examples/pull-request.yml` のワークフローです。
 
 ```yaml
 name: veritas
@@ -75,25 +75,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # The base commit is needed to compare against it and to skip documentation-only changes.
+          fetch-depth: 0
           persist-credentials: false
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           # Node.js 25+ on PATH runs project code without network access.
           node-version: 26
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: veritas/github-action@v1
+      - uses: under18dev/veritas/packages/github-action@v0.1.1
         with:
           profile: standard
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: veritas-runs
           path: .veritas/runs
           retention-days: 14
 ```
 
-::: warning
-この例では Action を `veritas/github-action@v1` として参照しています。ワークフローでの Action の参照方法は [GitHub Action リファレンス](/ja/reference/github-action)を確認してください。Action を使えない場合は、下の [CLI のワークフロー](#github-actions-で-cli-を使う)で、npm パッケージを使って同じ結果を得られます。
-:::
+`fetch-depth: 0` は、比較の基準のコミットを取得するためのもので、これがあると Action は基準と比べたり、ドキュメントだけの変更を省いたりできます。`pnpm/action-setup` は、プロジェクトが pnpm を使う場合だけ必要です。入力と出力の詳細は [GitHub Action リファレンス](/ja/reference/github-action)にあります。
 
 ### 入力と出力
 
@@ -102,17 +105,17 @@ jobs:
 | `profile`           | `standard` | `quick`、`standard`、`deep`                                                                                 |
 | `working-directory` | `.`        | プロジェクトのディレクトリ                                                                                  |
 | `since`             | （空）     | 比較の基準の SHA。空なら、`pull_request` ではプルリクエストの base SHA、`push` では更新前の head を使います |
-| `inconclusive`      | `warn`     | `warn`、`fail`、`ignore`。指定しなければ設定ファイルの `policy.inconclusiveBehavior` を使います             |
+| `inconclusive`      | （空）     | `warn`、`fail`、`ignore`。空なら設定ファイルの `policy.inconclusiveBehavior` を使います                     |
 | `summary`           | `true`     | ステップのサマリーを書くか                                                                                  |
 
-| 出力                 | 中身                                                                                    |
-| -------------------- | --------------------------------------------------------------------------------------- |
-| `verdict`            | `pass`、`pass_with_warnings`、`policy_failure`、`tool_error`、`inconclusive`、`skipped` |
-| `exit-code`          | Veritas の終了コード                                                                    |
-| `run-id`             | run ID                                                                                  |
-| `confirmed-findings` | 確定した finding の数                                                                   |
-| `report-path`        | 実行の `run.json` のパス（ワークスペースからの相対パス）                                |
-| `from-fork`          | フォークからのプルリクエストなら `true`                                                 |
+| 出力                 | 中身                                                                                           |
+| -------------------- | ---------------------------------------------------------------------------------------------- |
+| `verdict`            | `pass`、`pass_with_warnings`、`policy_failure`、`tool_error`、`inconclusive`、`skipped`        |
+| `exit-code`          | Veritas の終了コード                                                                           |
+| `run-id`             | run ID                                                                                         |
+| `confirmed-findings` | 確定した finding の数                                                                          |
+| `report-path`        | 実行の `run.json` のパス（ワークスペースからの相対パス）。レポートは同じディレクトリにあります |
+| `from-fork`          | フォークからのプルリクエストなら `true`                                                        |
 
 変更が Markdown ファイル、`docs/` 以下のファイル、画像だけなら、verdict `skipped`、終了コード `0` で実行を省きます。実行ごとに `veritas replay <run-id>` が記録されるので、アップロードした成果物から手元で再現できます。
 

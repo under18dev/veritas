@@ -141,12 +141,13 @@ const markdown = renderReport(buildReportInput('/path/to/project'), 'markdown');
 
 ## プロジェクトの準備
 
-| エクスポート                              | 対応する CLI     | 用途                                                                           |
-| ----------------------------------------- | ---------------- | ------------------------------------------------------------------------------ |
-| `initProject(root, { force?, dryRun? })`  | `veritas init`   | プロジェクトを検出して `.veritas/config.json` を書く。設定と次の手順を返す     |
-| `loadConfig(root, { allowCodeConfig? })`  | なし             | 設定を読み込んで検証する。`{ config, file, hash }` を返す                      |
-| `openProject(root, { allowCodeConfig? })` | なし             | 設定を読み込む。`{ root, config, configHash }` を返す                          |
-| `runDoctor(root, config, env?)`           | `veritas doctor` | ケイパビリティと機能を調べる。設定なしで調べるときは `config` に `null` を渡す |
+| エクスポート                              | 対応する CLI     | 用途                                                                                                                                                                    |
+| ----------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `initProject(root, { force?, dryRun? })`  | `veritas init`   | プロジェクトを検出して `.veritas/config.json` を書く。設定と次の手順を返す                                                                                              |
+| `loadConfig(root, { allowCodeConfig? })`  | なし             | 設定を読み込んで検証する。`{ config, file, hash }` を返す                                                                                                               |
+| `openProject(root, { allowCodeConfig? })` | なし             | 設定を読み込む。`{ root, config, configHash }` を返す                                                                                                                   |
+| `runDoctor(root, config, env?, bundled?)` | `veritas doctor` | ケイパビリティと機能を調べる。設定なしで調べるときは `config` に `null` を渡す。CLI と同じく `bundled` に `bundledTools()` を渡すと、Veritas に同梱したツールも見つかる |
+| `bundledTools()`                          | なし             | この Veritas のインストールに含まれる `@mizchi/mutator`、fast-check、`z3-solver` のバージョン（解決できないものは `null`）                                              |
 
 ## CLI のプログラム
 

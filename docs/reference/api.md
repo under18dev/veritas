@@ -141,12 +141,13 @@ const markdown = renderReport(buildReportInput('/path/to/project'), 'markdown');
 
 ## Project setup
 
-| Export                                    | CLI equivalent   | Purpose                                                                                   |
-| ----------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------- |
-| `initProject(root, { force?, dryRun? })`  | `veritas init`   | Detect the project and write `.veritas/config.json`; returns the config and next steps    |
-| `loadConfig(root, { allowCodeConfig? })`  | none             | Load and validate the configuration; returns `{ config, file, hash }`                     |
-| `openProject(root, { allowCodeConfig? })` | none             | Load the configuration; returns `{ root, config, configHash }`                            |
-| `runDoctor(root, config, env?)`           | `veritas doctor` | Check capabilities and features; pass `null` as `config` to check without a configuration |
+| Export                                    | CLI equivalent   | Purpose                                                                                                                                                                                      |
+| ----------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `initProject(root, { force?, dryRun? })`  | `veritas init`   | Detect the project and write `.veritas/config.json`; returns the config and next steps                                                                                                       |
+| `loadConfig(root, { allowCodeConfig? })`  | none             | Load and validate the configuration; returns `{ config, file, hash }`                                                                                                                        |
+| `openProject(root, { allowCodeConfig? })` | none             | Load the configuration; returns `{ root, config, configHash }`                                                                                                                               |
+| `runDoctor(root, config, env?, bundled?)` | `veritas doctor` | Check capabilities and features; pass `null` as `config` to check without a configuration. Pass `bundledTools()` as `bundled`, as the CLI does, so that tools shipped with Veritas are found |
+| `bundledTools()`                          | none             | Versions of `@mizchi/mutator`, fast-check and `z3-solver` that this Veritas installation brings (`null` when one cannot be resolved)                                                         |
 
 ## CLI program
 

@@ -76,6 +76,8 @@ npx veritas doctor
 available   node             26.13.1 Node.js >= 24
 available   vitest           5.1.1 resolved from project
 available   mutator          0.4.5 @mizchi/mutator resolved from project
+available   fast_check       4.10.3 resolved from project
+available   z3               5.4.1 z3-solver (wasm) resolved from veritas
 disabled    llm               no LLM provider configured; rule-based analysis only
 disabled    network           network access disabled (default)
 available   sandbox           restricted process (permission model; defence in depth, the project's code is trusted): no writes, child processes or network
@@ -83,9 +85,10 @@ available   sandbox           restricted process (permission model; defence in d
 enabled   init
 degraded  discover (missing: network, llm)
 enabled   mutate
+enabled   prove (z3)
 ```
 
-`network` と `llm` が足りずに `degraded` になるのは、ふつうの状態です。どちらも任意の機能で、既定でオフになっています。
+`resolved from project` はプロジェクトに入っているものを、`resolved from veritas` は Veritas と一緒に入ったものを使うという意味で、どちらでも問題ありません。`network` と `llm` が足りずに `degraded` になるのは、ふつうの状態です。どちらも任意の機能で、既定でオフになっています。
 
 ## パイプラインを実行する
 

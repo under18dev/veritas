@@ -12,7 +12,7 @@ Veritas はテストを仕様と照らし合わせますが、その仕様は、
 | ドキュメント           | `docs/**/*.md`、`CHANGELOG*`、`RELEASE*`                                                            | オン |
 | コードのコメント       | `analysis.include` に当てはまるファイルの、export された宣言の JSDoc                                | オン |
 | スキーマ               | OpenAPI と JSON Schema の範囲指定（`openapi.{json,yaml}`、`*.openapi.*`、`*.schema.*`）             | オン |
-| git の履歴             | `git log`                                                                                           | オン |
+| git の履歴             | `git log`。コミットごとに 1 つの出典（直近 50 件）                                                  | オン |
 | エクスポートした Issue | `.veritas-sources/issues/` と `.veritas-sources/pulls/` の JSON ファイル                            | オン |
 | GitHub API             | `sources.github.repo` の Issue とプルリクエスト                                                     | オフ |
 | Web                    | `sources.web.allowDomains` のドメインのページ。ページ数、リンクの深さ、文字数、時間に上限があります | オフ |
@@ -33,7 +33,7 @@ veritas discover --sources local,web --allow-domain docs.example.com --max-pages
 
 ```text
 quote   line 7: "Orders with a total of 1000 or more receive a flat discount of 100."
-property P-7f8d3341340c [proposed, normative] discountAmount: total >= 1000 -> Orders with a total of 1000 or more receive a flat discount of 100.
+property P-ee03e6e8b749 [proposed, normative] discountAmount: total >= 1000 -> Orders with a total of 1000 or more receive a flat discount of 100.
 ```
 
 どの Property も出どころを保持しています。出典、ファイルと行番号（`README.md:7`）、引用したテキスト、形式化するときに置いた前提です。`veritas spec show <id>` で、形式モデルと一緒に確認できます。どの関数に当たるかはっきりしない記述は、結び付けないまま「対応なし」として報告し、推測で埋めることはしません。
@@ -101,14 +101,14 @@ veritas spec export                    # 一覧を JSON で出力
   "schemaVersion": "1.0.0",
   "approvals": [
     {
-      "id": "A-1ec8b553846d",
-      "propertyId": "P-7f8d3341340c",
+      "id": "A-aeaeacd1d243",
+      "propertyId": "P-ee03e6e8b749",
       "propertyVersion": 1,
       "decision": "accept",
       "actor": "you",
       "reason": "README is the pricing specification",
-      "decidedAt": "2026-11-20T10:09:52.777Z",
-      "sourceIds": ["src-bd85b3f2deb4"]
+      "decidedAt": "2026-11-20T10:46:53.311Z",
+      "sourceIds": ["src-fa35c6154f0b"]
     }
   ]
 }
