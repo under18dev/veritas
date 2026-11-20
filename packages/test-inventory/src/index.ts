@@ -18,7 +18,14 @@ import { z } from 'zod';
 export const TestInventory = z.object({
   tests: z.array(TestCase),
   edges: z.array(TestPropertyEdge),
-  files: z.array(z.object({ path: z.string(), hash: z.string() })),
+  files: z.array(
+    z.object({
+      path: z.string(),
+      hash: z.string(),
+      /** Files inside the root the test file imports, directly or through other local files (POSIX, sorted). */
+      dependencies: z.array(z.string()).default([]),
+    }),
+  ),
   diagnostics: z.array(z.object({ file: z.string(), message: z.string() })),
 });
 export type TestInventory = z.infer<typeof TestInventory>;
@@ -114,6 +121,10 @@ export function inventoryTests(options: {
   const files = uniqueFiles.map((file) => ({
     path: toPosixRelative(root, file),
     hash: sha256(readFileSync(file)),
+    dependencies: (() => {
+      const source = sourceFiles.get(file);
+      return source ? localDependencies(source, checker, root) : [];
+    })(),
   }));
   return TestInventory.parse({ tests, edges, files, diagnostics });
 }
@@ -716,15 +727,57 @@ function resolveProjectCall(
   return projectSymbolId(checker.getSymbolAtLocation(node.expression), checker, projectSet, root);
 }
 
+/**
+ * Local files a source file reaches through static imports, re-exports and literal `import()`, transitively. Declaration files and dependencies under node_modules are not followed: a workspace package
+ * imported through its built `.d.ts` runs its build output, which changing the source does not affect.
+ */
+function localDependencies(start: ts.SourceFile, checker: ts.TypeChecker, root: string): string[] {
+  const seen = new Set<ts.SourceFile>([start]);
+  const queue = [start];
+  for (let source = queue.shift(); source; source = queue.shift()) {
+    for (const node of descendants(source)) {
+      let specifier: ts.Expression | undefined;
+      if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier)
+        specifier = node.moduleSpecifier;
+      else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
+        specifier = node.arguments[0];
+      if (!specifier || !ts.isStringLiteralLike(specifier)) continue;
+      const target = checker
+        .getSymbolAtLocation(specifier)
+        ?.declarations?.find((declaration) => ts.isSourceFile(declaration));
+      if (!target || !ts.isSourceFile(target) || target.isDeclarationFile || seen.has(target)) continue;
+      const relative = path.relative(root, path.resolve(target.fileName));
+      if (
+        relative.startsWith('..') ||
+        path.isAbsolute(relative) ||
+        relative.split(path.sep).includes('node_modules')
+      )
+        continue;
+      seen.add(target);
+      queue.push(target);
+    }
+  }
+  return [...seen]
+    .filter((source) => source !== start)
+    .map((source) => toPosixRelative(root, source.fileName))
+    .sort();
+}
+
 const TEST_SUPPORT_DIRECTORIES = new Set(['test', 'tests', '__tests__', '__mocks__', 'e2e']);
 
-/** Helpers next to the tests are test code even when a broad include matches them: they are followed, not targets. */
-function isTestSupportFile(root: string, file: string): boolean {
-  return path
-    .relative(root, path.resolve(file))
-    .split(path.sep)
+/**
+ * Whether a file (POSIX, relative to the root) lives in a test directory. Helpers next to the tests are test
+ * code even when a broad include matches them: they are followed, not targets.
+ */
+export function isTestSupportPath(relative: string): boolean {
+  return relative
+    .split('/')
     .slice(0, -1)
     .some((segment) => TEST_SUPPORT_DIRECTORIES.has(segment));
+}
+
+function isTestSupportFile(root: string, file: string): boolean {
+  return isTestSupportPath(toPosixRelative(root, file));
 }
 
 function bindingIdentifiers(name: ts.BindingName): ts.Identifier[] {

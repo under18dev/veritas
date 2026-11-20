@@ -12,6 +12,7 @@ import {
 import { detectMutator, PINNED_MUTATOR_VERSION, summarize } from './detect.js';
 import { importMutationReport } from './import.js';
 import { countMutants, emptyCounts, type MutationRunResult, type MutationRunStatus } from './schema.js';
+import { writeNarrowedVitestConfig } from './vitest-config.js';
 
 export interface RunMutationOptions {
   root: string;
@@ -30,6 +31,15 @@ export interface RunMutationOptions {
   mutatorBin?: string;
   /** Do not fall back to the adapter's own mutator when the project has none (default false). */
   projectMutatorOnly?: boolean;
+  /**
+   * Test files (POSIX, relative to the root) that can kill these mutants. When given, mutator runs only
+   * them, through a generated Vitest config; an empty list means no test reaches the code in scope.
+   */
+  testFiles?: string[];
+  /** Vitest config passed as `--config`. */
+  configPath?: string;
+  /** Pass `--no-typecheck`. */
+  noTypecheck?: boolean;
 }
 
 const MUTANT_KEY = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
@@ -67,6 +77,8 @@ export function buildMutatorArgs(options: RunMutationOptions): string[] {
     }
     args.push('--include', glob);
   }
+  if (options.configPath !== undefined) args.push('--config', options.configPath);
+  if (options.noTypecheck) args.push('--no-typecheck');
   if (options.killMatrix) args.push('--kill-matrix');
   for (const key of options.only ?? []) {
     if (!MUTANT_KEY.test(key)) throw new TypeError(`invalid mutant key for --only: ${JSON.stringify(key)}`);
@@ -74,6 +86,36 @@ export function buildMutatorArgs(options: RunMutationOptions): string[] {
   }
   args.push('--time-budget', String(timeBudgetSeconds(options.config.mutation.timeoutMs)));
   return args;
+}
+
+/**
+ * True when `<root>/tsconfig.json` lists no files itself and only references other projects. mutator
+ * type-checks mutants against exactly that file, and with no files in it every check fails.
+ */
+export function rootTsconfigHasNoFiles(root: string): boolean {
+  let text: string;
+  try {
+    text = readFileSync(path.join(root, 'tsconfig.json'), 'utf8');
+  } catch {
+    return false;
+  }
+  // tsconfig allows comments and trailing commas; strip them outside strings.
+  const json = text
+    .replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (m) => (m.startsWith('"') ? m : ''))
+    .replace(/,(\s*[}\]])/g, '$1');
+  try {
+    const config = JSON.parse(json) as Record<string, unknown>;
+    return (
+      Array.isArray(config.files) &&
+      config.files.length === 0 &&
+      config.include === undefined &&
+      config.extends === undefined &&
+      Array.isArray(config.references) &&
+      config.references.length > 0
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -127,9 +169,18 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   }
   // Checked before anything is created or spawned: mutator writes wherever --report-dir points.
   const reportDir = confineReportDir(options.root, options.reportDir);
+  const noTypecheck = options.noTypecheck ?? rootTsconfigHasNoFiles(options.root);
+  if (noTypecheck && options.noTypecheck === undefined)
+    warnings.push(
+      'tsconfig.json at the root only references other projects, and mutator type-checks against that file alone: mutants were not type-checked, so some survivors may be type errors',
+    );
+  if (options.testFiles?.length === 0) {
+    warnings.push('no test imports the code in scope; mutation was not run');
+    return result('succeeded', { detail: 'no test can kill these mutants' });
+  }
   let args: string[];
   try {
-    args = buildMutatorArgs({ ...options, reportDir });
+    args = buildMutatorArgs({ ...options, reportDir, noTypecheck });
   } catch (error) {
     return result('error', { detail: (error as Error).message });
   }
@@ -156,6 +207,8 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     (options.scope?.length ?? 0) > 0 && '--include',
     options.killMatrix && '--kill-matrix',
     (options.only?.length ?? 0) > 0 && '--only',
+    options.testFiles !== undefined && '--config',
+    noTypecheck && '--[no-]typecheck',
     '--time-budget',
     'agent',
     'json',
@@ -172,6 +225,14 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   }
 
   mkdirSync(reportDir, { recursive: true });
+  if (options.testFiles !== undefined) {
+    const configPath = writeNarrowedVitestConfig({
+      root: options.root,
+      dir: reportDir,
+      testFiles: options.testFiles,
+    });
+    args = buildMutatorArgs({ ...options, reportDir, configPath, noTypecheck });
+  }
   const command = [process.execPath, detection.binPath, ...args];
   const run = await runProjectTests(process.execPath, [detection.binPath, ...args], {
     cwd: options.root,
@@ -188,7 +249,11 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   if (run.timedOut) {
     return result('timeout', {
       ...common,
-      detail: `mutator exceeded mutation.timeoutMs (${options.config.mutation.timeoutMs} ms) and was killed`,
+      detail: `mutator exceeded mutation.timeoutMs (${options.config.mutation.timeoutMs} ms) and was killed${
+        options.testFiles === undefined
+          ? ' (it ran every test the project config selects)'
+          : ` (it ran ${options.testFiles.length} test file(s) that import the code in scope)`
+      }`,
     });
   }
   if (options.signal?.aborted)

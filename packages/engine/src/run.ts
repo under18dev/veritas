@@ -73,7 +73,7 @@ import {
 import { type PbtResult, runPropertyTest } from '@under18dev/veritas-property-testing';
 import { proveWithLean } from '@under18dev/veritas-solver-lean';
 import { type DiscoveryResult, discoverEvidence } from '@under18dev/veritas-spec-discovery';
-import { inventoryTests, type TestInventory } from '@under18dev/veritas-test-inventory';
+import { inventoryTests, isTestSupportPath, type TestInventory } from '@under18dev/veritas-test-inventory';
 import { ARTIFACTS } from './artifacts.js';
 import { extractWithLlm } from './llm-extract.js';
 import { createLlmProvider } from './llm-providers.js';
@@ -289,6 +289,14 @@ async function runInContext(
 
   const stages: Stage[] = [];
   const add = (stage: Stage) => wanted.has(stage.name) && stages.push(stage);
+  const mutationTestFiles = (mapped: TestInventory | undefined): string[] | undefined => {
+    if (config.analysis.testFramework !== 'vitest') return undefined;
+    try {
+      return selectMutationTestFiles(mapped ?? inventoryTests({ root, config }), config, options.scope);
+    } catch {
+      return undefined;
+    }
+  };
 
   add({
     name: 'index',
@@ -460,7 +468,7 @@ async function runInContext(
   add({
     name: 'mutate',
     dependsOn: [],
-    run: async () => {
+    run: async (ctx) => {
       if (imported) {
         const result = imported;
         mutants = result.mutants;
@@ -481,12 +489,14 @@ async function runInContext(
           ],
         };
       }
+      const testFiles = mutationTestFiles(ctx.outputs.get('map') as TestInventory | undefined);
       const cacheKey = cache
         ? mutationCacheKey(cache, root, {
             configHash,
             since: options.since,
             scope: options.scope,
             killMatrix: Boolean(options.killMatrix),
+            testFiles,
           })
         : null;
       const cached = cache && cacheKey ? cache.get('mutation', cacheKey, MutationRunResult) : undefined;
@@ -500,6 +510,7 @@ async function runInContext(
           ...(options.since ? { since: options.since } : {}),
           ...(options.scope ? { scope: options.scope } : {}),
           ...(options.killMatrix ? { killMatrix: true } : {}),
+          ...(testFiles ? { testFiles } : {}),
         }));
       // Only a complete mutation run is reused; a failed or unsupported one is always retried.
       if (!cached && cache && cacheKey && result.status === 'succeeded')
@@ -1025,6 +1036,35 @@ async function runInContext(
  * the selection (`--since` resolved to a commit, scope). Without git the files cannot be listed and the cache is
  * not used.
  */
+/**
+ * Test files mutator needs to run. A test file is left out only on evidence that it cannot kill these
+ * mutants: it imports project sources, none of them in scope; or it imports none and only runs code out of
+ * process (a child process or a dynamic import, which executes the build output, not the mutated source).
+ * A test that imports no source at all is kept, so a failing baseline still shows.
+ */
+export function selectMutationTestFiles(
+  inventory: Pick<TestInventory, 'files' | 'tests'>,
+  config: VeritasConfig,
+  scope?: string[],
+): string[] {
+  const { include, exclude, testInclude } = config.analysis;
+  const matches = (file: string, globs: string[]) => globs.some((glob) => path.posix.matchesGlob(file, glob));
+  const isSource = (file: string) =>
+    matches(file, include) &&
+    !matches(file, exclude) &&
+    !matches(file, testInclude) &&
+    !isTestSupportPath(file);
+  const inScope = (file: string) => (scope?.length ? matches(file, scope) : isSource(file));
+  const opaque = new Set(
+    inventory.tests.filter((test) => test.suspicions.includes('opaque_call')).map((test) => test.file),
+  );
+  return inventory.files
+    .filter((file) =>
+      file.dependencies.some(isSource) ? file.dependencies.some(inScope) : !opaque.has(file.path),
+    )
+    .map((file) => file.path);
+}
+
 export function mutationCacheKey(
   cache: ContentCache,
   root: string,
@@ -1033,6 +1073,7 @@ export function mutationCacheKey(
     since?: string | undefined;
     scope?: string[] | undefined;
     killMatrix?: boolean;
+    testFiles?: string[] | undefined;
   },
 ): string | null {
   const listed = gitOutput(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
@@ -1067,6 +1108,7 @@ export function mutationCacheKey(
     since: since?.trim() ?? null,
     scope: selection.scope ?? [],
     killMatrix: selection.killMatrix ?? false,
+    testFiles: selection.testFiles ?? null,
   });
 }
 

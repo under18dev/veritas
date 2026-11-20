@@ -54,6 +54,30 @@ describe('module resolution without a tsconfig', () => {
   });
 });
 
+describe('test file dependencies', () => {
+  it('lists the local files a test file reaches through imports, and nothing outside the project', () => {
+    const result = inventory({
+      'src/a.ts': "import { b } from './b.js';\nexport const a = () => b();\n",
+      'src/b.ts': "export const b = () => 1;\nexport type { Shape } from './types.js';\n",
+      'src/types.ts': 'export type Shape = { x: number };\n',
+      'src/unused.ts': 'export const unused = 1;\n',
+      'test/a.test.ts': `import { expect, it } from 'vitest';
+import path from 'node:path';
+import { missing } from 'not-installed';
+import { a } from '../src/a.js';
+it('a', async () => { expect(a()).toBe(1); await import('../src/b.js'); path.sep; missing; });
+`,
+    });
+
+    expect(result.files).toEqual([
+      expect.objectContaining({
+        path: 'test/a.test.ts',
+        dependencies: ['src/a.ts', 'src/b.ts', 'src/types.ts'],
+      }),
+    ]);
+  });
+});
+
 describe('module resolution that fails', () => {
   const nodenext = JSON.stringify({ compilerOptions: { module: 'nodenext', moduleResolution: 'nodenext' } });
 

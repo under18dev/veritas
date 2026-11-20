@@ -16,6 +16,8 @@ export const OPTIONAL_CAPABILITIES = [
   '--include',
   '--kill-matrix',
   '--only',
+  '--config',
+  '--[no-]typecheck',
   '--time-budget',
   'agent',
   'json',
@@ -130,7 +132,7 @@ export async function detectMutator(root: string, options: DetectOptions = {}): 
   }
   const text = help.stdout + help.stderr;
   const capabilities = [...REQUIRED_CAPABILITIES, ...OPTIONAL_CAPABILITIES].filter((flag) =>
-    new RegExp(`(^|[\\s,])${flag.replace(/[-]/g, '\\-')}(?=[\\s,)]|$)`, 'm').test(text),
+    new RegExp(`(^|[\\s,])${flag.replace(/[-[\]]/g, '\\$&')}(?=[\\s,)]|$)`, 'm').test(text),
   );
   const missing = REQUIRED_CAPABILITIES.filter((flag) => !capabilities.includes(flag));
   const versionNote =
