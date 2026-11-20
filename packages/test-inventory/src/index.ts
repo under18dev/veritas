@@ -228,18 +228,32 @@ function analyzeTest(
   const body = callback && isFunction(callback) ? callback.body : undefined;
   const calls: { node: ts.CallExpression; symbol: string }[] = [];
   const assertions: ts.CallExpression[] = [];
-  const localCalls = new Map<string, { node: ts.CallExpression; symbol: string }>();
+  // Variables holding (something derived from) a project call's result, keyed by symbol so shadowing is respected.
+  const localCalls = new Map<ts.Symbol, ts.CallExpression[]>();
+  const trackedCalls = (expression: ts.Node): ts.CallExpression[] => {
+    const found = new Set<ts.CallExpression>();
+    for (const item of [expression, ...descendants(expression)]) {
+      if (!ts.isIdentifier(item)) continue;
+      const symbol = checker.getSymbolAtLocation(item);
+      for (const call of (symbol && localCalls.get(symbol)) ?? []) found.add(call);
+    }
+    return [...found];
+  };
   const unresolvedImports = new Set<string>();
   const nodes = body ? descendants(body) : [];
   for (const node of nodes) {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer &&
-      ts.isCallExpression(node.initializer)
-    ) {
-      const resolved = resolveProjectCall(node.initializer, checker, projectSet, root);
-      if (resolved) localCalls.set(node.name.text, { node: node.initializer, symbol: resolved });
+    if (ts.isVariableDeclaration(node) && node.initializer) {
+      const initializer = node.initializer;
+      const projectCall = [initializer, ...descendants(initializer)].find(
+        (item): item is ts.CallExpression =>
+          ts.isCallExpression(item) && resolveProjectCall(item, checker, projectSet, root) !== undefined,
+      );
+      const sources = projectCall ? [projectCall] : trackedCalls(initializer);
+      if (sources.length > 0)
+        for (const identifier of bindingIdentifiers(node.name)) {
+          const symbol = checker.getSymbolAtLocation(identifier);
+          if (symbol) localCalls.set(symbol, sources);
+        }
     }
     if (!ts.isCallExpression(node)) continue;
     const resolved = resolveProjectCall(node, checker, projectSet, root);
@@ -256,10 +270,7 @@ function analyzeTest(
     const argument = assertion.arguments[0];
     if (!argument) continue;
     for (const call of calls) if (contains(argument, call.node)) asserted.add(call.node.getStart(source));
-    if (ts.isIdentifier(argument)) {
-      const call = localCalls.get(argument.text);
-      if (call) asserted.add(call.node.getStart(source));
-    }
+    for (const call of trackedCalls(argument)) asserted.add(call.getStart(source));
   }
   // A value passed to a helper of this file that asserts on that parameter is asserted too.
   const helpers = assertingHelpers(source);
@@ -273,10 +284,7 @@ function analyzeTest(
       const argument = node.arguments[index];
       if (!argument) continue;
       for (const call of calls) if (contains(argument, call.node)) asserted.add(call.node.getStart(source));
-      if (ts.isIdentifier(argument)) {
-        const call = localCalls.get(argument.text);
-        if (call) asserted.add(call.node.getStart(source));
-      }
+      for (const call of trackedCalls(argument)) asserted.add(call.getStart(source));
     }
   }
   const relativeFile = toPosixRelative(root, file);
@@ -340,6 +348,13 @@ function resolveProjectCall(
   root: string,
 ): string | undefined {
   return projectSymbolId(checker.getSymbolAtLocation(node.expression), checker, projectSet, root);
+}
+
+function bindingIdentifiers(name: ts.BindingName): ts.Identifier[] {
+  if (ts.isIdentifier(name)) return [name];
+  return name.elements.flatMap((element) =>
+    ts.isBindingElement(element) ? bindingIdentifiers(element.name) : [],
+  );
 }
 
 /** The relative module specifier a callee is imported from, when TypeScript cannot resolve that module. */

@@ -70,6 +70,49 @@ describe('assertion evidence', () => {
     expect(asserted('shadowed helper')).toBe(false);
   });
 
+  it('links assertions on properties of awaited, destructured and derived call results', () => {
+    const root = tempProject({
+      'src/math.ts': `
+        export function fn(value: number) { return { value: value + 1, items: [value] }; }
+        export async function fnAsync(value: number) { return { value: value + 1 }; }
+        export function list(): number[] { return [1]; }
+      `,
+      'test/derived.test.ts': `
+        import { expect, test } from 'vitest';
+        import { fn, fnAsync, list } from '../src/math.js';
+        test('property', () => { const a = fn(1); expect(a.value).toBe(2); });
+        test('awaited', async () => { const r = await fnAsync(1); expect(r.value).toBe(2); });
+        test('object pattern', () => { const { value } = fn(1); expect(value).toBe(2); });
+        test('array pattern', () => { const [first] = list(); expect(first).toBe(1); });
+        test('derived', () => { const a = fn(1); const v = a.value; expect(v).toBe(2); });
+        test('member of call', () => { const v = fn(1).value; expect(v).toBe(2); });
+        test('method chain', () => { const a = fn(1); expect(a.items.map((x) => x * 2)).toEqual([2]); });
+        test('unrelated local', () => { const a = fn(1); const k = 2; expect(k).toBe(2); });
+        test('shadowed', () => {
+          const a = fn(1);
+          const inner = () => { const a = 2; expect(a).toBe(2); };
+          inner();
+        });
+      `,
+    });
+    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+    const asserted = (name: string) =>
+      inventory.tests.find((test) => test.name === name)?.targetCalls.map((call) => call.asserted);
+
+    for (const name of [
+      'property',
+      'awaited',
+      'object pattern',
+      'array pattern',
+      'derived',
+      'member of call',
+      'method chain',
+    ])
+      expect(asserted(name), name).toEqual([true]);
+    expect(asserted('unrelated local')).toEqual([false]);
+    expect(asserted('shadowed')).toEqual([false]);
+  });
+
   it('counts expect.assertions, assert.equal, and snapshot matcher variants', () => {
     const root = tempProject({
       'src/math.ts': 'export function fn(value: number): number { return value; }\n',
