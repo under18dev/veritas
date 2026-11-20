@@ -122,9 +122,26 @@ describe('writeNarrowedVitestConfig', () => {
 
     return listed.stdout
       .split('\n')
-      .map((line) => line.replace(/^\[[^\]]*\]\s*/, '').trim())
+      .map((line) =>
+        line
+          .replace(/^\[[^\]]*\]\s*/, '')
+          .trim()
+          .split('\\')
+          .join('/'),
+      )
       .filter(Boolean)
       .sort();
+  };
+
+  // Vitest prints paths relative to its own view of the root, which on Windows may differ from ours in
+  // 8.3 short names (RUNNER~1 vs runneradmin), so compare by the path inside the project.
+  const expectListed = (root: string, configPath: string, expected: string[]) => {
+    const listed = listFiles(root, configPath);
+
+    expect(listed).toHaveLength(expected.length);
+
+    for (const [i, file] of expected.entries())
+      expect(listed[i] === file || listed[i]?.endsWith(`/${file}`), `${listed[i]} is ${file}`).toBe(true);
   };
 
   it('keeps only the selected tests in the project config and drops projects left without one', () => {
@@ -146,7 +163,7 @@ describe('writeNarrowedVitestConfig', () => {
     const dir = path.join(root, '.veritas/runs/r/mutation');
     mkdirSync(dir, { recursive: true });
     const configPath = writeNarrowedVitestConfig({ root, dir, testFiles: ['packages/a/test/a.test.mjs'] });
-    expect(listFiles(root, configPath)).toEqual(['packages/a/test/a.test.mjs']);
+    expectListed(root, configPath, ['packages/a/test/a.test.mjs']);
   }, 90_000);
 
   it('works without a project config', () => {
@@ -159,6 +176,6 @@ describe('writeNarrowedVitestConfig', () => {
     mkdirSync(dir, { recursive: true });
     const configPath = writeNarrowedVitestConfig({ root, dir, testFiles: ['test/b.test.mjs'] });
     expect(readFileSync(configPath, 'utf8')).toContain('const baseModule = {};');
-    expect(listFiles(root, configPath)).toEqual(['test/b.test.mjs']);
+    expectListed(root, configPath, ['test/b.test.mjs']);
   }, 90_000);
 });
