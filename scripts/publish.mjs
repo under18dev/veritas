@@ -22,12 +22,18 @@ const expectIndex = args.indexOf('--expect');
 const expected = expectIndex >= 0 ? args[expectIndex + 1]?.replace(/^v/, '') : undefined;
 const inActions = process.env.GITHUB_ACTIONS === 'true';
 
+// On Windows npm and pnpm are .cmd shims, which Node.js only starts through a shell; quote every argument so
+// paths with spaces stay one argument.
+const quote = (arg) => `"${arg.replaceAll('"', '""')}"`;
 const run = (command, commandArgs, options = {}) => {
-  const result = spawnSync(command, commandArgs, {
-    encoding: 'utf8',
-    shell: process.platform === 'win32',
-    ...options,
-  });
+  const result =
+    process.platform === 'win32'
+      ? spawnSync([command, ...commandArgs].map(quote).join(' '), {
+          encoding: 'utf8',
+          shell: true,
+          ...options,
+        })
+      : spawnSync(command, commandArgs, { encoding: 'utf8', ...options });
 
   return { code: result.status ?? 1, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
 };
@@ -78,6 +84,15 @@ for (const { dir, manifest } of ordered) {
   if (existing.code === 0 && existing.stdout.trim() === version) {
     console.log(`skip    ${id} (already published)`);
     continue;
+  }
+
+  // Publish only on a confirmed "not found"; a network or registry error must not be read as "not published".
+  if (existing.code === 0 || !/\bE404\b/.test(existing.stderr)) {
+    console.error(
+      `check   ${id} failed: cannot tell whether it is published\n${existing.stderr}${existing.stdout}`,
+    );
+    failed = true;
+    break;
   }
 
   const before = new Set(readdirSync(out));
