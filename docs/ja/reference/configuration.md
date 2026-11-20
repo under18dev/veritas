@@ -30,7 +30,7 @@ Veritas が設定を読む場所、すべての設定の既定値と使える値
 - `formal.integerDomain` は、形式検証で使う整数の範囲です。境界は 10 進数の文字列で書きます。
 - `policy.inconclusiveBehavior: "fail"` にすると、判定できない結果があれば終了コード 4 になります。CI のゲートに向いています。
 - `policy.maxNewSurvivors: 0` にすると、範囲内の mutant が 1 つでも生き残れば失敗します。
-- `storage.retainRuns: 10` で、新しいほうから 10 個の実行ディレクトリを残します。
+- `storage.retainRuns: 10` で、終わった実行を新しいほうから 10 個残します。実行中のものは削除しません。
 
 ## 設定ファイルの場所
 

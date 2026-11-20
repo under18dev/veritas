@@ -142,4 +142,4 @@ veritas report --format json
 veritas report --run <run-id>           # 指定した実行
 ```
 
-実行ごとに `report.json`、`report.md`、`report.html`、`report.sarif` も実行ディレクトリに書き出されます。節の構成とファイルは[レポートと成果物](/ja/reference/reports)にあります。
+`veritas run` と `veritas prove` は、`reports.formats` に指定したレポートファイル（既定では `report.json`、`report.md`、`report.html`、`report.sarif`）も実行ディレクトリに書き出します。ほかのコマンドの実行については、`veritas report` で必要なときに出力できます。節の構成とファイルは[レポートと成果物](/ja/reference/reports)にあります。

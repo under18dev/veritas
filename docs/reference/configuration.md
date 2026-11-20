@@ -30,7 +30,7 @@ This page describes where Veritas reads its configuration, every setting with it
 - `formal.integerDomain` sets the integer range of formal checks. The bounds are decimal strings.
 - `policy.inconclusiveBehavior: "fail"` makes inconclusive results end with exit code 4, which suits a CI gate.
 - `policy.maxNewSurvivors: 0` fails the run when any mutant in scope survives.
-- `storage.retainRuns: 10` keeps the ten most recent run directories.
+- `storage.retainRuns: 10` keeps the ten most recent finished runs; runs still in progress are never removed.
 
 ## Where configuration lives
 

@@ -142,4 +142,4 @@ veritas report --format json
 veritas report --run <run-id>           # a specific run
 ```
 
-Every run also writes `report.json`, `report.md`, `report.html` and `report.sarif` to its run directory. [Reports and artifacts](/reference/reports) describes the sections and files.
+`veritas run` and `veritas prove` also write the report files listed in `reports.formats` (by default `report.json`, `report.md`, `report.html` and `report.sarif`) to the run directory; for runs of other commands, `veritas report` renders them on request. [Reports and artifacts](/reference/reports) describes the sections and files.
