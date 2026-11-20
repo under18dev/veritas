@@ -1,7 +1,6 @@
 {
   "name": "@under18dev/veritas-github-action",
   "version": "0.1.1",
-  "private": true,
   "description": "GitHub Action running Veritas on pull requests",
   "license": "Apache-2.0",
   "repository": {
@@ -16,9 +15,14 @@
       "import": "./dist/index.js"
     }
   },
+  "bin": {
+    "veritas-github-action": "dist/main.js"
+  },
   "files": [
     "dist",
-    "action.yml"
+    "action.yml",
+    "LICENSE",
+    "README.md"
   ],
   "engines": {
     "node": ">=24"

@@ -306,4 +306,33 @@ describe('main end to end', { timeout: 300_000 }, () => {
     expect(outputValues(strict.output)['exit-code']).toBe('4');
     expect(existsSync(path.join(project, '.veritas'))).toBe(false);
   });
+
+  it('uses the configured inconclusive policy when the input is left empty', async () => {
+    const project = mkdtempSync(path.join(tmpdir(), 'veritas-action-policy-'));
+    writeFileSync(path.join(project, 'main.py'), 'print("not a node project")\n');
+    mkdirSync(path.join(project, '.veritas'));
+    writeFileSync(
+      path.join(project, '.veritas/config.json'),
+      JSON.stringify({ policy: { inconclusiveBehavior: 'fail' } }),
+    );
+    git(project, 'init', '-q');
+    git(project, '-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'add', '-A');
+    git(
+      project,
+      '-c',
+      'user.email=fixture@example.invalid',
+      '-c',
+      'user.name=fixture',
+      'commit',
+      '-qm',
+      'base',
+    );
+    const base = git(project, 'rev-parse', 'HEAD');
+    const files = configure(project, base, { inconclusive: '' });
+    expect(await main()).toBe(4);
+    expect(outputValues(files.output)['exit-code']).toBe('4');
+    // An explicit input still wins over the configuration.
+    configure(project, base, { inconclusive: 'warn' });
+    expect(await main()).toBe(0);
+  });
 });

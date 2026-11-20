@@ -13,6 +13,16 @@ if (!version || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
   process.exit(2);
 }
 
+// The GitHub Action runs the published package of its own version.
+const action = path.join(repo, 'packages/github-action/action.yml');
+writeFileSync(
+  action,
+  readFileSync(action, 'utf8').replace(
+    /@under18dev\/veritas-github-action@[0-9A-Za-z.+-]+/,
+    `@under18dev/veritas-github-action@${version}`,
+  ),
+);
+
 for (const { dir } of workspacePackages(repo)) {
   const file = path.join(repo, dir, 'package.json');
   const text = readFileSync(file, 'utf8');

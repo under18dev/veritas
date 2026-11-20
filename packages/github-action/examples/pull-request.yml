@@ -9,16 +9,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # The base commit is needed to compare against it and to skip documentation-only changes.
+          fetch-depth: 0
           persist-credentials: false
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           # Node.js 25+ on PATH runs project code without network access.
           node-version: 26
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: veritas/github-action@v1
+      - uses: under18dev/veritas/packages/github-action@v0.1.1
         with:
           profile: standard
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: veritas-runs
           path: .veritas/runs

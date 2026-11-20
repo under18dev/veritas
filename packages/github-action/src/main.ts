@@ -1,4 +1,5 @@
-import { appendFileSync } from 'node:fs';
+#!/usr/bin/env node
+import { appendFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -102,7 +103,10 @@ export async function main(): Promise<number> {
     return 0;
   }
   const project = detectProject(root);
-  const behaviorInput = input('inconclusive', 'warn');
+  // An explicit input wins; an empty one (the default) uses the configured policy, then 'warn'.
+  const configured = await loadConfig(root).catch(() => null);
+  const behaviorInput =
+    process.env.INPUT_INCONCLUSIVE || (configured?.config.policy.inconclusiveBehavior ?? 'warn');
 
   if (!project.hasPackageJson) return degraded('no package.json found', behaviorInput, event.fromFork);
   const doctor = await runDoctor(root, null);
@@ -112,12 +116,7 @@ export async function main(): Promise<number> {
   const profile = input('profile', 'standard') as Profile;
 
   if (!PROFILE_STAGES[profile]) throw new Error(`unsupported profile: ${profile}`);
-  const configured = await loadConfig(root).catch(() => null);
-  const behavior = (
-    process.env.INPUT_INCONCLUSIVE
-      ? behaviorInput
-      : (configured?.config.policy.inconclusiveBehavior ?? 'warn')
-  ) as 'warn' | 'fail' | 'ignore';
+  const behavior = behaviorInput as 'warn' | 'fail' | 'ignore';
   const summary = await runVeritas({
     root,
     command: 'github-action',
@@ -130,8 +129,9 @@ export async function main(): Promise<number> {
     behavior === 'fail' && summary.decision.reasons.some((reason) => reason.includes('inconclusive'))
       ? { ...summary.decision, verdict: 'inconclusive' as const, exitCode: 4 as const }
       : summary.decision;
-  // Workspace-relative POSIX path, the same on every runner OS and usable in later workflow steps.
-  const reportPath = path.relative(root, path.join(summary.dir, 'run.json')).split(path.sep).join('/');
+  // Workspace-relative POSIX path of the run's run.json (the run directory holds the reports), the same on every
+  // runner OS and usable in later workflow steps.
+  const reportPath = path.relative(workspace, path.join(summary.dir, 'run.json')).split(path.sep).join('/');
   writeOutput({
     verdict: decision.verdict,
     'exit-code': String(decision.exitCode),
@@ -163,7 +163,16 @@ export async function main(): Promise<number> {
   return decision.exitCode;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+// Run when started directly or through the package's bin link (node_modules/.bin, npx), which resolves to this file.
+const started = (() => {
+  try {
+    return process.argv[1] ? realpathSync(process.argv[1]) : '';
+  } catch {
+    return '';
+  }
+})();
+
+if (started && started === realpathSync(fileURLToPath(import.meta.url)))
   main()
     .then((code) => {
       process.exitCode = code;

@@ -2,7 +2,15 @@
 // the README quick start there (on the discount example), followed by a markdown report.
 // Exits non-zero if any step fails or the expected boundary finding is missing.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,8 +44,6 @@ run(
     './packages/*',
     '--filter',
     './packages/llm-providers/*',
-    '--filter',
-    '!@under18dev/veritas-github-action',
     'pack',
     '--pack-destination',
     tgz,
@@ -121,4 +127,31 @@ veritas('report', '--format', 'markdown');
 
 if (!run(pnpm, ['exec', 'veritas-mcp', '--help'], project).includes('Usage: veritas-mcp'))
   throw new Error('veritas-mcp is not usable from the main package');
+// The GitHub Action installs its own package with npx; it must install alone and start from its bin. Without a
+// GitHub event it refuses to run, which shows that it ran.
+const actionProject = path.join(work, 'action');
+mkdirSync(actionProject);
+writeFileSync(
+  path.join(actionProject, 'package.json'),
+  JSON.stringify({
+    name: 'action-install-check',
+    private: true,
+    devDependencies: { '@under18dev/veritas-github-action': tarballs['@under18dev/veritas-github-action'] },
+  }),
+);
+writeFileSync(
+  path.join(actionProject, 'pnpm-workspace.yaml'),
+  readFileSync(path.join(project, 'pnpm-workspace.yaml')),
+);
+run(pnpm, ['install'], actionProject);
+const action = spawnSync(pnpm, ['exec', 'veritas-github-action'], {
+  cwd: actionProject,
+  encoding: 'utf8',
+  shell: process.platform === 'win32',
+  env: { ...process.env, GITHUB_EVENT_NAME: '', GITHUB_WORKSPACE: actionProject },
+});
+process.stdout.write(`$ ${pnpm} exec veritas-github-action -> ${action.status}\n`);
+
+if (action.status === 0 || !action.stderr.trim())
+  throw new Error(`veritas-github-action did not start from its bin:\n${action.stdout}${action.stderr}`);
 console.log(`clean install check passed in ${project}`);

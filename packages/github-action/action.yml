@@ -1,18 +1,39 @@
 name: Veritas
 description: Run offline Veritas verification in GitHub Actions
 inputs:
-  profile: { description: Verification profile, default: standard }
-  working-directory: { description: Project directory, default: . }
-  since: { description: Base SHA, default: "" }
-  inconclusive: { description: Policy for inconclusive results, default: warn }
+  profile: { description: "Verification profile: quick, standard or deep", default: standard }
+  working-directory: { description: Project directory, relative to the workspace, default: . }
+  since: { description: Base SHA; defaults to the pull request base or the push before, default: "" }
+  inconclusive:
+    description: "Policy for inconclusive results (warn, fail or ignore); empty uses policy.inconclusiveBehavior from the configuration"
+    default: ""
   summary: { description: Write a step summary, default: "true" }
 outputs:
-  verdict: { description: Policy verdict }
-  exit-code: { description: Veritas exit code }
-  run-id: { description: Run identifier }
-  confirmed-findings: { description: Number of confirmed findings }
-  report-path: { description: Path to the run report }
-  from-fork: { description: Whether the pull request comes from a fork }
+  verdict: { description: Policy verdict, value: "${{ steps.veritas.outputs.verdict }}" }
+  exit-code: { description: Veritas exit code, value: "${{ steps.veritas.outputs.exit-code }}" }
+  run-id: { description: Run identifier, value: "${{ steps.veritas.outputs.run-id }}" }
+  confirmed-findings:
+    description: Number of confirmed findings
+    value: "${{ steps.veritas.outputs.confirmed-findings }}"
+  report-path:
+    description: Workspace-relative path of the run's run.json; the reports are next to it
+    value: "${{ steps.veritas.outputs.report-path }}"
+  from-fork:
+    {
+      description: Whether the pull request comes from a fork,
+      value: "${{ steps.veritas.outputs.from-fork }}",
+    }
 runs:
-  using: node24
-  main: dist/main.js
+  using: composite
+  steps:
+    # Runs the published package of this exact version with the Node.js the job set up (25+ blocks network access
+    # from project code). The version is set by scripts/set-version.mjs together with the packages.
+    - id: veritas
+      shell: bash
+      env:
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_SINCE: ${{ inputs.since }}
+        INPUT_INCONCLUSIVE: ${{ inputs.inconclusive }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
+      run: npx --yes @under18dev/veritas-github-action@0.1.1
