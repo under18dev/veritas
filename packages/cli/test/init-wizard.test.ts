@@ -1,6 +1,6 @@
 import { type ProjectInfo, VeritasConfig } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
-import { githubRepoFromRemote } from '../src/commands/init.js';
+import { asksQuestions, githubRepoFromRemote, installerCommand, perform } from '../src/commands/init.js';
 import {
   addDevDependency,
   type Prompter,
@@ -79,6 +79,22 @@ describe('init wizard', () => {
     expect(VeritasConfig.parse(result.config)).toEqual(result.config);
   });
 
+  it('does not run codex to check it before the user allows its file reads', async () => {
+    const probed: [string, boolean | undefined][] = [];
+    const env = environment({
+      llm: async (provider, allow) => {
+        probed.push([provider, allow]);
+
+        return { state: 'unavailable', detail: 'x' };
+      },
+    });
+    await runInitWizard(proposed, env, scripted(['1']));
+    expect(probed.some(([p]) => p === 'codex')).toBe(false);
+    probed.length = 0;
+    await runInitWizard(proposed, env, scripted(['4', 'y']));
+    expect(probed.filter(([p]) => p === 'codex')).toEqual([['codex', true]]);
+  });
+
   it('enables codex only when the user allows its file reads', async () => {
     const declined = await runInitWizard(proposed, environment(), scripted(['4', 'n']));
     expect(declined.config.llm).toMatchObject({ provider: 'none', allowCodexFileReads: false });
@@ -109,12 +125,68 @@ describe('init wizard', () => {
   });
 });
 
+describe('init outside the questions', () => {
+  it('never asks with --json or in CI', () => {
+    expect(asksQuestions(undefined, {})).toBe(true);
+    expect(asksQuestions(true, {})).toBe(false);
+    expect(asksQuestions(undefined, { CI: 'true' })).toBe(false);
+  });
+
+  it('keeps proofs on Z3 when Lean cannot be installed, and goes on when the package manager fails', async () => {
+    const lean = { ...proposed, formal: { ...proposed.formal, backend: 'lean' as const } };
+    const ran: string[][] = [];
+    const tools = {
+      installLean: async () => false,
+      leanAvailable: async () => false,
+      run: async (command: string, args: string[]) => {
+        ran.push([command, ...args]);
+
+        return false;
+      },
+    };
+    const next = await perform(
+      [
+        { kind: 'install-lean' },
+        { kind: 'add-mutator', command: ['pnpm', 'add', '-D', '@mizchi/mutator@0.4.5'] },
+      ],
+      lean,
+      '/p',
+      tools,
+    );
+    expect(next.formal.backend).toBe('z3');
+    expect(ran).toEqual([['pnpm', 'add', '-D', '@mizchi/mutator@0.4.5']]);
+    const kept = await perform([{ kind: 'install-lean' }], lean, '/p', {
+      ...tools,
+      installLean: async () => true,
+      leanAvailable: async () => true,
+    });
+    expect(kept.formal.backend).toBe('lean');
+  });
+});
+
 describe('helpers', () => {
   it('reads the GitHub repository of the origin remote', () => {
     expect(githubRepoFromRemote('git@github.com:acme/shop.git')).toBe('acme/shop');
     expect(githubRepoFromRemote('https://github.com/acme/shop')).toBe('acme/shop');
     expect(githubRepoFromRemote('https://gitlab.com/acme/shop.git')).toBeNull();
     expect(githubRepoFromRemote(null)).toBeNull();
+    // Only github.com itself.
+    expect(githubRepoFromRemote('https://evilgithub.com/acme/shop')).toBeNull();
+    expect(githubRepoFromRemote('git@notgithub.com:acme/shop.git')).toBeNull();
+    expect(githubRepoFromRemote('https://github.com.example.com/acme/shop')).toBeNull();
+    expect(githubRepoFromRemote('ssh://git@github.com/acme/shop.git')).toBe('acme/shop');
+  });
+
+  it('runs the elan installer without its menu, without changing PATH, with the stable toolchain', () => {
+    expect(installerCommand('/tmp/elan-init.sh', false)).toEqual([
+      'sh',
+      ['/tmp/elan-init.sh', '-y', '--default-toolchain', 'stable', '--no-modify-path'],
+    ]);
+    const [command, args] = installerCommand("C:\\Temp\\o'k\\elan-init.ps1", true);
+    expect(command).toBe('powershell');
+    expect(args.at(-1)).toBe(
+      "& 'C:\\Temp\\o''k\\elan-init.ps1' -NoPrompt $true -NoModifyPath $true -DefaultToolchain stable",
+    );
   });
 
   it('adds a dev dependency with the project package manager', () => {

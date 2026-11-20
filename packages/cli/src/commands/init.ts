@@ -22,7 +22,11 @@ import { type Prompter, runInitWizard, type WizardAction, type WizardEnvironment
 
 /** `owner/name` of a GitHub `origin` remote (`git@github.com:o/n.git`, `https://github.com/o/n`). */
 export function githubRepoFromRemote(url: string | null): string | null {
-  const match = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url?.trim() ?? '');
+  // Only github.com itself, so `evilgithub.com` or `github.com.example` is never taken for it.
+  const match =
+    /^(?:https?:\/\/(?:[^@/\s]+@)?github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(
+      url?.trim() ?? '',
+    );
 
   return match ? `${match[1]}/${match[2]}` : null;
 }
@@ -46,6 +50,26 @@ function runAttached(command: string, args: string[], cwd: string): Promise<bool
   });
 }
 
+/**
+ * How the official elan installer is run: without its menu, without changing PATH, with the stable toolchain.
+ * `veritas doctor` finds Lean in ~/.elan/bin. PowerShell gets the booleans through -Command, since -File passes them
+ * as strings.
+ */
+export function installerCommand(script: string, windows: boolean): [string, string[]] {
+  return windows
+    ? [
+        'powershell',
+        [
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          `& '${script.replaceAll("'", "''")}' -NoPrompt $true -NoModifyPath $true -DefaultToolchain stable`,
+        ],
+      ]
+    : ['sh', [script, '-y', '--default-toolchain', 'stable', '--no-modify-path']];
+}
+
 /** Download the official elan installer and run it; elan then installs the stable Lean 4 toolchain. */
 async function installLean(root: string): Promise<boolean> {
   const windows = process.platform === 'win32';
@@ -63,9 +87,7 @@ async function installLean(root: string): Promise<boolean> {
     const script = path.join(dir, path.basename(url));
     writeFileSync(script, await response.text());
 
-    return windows
-      ? await runAttached('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], root)
-      : await runAttached('sh', [script, '-y', '--default-toolchain', 'stable', '--no-modify-path'], root);
+    return await runAttached(...installerCommand(script, windows), root);
   } catch (error) {
     log(`could not install Lean: ${(error as Error).message}`);
 
@@ -81,14 +103,32 @@ function readlinePrompter(): Prompter & { close(): void } {
   return { ask: (question) => rl.question(question), say: (line) => log(line), close: () => rl.close() };
 }
 
+/** Whether `init` asks its questions: only for a person at a terminal, never with --json or in CI. */
+export function asksQuestions(json: boolean | undefined, env: NodeJS.ProcessEnv): boolean {
+  return !json && !isCi(env);
+}
+
+export interface Installers {
+  installLean(root: string): Promise<boolean>;
+  leanAvailable(root: string): Promise<boolean>;
+  run(command: string, args: string[], cwd: string): Promise<boolean>;
+}
+
+const installers: Installers = { installLean, leanAvailable, run: runAttached };
+
 /** Carry out what the user agreed to; a failed Lean install puts proofs back on Z3. */
-async function perform(actions: WizardAction[], config: VeritasConfig, root: string): Promise<VeritasConfig> {
+export async function perform(
+  actions: WizardAction[],
+  config: VeritasConfig,
+  root: string,
+  tools: Installers = installers,
+): Promise<VeritasConfig> {
   const next = structuredClone(config);
 
   for (const action of actions) {
     if (action.kind === 'install-lean') {
       log('installing Lean 4 with elan...');
-      const ok = (await installLean(root)) && (await leanAvailable(root));
+      const ok = (await tools.installLean(root)) && (await tools.leanAvailable(root));
 
       if (ok) log('Lean 4 is installed (in ~/.elan/bin, where `veritas doctor` also looks)');
       else {
@@ -99,7 +139,7 @@ async function perform(actions: WizardAction[], config: VeritasConfig, root: str
       log(`running ${action.command.join(' ')}...`);
       const [command, ...args] = action.command as [string, ...string[]];
 
-      if (!(await runAttached(command, args, root)))
+      if (!(await tools.run(command, args, root)))
         log(`\`${action.command.join(' ')}\` failed; mutation testing uses the copy bundled with Veritas`);
     }
   }
@@ -135,10 +175,11 @@ export async function initCommand(
 
     try {
       // The questions are for a person at a terminal: never with --json or in CI.
-      if (!opts.json && !isCi(process.env)) {
+      if (asksQuestions(opts.json, process.env)) {
         const env: WizardEnvironment = {
           project: detectProject(opts.root),
-          llm: (provider) => llmAvailability(provider, process.env, opts.root, { allowCodexFileReads: true }),
+          llm: (provider, allowCodexFileReads = false) =>
+            llmAvailability(provider, process.env, opts.root, { allowCodexFileReads }),
           leanAvailable: () => leanAvailable(opts.root),
           githubRepo: () => githubRepoFromRemote(gitOutput(opts.root, ['remote', 'get-url', 'origin'])),
           projectHasMutator: resolvePackageVersion(opts.root, '@mizchi/mutator') !== null,

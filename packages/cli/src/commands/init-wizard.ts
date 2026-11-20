@@ -9,7 +9,8 @@ export interface Prompter {
 /** What the wizard reads from the machine and the project. Injected so it can be tested. */
 export interface WizardEnvironment {
   project: ProjectInfo;
-  llm(provider: LlmProviderName): Promise<LlmAvailability>;
+  /** Whether a provider can be used; codex is only probed once the user allowed its file reads. */
+  llm(provider: LlmProviderName, allowCodexFileReads?: boolean): Promise<LlmAvailability>;
   /** Whether `lean` (and Lake) can be found, as `veritas doctor` looks for them. */
   leanAvailable(): Promise<boolean>;
   /** `owner/name` of the git remote `origin` on GitHub, if any. */
@@ -72,10 +73,13 @@ export async function runInitWizard(
   prompter.say('LLM provider (reads documentation that rules cannot; its proposals still need your review):');
 
   for (const [index, provider] of PROVIDERS.entries()) {
+    // codex is not run before the user allows its read-only shell to read local files.
     const state =
       provider.name === 'none'
         ? ''
-        : ` [${(await env.llm(provider.name)).state === 'available' ? 'available' : 'not set up'}]`;
+        : provider.name === 'codex'
+          ? ' [asks for permission first]'
+          : ` [${(await env.llm(provider.name)).state === 'available' ? 'available' : 'not set up'}]`;
     prompter.say(`  ${index + 1}) ${provider.label}${state}`);
   }
   const choice = Number.parseInt((await prompter.ask('Choose 1-5 [1]: ')).trim() || '1', 10);
@@ -89,8 +93,11 @@ export async function runInitWizard(
     } else prompter.say('  codex not enabled; keeping rule-based analysis');
   } else config.llm.provider = provider;
 
-  if (config.llm.provider !== 'none' && (await env.llm(config.llm.provider)).state !== 'available')
-    prompter.say(`  note: ${(await env.llm(config.llm.provider)).detail}`);
+  if (config.llm.provider !== 'none') {
+    const availability = await env.llm(config.llm.provider, config.llm.allowCodexFileReads);
+
+    if (availability.state !== 'available') prompter.say(`  note: ${availability.detail}`);
+  }
 
   // GitHub issues and pull requests.
   if (yes(await prompter.ask('Read GitHub issues and pull requests as specification evidence? [y/N] '))) {

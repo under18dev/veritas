@@ -85,7 +85,7 @@ Without `--yes`, `init` run in a terminal asks about the settings it cannot dete
 | Use Lean instead of Z3                                         | Sets `formal.backend` to `lean`. Lean covers integers and booleans only; Z3 also covers records and arrays                                                                                                                |
 | Add `@mizchi/mutator` to the project (only when it is missing) | Runs your package manager to add it as a dev dependency, so mutation testing uses the project's Vitest, test environments and plugins                                                                                     |
 
-You then see the resulting configuration and confirm writing it. Installs run only after that confirmation; if Lean cannot be installed, proofs stay on Z3. With `--yes`, `--json`, in CI or without a terminal, `init` asks nothing, installs nothing and writes the detected configuration.
+You then see the resulting configuration and confirm writing it. Installs run only after that confirmation; if Lean cannot be installed, proofs stay on Z3. With `--json` or in CI, these questions are skipped and nothing is installed; `init` still asks before writing the detected configuration. `--yes` writes it without asking, and is required without a terminal.
 
 ## Check the environment
 
