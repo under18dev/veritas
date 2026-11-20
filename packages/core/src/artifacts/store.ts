@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -273,8 +274,9 @@ export function listRuns(root: string): string[] {
 const RUN_ID = /^run-\d{8}T\d{9}Z-\d{3}-[0-9a-f]{6}$/;
 
 /**
- * Remove run directories under `.veritas/runs` beyond the `keep` newest, never `current`. Only real directories
- * named like a run ID are removed; links and anything else stay. Returns the removed run IDs.
+ * Remove run directories under `.veritas/runs` beyond the `keep` newest, never `current`. Only finished runs are
+ * removed: real directories named like a run ID that hold `run.json`, which a run writes last, so a run still in
+ * progress in another process is left alone. Links and anything else stay. Returns the removed run IDs.
  */
 export function pruneRuns(root: string, keep: number, current: string): string[] {
   const dir = path.join(root, RUNS_DIR);
@@ -285,7 +287,13 @@ export function pruneRuns(root: string, keep: number, current: string): string[]
     return [];
   }
   const runs = entries
-    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink() && RUN_ID.test(entry.name))
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        !entry.isSymbolicLink() &&
+        RUN_ID.test(entry.name) &&
+        existsSync(path.join(dir, entry.name, 'run.json')),
+    )
     .map((entry) => entry.name)
     .sort()
     .reverse();

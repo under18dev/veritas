@@ -209,7 +209,13 @@ describe('run store', () => {
       'run-20261102T000000000Z-000-bbbbbb',
       'run-20261103T000000000Z-000-cccccc',
     ];
-    for (const id of ids) mkdirSync(path.join(runs, id, 'proofs'), { recursive: true });
+    for (const id of ids) {
+      mkdirSync(path.join(runs, id, 'proofs'), { recursive: true });
+      writeFileSync(path.join(runs, id, 'run.json'), '{}');
+    }
+    // An older run another process is still writing has no run.json yet.
+    const active = 'run-20261030T000000000Z-000-eeeeee';
+    mkdirSync(path.join(runs, active), { recursive: true });
     mkdirSync(path.join(runs, 'notes'), { recursive: true });
     writeFileSync(path.join(runs, 'run-keep.txt'), 'not a run directory');
     const outside = tmp();
@@ -226,6 +232,7 @@ describe('run store', () => {
     expect(existsSync(path.join(runs, 'notes'))).toBe(true);
     expect(existsSync(path.join(runs, 'run-keep.txt'))).toBe(true);
     expect(existsSync(outside)).toBe(true);
+    expect(existsSync(path.join(runs, active))).toBe(true);
   });
 
   it('writes validated, enveloped artifacts with full metadata and reads them back', () => {
