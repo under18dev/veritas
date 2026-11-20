@@ -100,6 +100,13 @@ describe('scope and diagnostics', () => {
         import { value } from '../src/value.js';
         test('direct', () => expect(value(1)).toBe(1));
       `,
+      'test/iife.test.ts': `
+        import { expect, test } from 'vitest';
+        import { spawnSync } from 'node:child_process';
+        import { value } from '../src/value.js';
+        (() => { spawnSync('node', ['src/value.js']); })();
+        test('direct', () => expect(value(1)).toBe(1));
+      `,
       'test/spawn-in-function.test.ts': `
         import { expect, test } from 'vitest';
         import { spawnSync } from 'node:child_process';
@@ -112,6 +119,7 @@ describe('scope and diagnostics', () => {
     const suspicions = (file: string) => tests.find((t) => t.file === file)?.suspicions;
     expect(suspicions('test/load-spawn.test.ts')).toContain('opaque_call');
     expect(suspicions('test/load-missing.test.ts')).toContain('unresolved_import');
+    expect(suspicions('test/iife.test.ts')).toContain('opaque_call');
     // A helper module's load-time code runs when the test file imports it.
     expect(suspicions('test/via-support.test.ts')).toContain('opaque_call');
     // A function that is never called at load time does not run before the tests.

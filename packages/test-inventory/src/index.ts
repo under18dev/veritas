@@ -960,7 +960,13 @@ function moduleLoadReach(
   let opaque = false;
   let unresolved = false;
   const visit = (node: ts.Node) => {
-    if (isFunctionLike(node)) return;
+    // A function body runs later, unless the function is invoked right away (an IIFE).
+    if (isFunctionLike(node)) {
+      let outer: ts.Node = node.parent;
+      while (ts.isParenthesizedExpression(outer)) outer = outer.parent;
+      const invoked = ts.isCallExpression(outer) && skipParens(outer.expression) === node;
+      if (!invoked) return;
+    }
     if (ts.isCallExpression(node) && isOpaqueCall(node, checker)) opaque = true;
     const specifier =
       ts.isImportDeclaration(node) || ts.isExportDeclaration(node) ? node.moduleSpecifier : undefined;
