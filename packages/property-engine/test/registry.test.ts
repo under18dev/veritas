@@ -151,7 +151,8 @@ function registryFor(name: string, discovery: DiscoveryInput) {
   };
 }
 
-describe('registry from documentation and code', () => {
+// Each case builds a TypeScript program for a fixture, which takes several seconds on slower (Windows) runners.
+describe('registry from documentation and code', { timeout: 60_000 }, () => {
   it('maps README thresholds to the right functions and compares them with the implementation', () => {
     const { registry } = registryFor('discount-boundary', discountDiscovery);
     const discount = registry.properties.find((p) => p.statementIds.includes('ST-1'));
