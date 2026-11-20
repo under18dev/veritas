@@ -229,6 +229,7 @@ function analyzeTest(
   const calls: { node: ts.CallExpression; symbol: string }[] = [];
   const assertions: ts.CallExpression[] = [];
   const localCalls = new Map<string, { node: ts.CallExpression; symbol: string }>();
+  const unresolvedImports = new Set<string>();
   const nodes = body ? descendants(body) : [];
   for (const node of nodes) {
     if (
@@ -243,6 +244,10 @@ function analyzeTest(
     if (!ts.isCallExpression(node)) continue;
     const resolved = resolveProjectCall(node, checker, projectSet, root);
     if (resolved) calls.push({ node, symbol: resolved });
+    else {
+      const specifier = unresolvedImportOf(node.expression, ctx);
+      if (specifier !== undefined) unresolvedImports.add(specifier);
+    }
     if (isExpectCall(node) || isAssertCall(node)) assertions.push(node);
   }
   const calledSymbols = [...new Set(calls.map((call) => call.symbol))];
@@ -288,8 +293,10 @@ function analyzeTest(
   const suspicions: TestCaseType['suspicions'] = [];
   if (assertions.length === 0 && !callsHelperWithAssertion(body, source)) suspicions.push('no_assertion');
   if (tautological) suspicions.push('tautological_assertion');
-  if (calledSymbols.length === 0) suspicions.push('target_not_called');
+  // A call through an unresolved import may well reach project code, so its absence is not proven.
+  if (calledSymbols.length === 0 && unresolvedImports.size === 0) suspicions.push('target_not_called');
   if (mockedTarget) suspicions.push('unconditional_mock');
+  if (unresolvedImports.size > 0) suspicions.push('unresolved_import');
   return {
     id: testId(toPosixRelative(root, file), suitePath, name),
     file: toPosixRelative(root, file),
@@ -315,6 +322,28 @@ function resolveProjectCall(
   root: string,
 ): string | undefined {
   return projectSymbolId(checker.getSymbolAtLocation(node.expression), checker, projectSet, root);
+}
+
+/** The relative module specifier a callee is imported from, when TypeScript cannot resolve that module. */
+function unresolvedImportOf(callee: ts.Expression, ctx: Ctx): string | undefined {
+  let current = skipParens(callee);
+  while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current))
+    current = skipParens(current.expression);
+  if (!ts.isIdentifier(current)) return undefined;
+  for (const declaration of ctx.checker.getSymbolAtLocation(current)?.declarations ?? []) {
+    const importDeclaration = ts.isImportSpecifier(declaration)
+      ? declaration.parent.parent.parent
+      : ts.isNamespaceImport(declaration)
+        ? declaration.parent.parent
+        : ts.isImportClause(declaration)
+          ? declaration.parent
+          : undefined;
+    const specifier = importDeclaration?.moduleSpecifier;
+    if (!specifier || !ts.isStringLiteral(specifier) || !specifier.text.startsWith('.')) continue;
+    // Ask the checker, not resolveModuleName: it applies the importing file's ESM/CJS resolution mode.
+    if (!ctx.checker.getSymbolAtLocation(specifier)) return specifier.text;
+  }
+  return undefined;
 }
 
 function projectSymbolId(
@@ -734,9 +763,10 @@ function expandBraces(pattern: string): string[] {
     .split(',')
     .flatMap((part) => expandBraces(`${pattern.slice(0, start)}${part}${pattern.slice(end + 1)}`));
 }
+// Bundler resolution, like Vitest's: extensionless relative imports resolve, and so do `.js` specifiers for `.ts` files.
 const DEFAULT_COMPILER_OPTIONS: ts.CompilerOptions = {
-  module: ts.ModuleKind.NodeNext,
-  moduleResolution: ts.ModuleResolutionKind.NodeNext,
+  module: ts.ModuleKind.ESNext,
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
   target: ts.ScriptTarget.ES2024,
   allowJs: true,
 };

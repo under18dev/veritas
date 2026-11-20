@@ -88,6 +88,24 @@ describe('assessTest', () => {
     expect(a.rationale.join(' ')).toMatch(/no assertion checks the result/);
   });
 
+  it('is inconclusive, not disconnected, when the asserted call goes through an unresolved import', () => {
+    const t = testCase({ id: 'T-a', calledSymbols: [], suspicions: ['unresolved_import'] });
+    const a = assessTest(t, input());
+    expect(a.outcome).toBe('inconclusive');
+    expect(a.vector.assertionRelevance).toBe('unknown');
+    expect(a.rationale.join(' ')).toMatch(/import did not resolve/);
+    expect(a.limitations.join(' ')).toMatch(/could not resolve/);
+  });
+
+  it('still calls a constant assertion tautological when an import is also unresolved', () => {
+    const t = testCase({
+      id: 'T-a',
+      calledSymbols: [],
+      suspicions: ['tautological_assertion', 'unresolved_import'],
+    });
+    expect(assessTest(t, input()).outcome).toBe('tautological_or_disconnected');
+  });
+
   it('is meaningful only with an asserted call, a killed relevant mutant and the boundary exercised', () => {
     const t = testCase({ id: 'T-a', targetCalls: [call(['1000'])] });
     const a = assessTest(t, input({ mutants: [mutant('M-1', 'killed', ['T-a'], ['T-a'])] }));
