@@ -1,6 +1,6 @@
 # Specifications
 
-This page explains where Veritas finds the rules it checks against, how a rule becomes a property, and how you accept, reject and track properties. Veritas never decides on its own what your specification is: every property starts as `proposed`, and only you can accept it.
+This page explains where Veritas finds the rules it checks against, how a rule becomes a property, and how you accept, reject and track properties. Veritas never decides on its own what your specification is: it creates each property as `proposed`, or `conflicted` when sources disagree, and only you can accept one.
 
 ## Where rules come from
 
@@ -58,14 +58,14 @@ veritas spec diff                 # properties added and removed between the las
 veritas spec export               # all properties as JSON
 ```
 
-| Status       | Meaning                                                      |
-| ------------ | ------------------------------------------------------------ |
-| `proposed`   | Found by Veritas and not decided; every property starts here |
-| `reviewed`   | Looked at, not decided                                       |
-| `accepted`   | Accepted as the specification                                |
-| `rejected`   | Rejected                                                     |
-| `conflicted` | Its sources disagree with another property                   |
-| `superseded` | Replaced by a newer property                                 |
+| Status       | Meaning                                    |
+| ------------ | ------------------------------------------ |
+| `proposed`   | Found by Veritas and not decided           |
+| `reviewed`   | Looked at, not decided                     |
+| `accepted`   | Accepted as the specification              |
+| `rejected`   | Rejected                                   |
+| `conflicted` | Its sources disagree with another property |
+| `superseded` | Replaced by a newer property               |
 
 Only accepted properties act as the specification:
 

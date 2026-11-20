@@ -98,7 +98,7 @@ Veritas は、終わった実行のうち新しいものを `storage.retainRuns`
 
 ## エンベロープのメタデータ
 
-JSON の成果物は、すべて `{ "meta": { ... }, "data": ... }` という形のエンベロープです。
+Veritas が実行ごとに書く JSON ファイル（`report.json` と mutator 自身のファイルを除く）は、`{ "meta": { ... }, "data": ... }` という形のエンベロープです。
 
 ```json
 {

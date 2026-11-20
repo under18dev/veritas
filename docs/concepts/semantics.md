@@ -25,7 +25,7 @@ Every result Veritas reports has a precise, limited meaning. This page states wh
 
 Lean results carry `kernel_checked` assurance only when the proof uses no `sorry`, `admit`, `native_decide` or axioms beyond Lean's standard ones ([ADR 0005](/adr/0005-lean-backend)); a proof that uses any of them is never treated as verified. SMT results carry `smt_bounded` assurance. Reports show the difference.
 
-Only `confirmed` findings can fail the policy, and `unknown`, `timeout` and `unsupported` are never counted as success. Under `policy.inconclusiveBehavior: warn` they leave the exit code at 0 but keep the verdict at `pass_with_warnings`, never `pass` (see [CLI exit codes](/reference/cli#exit-codes)).
+A run fails the policy (exit code 1) only through a confirmed specification violation or a missed policy threshold; suspected findings never fail it (see [CLI exit codes](/reference/cli#exit-codes)). `unknown`, `timeout` and `unsupported` are never counted as success. Under `policy.inconclusiveBehavior: warn` they leave the exit code at 0 but keep the verdict at `pass_with_warnings`, never `pass`.
 
 ## What is checked
 

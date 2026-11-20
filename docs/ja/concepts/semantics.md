@@ -25,7 +25,7 @@ Veritas が報告する結果には、どれも厳密で限られた意味があ
 
 Lean の結果に `kernel_checked` の保証が付くのは、証明が `sorry`、`admit`、`native_decide`、Lean の標準以外の公理を使っていないときだけです（[ADR 0005](/adr/0005-lean-backend)、英語）。これらを使った証明は、検証済みとして扱いません。SMT の結果には `smt_bounded` の保証が付きます。レポートでは、この違いを区別して表示します。
 
-ポリシー違反にできるのは `confirmed` の finding だけで、`unknown`、`timeout`、`unsupported` を成功として数えることはありません。`policy.inconclusiveBehavior: warn` のもとでは終了コードは 0 のままですが、verdict は `pass_with_warnings` にとどまり、`pass` にはなりません（[CLI の終了コード](/ja/reference/cli#終了コード)を参照）。
+ポリシー違反（終了コード 1）になるのは、仕様違反が確定したときか、ポリシーの基準を満たさなかったときだけで、`suspected` の finding で失敗することはありません（[CLI の終了コード](/ja/reference/cli#終了コード)を参照）。`unknown`、`timeout`、`unsupported` を成功として数えることもありません。`policy.inconclusiveBehavior: warn` のもとでは終了コードは 0 のままですが、verdict は `pass_with_warnings` にとどまり、`pass` にはなりません。
 
 ## 何を検査するか
 

@@ -23,7 +23,9 @@ veritas explain F-0b43c88cc3a6
 | `3`    | ツールのエラー。ステージの失敗、ソルバーや子プロセスの異常終了                                                                                        |
 | `4`    | `policy.inconclusiveBehavior: fail` のもとで、判定できない結果があった                                                                                |
 
-終了コード `1` になるのは `confirmed` の finding だけです。`unknown`、`timeout`、`unsupported` は成功として数えません。`policy.inconclusiveBehavior` が `warn` か `ignore` なら終了コードは `0` ですが、verdict は `pass_with_warnings` になり、理由の一覧にそれぞれの結果が載ります。
+終了コード `1` になる理由は 2 つあります。1 つは、`policy.confirmedViolation` が `fail` のときに仕様違反が確定した場合です（種類が `spec_implementation_mismatch`、`counterexample`、`spec_violation_candidate` のいずれかで、certainty が `confirmed` の finding）。もう 1 つは、`policy.maxNewSurvivors` か `policy.minPropertyCoverage` を満たさなかった場合です。`suspected` の finding や、生き残った mutant のようなほかの確定した finding は、報告されますが失敗にはなりません。
+
+`unknown`、`timeout`、`unsupported` は成功として数えません。`policy.inconclusiveBehavior` が `warn` か `ignore` なら終了コードは `0` ですが、verdict は `pass_with_warnings` になり、理由の一覧にそれぞれの結果が載ります。
 
 `veritas improve` と `veritas test replay` では、一部のコードの意味が変わります。[コマンドごとの補足](#コマンドごとの補足)を参照してください。
 
@@ -100,7 +102,7 @@ veritas explain F-0b43c88cc3a6
 
 `--offline` を付けると、Veritas 自身はネットワークにアクセスしません。GitHub や Web のソースも LLM も使いません。ただし、mutation testing で実行するプロジェクト自身のテストは制限しません。テストもネットワークから切り離す方法は、[信頼できないリポジトリ](/ja/guide/untrusted-repositories)を参照してください。
 
-レポートのファイルを実行ディレクトリに書くのは、report ステージを含む `run` と `prove` だけです。`veritas report` を使えば、どの実行からでもレポートを作れます。
+レポートのファイルを実行ディレクトリに書くのは、report ステージを含む `run` と `prove`、およびそれらを `replay` したときだけです。`veritas report` を使えば、どの実行からでもレポートを作れます。
 
 `--since <ref>` を付けると、mutation testing の対象を、その git の ref から変更されたコードに絞ります。`--include-proposed` を付けると、accepted でない Property も検査します。それらから出た finding は `suspected` 以下になります。
 

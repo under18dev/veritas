@@ -1,6 +1,6 @@
 # Node API
 
-`@under18dev/veritas` が Node.js 向けに公開している関数と型をまとめます。各関数は、対応する `veritas` コマンドと同じステージを実行し、`.veritas/runs/<run-id>/` に同じファイルを書き、同じ verdict と終了コードを返します。
+`@under18dev/veritas` が Node.js 向けに公開している関数と型をまとめます。各関数は、対応する `veritas` コマンドと同じステージを実行し、`.veritas/runs/<run-id>/` に同じ種類のファイルを書き、同じ方法で決めた verdict と終了コードを返します。ただし、既定値が CLI と違うものがあります。CLI と同じ動作にするには、下の表のオプションを指定してください。
 
 ```bash
 pnpm add -D @under18dev/veritas
@@ -30,6 +30,11 @@ console.log(deep.runId, deep.dir);
 | `prove(options)`               | `veritas prove`    | index, discover, spec, map, prove, assess, report            | `true`           |
 | `run({ profile, ...options })` | `veritas run`      | プロファイル（`quick`、既定の `standard`、`deep`）のステージ | `false`          |
 | `runVeritas(options)`          | なし               | 任意のステージの列。列の前にある依存ステージも実行する       | `false`          |
+
+CLI と既定値が違うのは次の点です。
+
+- `discover()` は、設定で有効にしたネットワーク上のソースも集めます。`veritas discover` は `--sources` を付けない限り `local` だけを集めるので、同じ動作にするには `sources: ['local']` を渡してください。
+- `analyze()`、`mutate()`、`prove()` の既定は `offline: true` ですが、`offline: false` も指定できます。対応するコマンドは常にオフラインです。
 
 `COMMAND_STAGES`（`discover`、`analyze`、`mutate`、`prove`）と `PROFILE_STAGES`（プロファイルごと）に、これらのステージの列が入っています。
 

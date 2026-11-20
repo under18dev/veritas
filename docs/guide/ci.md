@@ -80,13 +80,13 @@ Grant only `contents: read` and check out with `persist-credentials: false`, as 
 
 ## Choose what fails the build
 
-| Exit code | Verdict                                    |
-| --------- | ------------------------------------------ |
-| `0`       | `pass`, `pass_with_warnings`               |
-| `1`       | `policy_failure`                           |
-| `2`       | Configuration or usage error               |
-| `3`       | `tool_error`                               |
-| `4`       | `inconclusive` (only with a `fail` policy) |
+| Exit code | Verdict                                                                                                                                                                                                        |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`       | `pass`, `pass_with_warnings`. From the action also `skipped` (documentation-only change), and `inconclusive` when the project cannot be analysed (no `package.json` or no Vitest) and the policy is not `fail` |
+| `1`       | `policy_failure`: a confirmed specification violation, or a failed `maxNewSurvivors` or `minPropertyCoverage` threshold                                                                                        |
+| `2`       | Configuration or usage error                                                                                                                                                                                   |
+| `3`       | `tool_error`                                                                                                                                                                                                   |
+| `4`       | `inconclusive`, only when the inconclusive policy is `fail`                                                                                                                                                    |
 
 Set the policy in `.veritas/config.json`:
 
@@ -106,7 +106,7 @@ Set the policy in `.veritas/config.json`:
 | `policy.confirmedViolation`   | `fail`, `warn` (`fail`)           | Exit `1` on a confirmed specification violation                                                                                                                          |
 | `policy.inconclusiveBehavior` | `fail`, `warn`, `ignore` (`warn`) | `fail` turns inconclusive results (undecided claims, partial or skipped stages) into exit `4`; otherwise they are listed and the verdict is at best `pass_with_warnings` |
 | `policy.maxNewSurvivors`      | integer (unset)                   | Exit `1` when more mutants survive in the run's scope; with `--since`, the scope is the change. Inconclusive without mutation results                                    |
-| `policy.minPropertyCoverage`  | 0 to 1 (unset)                    | Exit `1` when a smaller share of accepted properties has a `meaningful_with_evidence` test. Inconclusive without accepted properties                                     |
+| `policy.minPropertyCoverage`  | 0 to 1 (unset)                    | Exit `1` when a smaller share of accepted properties has a `meaningful_with_evidence` test. Inconclusive when no property is accepted or the run has no test assessments |
 
 Suspected findings never fail the build, and a threshold that cannot be measured is inconclusive.
 

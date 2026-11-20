@@ -1,6 +1,6 @@
 # Node API
 
-This page lists what `@under18dev/veritas` exports for use from Node.js. The functions run the same stages as the matching `veritas` command, write the same files to `.veritas/runs/<run-id>/`, and return the same verdict and exit code.
+This page lists what `@under18dev/veritas` exports for use from Node.js. The functions run the same stages as the matching `veritas` command, write the same kind of files to `.veritas/runs/<run-id>/`, and return a verdict and exit code computed the same way. Some defaults differ from the CLI; pass the options in the table below to get the same behaviour.
 
 ```bash
 pnpm add -D @under18dev/veritas
@@ -30,6 +30,11 @@ console.log(deep.runId, deep.dir);
 | `prove(options)`               | `veritas prove`    | index, discover, spec, map, prove, assess, report                  | `true`            |
 | `run({ profile, ...options })` | `veritas run`      | the stages of the profile (`quick`, `standard` by default, `deep`) | `false`           |
 | `runVeritas(options)`          | none               | any list of stages; dependencies listed earlier run too            | `false`           |
+
+Defaults that differ from the CLI:
+
+- `discover()` collects the network sources enabled in the configuration. `veritas discover` collects only `local` unless you pass `--sources`; pass `sources: ['local']` for the same behaviour.
+- `analyze()`, `mutate()` and `prove()` default to `offline: true` and accept `offline: false`. The matching commands are always offline.
 
 `COMMAND_STAGES` (for `discover`, `analyze`, `mutate` and `prove`) and `PROFILE_STAGES` (for each profile) hold these stage lists.
 

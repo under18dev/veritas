@@ -57,15 +57,19 @@ Because the action is a composite action, it runs on the Node.js that the job se
 
 ## Inputs
 
-| Input               | Default    | Meaning                                                                                                                                                                              |
-| ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `profile`           | `standard` | `quick`, `standard` or `deep`; the same stages as `veritas run --profile`                                                                                                            |
-| `working-directory` | `.`        | Project directory, relative to the workspace. A path outside the checked-out repository is refused                                                                                   |
-| `since`             | `""`       | Base commit for incremental checks. Empty: the pull request's base SHA, or the commit before a push                                                                                  |
-| `inconclusive`      | `""`       | `warn`, `fail` or `ignore`. Empty: `policy.inconclusiveBehavior` from the configuration, else `warn`. With `fail`, any inconclusive result makes the verdict `inconclusive` (exit 4) |
-| `summary`           | `"true"`   | Write a step summary; `"false"` turns it off                                                                                                                                         |
+| Input               | Default    | Meaning                                                                                                         |
+| ------------------- | ---------- | --------------------------------------------------------------------------------------------------------------- |
+| `profile`           | `standard` | `quick`, `standard` or `deep`; the same stages as `veritas run --profile`                                       |
+| `working-directory` | `.`        | Project directory, relative to the workspace. A path outside the checked-out repository is refused              |
+| `since`             | `""`       | Base commit for incremental checks. Empty: the pull request's base SHA, or the commit before a push             |
+| `inconclusive`      | `""`       | `warn`, `fail` or `ignore`. Empty: `policy.inconclusiveBehavior` from the configuration, else `warn`. See below |
+| `summary`           | `"true"`   | Write a step summary; `"false"` turns it off                                                                    |
 
-The run is always offline: no GitHub or web sources and no LLM, whatever the configuration says. An explicit `inconclusive` input takes precedence over the configuration for the action's own decision. The engine still applies `policy.inconclusiveBehavior` from the configuration, so with `"fail"` in the configuration, inconclusive results end with exit code 4 even when the input is `warn`.
+The run is always offline: no GitHub or web sources and no LLM, whatever the configuration says. How `inconclusive` applies:
+
+- When the action cannot run the analysis (no `package.json`, or Vitest unavailable), it decides alone: `fail` gives exit code 4, `warn` and `ignore` give 0.
+- After an analysis, `fail` turns any inconclusive result into the verdict `inconclusive` (exit code 4).
+- `warn` or `ignore` cannot relax the configuration: with `policy.inconclusiveBehavior: "fail"` in the configuration, inconclusive results still end with exit code 4.
 
 ## Outputs
 
@@ -95,7 +99,7 @@ A later step can read them through the step's `id`. Add `if: always()` so that t
 | Code | Meaning                                                                                                                                  |
 | ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `0`  | Passing, including warnings, documentation-only changes that were skipped, and degraded projects (below) unless `inconclusive` is `fail` |
-| `1`  | Confirmed policy failure                                                                                                                 |
+| `1`  | Policy failure: a confirmed specification violation, or a missed policy threshold                                                        |
 | `2`  | Invalid or unsafe invocation: a refused event, an invalid `working-directory`, a missing or invalid configuration                        |
 | `3`  | Tool error, including an unsupported event                                                                                               |
 | `4`  | Inconclusive with the `fail` policy                                                                                                      |

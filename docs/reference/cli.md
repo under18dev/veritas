@@ -23,7 +23,9 @@ veritas explain F-0b43c88cc3a6
 | `3`  | Tool error: a stage failed, or a solver or child process crashed                                                                                                 |
 | `4`  | Inconclusive results with `policy.inconclusiveBehavior: fail`                                                                                                    |
 
-Only `confirmed` findings can cause exit code `1`. `unknown`, `timeout` and `unsupported` results never count as success: with `policy.inconclusiveBehavior` set to `warn` or `ignore`, the exit code is `0`, but the verdict is `pass_with_warnings` and the reasons list each result.
+Exit code `1` has two causes. One is a confirmed specification violation (a finding of kind `spec_implementation_mismatch`, `counterexample` or `spec_violation_candidate` with certainty `confirmed`) while `policy.confirmedViolation` is `fail`. The other is a missed `policy.maxNewSurvivors` or `policy.minPropertyCoverage`. Suspected findings and other confirmed findings, such as a surviving mutant, are reported but do not fail the run.
+
+`unknown`, `timeout` and `unsupported` results never count as success: with `policy.inconclusiveBehavior` set to `warn` or `ignore`, the exit code is `0`, but the verdict is `pass_with_warnings` and the reasons list each result.
 
 `veritas improve` and `veritas test replay` give some codes a command-specific meaning; see [Notes by command](#notes-by-command).
 
@@ -98,7 +100,7 @@ With the global `--json` option, stdout contains exactly one JSON value and noth
 
 `--offline` makes Veritas itself send no network request: no GitHub or web sources and no LLM. It does not restrict the project's own tests, which mutation testing runs; to keep those off the network, see [Untrusted repositories](/guide/untrusted-repositories).
 
-Only commands with the report stage (`run` and `prove`) write report files to the run directory. `veritas report` renders a report from any run.
+Only commands with the report stage (`run`, `prove`, and `replay` of such a run) write report files to the run directory. `veritas report` renders a report from any run.
 
 `--since <ref>` limits mutation testing to code changed since a git ref. `--include-proposed` also checks properties that are not accepted; findings from them are at most `suspected`.
 

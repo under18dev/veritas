@@ -1,6 +1,6 @@
 # Architecture
 
-Veritas answers, for each test, which specification it is derived from, what it observes, which faults it detects, what has been formally checked under which model and bounds, and what remains unknown. Every answer is backed by machine-readable evidence. This page shows how a run flows through the packages of Veritas and where it stores its data. For what the results mean, see [Semantics](/concepts/semantics).
+Veritas answers, for each test, which specification it is derived from, what it observes, which faults it detects, what has been formally checked under which model and bounds, and what remains unknown. The evidence for each answer is written to machine-readable files. This page shows how a run flows through the packages of Veritas and where it stores its data. For what the results mean, see [Semantics](/concepts/semantics).
 
 ## Pipeline
 

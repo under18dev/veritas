@@ -6,9 +6,9 @@ This page explains how `veritas improve` plans new tests for the gaps a run foun
 
 - It adds new test files only. It never edits, deletes or weakens existing tests, and never touches production code, README or docs.
 - Expected values come from accepted properties, never from running your code. `--include-proposed` also allows proposed properties.
-- Planning is the default and writes no project file.
+- Planning is the default. It writes the plan to `.veritas/improvements/<plan-id>/plan.json` and changes no file of your project.
 - Applying needs `--apply` with the plan ID and approval token printed for that plan.
-- A plan is measured in a temporary copy of the project and written only when it improves the results.
+- Applying measures the plan in a temporary copy of the project and writes the test files into your project only when the results improve.
 - Applying is refused in CI.
 
 ## Plan

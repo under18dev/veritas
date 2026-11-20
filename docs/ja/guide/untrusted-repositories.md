@@ -14,7 +14,7 @@ Veritas のどのコマンドがプロジェクトのコードを実行するか
 | `improve --apply`                      | 隔離したコピーの中で、プロジェクトのテスト          |
 | `test generate` で作ったファイルの実行 | Vitest を通して、プロジェクトのコード               |
 
-`run --profile quick`、`discover`、`analyze`、`spec`、`report`、`explain` は、プロジェクトのコードを実行しません。
+`run --profile quick`、`discover`、`analyze`、`spec`、`report`、`explain` は、プロジェクトのコードを実行しません。ただし `--allow-code-config` を付けると、`veritas.config.ts`、`veritas.config.mjs`、`veritas.config.js` を読み込んで実行します。
 
 property-based testing と反例の再実行は、Node.js の permission model のもとで、別の Node.js プロセスで動かします。このプロセスはプロジェクトを読めるだけで、ファイルの書き込み、子プロセスやワーカーの起動、コードの生成はできず、Node.js 25 以上ならネットワークにもアクセスできません。mutation testing と `improve` は、許可した環境変数と空の一時ホームディレクトリでプロジェクトのテストランナーを動かしますが、ファイルの読み取りとネットワークは隔離しません。
 

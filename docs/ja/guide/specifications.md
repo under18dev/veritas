@@ -1,6 +1,6 @@
 # 仕様の確定
 
-Veritas が照らし合わせる規則をどこから見つけるか、規則がどのように Property になるか、Property をどう accept、reject、追跡するかを説明します。何が仕様かを Veritas が自分で決めることはありません。Property はすべて `proposed` から始まり、accepted にできるのはあなただけです。
+Veritas が照らし合わせる規則をどこから見つけるか、規則がどのように Property になるか、Property をどう accept、reject、追跡するかを説明します。何が仕様かを Veritas が自分で決めることはありません。Veritas は Property を `proposed`（出典が食い違う場合は `conflicted`）として作り、accepted にできるのはあなただけです。
 
 ## 規則を読む出典
 
@@ -58,14 +58,14 @@ veritas spec diff                 # 直近二回の実行のあいだで増減�
 veritas spec export               # すべての Property を JSON で出力
 ```
 
-| 状態         | 意味                                                           |
-| ------------ | -------------------------------------------------------------- |
-| `proposed`   | Veritas が見つけたが、まだ決まっていない。すべてここから始まる |
-| `reviewed`   | 確認済みだが、まだ決めていない                                 |
-| `accepted`   | 仕様として認められた                                           |
-| `rejected`   | 退けられた                                                     |
-| `conflicted` | 出典が別の Property と食い違っている                           |
-| `superseded` | 新しい Property に置き換えられた                               |
+| 状態         | 意味                                     |
+| ------------ | ---------------------------------------- |
+| `proposed`   | Veritas が見つけたが、まだ決まっていない |
+| `reviewed`   | 確認済みだが、まだ決めていない           |
+| `accepted`   | 仕様として認められた                     |
+| `rejected`   | 退けられた                               |
+| `conflicted` | 出典が別の Property と食い違っている     |
+| `superseded` | 新しい Property に置き換えられた         |
 
 仕様として扱うのは accepted な Property だけです。
 

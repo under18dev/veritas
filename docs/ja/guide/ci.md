@@ -80,13 +80,13 @@ jobs:
 
 ## ビルドを失敗させる条件を決める
 
-| 終了コード | verdict                                     |
-| ---------- | ------------------------------------------- |
-| `0`        | `pass`、`pass_with_warnings`                |
-| `1`        | `policy_failure`                            |
-| `2`        | 設定や使い方の誤り                          |
-| `3`        | `tool_error`                                |
-| `4`        | `inconclusive`（`fail` ポリシーのときだけ） |
+| 終了コード | verdict                                                                                                                                                                                              |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`        | `pass`、`pass_with_warnings`。Action では `skipped`（ドキュメントだけの変更）と、プロジェクトを解析できず（`package.json` や Vitest がない）ポリシーが `fail` でないときの `inconclusive` も含みます |
+| `1`        | `policy_failure`。確定した仕様違反があるか、`maxNewSurvivors` か `minPropertyCoverage` のしきい値を満たさない                                                                                        |
+| `2`        | 設定や使い方の誤り                                                                                                                                                                                   |
+| `3`        | `tool_error`                                                                                                                                                                                         |
+| `4`        | `inconclusive`。inconclusive のポリシーが `fail` のときだけ                                                                                                                                          |
 
 ポリシーは `.veritas/config.json` に書きます。
 
@@ -106,7 +106,7 @@ jobs:
 | `policy.confirmedViolation`   | `fail`、`warn`（`fail`）           | 確定した仕様違反で終了コード `1` にする                                                                                                                                 |
 | `policy.inconclusiveBehavior` | `fail`、`warn`、`ignore`（`warn`） | `fail` なら、結論の出ていない結果（決着しなかった検証、partial や skipped のステージ）で終了コード `4`。それ以外では列挙だけで、verdict は良くても `pass_with_warnings` |
 | `policy.maxNewSurvivors`      | 整数（未設定）                     | 実行の範囲で生き残った mutant が上限を超えたら終了コード `1`。`--since` では範囲は変更部分。mutation testing の結果がなければ inconclusive                              |
-| `policy.minPropertyCoverage`  | 0〜1（未設定）                     | `meaningful_with_evidence` のテストがある accepted な Property の割合が下回ったら終了コード `1`。accepted な Property がなければ inconclusive                           |
+| `policy.minPropertyCoverage`  | 0〜1（未設定）                     | `meaningful_with_evidence` のテストがある accepted な Property の割合が下回ったら終了コード `1`。accepted な Property がないか、テストの評価がない実行では inconclusive |
 
 suspected の finding でビルドが失敗することはなく、測れなかったしきい値は inconclusive になります。
 

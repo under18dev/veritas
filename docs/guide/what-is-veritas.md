@@ -12,7 +12,7 @@ A passing test suite tells you that the tests pass, not what they check. For exa
 - a test calls your code but never uses the boundary input your documentation describes;
 - the README says "1000 or more", the code says `total > 1000`, and every test passes because none uses 1000.
 
-Line coverage reports all of these as covered. Veritas reports them as findings.
+In the second and third case every line runs, so line coverage counts the code as covered. Veritas reports all three as findings.
 
 ## What you get for each test and rule
 
@@ -28,7 +28,7 @@ Line coverage reports all of these as covered. Veritas reports them as findings.
 
 - **It gives no score.** Each test gets an evidence vector and one of five outcomes. See [Reading results](/guide/reading-results).
 - **It does not prove your code correct.** `proven_within_model` means that no counterexample exists within the stated model, bounds and assumptions. See [Verification](/guide/verification).
-- **It does not decide what the specification is.** Every rule it finds stays `proposed` until you accept it, and it never changes a specification or an expected value to match the code. See [Specifications](/guide/specifications).
+- **It does not decide what the specification is.** No rule it finds becomes `accepted` unless you accept it, and it never changes a specification or an expected value to match the code. See [Specifications](/guide/specifications).
 - **It does not isolate your project's code.** Veritas runs your tests and functions with the same trust as `npm test`. See [Untrusted repositories](/guide/untrusted-repositories).
 
 ## How a run works
@@ -68,7 +68,7 @@ Evidence collectors  Code intelligence  Test inventory
 
 ## Ways to run it
 
-All entry points use the same engine and write the same artifacts to `.veritas/runs/<run-id>/`.
+All entry points use the same engine. Each command writes the artifacts of the stages it runs to `.veritas/runs/<run-id>/`; commands that include the report stage (`veritas run` and `veritas prove`) also write the reports listed in `reports.formats` (by default JSON, Markdown, HTML and SARIF).
 
 | Entry point   | Use it for                          | Start here                                                                 |
 | ------------- | ----------------------------------- | -------------------------------------------------------------------------- |

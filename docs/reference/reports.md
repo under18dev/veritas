@@ -1,6 +1,6 @@
 # Reports and artifacts
 
-This page describes the report formats, the sections of a report, the files of a run directory under `.veritas/runs/<run-id>/`, the metadata every file carries, and how secrets are removed. The CLI, the Node API, the MCP server and the GitHub Action write the same files. For how to interpret a report, see [Reading results](/guide/reading-results).
+This page describes the report formats, the sections of a report, the files of a run directory under `.veritas/runs/<run-id>/`, the metadata the files carry, and how secrets are removed. The CLI, the Node API, the MCP server and the GitHub Action write the same files. For how to interpret a report, see [Reading results](/guide/reading-results).
 
 ## Report formats
 
@@ -98,7 +98,7 @@ Other files under `.veritas/`:
 
 ## Envelope metadata
 
-Every JSON artifact is an envelope `{ "meta": { ... }, "data": ... }`:
+The JSON files Veritas writes for a run (all except `report.json` and mutator's own files) are envelopes `{ "meta": { ... }, "data": ... }`:
 
 ```json
 {

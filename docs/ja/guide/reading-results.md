@@ -4,7 +4,7 @@ Veritas の出力に出てくる verdict（判定）、終了コード、finding
 
 ## verdict と終了コード
 
-どの実行も、最初の行に両方が出ます。
+`veritas run` と `veritas prove` は、最初の行に両方を表示します。
 
 ```text
 run run-20261120T105508829Z-000-017911  verdict: policy_failure (exit 1)
@@ -25,7 +25,7 @@ error[APPROVAL_MISMATCH]: the approval token does not match plan IP-a14164357e16
 hint: review the plan again with `veritas improve --dry-run` and use the token it prints
 ```
 
-ポリシー違反になるのは、確定した finding だけです。結論の出ていない結果があると verdict は `pass` にならず、既定の `warn` ポリシーでは `pass_with_warnings` になって、該当する項目が列挙されます。ポリシーの設定は [CI と GitHub Action](/ja/guide/ci)を参照してください。
+finding のうちポリシー違反になるのは確定したものだけで、`maxNewSurvivors` や `minPropertyCoverage` のしきい値を満たさない場合もポリシー違反になります。結論の出ていない結果があると verdict は `pass` にならず、既定の `warn` ポリシーでは `pass_with_warnings` になって、該当する項目が列挙されます。ポリシーの設定は [CI と GitHub Action](/ja/guide/ci)を参照してください。
 
 `--json` を付けると、標準出力には JSON の結果（`status`、`exitCode`、`runId`、`dir`、`reasons`、`stages`、`findings`）だけが出て、ログは標準エラー出力に出ます。
 

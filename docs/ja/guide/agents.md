@@ -73,21 +73,21 @@ claude mcp add veritas -- npx -y -p @under18dev/veritas veritas-mcp --root /path
 }
 ```
 
-クライアントのセッションごとに、サーバーのプロセスが一つ起動します。ツールを呼ぶたびに、`.veritas/runs/` に新しい実行ディレクトリができます。時間のかかる処理は同時に `--max-concurrent` 件までで、それを超えたものは待つか取り消されます。
+クライアントのセッションごとに、サーバーのプロセスが一つ起動します。`discover_specs`、`analyze_tests`、`run_mutation`、`verify_property` はパイプラインのステージを実行し、`.veritas/runs/` に新しい実行ディレクトリを作ります。`list_properties`、`get_evidence`、`get_run_status` は読むだけです。`plan_improvement` は計画を `.veritas/improvements/` に書き出します。時間のかかる処理は同時に `--max-concurrent` 件までで、それを超えたものは待つか取り消されます。
 
 ### ツール
 
-| ツール                       | 内容                                                                      |
-| ---------------------------- | ------------------------------------------------------------------------- |
-| `discover_specs`             | 仕様の根拠をオフラインで集める                                            |
-| `list_properties`            | 最新の実行の Property を、状態、由来、出典と一緒に一覧にする              |
-| `analyze_tests`              | コードとテストを解析し、テストを評価する（mutation testing は実行しない） |
-| `run_mutation`               | mutation testing を実行し、mutant を Property とテストに結び付ける        |
-| `verify_property`            | 形式化した Property を Z3 で検査し、反例を実行し直す                      |
-| `get_evidence`               | finding の根拠をたどって返す                                              |
-| `get_run_status`             | 実行の状態、ステージ、verdict、使用量を返す                               |
-| `plan_improvement`           | テストだけの改善を計画し、計画と承認トークンを返す                        |
-| `apply_approved_improvement` | 確認済みの計画を適用する。`--allow-write` のときだけ登録される            |
+| ツール                       | 内容                                                                                                       |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `discover_specs`             | 仕様の根拠をオフラインで集める                                                                             |
+| `list_properties`            | 最新の実行の Property を、状態、由来、出典と一緒に一覧にする                                               |
+| `analyze_tests`              | コードとテストを解析し、テストを評価する（mutation testing は実行しない）                                  |
+| `run_mutation`               | mutation testing を実行し、mutant を Property とテストに結び付ける                                         |
+| `verify_property`            | 形式化した Property を `formal.backend` のバックエンド（既定は Z3、または Lean）で検査し、反例を実行し直す |
+| `get_evidence`               | finding の根拠をたどって返す                                                                               |
+| `get_run_status`             | 実行の状態、ステージ、verdict、使用量を返す                                                                |
+| `plan_improvement`           | テストだけの改善を計画し、計画と承認トークンを返す                                                         |
+| `apply_approved_improvement` | 確認済みの計画を適用する。`--allow-write` のときだけ登録される                                             |
 
 各ツールの入力と出力は [MCP サーバーのリファレンス](/ja/reference/mcp)にあります。
 

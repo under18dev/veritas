@@ -12,7 +12,7 @@ Veritas は、TypeScript や JavaScript のプロジェクトのテストが、�
 - コードは呼んでいるが、ドキュメントに書かれた境界の値を試していないテスト。使っている入力では `>` と `>=` の違いが出ません
 - ドキュメントには「1000 以上」、コードには `total > 1000` と書かれているのに、1000 を使うテストがないので全部通ってしまうケース
 
-カバレッジではこれを見つけられません。行は実行されていても、肝心の入力で結果を確かめていないからです。
+二つ目と三つ目の例では行がすべて実行されるので、行カバレッジではカバー済みになります。Veritas は三つとも finding として報告します。
 
 ## 答えること
 
@@ -70,7 +70,7 @@ Evidence collectors  Code intelligence  Test inventory
 
 ## 実行する方法
 
-どの入口も同じエンジンを動かし、同じ成果物を出します。
+どの入口も同じエンジンを動かします。各コマンドは、実行したステージの成果物を `.veritas/runs/<run-id>/` に書き出します。レポートのステージを含むコマンド（`veritas run` と `veritas prove`）は、`reports.formats` に指定したレポート（既定は JSON、Markdown、HTML、SARIF）も書き出します。
 
 | 入口          | 向いている用途                              | 参照先                                                                       |
 | ------------- | ------------------------------------------- | ---------------------------------------------------------------------------- |
@@ -80,4 +80,4 @@ Evidence collectors  Code intelligence  Test inventory
 | Agent Skill   | `SKILL.md` を読み込むエージェント           | [エージェントと MCP](/ja/guide/agents)                                       |
 | GitHub Action | プルリクエストの検査                        | [CI と GitHub Action](/ja/guide/ci)                                          |
 
-ネットワークへのアクセスは既定でオフです。結果は `.veritas/runs/<run-id>/` に JSON、Markdown、HTML、SARIF で書き出されます。
+ネットワーク上の出典か LLM プロバイダーを有効にしない限り、Veritas はネットワークにアクセスしません。

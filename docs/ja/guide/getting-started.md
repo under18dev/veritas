@@ -41,6 +41,14 @@ bun add -d @under18dev/veritas
 
 パッケージには `veritas` と `veritas-mcp` の二つのコマンドが入っています。`npx veritas`、`pnpm exec veritas`、`yarn veritas`、`bunx veritas` のように、パッケージマネージャーから実行してください。このガイドでは多くの場合、短く `veritas` と書きます。
 
+プロジェクトごとに追加せずに使うなら、グローバルにインストールします。
+
+```bash
+npm install -g @under18dev/veritas
+```
+
+`veritas` と `veritas-mcp` が `PATH` から使えるようになります。プロジェクトで実行すると、Vitest、`@mizchi/mutator`、fast-check は、プロジェクトに入っていればそれを使います。
+
 ## 設定ファイルを作る
 
 ```bash

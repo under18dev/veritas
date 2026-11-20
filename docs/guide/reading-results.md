@@ -4,7 +4,7 @@ This page explains the verdict, the exit code, findings, test outcomes and the s
 
 ## Verdict and exit code
 
-The first line of every run shows both:
+`veritas run` and `veritas prove` print both on their first line:
 
 ```text
 run run-20261120T105508829Z-000-017911  verdict: policy_failure (exit 1)
@@ -25,7 +25,7 @@ error[APPROVAL_MISMATCH]: the approval token does not match plan IP-a14164357e16
 hint: review the plan again with `veritas improve --dry-run` and use the token it prints
 ```
 
-Only confirmed findings fail the policy. Inconclusive results never produce `pass`: under the default `warn` policy the verdict is `pass_with_warnings` and each inconclusive item is listed. [CI and GitHub Action](/guide/ci#choose-what-fails-the-build) shows how to configure the policy.
+Among findings, only confirmed ones fail the policy; a failed `maxNewSurvivors` or `minPropertyCoverage` threshold also does. Inconclusive results never produce `pass`: under the default `warn` policy the verdict is `pass_with_warnings` and each inconclusive item is listed. [CI and GitHub Action](/guide/ci#choose-what-fails-the-build) shows how to configure the policy.
 
 With `--json`, stdout contains only the JSON result (`status`, `exitCode`, `runId`, `dir`, `reasons`, `stages`, `findings`) and logs go to stderr.
 

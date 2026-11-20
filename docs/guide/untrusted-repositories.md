@@ -14,7 +14,7 @@ Project code is trusted code ([ADR 0011](/adr/0011-trusted-project-code)). These
 | `improve --apply`                  | The project's tests, in an isolated copy         |
 | Running files from `test generate` | The project's code, through Vitest               |
 
-`run --profile quick`, `discover`, `analyze`, `spec`, `report` and `explain` do not execute project code.
+`run --profile quick`, `discover`, `analyze`, `spec`, `report` and `explain` do not execute project code, unless you pass `--allow-code-config`, which loads and runs `veritas.config.ts`, `veritas.config.mjs` or `veritas.config.js`.
 
 Property-based tests and counterexample replay run in a separate Node.js process under the Node.js permission model: it can read the project only, cannot write files or start child processes, workers or generated code, and on Node.js 25 or later has no network access. Mutation testing and `improve` run the project's own test runner with an allowlisted environment and an empty temporary home directory, but without file-read or network isolation.
 
