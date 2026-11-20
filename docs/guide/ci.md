@@ -28,7 +28,7 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: under18dev/veritas/packages/github-action@v0.1.1
+      - uses: under18dev/veritas/packages/github-action@v0.1.2
         with:
           profile: standard
       - uses: actions/upload-artifact@v4

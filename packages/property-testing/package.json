@@ -1,6 +1,6 @@
 {
   "name": "@under18dev/veritas-property-testing",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Property-based testing (fast-check) for Veritas properties, in a restricted process",
   "license": "Apache-2.0",
   "repository": {

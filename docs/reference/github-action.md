@@ -28,7 +28,7 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: under18dev/veritas/packages/github-action@v0.1.1
+      - uses: under18dev/veritas/packages/github-action@v0.1.2
         with:
           profile: standard
       - uses: actions/upload-artifact@v4
@@ -81,7 +81,7 @@ The run is always offline: no GitHub or web sources and no LLM, whatever the con
 A later step can read them through the step's `id`. Add `if: always()` so that the step also runs when Veritas fails:
 
 ```yaml
-- uses: under18dev/veritas/packages/github-action@v0.1.1
+- uses: under18dev/veritas/packages/github-action@v0.1.2
   id: veritas
   with:
     profile: standard

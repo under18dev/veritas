@@ -105,7 +105,7 @@ Every JSON artifact is an envelope `{ "meta": { ... }, "data": ... }`:
   "meta": {
     "schemaVersion": "1.0.0",
     "runId": "run-20261120T100618836Z-000-1951f4",
-    "toolVersion": "0.1.1",
+    "toolVersion": "0.1.2",
     "gitCommit": "8a0dfe77e920c63934c08149b2f0a7aa67aecaa0",
     "configHash": "26b755aea2820bc824e016aaa6c9c6a663f172075da0d22a449ae19ea1af9255",
     "sourceHash": "64bf135f24766bd2b631d31b80625951a3629b2c23f7d0b0deacc76437082b6b",
