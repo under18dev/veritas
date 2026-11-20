@@ -422,10 +422,6 @@ findings (1):
 
 All 17 mutants are killed. fast-check ran 1000 inputs against the accepted rule with a recorded seed. Z3 found no input in `[-10000, 10000]` that violates it, and the `property_detection` checks show inputs at which the rule tells each mutant from the original. The two original discount tests are still `weak_or_incomplete`, because they themselves do not check the boundary; the new test is `meaningful_with_evidence`. The tautological test remains for a person to fix or remove.
 
-::: warning Property IDs and commits
-In this release, the ID of a documentation property includes the git commit at which its source was read. After you commit, the same README rule gets a new ID, the earlier decision does not apply to it, and it is listed as `proposed` again. `veritas spec diff` shows the old and new IDs. This tutorial does not commit between steps 5 and 10 for that reason.
-:::
-
 ## What to read next
 
 - [Reading results](/guide/reading-results) explains every status you saw above.

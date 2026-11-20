@@ -116,10 +116,6 @@ veritas spec export                    # 一覧を JSON で出力
 
 このファイルは追記だけで、あとから決め直しても以前の記録は消えません。決定は、決めたときのバージョンの Property にだけ適用されます。Property の内容が変わったら、もう一度レビューが必要です。
 
-::: warning コミットすると Property の ID が変わる
-現在のリリースでは、ドキュメントから来た Property の ID に、出典を読んだときの git のコミットが含まれます。新しくコミットすると、同じ記述から新しい ID の Property ができ、以前の決定は適用されません。コミットしたあとは `veritas spec diff` で変わった ID を確かめ、もう一度 accept か reject をしてください。
-:::
-
 チーム全員が同じ決定をもとに作業できるよう、承認のファイルはプロジェクトと一緒に管理してください。このファイルを残す `.gitignore` の例は[はじめに](/ja/guide/getting-started#結果の保存先)にあります。
 
 MCP サーバーからは承認を変更できません。Agent Skill に従うエージェントは、どの Property をなぜ決めるのかをあなたが伝えたときだけ、`spec accept` や `spec reject` を実行します。

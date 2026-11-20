@@ -116,10 +116,6 @@ Decisions are appended to `.veritas/approvals.json`:
 
 The file is append-only: a later decision is added, earlier ones are kept. A decision applies to the property version it was made for. When the content of a property changes, it has to be reviewed again.
 
-::: warning Property IDs change with commits
-In this release, the ID of a documentation property includes the git commit at which its source was read. After a new commit, the same statement produces a property with a new ID, and earlier decisions do not apply to it. Run `veritas spec diff` after a commit to see which IDs changed, and accept or reject them again.
-:::
-
 Keep the approvals file with the project so that the whole team works from the same decisions, and see [Getting started](/guide/getting-started#where-the-results-go) for a `.gitignore` that keeps it.
 
 Approvals cannot be changed through the MCP server. Agents following the Agent Skill only run `spec accept` or `spec reject` when you tell them which property and why.
