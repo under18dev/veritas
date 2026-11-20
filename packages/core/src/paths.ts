@@ -48,3 +48,13 @@ function realpathOfExistingPrefix(target: string): string {
 export function toPosixRelative(root: string, file: string): string {
   return path.relative(root, file).split(path.sep).join('/');
 }
+
+/**
+ * Whether `p` is a plain relative path that stays where it is joined: no URL scheme, not absolute or
+ * protocol-relative, no backslash or control character, and no empty, `.` or `..` segment.
+ */
+export function isPlainRelativePath(p: string): boolean {
+  if (p === '' || /^[a-z][a-z0-9+.-]*:/i.test(p) || p.startsWith('/') || p.includes('\\')) return false;
+  if ([...p].some((ch) => ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f)) return false;
+  return p.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+}

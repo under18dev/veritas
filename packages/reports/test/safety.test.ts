@@ -153,3 +153,50 @@ describe('artifact links', () => {
     );
   });
 });
+
+describe('untrusted paths and links in every format', () => {
+  const hostile = () => {
+    const input = fixture();
+    const claim = input.claims[0] as (typeof input.claims)[number];
+    claim.solverInputArtifact = '../../outside.smt2';
+    const finding = input.findings[0] as (typeof input.findings)[number];
+    finding.locations = [{ file: 'src/discount.ts' }, { file: '../../etc/passwd' }, { file: '/etc/shadow' }];
+    finding.propertyIds = [...finding.propertyIds, 'P-missing'];
+    return input;
+  };
+
+  it('never prints a path outside the run directory as an artifact location', () => {
+    for (const out of [renderText(hostile()), renderMarkdown(hostile())]) {
+      expect(out).not.toContain('outside.smt2');
+      expect(out).toContain('unsafe location omitted');
+    }
+  });
+
+  it('refuses a base directory that leaves the project', () => {
+    expect(safeArtifactHref('../outside', 'proof.smt2')).toBeNull();
+    expect(safeArtifactHref('.veritas/runs/../../x', 'proof.smt2')).toBeNull();
+  });
+
+  it('keeps only project-relative locations in SARIF', () => {
+    const sarif = renderSarif(hostile());
+    expect(JSON.stringify(sarif)).not.toMatch(/passwd|shadow/);
+    expect(JSON.stringify((sarif.runs[0]?.results[0] as { locations?: unknown })?.locations)).toContain(
+      'src/discount.ts',
+    );
+  });
+
+  it('links the CI summary only to an http(s) URL', () => {
+    expect(renderCiSummary(fixture(), { artifactUrl: 'javascript:alert(1)' })).not.toContain('Full report');
+    expect(renderCiSummary(fixture(), { artifactUrl: 'https://github.com/o/r/actions/runs/1' })).toContain(
+      '[Full report](https://github.com/o/r/actions/runs/1)',
+    );
+  });
+
+  it('renders a relation to an item missing from the report as text, not a dangling link', () => {
+    const html = renderHtml(hostile());
+    expect(html).not.toContain('href="#P-missing"');
+    expect(html).toContain('P-missing (not in this report)');
+    const anchors = new Set([...html.matchAll(/ id="([^"]*)"/g)].map((m) => m[1]));
+    for (const [, target] of html.matchAll(/href="#([^"]*)"/g)) expect(anchors.has(target)).toBe(true);
+  });
+});

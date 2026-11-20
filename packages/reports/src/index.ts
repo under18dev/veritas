@@ -5,6 +5,7 @@ import {
   EvidenceSource,
   Finding,
   FormalClaim,
+  isPlainRelativePath,
   MeasurementSnapshot,
   Mutant,
   MutantStatus,
@@ -135,7 +136,7 @@ function claimText(claim: FormalClaim, artifactBase: string): string {
   const scope = JSON.stringify(claim.scope);
   const domain = claim.scope.domain ? `, domain ${JSON.stringify(claim.scope.domain)}` : '';
   const artifact = claim.solverInputArtifact
-    ? `, solver input ${artifactBase.replace(/\/$/, '')}/${claim.solverInputArtifact}`
+    ? `, solver input ${safeArtifactHref(artifactBase, claim.solverInputArtifact) ?? '(unsafe location omitted)'}`
     : '';
   return `${claim.kind}: ${statusText(claim.status)}${domain}; assurance ${claim.assurance}; scope ${scope}; assumptions ${claim.assumptions.join('; ') || 'none'}; semantic gaps ${claim.semanticGaps.join('; ') || 'none'}; counterexample ${claim.counterexample ? JSON.stringify(claim.counterexample) : 'none'}${artifact}; reproduction ${claim.reproduction ?? 'none'}`;
 }
@@ -300,23 +301,14 @@ export function renderMarkdown(input: ReportInput): string {
 }
 
 /**
- * A link target for a run artifact, or null when it is not a plain relative path. Rejects any URL scheme
- * (`javascript:`, `data:`, `http:` ...), protocol-relative and absolute paths, backslashes, and artifact paths with
- * empty, `.` or `..` segments, which could point outside the run directory.
+ * A link target for a run artifact, or null when either part is not a plain relative path (see
+ * `isPlainRelativePath`): URL schemes, absolute paths, backslashes and `.`/`..` segments could point anywhere.
+ * The base may also be `.`.
  */
 export function safeArtifactHref(base: string, artifact: string): string | null {
-  if (artifact.split('/').some((segment) => segment === '' || segment === '.' || segment === '..'))
-    return null;
-  const joined = `${base.replace(/\/$/, '')}/${artifact}`;
-  if (
-    /^[a-z][a-z0-9+.-]*:/i.test(joined) ||
-    joined.startsWith('//') ||
-    joined.startsWith('/') ||
-    joined.includes('\\')
-  )
-    return null;
-  if ([...joined].some((ch) => ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f)) return null;
-  return joined;
+  const trimmed = base.replace(/\/$/, '');
+  if (!isPlainRelativePath(artifact) || (trimmed !== '.' && !isPlainRelativePath(trimmed))) return null;
+  return `${trimmed}/${artifact}`;
 }
 
 function artifactLink(base: string, artifact: string): string {
@@ -407,7 +399,17 @@ export function renderHtml(input: ReportInput): string {
   const limitations = reportSections[9] ?? '';
   const section = (heading: string, body: string, content: string) =>
     `<section><h2>${heading}</h2><pre>${htmlEscape(body)}</pre>${content}</section>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Veritas report ${htmlEscape(i.run.id)}</title><style>body{font-family:system-ui,sans-serif;line-height:1.45;max-width:1100px;margin:2rem auto;padding:0 1rem}article{border:1px solid #bbb;padding:.75rem;margin:.75rem 0}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:.4rem;text-align:left}blockquote{white-space:pre-wrap}pre{white-space:pre-wrap}</style></head><body><h1>Veritas report</h1>${section('1. Run metadata/environment/scope', metadata, `<p>${htmlEscape(i.run.id)} — ${htmlEscape(i.run.verdict ?? 'none')} — ${htmlEscape(i.run.environment.os)} — Node ${htmlEscape(i.run.environment.node)}</p>`)}${section('2. Collected evidence with provenance', evidence, sources || '<p>none</p>')}${section('3. Property ledger', propertyLedger, properties || '<p>none</p>')}${section('4. Specification vs implementation mismatches', mismatches, findingBlocks || '<p>none</p>')}${section('5. Tests x properties matrix', matrix, `${table}${tests || '<p>none</p>'}`)}${section('6. Mutation outcomes', mutation, mutants || '<p>none</p>')}${section('7. Formal claims', formal, claims || '<p>none</p>')}${section('8. Test assessments', assessments, `<p>${htmlEscape(i.assessments.map((assessment) => `${assessment.testId}: ${assessment.outcome}; ${assessment.rationale.join('; ')}`).join('\n') || 'none')}</p>`)}${section('9. Improvement proposals', improvements, i.improvements.map((imp) => `<article>${anchor(imp.planId)}<h3>${htmlEscape(imp.planId)} — ${htmlEscape(imp.outcome)}</h3><p>${htmlEscape(imp.goal ?? 'no plan')}</p></article>`).join('') || '<p>none</p>')}${section('10. Limitations', limitations, `<p>${htmlEscape(limitations.replace(/^10\. Limitations\n/, ''))}</p>`)}</body></html>`;
+  return withoutDanglingLinks(
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Veritas report ${htmlEscape(i.run.id)}</title><style>body{font-family:system-ui,sans-serif;line-height:1.45;max-width:1100px;margin:2rem auto;padding:0 1rem}article{border:1px solid #bbb;padding:.75rem;margin:.75rem 0}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:.4rem;text-align:left}blockquote{white-space:pre-wrap}pre{white-space:pre-wrap}</style></head><body><h1>Veritas report</h1>${section('1. Run metadata/environment/scope', metadata, `<p>${htmlEscape(i.run.id)} — ${htmlEscape(i.run.verdict ?? 'none')} — ${htmlEscape(i.run.environment.os)} — Node ${htmlEscape(i.run.environment.node)}</p>`)}${section('2. Collected evidence with provenance', evidence, sources || '<p>none</p>')}${section('3. Property ledger', propertyLedger, properties || '<p>none</p>')}${section('4. Specification vs implementation mismatches', mismatches, findingBlocks || '<p>none</p>')}${section('5. Tests x properties matrix', matrix, `${table}${tests || '<p>none</p>'}`)}${section('6. Mutation outcomes', mutation, mutants || '<p>none</p>')}${section('7. Formal claims', formal, claims || '<p>none</p>')}${section('8. Test assessments', assessments, `<p>${htmlEscape(i.assessments.map((assessment) => `${assessment.testId}: ${assessment.outcome}; ${assessment.rationale.join('; ')}`).join('\n') || 'none')}</p>`)}${section('9. Improvement proposals', improvements, i.improvements.map((imp) => `<article>${anchor(imp.planId)}<h3>${htmlEscape(imp.planId)} — ${htmlEscape(imp.outcome)}</h3><p>${htmlEscape(imp.goal ?? 'no plan')}</p></article>`).join('') || '<p>none</p>')}${section('10. Limitations', limitations, `<p>${htmlEscape(limitations.replace(/^10\. Limitations\n/, ''))}</p>`)}</body></html>`,
+  );
+}
+
+/** In-page links whose target is not in the page (an id the report has no item for) become plain text. */
+function withoutDanglingLinks(html: string): string {
+  const ids = new Set([...html.matchAll(/ id="([^"]*)"/g)].map((m) => m[1]));
+  return html.replace(/<a href="#([^"]*)">([^<]*)<\/a>/g, (link, id: string, text: string) =>
+    ids.has(id) ? link : `${text} (not in this report)`,
+  );
 }
 
 function sarifLevel(f: Finding): 'error' | 'warning' | 'note' {
@@ -436,13 +438,16 @@ export function renderSarif(input: ReportInput): SarifLog {
           level: sarifLevel(f),
           message: { text: f.title },
           properties: f.certainty === 'suspected' ? { certainty: 'suspected' } : { certainty: f.certainty },
-          locations: f.locations.length
-            ? f.locations.map((l) => ({
-                physicalLocation: {
-                  artifactLocation: { uri: l.file.replaceAll('\\', '/'), uriBaseId: '%SRCROOT%' },
-                  ...(l.range ? { region: { startLine: l.range.start, endLine: l.range.end } } : {}),
-                },
-              }))
+          // Only project-relative files: a location such as `../x` or `/etc/x` is not part of the source root.
+          locations: f.locations.some((l) => isPlainRelativePath(l.file.replaceAll('\\', '/')))
+            ? f.locations
+                .filter((l) => isPlainRelativePath(l.file.replaceAll('\\', '/')))
+                .map((l) => ({
+                  physicalLocation: {
+                    artifactLocation: { uri: l.file.replaceAll('\\', '/'), uriBaseId: '%SRCROOT%' },
+                    ...(l.range ? { region: { startLine: l.range.start, endLine: l.range.end } } : {}),
+                  },
+                }))
             : undefined,
         })),
       },
@@ -478,6 +483,11 @@ export function validateSarif(log: SarifLog): { valid: boolean; errors: string[]
   };
 }
 
+/** An http(s) URL or a plain relative path; anything else (`javascript:` ...) is not linked. */
+function safeReportUrl(url: string): boolean {
+  return /^https?:\/\/[^\s()<>]+$/i.test(url) || (isPlainRelativePath(url) && !/[\s()<>]/.test(url));
+}
+
 export function renderCiSummary(input: ReportInput, options: { artifactUrl?: string } = {}): string {
   const i = safe(input);
   const confirmed = i.findings.filter((f) => f.certainty === 'confirmed').length;
@@ -485,5 +495,5 @@ export function renderCiSummary(input: ReportInput, options: { artifactUrl?: str
   const unknownClaims = i.claims.filter((c) =>
     ['unknown', 'timeout', 'unsupported'].includes(c.status),
   ).length;
-  return `## Veritas\n\n- Verdict: ${i.run.verdict ?? 'unknown'}\n- Exit code: ${i.run.exitCode ?? 'unknown'}\n- Findings: ${confirmed.toLocaleString('en-US')} confirmed, ${suspected.toLocaleString('en-US')} suspected\n- Formal claims requiring follow-up: ${unknownClaims.toLocaleString('en-US')}\n- Finding details truncated to counts to keep this summary under 65,000 characters.${options.artifactUrl ? `\n- [Full report](${options.artifactUrl})` : ''}\n`;
+  return `## Veritas\n\n- Verdict: ${i.run.verdict ?? 'unknown'}\n- Exit code: ${i.run.exitCode ?? 'unknown'}\n- Findings: ${confirmed.toLocaleString('en-US')} confirmed, ${suspected.toLocaleString('en-US')} suspected\n- Formal claims requiring follow-up: ${unknownClaims.toLocaleString('en-US')}\n- Finding details truncated to counts to keep this summary under 65,000 characters.${options.artifactUrl && safeReportUrl(options.artifactUrl) ? `\n- [Full report](${options.artifactUrl})` : ''}\n`;
 }
