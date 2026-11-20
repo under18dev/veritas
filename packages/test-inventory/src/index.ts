@@ -819,15 +819,17 @@ function analyzeTest(
     suspicions.push('no_assertion');
 
   if (tautological) suspicions.push('tautological_assertion');
-  const opaque = analysis?.opaque === true;
+  // Code that runs when the file loads (outside any function) runs before every test in it.
+  const loading = moduleLoadReach(source, checker);
+  const opaque = analysis?.opaque === true || loading.opaque;
+  const unresolved = unresolvedImports.size > 0 || loading.unresolved;
 
   // An unresolved import, a child process or a dynamic import may well reach project code: absence is not proven.
-  if (calledSymbols.length === 0 && unresolvedImports.size === 0 && !opaque)
-    suspicions.push('target_not_called');
+  if (calledSymbols.length === 0 && !unresolved && !opaque) suspicions.push('target_not_called');
 
   if (mockedTarget) suspicions.push('unconditional_mock');
 
-  if (unresolvedImports.size > 0) suspicions.push('unresolved_import');
+  if (unresolved) suspicions.push('unresolved_import');
 
   if (opaque) suspicions.push('opaque_call');
 
@@ -923,6 +925,40 @@ function bindingIdentifiers(name: ts.BindingName): ts.Identifier[] {
   return name.elements.flatMap((element) =>
     ts.isBindingElement(element) ? bindingIdentifiers(element.name) : [],
   );
+}
+
+const moduleLoadCache = new WeakMap<ts.SourceFile, { opaque: boolean; unresolved: boolean }>();
+
+/**
+ * What a file runs when it loads: opaque calls outside any function, and relative imports or re-exports that do
+ * not resolve (their module, if it exists at run time, is loaded and executed before the tests).
+ */
+function moduleLoadReach(
+  source: ts.SourceFile,
+  checker: ts.TypeChecker,
+): { opaque: boolean; unresolved: boolean } {
+  const cached = moduleLoadCache.get(source);
+  if (cached) return cached;
+  let opaque = false;
+  let unresolved = false;
+  const visit = (node: ts.Node) => {
+    if (isFunctionLike(node)) return;
+    if (ts.isCallExpression(node) && isOpaqueCall(node, checker)) opaque = true;
+    const specifier =
+      ts.isImportDeclaration(node) || ts.isExportDeclaration(node) ? node.moduleSpecifier : undefined;
+    if (
+      specifier &&
+      ts.isStringLiteral(specifier) &&
+      specifier.text.startsWith('.') &&
+      !checker.getSymbolAtLocation(specifier)
+    )
+      unresolved = true;
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(source, visit);
+  const result = { opaque, unresolved };
+  moduleLoadCache.set(source, result);
+  return result;
 }
 
 /**

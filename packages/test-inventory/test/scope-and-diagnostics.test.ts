@@ -77,6 +77,38 @@ describe('scope and diagnostics', () => {
     expect(tests.find((t) => t.name === 'x')?.suspicions).toContain('opaque_call');
   });
 
+  it('applies what a file runs when it loads to every test in it', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/load-spawn.test.ts': `
+        import { expect, test } from 'vitest';
+        import { spawnSync } from 'node:child_process';
+        import { value } from '../src/value.js';
+        spawnSync('node', ['src/value.js']);
+        test('direct', () => expect(value(1)).toBe(1));
+      `,
+      'test/load-missing.test.ts': `
+        import { expect, test } from 'vitest';
+        import './setup-missing.js';
+        import { value } from '../src/value.js';
+        test('direct', () => expect(value(1)).toBe(1));
+      `,
+      'test/spawn-in-function.test.ts': `
+        import { expect, test } from 'vitest';
+        import { spawnSync } from 'node:child_process';
+        import { value } from '../src/value.js';
+        const unused = () => spawnSync('node', ['x']);
+        test('direct', () => expect(value(1)).toBe(1));
+      `,
+    });
+    const tests = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests;
+    const suspicions = (file: string) => tests.find((t) => t.file === file)?.suspicions;
+    expect(suspicions('test/load-spawn.test.ts')).toContain('opaque_call');
+    expect(suspicions('test/load-missing.test.ts')).toContain('unresolved_import');
+    // A function that is never called at load time does not run before the tests.
+    expect(suspicions('test/spawn-in-function.test.ts')).not.toContain('opaque_call');
+  });
+
   it('does not treat node or Vitest calls as project symbols', () => {
     const root = tempProject({
       'src/value.ts': 'export const value = (input: number) => input;\n',
