@@ -232,6 +232,12 @@ export function create(proto: object) { return Object.create(proto); }
 import { create, each, parse } from '../src/fns.js';
 it('increment', () => { let count = 0; each([1, 2], () => { count++; }); expect(count).toBe(2); });
 it('pushed', () => { const out: number[] = []; ['1'].forEach((t) => { out.push(parse(t)); }); expect(out).toEqual([1]); });
+it('consumed by another call', async () => {
+  let running = 0;
+  const tasks = Array.from({ length: 3 }, async () => { running++; running--; });
+  each(tasks as never, () => {});
+  expect(running).toBe(0);
+});
 it('stored on a property', () => {
   function Shape() {}
   const holder: { proto?: object } = {};
@@ -242,6 +248,8 @@ it('stored on a property', () => {
       extra,
     );
     expect(byName('increment')).toMatchObject({ symbols: ['src/fns.ts#each'], asserted: true });
+    // The callbacks ran inside Array.from, before project code got their promises.
+    expect(byName('consumed by another call').asserted).toBe(false);
     expect(byName('pushed')).toMatchObject({ symbols: ['src/fns.ts#parse'], asserted: true });
     expect(byName('stored on a property')).toMatchObject({ symbols: ['src/fns.ts#create'], asserted: true });
   });

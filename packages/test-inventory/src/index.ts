@@ -331,14 +331,14 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
 
     for (const argument of argumentsOf(call))
       for (const item of [argument, ...descendants(argument)]) {
-        if (isFunctionLike(item)) callbacks.add(item);
+        if (isFunctionLike(item) && handedOver(item, argument)) callbacks.add(item);
 
         if (!ts.isIdentifier(item)) continue;
         const declaration = checker.getSymbolAtLocation(item)?.valueDeclaration;
 
         if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer)
           for (const inner of [declaration.initializer, ...descendants(declaration.initializer)])
-            if (isFunctionLike(inner)) callbacks.add(inner);
+            if (isFunctionLike(inner) && handedOver(inner, declaration.initializer)) callbacks.add(inner);
       }
 
     for (const callback of callbacks) bind(writtenOuterIdentifiers(callback, checker), [call], true);
@@ -645,6 +645,29 @@ function isFunctionLike(
     ts.isFunctionExpression(node) ||
     ts.isMethodDeclaration(node)
   );
+}
+
+/**
+ * Whether a function inside `value` reaches whoever receives `value`: it is `value` itself or sits in array and
+ * object literals of it, not in an argument another call already consumes (`Array.from(n, () => ...)`, `xs.map(f)`).
+ */
+function handedOver(fn: ts.Node, value: ts.Node): boolean {
+  for (let current = fn; current !== value; current = current.parent) {
+    const parent = current.parent;
+
+    if (!parent) return false;
+
+    if (
+      (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
+      parent.arguments?.includes(current as ts.Expression)
+    )
+      return false;
+
+    // Not inside another function's body either: only the outermost functions are handed over.
+    if (isFunctionLike(parent) && parent !== fn) return false;
+  }
+
+  return true;
 }
 
 /** Variables declared outside a callback that it assigns (`x = …`, `x.y = …`) or mutates (`x.push(…)`). */
