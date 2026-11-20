@@ -71,6 +71,8 @@ describe('SMT-LIB generation', () => {
     };
     expect(() => conformanceQuery(rec, 1000)).toThrow(/recursive/);
     expect(() => conformanceQuery(boundaryIR('>', '-9007199254740993', '0'), 1000)).toThrow(/safe-integer/);
+    // An empty domain would make every property unsat.
+    expect(() => conformanceQuery(boundaryIR('>', '5', '1'), 1000)).toThrow(/empty/);
     const injected = { ...boundaryIR('>'), params: [{ name: 'x| (assert false) |', sort: 'bool' as const }] };
     expect(() => conformanceQuery(injected, 1000)).toThrow(/invalid identifier/);
   });

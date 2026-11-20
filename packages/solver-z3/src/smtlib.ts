@@ -183,6 +183,10 @@ export function checkIR(ir: PropertyIR): void {
         `domain of ${p.name} exceeds the safe-integer range`,
       );
     }
+    // An empty domain makes every property vacuously unsat.
+    if (p.sort === 'int' && BigInt(p.domain.min) > BigInt(p.domain.max)) {
+      throw new VeritasError('user', 'IR_DOMAIN_EMPTY', `domain of ${p.name} is empty (min > max)`);
+    }
   }
   for (const pre of ir.preconditions) {
     if (sortOf(pre, env, functions) !== 'bool')
