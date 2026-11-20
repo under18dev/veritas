@@ -1,7 +1,7 @@
 {
   "name": "@under18dev/veritas-property-testing",
   "version": "0.0.0",
-  "description": "Sandboxed property-based testing (fast-check) for Veritas properties",
+  "description": "Property-based testing (fast-check) for Veritas properties, in a restricted process",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {

@@ -37,7 +37,7 @@ export function buildProgram(
     .option('--allow-code-config', 'allow loading veritas.config.{ts,js}, which executes project code')
     .option(
       '--debug',
-      'log child processes, sandbox calls, stages and cache use to stderr (also VERITAS_DEBUG=1)',
+      'log child processes, restricted calls of project code, stages and cache use to stderr (also VERITAS_DEBUG=1)',
     )
     .addOption(
       new Option('--log-format <format>', 'stderr log format: text, or json (one object per line)')
@@ -79,7 +79,9 @@ export function buildProgram(
   wire(
     program
       .command('doctor')
-      .description('check tools, credentials and sandbox; report disabled/degraded features'),
+      .description(
+        'check tools, credentials and the restricted runner for project code; report disabled/degraded features',
+      ),
     (o) => doctorCommand(o),
   );
   wire(

@@ -36,7 +36,7 @@ describe('init and doctor', () => {
     const isolated =
       Number(process.versions.node.split('.')[0]) >= 25 || Boolean(process.env.VERITAS_SANDBOX_NODE);
     expect(sandbox?.state).toBe(isolated ? 'available' : 'unavailable');
-    expect(sandbox?.detail).toMatch(isolated ? /permission-model sandbox/ : /cannot block network access/);
+    expect(sandbox?.detail).toMatch(isolated ? /restricted process/ : /cannot block network access/);
   });
 
   it('refuses to overwrite an existing configuration without --force', () => {

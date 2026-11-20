@@ -207,9 +207,9 @@ export async function runDoctor(
     !sandboxOk
       ? 'cannot create temporary workspaces'
       : runtime.networkIsolated
-        ? `permission-model sandbox: no writes, child processes or network${via}`
+        ? `restricted process (permission model; defence in depth, the project's code is trusted): no writes, child processes or network${via}`
         : allowed
-          ? `permission-model sandbox WITHOUT network isolation (Node.js ${runtime.version}; allowed by sandbox.allowNetworkWithoutIsolation)`
+          ? `restricted process WITHOUT network isolation (Node.js ${runtime.version}; allowed by sandbox.allowNetworkWithoutIsolation)`
           : `project code is not run: Node.js ${runtime.version} cannot block network access; use Node.js 25+ or set VERITAS_SANDBOX_NODE`,
   );
 
