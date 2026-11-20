@@ -51,6 +51,8 @@ veritas prove --engine lean        # Lean 4 kernel check
 veritas test generate              # fast-check tests under .veritas/generated-tests/
 ```
 
+`veritas prove` replays counterexamples in the sandbox. `test generate` only writes the files. When you run them with Vitest, they run with the trust of your own test suite.
+
 ## 6. Improve tests
 
 ```bash
