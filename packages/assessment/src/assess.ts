@@ -66,6 +66,9 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
   );
   const assertedCall = test.targetCalls.some((c) => c.asserted);
   const unresolved = test.suspicions.includes('unresolved_import');
+  const opaque = test.suspicions.includes('opaque_call');
+  // Static analysis could not see everything the test reaches, so a missing link is not proof of none.
+  const linkUnknown = unresolved || opaque;
 
   const boundaryCoverage: EvidenceVector['boundaryCoverage'] = [];
   for (const p of properties) {
@@ -103,6 +106,10 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
   // A timeout counts as detected for the run, but which covering test would have caught it is not known.
   for (const m of other.filter((m) => m.status === 'timeout' && m.relevance === 'spec_relevant'))
     unknowns.push(`covered mutant ${m.id} timed out; whether this test detects it is not known`);
+  if (opaque)
+    unknowns.push(
+      'runs code in a child process or through a dynamic import; static analysis cannot see which project code it reaches',
+    );
   for (const c of claims)
     if (c.status !== 'proven_within_model' && c.status !== 'counterexample_found')
       unknowns.push(`formal claim ${c.id} is ${c.status}`);
@@ -113,7 +120,7 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
       ? 'checks_result'
       : test.assertionCount === 0
         ? 'none'
-        : unresolved
+        : linkUnknown
           ? 'unknown'
           : 'weak',
     mutationDetection: {
@@ -136,18 +143,23 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
     test.suspicions.includes('tautological_assertion') ||
     test.suspicions.includes('target_not_called') ||
     test.suspicions.includes('no_assertion') ||
-    (!assertedCall && !unresolved);
+    (!assertedCall && !linkUnknown);
   if (disconnected) {
     outcome = 'tautological_or_disconnected';
     if (test.suspicions.length) rationale.push(`static analysis: ${test.suspicions.join(', ')}`);
     if (!assertedCall) rationale.push('no assertion checks the result of a project function');
     if (input.mutationAvailable && killed.length === 0) rationale.push('killed no mutant');
   } else if (!assertedCall) {
-    // Only reachable with an unresolved import: the asserted call may be project code, so do not judge it.
+    // Only reachable when the link is unknown: the asserted value may come from project code, so do not judge it.
     outcome = 'inconclusive';
-    rationale.push(
-      'the asserted call could not be linked to a project symbol because its import did not resolve',
-    );
+    if (unresolved)
+      rationale.push(
+        'the asserted call could not be linked to a project symbol because its import did not resolve',
+      );
+    if (opaque)
+      rationale.push(
+        'the asserted values come from a child process or a dynamic import, which static analysis cannot follow',
+      );
   } else if (properties.some((p) => p.status === 'conflicted')) {
     outcome = 'spec_conflict';
     rationale.push(

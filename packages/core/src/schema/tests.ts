@@ -23,7 +23,11 @@ export const TestCase = z.object({
   usesMocks: z.boolean(),
   usesSnapshots: z.boolean(),
   nondeterminism: z.array(z.string()),
-  /** `unresolved_import`: a call goes through a relative import TypeScript could not resolve, so its target is unknown. */
+  /**
+   * `unresolved_import`: a call goes through a relative import TypeScript could not resolve.
+   * `opaque_call`: the test runs code in a child process or through a dynamic import.
+   * Either way, what the test reaches is unknown rather than absent.
+   */
   suspicions: z.array(
     z.enum([
       'no_assertion',
@@ -31,6 +35,7 @@ export const TestCase = z.object({
       'target_not_called',
       'unconditional_mock',
       'unresolved_import',
+      'opaque_call',
     ]),
   ),
   granularity: z.enum(['test', 'suite']),

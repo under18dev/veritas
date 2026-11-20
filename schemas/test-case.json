@@ -154,7 +154,8 @@
           "tautological_assertion",
           "target_not_called",
           "unconditional_mock",
-          "unresolved_import"
+          "unresolved_import",
+          "opaque_call"
         ]
       }
     },
