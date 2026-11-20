@@ -47,7 +47,7 @@ What each part is for:
 - `actions/setup-node` provides the Node.js the action runs with (see below). Use Node.js 25 or later (the example uses 26).
 - `upload-artifact` with `if: always()` keeps `.veritas/runs` even when the Veritas step fails, so that the evidence of a failing run can be inspected and the run replayed locally. Set a retention period.
 
-The project must contain a committed `.veritas/config.json` (create it with `veritas init`); without it the action fails with `CONFIG_MISSING` (exit code 2).
+The analysis needs a committed `.veritas/config.json` (create it with `veritas init`); when the analysis runs without it, the action fails with `CONFIG_MISSING` (exit code 2). A documentation-only change, and a project that cannot be analysed (no `package.json` or no Vitest), end before the configuration is read.
 
 ## Versions and Node.js
 

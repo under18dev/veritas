@@ -47,7 +47,7 @@ jobs:
 - `actions/setup-node` で、Action が使う Node.js を用意します（後述）。Node.js 25 以上を使ってください（例では 26）。
 - `upload-artifact` に `if: always()` を付けると、Veritas のステップが失敗しても `.veritas/runs` が残り、失敗した実行の根拠を確かめたり、手元で再実行したりできます。保存期間も指定してください。
 
-プロジェクトには、コミット済みの `.veritas/config.json` が必要です（`veritas init` で作ります）。ない場合、Action は `CONFIG_MISSING`（終了コード 2）で失敗します。
+解析には、コミット済みの `.veritas/config.json` が必要です（`veritas init` で作ります）。設定がないまま解析まで進むと、Action は `CONFIG_MISSING`（終了コード 2）で失敗します。ドキュメントだけの変更と、解析できないプロジェクト（`package.json` がない、または Vitest がない）は、設定を読む前に終わります。
 
 ## バージョンと Node.js
 
