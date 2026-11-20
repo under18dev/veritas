@@ -1,5 +1,6 @@
 // Measures wall-clock time and usage counters of `veritas run` per profile on each fixture.
-// Usage: node benchmarks/run.mjs [--check] [profile ...]   (default: quick standard deep)
+// Usage: node benchmarks/run.mjs [--check] [--keep-runs <dir>] [profile ...]   (default: quick standard deep)
+// --keep-runs copies each run's .veritas/runs/<run-id>/ to <dir>/<fixture>-<profile>/ (CI uploads them).
 // Writes benchmarks/results/<date>-<platform>.json. With --check, exits 1 when a run fails or exceeds the budget in
 // benchmarks/budget.json (ADR 0009); without it, numbers are recorded only.
 import { spawnSync } from 'node:child_process';
@@ -29,7 +30,9 @@ const fixtures = [
 ];
 const args = process.argv.slice(2);
 const check = args.includes('--check');
-const named = args.filter((a) => a !== '--check');
+const keepAt = args.indexOf('--keep-runs');
+const keepRuns = keepAt >= 0 ? path.resolve(args[keepAt + 1] ?? '') : null;
+const named = args.filter((a, i) => a !== '--check' && i !== keepAt && i !== keepAt + 1);
 const profiles = named.length ? named : ['quick', 'standard', 'deep'];
 const budget = JSON.parse(readFileSync(path.join(repo, 'benchmarks/budget.json'), 'utf8'));
 
@@ -80,6 +83,7 @@ for (const fixture of fixtures) {
       functions = JSON.parse(readFileSync(path.join(runDir, 'code-index.json'), 'utf8')).data.functions
         .length;
       tests = JSON.parse(readFileSync(path.join(runDir, 'test-map.json'), 'utf8')).data.tests.length;
+      if (keepRuns) cpSync(runDir, path.join(keepRuns, `${fixture}-${profile}`), { recursive: true });
     } catch {
       // keep nulls: a failed run is reported, not hidden
     }

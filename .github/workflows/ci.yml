@@ -68,7 +68,19 @@ jobs:
       - run: pnpm test
       - run: pnpm test:acceptance
       - name: Performance budget
-        run: node benchmarks/run.mjs --check
+        run: node benchmarks/run.mjs --check --keep-runs veritas-runs
+      # The run artifacts (reports, claims, solver input and output, artifact index) are kept for reproduction.
+      # Every artifact is redacted when written; fixtures contain no secrets.
+      - name: Upload Veritas run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: veritas-runs-${{ matrix.os }}-node${{ matrix.node }}
+          path: |
+            veritas-runs
+            benchmarks/results
+          retention-days: 14
+          if-no-files-found: warn
       - name: clean install from packed tarballs
         run: node scripts/clean-install-check.mjs
       - name: schemas are up to date
