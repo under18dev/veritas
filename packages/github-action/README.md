@@ -5,7 +5,7 @@ The program behind the Veritas GitHub Action
 Part of [Veritas](https://github.com/under18dev/veritas), specification-aware test verification for TypeScript/JavaScript projects. Use the action in a workflow rather than this package directly:
 
 ```yaml
-- uses: under18dev/veritas/packages/github-action@v0.1.2
+- uses: under18dev/veritas/packages/github-action@v0.1.3
   with:
     profile: standard
 ```

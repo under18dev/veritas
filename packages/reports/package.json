@@ -1,6 +1,6 @@
 {
   "name": "@under18dev/veritas-reports",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Text, JSON, Markdown, HTML and SARIF reports for Veritas runs",
   "license": "Apache-2.0",
   "repository": {

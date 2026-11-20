@@ -1,6 +1,6 @@
 {
   "name": "@under18dev/veritas-test-inventory",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Vitest test discovery and assertion analysis for Veritas",
   "license": "Apache-2.0",
   "repository": {
