@@ -101,6 +101,7 @@ function configure(
   vi.stubEnv('GITHUB_OUTPUT', output);
   vi.stubEnv('GITHUB_STEP_SUMMARY', summary);
   vi.stubEnv('GITHUB_TOKEN', 'ghp_fakefakefakefakefakefakefakefakefake1234');
+  vi.stubEnv('GITHUB_WORKSPACE', rootDir);
   vi.stubEnv('INPUT_WORKING_DIRECTORY', rootDir);
   vi.stubEnv('INPUT_PROFILE', options.profile ?? 'quick');
   vi.stubEnv('INPUT_INCONCLUSIVE', options.inconclusive ?? 'warn');
@@ -251,6 +252,14 @@ describe('main end to end', { timeout: 300_000 }, () => {
     expect(outputValues(files.output).verdict).toBe('inconclusive');
   });
 
+  it('refuses a working directory outside the checked-out workspace', async () => {
+    const project = copyFixture();
+    configure(project, git(project, 'rev-parse', 'HEAD'));
+    vi.stubEnv('INPUT_WORKING_DIRECTORY', '../');
+    await expect(main()).rejects.toThrow(/escapes the project root/);
+    expect(existsSync(path.join(path.dirname(project), '.veritas'))).toBe(false);
+  });
+
   it('returns 2 and writes no Veritas files for pull_request_target', async () => {
     const project = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-action-target-')));
     const eventPath = path.join(project, 'event.json');
@@ -260,6 +269,7 @@ describe('main end to end', { timeout: 300_000 }, () => {
     );
     vi.stubEnv('GITHUB_EVENT_NAME', 'pull_request_target');
     vi.stubEnv('GITHUB_EVENT_PATH', eventPath);
+    vi.stubEnv('GITHUB_WORKSPACE', project);
     vi.stubEnv('INPUT_WORKING_DIRECTORY', project);
     expect(await main()).toBe(2);
     expect(existsSync(path.join(project, '.veritas'))).toBe(false);

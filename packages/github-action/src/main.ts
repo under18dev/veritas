@@ -1,7 +1,15 @@
 import { appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { detectProject, loadConfig, redact, runCommand, runDoctor } from '@under18dev/veritas-core';
+import {
+  detectProject,
+  exitCodeFor,
+  loadConfig,
+  redact,
+  resolveInsideRoot,
+  runCommand,
+  runDoctor,
+} from '@under18dev/veritas-core';
 import { PROFILE_STAGES, type Profile, runVeritas } from '@under18dev/veritas-engine';
 import { planFromEvent, type RunPlan } from './event.js';
 
@@ -49,7 +57,10 @@ function degraded(reason: string, behavior: string, fromFork: boolean): number {
   return exitCode;
 }
 export async function main(): Promise<number> {
-  const root = path.resolve(input('working-directory', '.'));
+  // The working directory must stay inside the checked-out repository; `../..` or an absolute path elsewhere
+  // would analyse and write .veritas/ outside it.
+  const workspace = process.env.GITHUB_WORKSPACE ?? process.cwd();
+  const root = resolveInsideRoot(workspace, input('working-directory', '.'));
   let event: RunPlan;
   try {
     event = planFromEvent({
@@ -139,5 +150,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     })
     .catch((error) => {
       console.error(redact(error instanceof Error ? error.message : String(error)));
-      process.exitCode = 2;
+      // The shared exit codes: 2 only for a user error (bad input or configuration), 3 for tool failures.
+      process.exitCode = exitCodeFor(error);
     });
