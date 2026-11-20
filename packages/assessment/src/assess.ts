@@ -100,6 +100,9 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
     unknowns.push(
       'a call goes through a relative import TypeScript could not resolve; its link to project code is unknown (see the inventory diagnostics)',
     );
+  // A timeout counts as detected for the run, but which covering test would have caught it is not known.
+  for (const m of other.filter((m) => m.status === 'timeout' && m.relevance === 'spec_relevant'))
+    unknowns.push(`covered mutant ${m.id} timed out; whether this test detects it is not known`);
   for (const c of claims)
     if (c.status !== 'proven_within_model' && c.status !== 'counterexample_found')
       unknowns.push(`formal claim ${c.id} is ${c.status}`);

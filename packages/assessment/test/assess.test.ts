@@ -122,6 +122,17 @@ describe('assessTest', () => {
     expect(a.rationale.join(' ')).toMatch(/unresolved import/);
   });
 
+  it('lists a covered timeout mutant as unknown instead of crediting it as a kill', () => {
+    const t = testCase({ id: 'T-a', targetCalls: [call(['1000'])] });
+    const a = assessTest(
+      t,
+      input({ mutants: [mutant('M-1', 'killed', ['T-a'], ['T-a']), mutant('M-2', 'timeout', [], ['T-a'])] }),
+    );
+    expect(a.killedMutantIds).toEqual(['M-1']);
+    expect(a.vector.unknowns.join(' ')).toMatch(/M-2 timed out/);
+    expect(a.limitations.join(' ')).toMatch(/M-2 timed out/);
+  });
+
   it('is weak when a relevant mutant it runs survives', () => {
     const t = testCase({ id: 'T-b', targetCalls: [call(['1000'])] });
     const a = assessTest(
