@@ -1102,11 +1102,13 @@ async function runInContext(
     }
   }
   log(`run ${runId}: ${decision.verdict}`);
-  store.writeText('trace.jsonl', trace.text());
+  // Older runs are pruned before the trace is written, so the trace records the removal. The current run is never
+  // pruned, and runs still in progress elsewhere are not finished yet.
   const pruned = pruneRuns(root, config.storage.retainRuns, runId);
 
   if (pruned.length > 0)
     log(`removed ${pruned.length} older run(s) beyond storage.retainRuns (${config.storage.retainRuns})`);
+  store.writeText('trace.jsonl', trace.text());
 
   return { runId, dir: store.dir, run, findings, decision };
 }

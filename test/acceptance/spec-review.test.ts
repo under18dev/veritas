@@ -147,6 +147,9 @@ describe('configuration that changes what a run keeps', () => {
     const ids = [1, 2, 3].map(() => json<{ runId: string }>(runCli(['discover', '--json'], dir)).runId);
     const left = readdirSync(path.join(dir, '.veritas/runs')).filter((name) => name.startsWith('run-'));
     expect(left.sort()).toEqual(ids.slice(1).sort());
+    // The run that removed the oldest one records that in its trace.
+    const trace = readFileSync(path.join(dir, '.veritas/runs', ids[2] as string, 'trace.jsonl'), 'utf8');
+    expect(trace).toMatch(/removed 1 older run\(s\) beyond storage.retainRuns \(2\)/);
   });
 });
 
