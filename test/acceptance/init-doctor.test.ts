@@ -143,6 +143,33 @@ describe('exit codes and output contract', () => {
     expect(run.options.web).toEqual({ allowDomains: ['docs.example.com'], maxPages: 2 });
   });
 
+  it('logs structured JSON lines to stderr with --debug --log-format json and keeps a trace of every run', () => {
+    const dir = copyFixture('discount-boundary', { git: true });
+    expect(runCli(['init', '--yes'], dir).status).toBe(0);
+    const result = runCli(['--json', '--debug', '--log-format', 'json', 'run', '--profile', 'quick'], dir);
+    expect([0, 4]).toContain(result.status);
+    const { runId } = json<{ runId: string }>(result);
+    const events = result.stderr
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { level: string; event?: string; message: string });
+    expect(events.every((e) => ['debug', 'info', 'warn', 'error'].includes(e.level) && e.message)).toBe(true);
+    expect(events.some((e) => e.event === 'stage')).toBe(true);
+    expect(events.some((e) => e.event === 'process')).toBe(true);
+    const runDir = path.join(dir, '.veritas/runs', runId);
+    const trace = readFileSync(path.join(runDir, 'trace.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    expect(trace.some((e: { event?: string }) => e.event === 'stage')).toBe(true);
+    expect(readFileSync(path.join(runDir, 'artifact-index.json'), 'utf8')).toContain('"trace.jsonl"');
+    // Without --debug, text logs carry no debug events; with VERITAS_DEBUG=1 they do.
+    const quiet = runCli(['run', '--profile', 'quick'], dir);
+    expect(quiet.stderr).not.toMatch(/^debug: /m);
+    const loud = runCli(['run', '--profile', 'quick'], dir, { VERITAS_DEBUG: '1' });
+    expect(loud.stderr).toMatch(/^debug: stage index started$/m);
+  });
+
   it('refuses a project root that does not exist', () => {
     const dir = copyFixture('discount-boundary');
     const result = runCli(['--json', '-C', path.join(dir, 'missing'), 'doctor'], dir);

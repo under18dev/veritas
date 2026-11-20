@@ -64,6 +64,8 @@ node /path/to/veritas/packages/cli/dist/bin.js explain <finding-id>
 
 `mutate --import <report.json>` normalizes an existing mutation-testing-elements report (for example from Stryker) instead of running mutator. `discover --allow-domain <domain>` and `--max-pages <n>` add to and override `sources.web` for one run; web discovery still has to be enabled in the configuration.
 
+Global options: `--json`, `-C <dir>`, `--debug` (child processes, stages and cache on stderr; also `VERITAS_DEBUG=1`), `--log-format text|json`; every run also keeps a trace in `.veritas/runs/<run-id>/trace.jsonl` (see the [user guide](docs/user-guide.md#debugging)).
+
 Exit codes: `0` success, `1` confirmed policy failure, `2` invalid configuration or usage, `3` tool or infrastructure error, `4` inconclusive under the configured policy. With `--json`, stdout contains only JSON, usage errors included; `report --json` cannot be combined with another `--format`.
 
 See the [support matrix](docs/support-matrix.md) for what is available in the current build.

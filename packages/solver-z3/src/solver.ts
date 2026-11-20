@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { Worker } from 'node:worker_threads';
-import { runCommand } from '@under18dev/veritas-core';
+import { runCommand, runContext } from '@under18dev/veritas-core';
 import { parseGetValue, parseSExprs, type SExpr } from './sexpr.js';
 
 export type SolverEngine = 'z3-wasm' | 'z3-native';
@@ -24,6 +24,8 @@ export interface SolveOptions {
   timeoutMs: number;
   signal?: AbortSignal;
   nativeBinary?: string;
+  /** JavaScript heap limit of the solver worker in MiB; defaults to the run's `limits.memoryMb`. */
+  memoryMb?: number;
 }
 
 /**
@@ -96,12 +98,26 @@ export function interpretOutput(
   }
 }
 
+/** Below this a worker cannot even start, and V8 then ends the whole process instead of the worker. */
+export const MIN_SOLVER_HEAP_MB = 256;
+
+/** The worker heap limit for a requested limit: never below `MIN_SOLVER_HEAP_MB`; undefined means no limit. */
+export function solverHeapLimit(memoryMb: number | undefined): number | undefined {
+  return memoryMb === undefined ? undefined : Math.max(MIN_SOLVER_HEAP_MB, Math.floor(memoryMb));
+}
+
 function runWasm(smt: string, options: SolveOptions): Promise<SolverRun> {
   const started = Date.now();
   return new Promise((resolve) => {
     // Load the worker next to this module; under tests this module is TypeScript, which Node 24+ runs natively.
     const ext = import.meta.url.endsWith('.ts') ? '.ts' : '.js';
-    const worker = new Worker(new URL(`./wasm-worker${ext}`, import.meta.url), { workerData: { smt } });
+    // The worker's JavaScript heap is capped at the run's memory limit (Z3's WebAssembly memory is separate
+    // and bounded by the 32-bit address space); running out ends the worker with an error, never a verdict.
+    const memoryMb = solverHeapLimit(options.memoryMb ?? runContext()?.memoryMb);
+    const worker = new Worker(new URL(`./wasm-worker${ext}`, import.meta.url), {
+      workerData: { smt },
+      ...(memoryMb ? { resourceLimits: { maxOldGenerationSizeMb: memoryMb } } : {}),
+    });
     let settled = false;
     const done = (run: Omit<SolverRun, 'engine' | 'durationMs'>) => {
       if (settled) return;
@@ -124,7 +140,16 @@ function runWasm(smt: string, options: SolveOptions): Promise<SolverRun> {
       const output = msg.output ?? '';
       done({ ...interpretOutput(output), engineVersion: msg.version ?? 'unknown', output });
     });
-    worker.once('error', (error: Error) => done({ ...base, verdict: 'error', error: error.message }));
+    worker.once('error', (error: Error & { code?: string }) =>
+      done({
+        ...base,
+        verdict: 'error',
+        error:
+          error.code === 'ERR_WORKER_OUT_OF_MEMORY'
+            ? `solver ran out of memory (limit ${memoryMb} MiB, limits.memoryMb)`
+            : error.message,
+      }),
+    );
     worker.once('exit', (code) =>
       done({ ...base, verdict: 'error', error: `solver worker exited with code ${code}` }),
     );

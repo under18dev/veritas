@@ -17,6 +17,7 @@ import { canonicalJson, hashValue, sha256 } from '../hash.js';
 import { resolveInsideRoot } from '../paths.js';
 import { DEFAULT_ENV_ALLOWLIST } from '../process.js';
 import { redact, redactDeep } from '../redact.js';
+import { logEvent } from '../run-context.js';
 import { ArtifactMeta, SCHEMA_VERSION } from '../schema/common.js';
 import { TOOL_VERSION } from '../version.js';
 
@@ -284,6 +285,17 @@ export class ContentCache {
 
   /** The entry for `key`, or undefined when there is none or it does not match `schema` (a miss, never an error). */
   get<S extends z.ZodType>(namespace: string, key: string, schema: S): z.output<S> | undefined {
+    const value = this.lookup(namespace, key, schema);
+    logEvent('debug', `cache ${value === undefined ? 'miss' : 'hit'} ${namespace}/${key.slice(0, 12)}`, {
+      event: 'cache',
+      namespace,
+      key,
+      hit: value !== undefined,
+    });
+    return value;
+  }
+
+  private lookup<S extends z.ZodType>(namespace: string, key: string, schema: S): z.output<S> | undefined {
     try {
       const entry = JSON.parse(readFileSync(this.file(namespace, key), 'utf8')) as {
         mac?: unknown;

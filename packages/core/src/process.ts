@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { redact } from './redact.js';
+import { logEvent, nodeMemoryFlags, outOfMemory, relativeToRoot } from './run-context.js';
 
 export interface CommandResult {
   command: string;
@@ -79,6 +80,26 @@ export function runCommand(
       running.delete(child);
       clearTimeout(timer);
       options.signal?.removeEventListener('abort', onAbort);
+      // Debug trace: what ran, where and how it ended. Arguments are capped and redacted; never the environment
+      // or the input/output contents.
+      const durationMs = Date.now() - started;
+      logEvent(
+        'debug',
+        `${path.basename(command)} ${result.spawnError ? 'could not start' : `exited ${result.exitCode ?? result.signal}`}${timedOut ? ' (timed out and killed)' : ''} after ${durationMs} ms`,
+        {
+          event: 'process',
+          command: path.basename(command),
+          args: args.slice(0, 40).map((a) => (a.length > 300 ? `${a.slice(0, 300)}...` : a)),
+          cwd: relativeToRoot(options.cwd),
+          durationMs,
+          exitCode: result.exitCode ?? null,
+          signal: result.signal ?? null,
+          timedOut,
+          aborted: options.signal?.aborted ?? false,
+          ...(result.spawnError ? { spawnError: result.spawnError } : {}),
+          ...(outOfMemory(stderr) ? { outOfMemory: true } : {}),
+        },
+      );
       resolve({
         command,
         args,
@@ -234,13 +255,21 @@ function shimTarget(file: string): string | null {
 export async function runProjectTests(
   command: string,
   args: string[],
-  options: RunCommandOptions,
+  options: RunCommandOptions & { memoryMb?: number },
 ): Promise<CommandResult> {
   const home = mkdtempSync(path.join(tmpdir(), 'veritas-home-'));
+  // NODE_OPTIONS is not in the environment allowlist, so the user's own value never reaches the tests; the
+  // memory limit (limits.memoryMb) is the only option set, and every Node.js process the runner starts inherits it.
+  const memory = nodeMemoryFlags(options.memoryMb);
   try {
     return await runCommand(command, args, {
       ...options,
-      env: { ...(options.env ?? {}), HOME: home, USERPROFILE: home },
+      env: {
+        ...(options.env ?? {}),
+        HOME: home,
+        USERPROFILE: home,
+        ...(memory.length ? { NODE_OPTIONS: memory.join(' ') } : {}),
+      },
     });
   } finally {
     rmSync(home, { recursive: true, force: true });

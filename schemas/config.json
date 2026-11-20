@@ -433,6 +433,19 @@
         }
       },
       "additionalProperties": false
+    },
+    "limits": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "memoryMb": {
+          "default": 2048,
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 65536
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

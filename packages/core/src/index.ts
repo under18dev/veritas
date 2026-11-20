@@ -13,6 +13,7 @@ export * from './project/doctor.js';
 export * from './project/init.js';
 export * from './project/llm.js';
 export * from './redact.js';
+export * from './run-context.js';
 export * from './sandbox.js';
 export * from './schema/common.js';
 export * from './schema/evidence.js';

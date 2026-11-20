@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs';
 import path from 'node:path';
-import { ExitCode, TOOL_VERSION, VeritasError } from '@under18dev/veritas-core';
+import { ExitCode, TOOL_VERSION, VeritasError, withRunContext } from '@under18dev/veritas-core';
 import { Command, CommanderError, Option } from 'commander';
 import { doctorCommand } from './commands/doctor.js';
 import {
@@ -18,7 +18,7 @@ import {
 } from './commands/engine.js';
 import { improveCommand } from './commands/improve.js';
 import { initCommand } from './commands/init.js';
-import { emitJson, type GlobalOptions, reportError } from './output.js';
+import { configureLogging, emitJson, type GlobalOptions, reportError, stderrSink } from './output.js';
 
 type Handler = (opts: GlobalOptions & Record<string, unknown>, args: string[]) => Promise<ExitCode>;
 
@@ -29,6 +29,15 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
     .option('--json', 'print machine-readable JSON on stdout; logs go to stderr')
     .option('-C, --root <dir>', 'project root', process.cwd())
     .option('--allow-code-config', 'allow loading veritas.config.{ts,js}, which executes project code')
+    .option(
+      '--debug',
+      'log child processes, sandbox calls, stages and cache use to stderr (also VERITAS_DEBUG=1)',
+    )
+    .addOption(
+      new Option('--log-format <format>', 'stderr log format: text, or json (one object per line)')
+        .choices(['text', 'json'])
+        .default('text'),
+    )
     .exitOverride()
     .configureOutput({ writeErr: (s) => process.stderr.write(s) });
 
@@ -38,10 +47,14 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
       const global = program.opts() as GlobalOptions;
       const opts = { ...global, ...command.opts(), root: path.resolve(global.root) } as GlobalOptions &
         Record<string, unknown>;
+      configureLogging({ debug: Boolean(global.debug), format: global.logFormat });
       try {
         if (!statSync(opts.root, { throwIfNoEntry: false })?.isDirectory())
           throw new VeritasError('user', 'ROOT_NOT_FOUND', `project root is not a directory: ${opts.root}`);
-        setExit(await handler(opts, command.args));
+        // Library code reports through the run context; the CLI shows it on stderr.
+        setExit(
+          await withRunContext({ root: opts.root, sinks: [stderrSink] }, () => handler(opts, command.args)),
+        );
       } catch (error) {
         setExit(reportError(error, opts.json));
       }

@@ -19,6 +19,8 @@ import {
   gitOutput,
   hashValue,
   type JsParam,
+  type LogSink,
+  logEvent,
   type Mutant,
   newRunId,
   openCache,
@@ -39,7 +41,10 @@ import {
   sha256,
   stableId,
   toPosixRelative,
+  traceCollector,
+  type VeritasConfig,
   VeritasError,
+  withRunContext,
 } from '@under18dev/veritas-core';
 import {
   applyMutation,
@@ -104,7 +109,10 @@ export interface RunOptions {
   propertyIds?: string[];
   allowCodeConfig?: boolean;
   signal?: AbortSignal;
+  /** Plain progress messages (info level and above). */
   log?: (message: string) => void;
+  /** Every structured event of the run, debug level included (see `LogEvent`). */
+  logger?: LogSink;
   /** Injected LLM provider (tests). By default the configured provider is used when it is available. */
   llmProvider?: LlmProvider | null;
 }
@@ -157,9 +165,29 @@ function tally(values: string[]): Record<string, number> {
 
 /** Run the requested stages and persist every artifact under `.veritas/runs/<run-id>/`. */
 export async function runVeritas(options: RunOptions): Promise<RunSummary> {
+  const { config, configHash } = await openProject(options.root, {
+    allowCodeConfig: options.allowCodeConfig,
+  });
+  // Every run keeps an execution trace (child processes, sandbox calls, stages, cache) in trace.jsonl; callers may
+  // also receive the events (logger) or, as before, only the plain messages (log).
+  const trace = traceCollector();
+  const sinks: LogSink[] = [trace.sink];
+  if (options.logger) sinks.push(options.logger);
+  const legacy = options.log;
+  if (legacy) sinks.push((event) => event.level !== 'debug' && legacy(event.message));
+  return withRunContext({ root: options.root, memoryMb: config.limits.memoryMb, sinks }, () =>
+    runInContext(options, config, configHash, trace),
+  );
+}
+
+async function runInContext(
+  options: RunOptions,
+  config: VeritasConfig,
+  configHash: string,
+  trace: ReturnType<typeof traceCollector>,
+): Promise<RunSummary> {
   const { root } = options;
-  const log = options.log ?? (() => {});
-  const { config, configHash } = await openProject(root, { allowCodeConfig: options.allowCodeConfig });
+  const log = (message: string) => logEvent('info', message);
   // Command-line web overrides go through the same validation as the configuration file.
   const discoveryConfig = options.web
     ? parseConfig(
@@ -956,6 +984,7 @@ export async function runVeritas(options: RunOptions): Promise<RunSummary> {
     }
   }
   log(`run ${runId}: ${decision.verdict}`);
+  store.writeText('trace.jsonl', trace.text());
   return { runId, dir: store.dir, run, findings, decision };
 }
 

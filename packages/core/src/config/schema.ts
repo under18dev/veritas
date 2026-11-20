@@ -157,6 +157,16 @@ export const VeritasConfig = z
       })
       .strict()
       .prefault({}),
+    limits: z
+      .object({
+        /**
+         * V8 heap limit in MiB for the processes Veritas starts for project code (sandboxed calls, property-based
+         * tests, the project's test runner and mutator) and for the Z3 worker. Lean cannot be limited portably.
+         */
+        memoryMb: z.number().int().min(256).max(65536).default(2048),
+      })
+      .strict()
+      .prefault({}),
   })
   .strict();
 

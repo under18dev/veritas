@@ -1,6 +1,7 @@
 import type { RunStore } from './artifacts/store.js';
 import type { VeritasConfig } from './config/schema.js';
 import { VeritasError } from './exit-codes.js';
+import { logEvent } from './run-context.js';
 import type { StageName, StageResult, UsageCounters } from './schema/run.js';
 import type { StageStatus } from './schema/status.js';
 
@@ -63,6 +64,7 @@ export async function runStages(stages: Stage[], ctx: Omit<StageContext, 'output
         messages: [`skipped: prerequisite stage(s) not usable: ${blocked.join(', ')}`],
       };
     } else {
+      logEvent('debug', `stage ${stage.name} started`, { event: 'stage', stage: stage.name, at: 'start' });
       try {
         outcome = await stage.run({ ...ctx, outputs });
         if (outcome.output !== undefined) outputs.set(stage.name, outcome.output);
@@ -75,6 +77,17 @@ export async function runStages(stages: Stage[], ctx: Omit<StageContext, 'output
       }
     }
     const finished = new Date();
+    logEvent(
+      'debug',
+      `stage ${stage.name} ${outcome.status} in ${finished.getTime() - started.getTime()} ms`,
+      {
+        event: 'stage',
+        stage: stage.name,
+        at: 'end',
+        status: outcome.status,
+        durationMs: finished.getTime() - started.getTime(),
+      },
+    );
     statusOf.set(stage.name, outcome.status);
     results.push({
       stage: stage.name,

@@ -1,6 +1,13 @@
 import type { Expr, PropertyIR } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
-import { conformanceQuery, interpretOutput, safeRangeQuery, solveSmtLib } from '../src/index.js';
+import {
+  conformanceQuery,
+  interpretOutput,
+  MIN_SOLVER_HEAP_MB,
+  safeRangeQuery,
+  solverHeapLimit,
+  solveSmtLib,
+} from '../src/index.js';
 
 const v = (name: string): Expr => ({ kind: 'var', name });
 const n = (value: number | string): Expr => ({ kind: 'int', value: String(value) });
@@ -167,4 +174,18 @@ describe('safe-integer obligation', () => {
       'unsat',
     );
   }, 60_000);
+});
+
+describe('solver memory limit', () => {
+  it('caps the worker heap but never below the size a worker needs to start', async () => {
+    expect(solverHeapLimit(undefined)).toBeUndefined();
+    expect(solverHeapLimit(1)).toBe(MIN_SOLVER_HEAP_MB);
+    expect(solverHeapLimit(4096)).toBe(4096);
+    // A limit below the floor would end the whole process when the worker starts; it is raised instead.
+    const run = await solveSmtLib('(declare-const x Int)(assert (> x 1))(check-sat)', {
+      timeoutMs: 60_000,
+      memoryMb: 1,
+    });
+    expect(run.verdict).toBe('sat');
+  }, 90_000);
 });

@@ -60,7 +60,6 @@ async function stagesCommand(
     args: process.argv.slice(2),
     stages,
     allowCodeConfig: Boolean(opts.allowCodeConfig),
-    log,
     ...extra,
   });
   return summaryOut(opts, summary);
@@ -179,7 +178,6 @@ export async function replayCommand(opts: Opts, args: string[]): Promise<ExitCod
     ...(run.scope.paths.length ? { scope: run.scope.paths } : {}),
     ...(run.scope.since ? { since: run.scope.since } : {}),
     allowCodeConfig: Boolean(opts.allowCodeConfig),
-    log,
   });
   return summaryOut(opts, summary);
 }

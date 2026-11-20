@@ -4,10 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   type Expr,
+  nodeMemoryFlags,
+  outOfMemory,
   PropertyIR,
   type RunStore,
   resolveInsideRoot,
   runCommand,
+  runContext,
   sandboxRefusal,
   sandboxRuntime,
   stableId,
@@ -283,7 +286,9 @@ async function execute(
   const refusal = sandboxRefusal(sandbox, options.allowNetworkWithoutIsolation);
   if (refusal) return finish('error', { error: refusal });
   const nonce = randomBytes(16).toString('hex');
+  const memoryMb = runContext()?.memoryMb;
   const args = [
+    ...nodeMemoryFlags(memoryMb),
     '--permission',
     `--allow-fs-read=${root}`,
     `--allow-fs-read=${RUNNER}`,
@@ -317,6 +322,11 @@ async function execute(
   }
   if (result.spawnError) return finish('error', { durationMs, error: result.spawnError });
   const output = parseOutput(result.stdout, nonce);
+  if (!output && outOfMemory(result.stderr))
+    return finish('error', {
+      durationMs,
+      error: `property runner ran out of memory (limit ${memoryMb ?? 'default'} MiB, limits.memoryMb)`,
+    });
   if (!output) {
     const detail = result.stderr.split('\n').find((l) => /Error/.test(l)) ?? result.stderr.slice(0, 500);
     return finish('error', {

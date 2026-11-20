@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveCommand, runCommand } from './process.js';
+import { logEvent, nodeMemoryFlags, outOfMemory, relativeToRoot, runContext } from './run-context.js';
 
 export type EncodedValue =
   | { t: 'number'; v: string }
@@ -99,7 +100,23 @@ export async function callInSandbox(options: {
   signal?: AbortSignal;
   /** Run even when no Node.js 25+ is available to block network access (explicit opt-in). */
   allowNetworkWithoutIsolation?: boolean;
+  /** V8 heap limit of the child in MiB; defaults to the run's `limits.memoryMb`. */
+  memoryMb?: number;
 }): Promise<SandboxResult> {
+  const result = await sandboxCall(options);
+  logEvent('debug', `sandbox call ${options.exportName}: ${result.status}`, {
+    event: 'sandbox',
+    module: relativeToRoot(options.modulePath),
+    exportName: options.exportName,
+    calls: options.calls.length,
+    status: result.status,
+    durationMs: result.durationMs,
+    ...(result.error ? { error: result.error } : {}),
+  });
+  return result;
+}
+
+async function sandboxCall(options: Parameters<typeof callInSandbox>[0]): Promise<SandboxResult> {
   const sandbox = sandboxRuntime();
   const refusal = sandboxRefusal(sandbox, options.allowNetworkWithoutIsolation);
   if (refusal)
@@ -117,7 +134,9 @@ export async function callInSandbox(options: {
   );
   const root = realpathSync(options.root);
   const modulePath = realpathSync(options.modulePath);
+  const memoryMb = options.memoryMb ?? runContext()?.memoryMb;
   const args = [
+    ...nodeMemoryFlags(memoryMb),
     '--permission',
     `--allow-fs-read=${root}`,
     `--allow-fs-read=${runner}`,
@@ -150,6 +169,12 @@ export async function callInSandbox(options: {
     if (!parsed.ok) return { ...base, status: 'error', error: parsed.error ?? 'sandbox failed' };
     return { ...base, status: 'ok', results: parsed.results ?? [], error: null };
   } catch {
+    if (outOfMemory(result.stderr))
+      return {
+        ...base,
+        status: 'error',
+        error: `sandboxed execution ran out of memory (limit ${memoryMb ?? 'default'} MiB, limits.memoryMb)`,
+      };
     const detail = result.stderr.split('\n').find((l) => /Error/.test(l)) ?? result.stderr.slice(0, 500);
     return {
       ...base,
