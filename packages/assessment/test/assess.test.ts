@@ -114,6 +114,14 @@ describe('assessTest', () => {
     expect(a.killedMutantIds).toEqual(['M-1']);
   });
 
+  it('is not meaningful when another call goes through an unresolved import, since it may have caused the kills', () => {
+    const t = testCase({ id: 'T-a', targetCalls: [call(['1000'])], suspicions: ['unresolved_import'] });
+    const a = assessTest(t, input({ mutants: [mutant('M-1', 'killed', ['T-a'], ['T-a'])] }));
+    expect(a.outcome).toBe('inconclusive');
+    expect(a.killedMutantIds).toEqual(['M-1']);
+    expect(a.rationale.join(' ')).toMatch(/unresolved import/);
+  });
+
   it('is weak when a relevant mutant it runs survives', () => {
     const t = testCase({ id: 'T-b', targetCalls: [call(['1000'])] });
     const a = assessTest(
