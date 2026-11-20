@@ -62,6 +62,8 @@ veritas improve --apply --plan <plan-id> --approve <token>
 
 Only new test files are added, and only when mutation results improve in an isolated copy. Expected values come from accepted specifications, never from the implementation (`--include-proposed` explicitly allows proposed ones). Rejecting a property after planning invalidates the plan. Tests that would fail against the current code are reported as possible specification violations instead of being added.
 
+After the patched tests pass, the copy also runs mutation testing again. It then re-evaluates the formal and property-based results with the stages and options of the run the plan came from (offline). If the re-evaluation fails, the patch is discarded. A project with symbolic links pointing outside it is refused (`IMPROVE_UNSAFE_LINK`), because the isolated run could write through them.
+
 ## Configuration
 
 `.veritas/config.json` is validated against `schemas/config.json`. Important settings:
