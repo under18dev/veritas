@@ -448,6 +448,9 @@ const CHILD_PROCESS_FUNCTIONS = new Set([
 /** A dynamic `import()` or a Node.js child_process call: what runs there is invisible to static analysis. */
 function isOpaqueCall(node: ts.CallExpression, checker: ts.TypeChecker): boolean {
   if (node.expression.kind === ts.SyntaxKind.ImportKeyword) return true;
+  // `require(...)` and `createRequire(...)` load modules at run time, which static imports do not show.
+  if (ts.isIdentifier(node.expression) && ['require', 'createRequire'].includes(node.expression.text))
+    return true;
   // By import source, which works without @types/node: `spawnSync(...)` or `cp.spawnSync(...)`.
   const callee = skipParens(node.expression);
   const local = ts.isPropertyAccessExpression(callee) ? skipParens(callee.expression) : callee;
@@ -913,12 +916,7 @@ function bindingIdentifiers(name: ts.BindingName): ts.Identifier[] {
  */
 function hasUnseenReach(source: ts.SourceFile, checker: ts.TypeChecker): boolean {
   return descendants(source).some((node) => {
-    // `require(...)` and `createRequire(...)` load modules at run time, which static imports do not show.
-    if (ts.isCallExpression(node))
-      return (
-        isOpaqueCall(node, checker) ||
-        (ts.isIdentifier(node.expression) && ['require', 'createRequire'].includes(node.expression.text))
-      );
+    if (ts.isCallExpression(node)) return isOpaqueCall(node, checker);
     const specifier =
       ts.isImportDeclaration(node) || ts.isExportDeclaration(node) ? node.moduleSpecifier : undefined;
 
