@@ -36,9 +36,9 @@ describe('git history and reproducibility', () => {
       'commit.gpgsign=false',
       'commit',
       '-qm',
-      'First',
+      'First \x1e\x1f',
       '-m',
-      'before\n---\nThe total must be at least 10.',
+      'before\n---\x1f\nThe total must be at least 10.',
     );
     writeFileSync(`${root}/B.txt`, 'b\n');
     git(root, 'add', 'B.txt');
