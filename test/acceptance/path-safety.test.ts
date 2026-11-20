@@ -72,10 +72,11 @@ describe('project root containment', () => {
   it('does not print a tampered artifact path from a run as a location', () => {
     const dir = copyFixture('discount-boundary', { git: true, linkDeps: true });
     expect(runCli(['init', '--yes'], dir).status).toBe(0);
-    const prove = json<{ runId: string; findings: { id: string }[] }>(
+    const prove = json<{ runId: string; findings: { id: string; claimIds: string[] }[] }>(
       runCli(['prove', '--include-proposed', '--json'], dir),
     );
-    const finding = prove.findings[0];
+    // A finding backed by a formal claim, so explain has a solver input to show.
+    const finding = prove.findings.find((f) => f.claimIds.length > 0);
     expect(finding).toBeDefined();
     const file = path.join(dir, '.veritas/runs', prove.runId, 'claims.json');
     const claims = JSON.parse(readFileSync(file, 'utf8'));
