@@ -31,6 +31,7 @@ import {
   type Property,
   type PropertyIR,
   parseConfig,
+  pruneRuns,
   type Run,
   RunStore,
   resolveInsideRoot,
@@ -328,10 +329,12 @@ async function runInContext(
               ...code0.files.map((f) => f.path),
             ])
           : null;
+      // analysis.inferSpecsFromCode: false keeps code-inferred candidates out of the property registry.
+      const fromCode = config.analysis.inferSpecsFromCode ? inferred : [];
       const candidates =
         options.since && diff !== null
-          ? markChangedCandidates(inferred, code0, parseChangedLines(diff), options.since)
-          : inferred;
+          ? markChangedCandidates(fromCode, code0, parseChangedLines(diff), options.since)
+          : fromCode;
 
       return {
         status: 'succeeded',
@@ -1098,6 +1101,10 @@ async function runInContext(
   }
   log(`run ${runId}: ${decision.verdict}`);
   store.writeText('trace.jsonl', trace.text());
+  const pruned = pruneRuns(root, config.storage.retainRuns, runId);
+
+  if (pruned.length > 0)
+    log(`removed ${pruned.length} older run(s) beyond storage.retainRuns (${config.storage.retainRuns})`);
 
   return { runId, dir: store.dir, run, findings, decision };
 }

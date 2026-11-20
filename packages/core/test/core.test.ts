@@ -32,6 +32,7 @@ import {
   PropertyIR,
   PUBLIC_SCHEMAS,
   parseConfig,
+  pruneRuns,
   RunStore,
   readEnvelope,
   redact,
@@ -111,6 +112,18 @@ describe('config', () => {
   it('rejects settings Veritas cannot enforce instead of ignoring them', () => {
     expect(() => parseConfig({ mutation: { maxMutants: 5 } }, 'x.json')).toThrow(/maxMutants/);
   });
+
+  it('accepts only the enforced value for settings that are invariants', () => {
+    for (const [input, key] of [
+      [{ analysis: { requireApprovalForNormativeClaims: false } }, 'requireApprovalForNormativeClaims'],
+      [{ improvement: { testFilesOnly: false } }, 'testFilesOnly'],
+      [{ storage: { storePrompts: true } }, 'storePrompts'],
+    ] as const)
+      expect(() => parseConfig(input, 'x.json'), key).toThrow(new RegExp(key));
+    const defaults = parseConfig({}, null);
+    expect(defaults.analysis.requireApprovalForNormativeClaims).toBe(true);
+    expect(defaults.storage.storePrompts).toBe(false);
+  });
 });
 
 describe('paths', () => {
@@ -187,6 +200,33 @@ describe('ids and hashing', () => {
 
 describe('run store', () => {
   const ctx = { configHash: hashValue({}), sourceHash: hashValue([]), gitCommit: null };
+
+  it('keeps the newest runs and removes older ones, never the current one or anything else', () => {
+    const root = tmp();
+    const runs = path.join(root, '.veritas/runs');
+    const ids = [
+      'run-20261101T000000000Z-000-aaaaaa',
+      'run-20261102T000000000Z-000-bbbbbb',
+      'run-20261103T000000000Z-000-cccccc',
+    ];
+    for (const id of ids) mkdirSync(path.join(runs, id, 'proofs'), { recursive: true });
+    mkdirSync(path.join(runs, 'notes'), { recursive: true });
+    writeFileSync(path.join(runs, 'run-keep.txt'), 'not a run directory');
+    const outside = tmp();
+    symlinkSync(
+      outside,
+      path.join(runs, 'run-20261031T000000000Z-000-dddddd'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    // The current run is kept even when it is not among the newest by name.
+    expect(pruneRuns(root, 2, ids[0] as string)).toEqual([ids[1]]);
+    expect(existsSync(path.join(runs, ids[0] as string))).toBe(true);
+    expect(existsSync(path.join(runs, ids[1] as string))).toBe(false);
+    expect(existsSync(path.join(runs, ids[2] as string))).toBe(true);
+    expect(existsSync(path.join(runs, 'notes'))).toBe(true);
+    expect(existsSync(path.join(runs, 'run-keep.txt'))).toBe(true);
+    expect(existsSync(outside)).toBe(true);
+  });
 
   it('writes validated, enveloped artifacts with full metadata and reads them back', () => {
     const root = tmp();

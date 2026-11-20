@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -267,6 +268,35 @@ export function listRuns(root: string): string[] {
   } catch {
     return [];
   }
+}
+
+const RUN_ID = /^run-\d{8}T\d{9}Z-\d{3}-[0-9a-f]{6}$/;
+
+/**
+ * Remove run directories under `.veritas/runs` beyond the `keep` newest, never `current`. Only real directories
+ * named like a run ID are removed; links and anything else stay. Returns the removed run IDs.
+ */
+export function pruneRuns(root: string, keep: number, current: string): string[] {
+  const dir = path.join(root, RUNS_DIR);
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const runs = entries
+    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink() && RUN_ID.test(entry.name))
+    .map((entry) => entry.name)
+    .sort()
+    .reverse();
+  const kept = new Set([current, ...runs.filter((id) => id !== current).slice(0, Math.max(0, keep - 1))]);
+  const removed: string[] = [];
+  for (const id of runs) {
+    if (kept.has(id)) continue;
+    rmSync(resolveInsideRoot(root, path.join(RUNS_DIR, id)), { recursive: true, force: true });
+    removed.push(id);
+  }
+  return removed;
 }
 
 /**

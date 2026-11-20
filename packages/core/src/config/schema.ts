@@ -67,7 +67,8 @@ export const VeritasConfig = z
         testInclude: z.array(z.string()).default(['**/*.{test,spec}.{ts,tsx,js,mjs}']),
         testFramework: z.literal('vitest').default('vitest'),
         inferSpecsFromCode: z.boolean().default(true),
-        requireApprovalForNormativeClaims: z.boolean().default(true),
+        // An invariant: a property from documentation becomes accepted only through an explicit approval.
+        requireApprovalForNormativeClaims: z.literal(true).default(true),
       })
       .strict()
       .prefault({}),
@@ -113,7 +114,8 @@ export const VeritasConfig = z
     improvement: z
       .object({
         autoApply: z.literal(false).default(false),
-        testFilesOnly: z.boolean().default(true),
+        // An invariant: improvements only add test files; production code is never edited.
+        testFilesOnly: z.literal(true).default(true),
         maxIterations: z.number().int().positive().max(20).default(3),
         maxPatchFiles: z.number().int().positive().max(50).default(5),
       })
@@ -145,8 +147,10 @@ export const VeritasConfig = z
       .prefault({}),
     storage: z
       .object({
+        /** Run directories kept under `.veritas/runs`; older ones are removed when a run finishes. */
         retainRuns: z.number().int().positive().default(20),
-        storePrompts: z.boolean().default(false),
+        // An invariant: prompts sent to an LLM are not stored with the run artifacts.
+        storePrompts: z.literal(false).default(false),
       })
       .strict()
       .prefault({}),

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ApprovalLedger, Property } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
@@ -107,5 +107,44 @@ describe('spec review commands', () => {
     expect(properties.length).toBe(list.properties.length);
     expect(properties.find((p) => p.id === id)?.status).toBe('rejected');
     expect(properties.some((p) => p.status === 'accepted')).toBe(false);
+  });
+});
+
+describe('configuration that changes what a run keeps', () => {
+  const configure = (dir: string, change: (config: Record<string, Record<string, unknown>>) => void) => {
+    const file = path.join(dir, '.veritas/config.json');
+    const config = JSON.parse(readFileSync(file, 'utf8'));
+    change(config);
+    writeFileSync(file, JSON.stringify(config));
+  };
+  const origins = (dir: string, runId: string) =>
+    (
+      JSON.parse(readFileSync(path.join(dir, '.veritas/runs', runId, 'properties.json'), 'utf8')).data as {
+        properties: { origin: string }[];
+      }
+    ).properties.map((p) => p.origin);
+
+  it('leaves code-inferred candidates out with analysis.inferSpecsFromCode: false', () => {
+    const dir = copyFixture('discount-boundary');
+    expect(runCli(['init', '--yes'], dir).status).toBe(0);
+    const before = json<{ runId: string }>(runCli(['analyze', '--json'], dir));
+    expect(origins(dir, before.runId)).toContain('inferred');
+    configure(dir, (config) => {
+      config.analysis = { ...config.analysis, inferSpecsFromCode: false };
+    });
+    const after = json<{ runId: string }>(runCli(['analyze', '--json'], dir));
+    expect(origins(dir, after.runId)).not.toContain('inferred');
+    expect(origins(dir, after.runId)).toContain('normative');
+  });
+
+  it('keeps only storage.retainRuns runs', () => {
+    const dir = copyFixture('discount-boundary');
+    expect(runCli(['init', '--yes'], dir).status).toBe(0);
+    configure(dir, (config) => {
+      config.storage = { ...config.storage, retainRuns: 2 };
+    });
+    const ids = [1, 2, 3].map(() => json<{ runId: string }>(runCli(['discover', '--json'], dir)).runId);
+    const left = readdirSync(path.join(dir, '.veritas/runs')).filter((name) => name.startsWith('run-'));
+    expect(left.sort()).toEqual(ids.slice(1).sort());
   });
 });
