@@ -2,7 +2,7 @@ import { realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { redact, type StageName, VeritasError } from '@under18dev/veritas-core';
+import { redact, type StageName, TOOL_VERSION, VeritasError } from '@under18dev/veritas-core';
 import {
   COMMAND_STAGES,
   explainFinding,
@@ -142,7 +142,7 @@ export function createServer(options: ServerOptions): McpServer {
 
   if (!statSync(root).isDirectory())
     throw new VeritasError('user', 'ROOT_NOT_FOUND', `project root is not a directory: ${options.root}`);
-  const server = new McpServer({ name: 'veritas', version: options.version ?? '0.0.0' });
+  const server = new McpServer({ name: 'veritas', version: options.version ?? TOOL_VERSION });
   const gate = new Semaphore(maxConcurrent);
 
   const runStages = (
