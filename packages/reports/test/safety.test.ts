@@ -139,6 +139,13 @@ describe('artifact links', () => {
     expect(html).toContain('link omitted: unsafe location');
   });
 
+  it.each(['../../outside.txt', 'proofs/../../../outside.txt', 'proofs/./x', '..', 'proofs/'])(
+    'never links to the artifact path %s, which is not a plain path inside the run directory',
+    (artifact) => {
+      expect(safeArtifactHref('.veritas/runs/run-1', artifact)).toBeNull();
+    },
+  );
+
   it('keeps relative artifact links', () => {
     expect(safeArtifactHref('.', 'proofs/C-1.smt2')).toBe('./proofs/C-1.smt2');
     expect(safeArtifactHref('.veritas/runs/run-1', 'proofs/C-1.smt2')).toBe(

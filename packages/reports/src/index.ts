@@ -301,9 +301,12 @@ export function renderMarkdown(input: ReportInput): string {
 
 /**
  * A link target for a run artifact, or null when it is not a plain relative path. Rejects any URL scheme
- * (`javascript:`, `data:`, `http:` ...), protocol-relative and absolute paths, and backslashes.
+ * (`javascript:`, `data:`, `http:` ...), protocol-relative and absolute paths, backslashes, and artifact paths with
+ * empty, `.` or `..` segments, which could point outside the run directory.
  */
 export function safeArtifactHref(base: string, artifact: string): string | null {
+  if (artifact.split('/').some((segment) => segment === '' || segment === '.' || segment === '..'))
+    return null;
   const joined = `${base.replace(/\/$/, '')}/${artifact}`;
   if (
     /^[a-z][a-z0-9+.-]*:/i.test(joined) ||
