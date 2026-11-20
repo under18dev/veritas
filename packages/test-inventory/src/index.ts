@@ -436,6 +436,17 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
       };
     else info = { ...none, opaque: ts.isCallExpression(node) && isOpaqueCall(node, ctx.checker) };
   }
+  const known = new Set(info.targets.map((t) => t.symbol));
+  const passed = passedProjectFunctions(node, ctx).filter((symbol) => !known.has(symbol));
+
+  if (passed.length > 0)
+    info = {
+      ...info,
+      targets: [
+        ...info.targets,
+        ...passed.map((symbol) => ({ symbol, ownArgs: false, assertedInside: false, flowsToResult: true })),
+      ],
+    };
   ctx.callInfo.set(node, info);
 
   return info;
@@ -821,7 +832,11 @@ function analyzeTest(
   }));
   // Tautological only when every compared value (subject and expected) is a compile-time
   // constant; runtime values such as process.env or non-project call results are not.
-  const comparisons = assertions.filter((assertion) => !isAssertionCountCall(assertion));
+  const typeLevel = assertions.length > 0 && assertions.every(isTypeLevelAssertion);
+  // Type-level checks compare types, not values, so they are neither constant nor about a value.
+  const comparisons = assertions.filter(
+    (assertion) => !isAssertionCountCall(assertion) && !isTypeLevelAssertion(assertion),
+  );
   const tautological =
     comparisons.length > 0 &&
     comparisons.every((assertion) =>
@@ -854,7 +869,8 @@ function analyzeTest(
   const unresolved = unresolvedImports.size > 0 || loading.unresolved;
 
   // An unresolved import, a child process or a dynamic import may well reach project code: absence is not proven.
-  if (calledSymbols.length === 0 && !unresolved && !opaque) suspicions.push('target_not_called');
+  if (typeLevel) suspicions.push('type_level_only');
+  else if (calledSymbols.length === 0 && !unresolved && !opaque) suspicions.push('target_not_called');
 
   if (mockedTarget) suspicions.push('unconditional_mock');
 
@@ -886,7 +902,55 @@ function resolveProjectCall(
   projectSet: Set<string>,
   root: string,
 ): string | undefined {
-  return projectSymbolId(checker.getSymbolAtLocation(calleeOf(node)), checker, projectSet, root);
+  return projectSymbolId(aliasTarget(calleeOf(node), checker), checker, projectSet, root);
+}
+
+/** The symbol an expression names, through `const local = projectFunction` aliases of the test file. */
+function aliasTarget(expression: ts.Expression, checker: ts.TypeChecker): ts.Symbol | undefined {
+  let symbol = checker.getSymbolAtLocation(skipParens(expression));
+
+  for (let depth = 0; symbol && depth < 5; depth++) {
+    const declaration = symbol.valueDeclaration;
+
+    if (
+      !declaration ||
+      !ts.isVariableDeclaration(declaration) ||
+      !ts.isVariableDeclarationList(declaration.parent) ||
+      !(declaration.parent.flags & ts.NodeFlags.Const) ||
+      !declaration.initializer
+    )
+      break;
+    const initializer = skipParens(declaration.initializer);
+
+    if (!ts.isIdentifier(initializer) && !ts.isPropertyAccessExpression(initializer)) break;
+    symbol = checker.getSymbolAtLocation(initializer);
+  }
+
+  return symbol;
+}
+
+/**
+ * Project functions an invocation is given as values (`[1, 2].map(double)`, `run(object, compare)`): the code it
+ * calls runs them, so their results are part of its result.
+ */
+function passedProjectFunctions(node: Invocation, ctx: Ctx): string[] {
+  const found: string[] = [];
+
+  // `expect(fn)` compares the function as a value; it does not run it.
+  if (ts.isCallExpression(node) && isAssertionChainCall(node)) return found;
+
+  for (const argument of argumentsOf(node)) {
+    const value = skipParens(argument);
+
+    if (!ts.isIdentifier(value) && !ts.isPropertyAccessExpression(value)) continue;
+
+    if (ctx.checker.getTypeAtLocation(value).getCallSignatures().length === 0) continue;
+    const id = projectSymbolId(aliasTarget(value, ctx.checker), ctx.checker, ctx.projectSet, ctx.root);
+
+    if (id) found.push(id);
+  }
+
+  return found;
 }
 
 /** A local that holds an object (or a value of unknown type), which a function it is passed to can change. */
@@ -904,8 +968,17 @@ function passedByReference(identifier: ts.Identifier, checker: ts.TypeChecker): 
 
   if (type.flags & primitive) return false;
 
-  // Functions passed as callbacks are followed separately, by what they write.
-  return type.getCallSignatures().length === 0;
+  if (type.getCallSignatures().length === 0) return true;
+  // A function written in the test is followed by what it writes. Any other callable value, such as `vi.fn()`,
+  // records how project code called it, which is an output of that call.
+  const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
+
+  return Boolean(
+    declaration &&
+      ts.isVariableDeclaration(declaration) &&
+      declaration.initializer &&
+      !isFunctionLike(skipParens(declaration.initializer)),
+  );
 }
 
 /**
@@ -1312,8 +1385,77 @@ function isCompileTimeConstant(node: ts.Expression, checker: ts.TypeChecker, dep
         ts.isVariableDeclarationList(declaration.parent) &&
         declaration.parent.flags & ts.NodeFlags.Const &&
         declaration.initializer &&
-        isCompileTimeConstant(declaration.initializer, checker, depth + 1),
+        isCompileTimeConstant(declaration.initializer, checker, depth + 1) &&
+        !mayBeChanged(expression, declaration.initializer, checker),
     );
+  }
+
+  return false;
+}
+
+/**
+ * Whether the array or object a `const` holds may change after it is created: a method is called on it
+ * (`result.push(x)`), one of its elements or properties is assigned, or it is passed to a function, which may do
+ * either. Such a value is not a compile-time constant even though its initializer is a literal.
+ */
+function mayBeChanged(
+  identifier: ts.Identifier,
+  initializer: ts.Expression,
+  checker: ts.TypeChecker,
+): boolean {
+  const value = skipParens(initializer);
+
+  if (!ts.isArrayLiteralExpression(value) && !ts.isObjectLiteralExpression(value)) return false;
+  const symbol = checker.getSymbolAtLocation(identifier);
+
+  return descendants(identifier.getSourceFile()).some((node) => {
+    if (!ts.isIdentifier(node) || node === identifier || checker.getSymbolAtLocation(node) !== symbol)
+      return false;
+    let use: ts.Node = node;
+
+    while (ts.isParenthesizedExpression(use.parent)) use = use.parent;
+    const parent = use.parent;
+
+    // Passing it to an assertion (`expect(x)`, `.toEqual(x)`, `assert.equal(x, ...)`) only reads it.
+    if (ts.isCallExpression(parent) && isAssertionChainCall(parent)) return false;
+
+    if (
+      (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
+      parent.arguments?.includes(use as ts.Expression)
+    )
+      return true;
+
+    if (
+      (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+      parent.expression === use
+    ) {
+      const outer = parent.parent;
+
+      return (
+        (ts.isCallExpression(outer) && outer.expression === parent) ||
+        (ts.isBinaryExpression(outer) &&
+          outer.left === parent &&
+          outer.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+          outer.operatorToken.kind <= ts.SyntaxKind.LastAssignment) ||
+        ts.isDeleteExpression(outer)
+      );
+    }
+
+    return false;
+  });
+}
+
+/** `expect(...)`, `assert...(...)` or a matcher chained on them (`expect(a).not.toEqual(b)`). */
+function isAssertionChainCall(call: ts.CallExpression): boolean {
+  let current: ts.Expression = call;
+
+  while (
+    ts.isCallExpression(current) ||
+    ts.isPropertyAccessExpression(current) ||
+    ts.isElementAccessExpression(current)
+  ) {
+    if (ts.isCallExpression(current) && (isExpectCall(current) || isAssertCall(current))) return true;
+    current = current.expression;
   }
 
   return false;
@@ -1428,6 +1570,13 @@ function assertingHelpers(source: ts.SourceFile): Map<ts.Node, Set<number>> {
   ts.forEachChild(source, visit);
   assertingHelpersCache.set(source, helpers);
   return helpers;
+}
+
+/** Vitest's type-level checks, which compare types at compile time and do nothing when the test runs. */
+function isTypeLevelAssertion(node: ts.CallExpression): boolean {
+  const root = rootIdentifier(node.expression);
+
+  return root === 'expectTypeOf' || root === 'assertType';
 }
 
 /** `expect(...)`, and Vitest's type-level checks `expectTypeOf(...)` and `assertType(...)`. */

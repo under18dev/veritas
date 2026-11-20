@@ -98,6 +98,13 @@ describe('assessTest', () => {
     expect(a.limitations.join(' ')).toMatch(/could not resolve/);
   });
 
+  it('is inconclusive, not disconnected, when the test checks only types', () => {
+    const t = testCase({ id: 'T-a', calledSymbols: [], suspicions: ['type_level_only'] });
+    const a = assessTest(t, input({ mutants: [mutant('M-1', 'survived', [], ['T-a'])] }));
+    expect(a.outcome).toBe('inconclusive');
+    expect(a.rationale.join(' ')).toMatch(/checks only TypeScript types/);
+  });
+
   it('still calls a constant assertion tautological when an import is also unresolved', () => {
     const t = testCase({
       id: 'T-a',

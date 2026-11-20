@@ -147,13 +147,21 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
 
   const rationale: string[] = [];
   let outcome: TestAssessment['outcome'];
+  const typeLevelOnly = test.suspicions.includes('type_level_only');
   const disconnected =
-    test.suspicions.includes('tautological_assertion') ||
-    test.suspicions.includes('target_not_called') ||
-    test.suspicions.includes('no_assertion') ||
-    (!assertedCall && !linkUnknown);
+    !typeLevelOnly &&
+    (test.suspicions.includes('tautological_assertion') ||
+      test.suspicions.includes('target_not_called') ||
+      test.suspicions.includes('no_assertion') ||
+      (!assertedCall && !linkUnknown));
 
-  if (disconnected) {
+  if (typeLevelOnly) {
+    // A type check is a real check of the project, but of its types: no run, mutant or solver here evaluates it.
+    outcome = 'inconclusive';
+    rationale.push(
+      'checks only TypeScript types (expectTypeOf, assertType), which Veritas does not evaluate',
+    );
+  } else if (disconnected) {
     outcome = 'tautological_or_disconnected';
 
     if (test.suspicions.length) rationale.push(`static analysis: ${test.suspicions.join(', ')}`);

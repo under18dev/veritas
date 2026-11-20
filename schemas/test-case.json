@@ -155,7 +155,8 @@
           "target_not_called",
           "unconditional_mock",
           "unresolved_import",
-          "opaque_call"
+          "opaque_call",
+          "type_level_only"
         ]
       }
     },

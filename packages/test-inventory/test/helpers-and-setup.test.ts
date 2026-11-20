@@ -185,10 +185,39 @@ it('primitive argument', () => { const n = 2; double(n); expect(n).toBe(2); });
     expect(byName('constructor')).toMatchObject({ symbols: ['src/more.ts#Url'], asserted: true });
     expect(byName('tagged template')).toMatchObject({ symbols: ['src/more.ts#dedent'], asserted: true });
     expect(byName('type-level')).toMatchObject({ symbols: ['src/more.ts#double'], asserted: true });
-    expect(byName('type-level').suspicions).not.toContain('no_assertion');
+    expect(byName('type-level').suspicions).toEqual(['type_level_only']);
     expect(byName('changed in place')).toMatchObject({ symbols: ['src/more.ts#merge'], asserted: true });
     // A number cannot be changed by the function it is passed to.
     expect(byName('primitive argument').asserted).toBe(false);
+  });
+
+  it('follows aliases, functions passed as values, mocks and arrays filled by project code', () => {
+    const extra = {
+      'src/iter.ts': `export function each(items: number[], cb: (n: number) => void) { for (const n of items) cb(n); }
+export function drop(items: number[]) { return items.slice(1); }
+export function chunk(items: number[]) { return [items]; }
+`,
+    };
+    const byName = inventory(
+      `import { expect, it, vi } from 'vitest';
+import { chunk, drop, each } from '../src/iter.js';
+const run = each;
+it('alias', () => { const seen: number[] = []; run([1, 2], (n) => seen.push(n)); expect(seen).toEqual([1, 2]); });
+it('passed as a value', () => { expect([[1, 2], [3]].map(drop)).toEqual([[2], []]); });
+it('mock', () => { const cb = vi.fn(); each([], cb); expect(cb).toHaveBeenCalledTimes(0); });
+it('filled array', () => { const out: number[] = []; each([3], (n) => { out.push(n); }); expect(out).toEqual([3]); });
+it('unchanged input', () => { const input = [1, 2]; chunk(input); expect(input).toEqual([1, 2]); });
+it('really constant', () => { const expected = [1]; expect([1]).toEqual(expected); });
+`,
+      extra,
+    );
+    expect(byName('alias')).toMatchObject({ symbols: ['src/iter.ts#each'], asserted: true });
+    expect(byName('passed as a value')).toMatchObject({ symbols: ['src/iter.ts#drop'], asserted: true });
+    expect(byName('mock')).toMatchObject({ symbols: ['src/iter.ts#each'], asserted: true });
+    // An array project code fills, or one it might change, is not a compile-time constant.
+    expect(byName('filled array').suspicions).not.toContain('tautological_assertion');
+    expect(byName('unchanged input').suspicions).not.toContain('tautological_assertion');
+    expect(byName('really constant').suspicions).toContain('tautological_assertion');
   });
 
   it('links the expected side of an assertion and the state of an object a project method ran on', () => {

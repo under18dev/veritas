@@ -27,6 +27,7 @@ export const TestCase = z.object({
    * `unresolved_import`: a call goes through a relative import TypeScript could not resolve.
    * `opaque_call`: the test runs code in a child process or through a dynamic import.
    * Either way, what the test reaches is unknown rather than absent.
+   * `type_level_only`: every assertion checks TypeScript types (`expectTypeOf`, `assertType`), which no run evaluates.
    */
   suspicions: z.array(
     z.enum([
@@ -36,6 +37,7 @@ export const TestCase = z.object({
       'unconditional_mock',
       'unresolved_import',
       'opaque_call',
+      'type_level_only',
     ]),
   ),
   granularity: z.enum(['test', 'suite']),
