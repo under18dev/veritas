@@ -196,6 +196,21 @@ async function reassess(
   return { runId: summary.runId, statuses: recordedClaimStatuses(workspace, summary.runId), failed };
 }
 
+/** Statuses that are no answer: a result that was decided before must not end up as one of these. */
+const UNDECIDED = new Set(['unknown', 'timeout', 'error', 'cancelled', 'semantic_mismatch', 'unsupported']);
+
+/**
+ * Results decided before the patch (a proof, a counterexample, a passed property test) that are undecided on the
+ * patched copy, as `id: before -> after`. A result not produced again is not counted.
+ */
+export function lostResults(before: Record<string, string>, after: Record<string, string>): string[] {
+  return Object.entries(before)
+    .filter(
+      ([id, status]) => !UNDECIDED.has(status) && after[id] !== undefined && UNDECIDED.has(after[id] ?? ''),
+    )
+    .map(([id, status]) => `${id}: ${status} -> ${after[id]}`);
+}
+
 function recordedClaimStatuses(root: string, runId: string): Record<string, string> {
   const out: Record<string, string> = {};
 
@@ -475,6 +490,17 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         'error',
         [
           `formal and property-based re-evaluation failed (${reassessed.failed.join(', ')}, run ${reassessed.runId})`,
+          'the patch was discarded',
+        ],
+        { workspace, before, rolledBack: true },
+      );
+    }
+    const lost = lostResults(before.claimStatuses, reassessed.statuses);
+    if (lost.length > 0) {
+      return end(
+        'error',
+        [
+          `results decided before the patch are undecided after it (run ${reassessed.runId}): ${lost.join('; ')}`,
           'the patch was discarded',
         ],
         { workspace, before, rolledBack: true },
