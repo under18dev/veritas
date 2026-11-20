@@ -121,6 +121,8 @@ export function runCommand(
     }, options.timeoutMs);
     const onAbort = () => killTree(child);
     options.signal?.addEventListener('abort', onAbort, { once: true });
+    // A signal that was aborted before (or while) the process started never fires 'abort' again.
+    if (options.signal?.aborted) onAbort();
     child.stdout?.on('data', (d: Buffer) => {
       if (stdout.length < max) stdout += d.toString();
     });

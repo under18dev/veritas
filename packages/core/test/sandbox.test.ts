@@ -189,6 +189,20 @@ setInterval(() => {}, 1000);
   }, 30_000);
 });
 
+describe('runCommand cancellation', () => {
+  it('ends a process at once when the signal was aborted before it started', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runCommand(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      cwd: tmpdir(),
+      timeoutMs: 30_000,
+      signal: controller.signal,
+    });
+    expect(result.timedOut).toBe(false);
+    expect(result.durationMs).toBeLessThan(10_000);
+  }, 40_000);
+});
+
 describe('sandbox runtime', () => {
   const old = { node: '/old/node', version: '24.11.0' };
 
