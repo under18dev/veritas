@@ -18,8 +18,40 @@ describe('git history and reproducibility', () => {
     git(root, 'add', 'README.md');
     git(root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Document boundary');
     const result = await discoverEvidence({ root, config: config() });
-    expect(result.sources.some((source) => source.kind === 'git' && source.locator === 'git log')).toBe(true);
-    expect(result.sources.find((source) => source.kind === 'git')?.revision).toMatch(/^[0-9a-f]{40}$/);
+    const commit = result.sources.find((source) => source.kind === 'git');
+    expect(commit?.locator).toMatch(/^commit [0-9a-f]{12}$/);
+    expect(commit?.revision).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('keeps the id of a commit message source when later commits are added', async () => {
+    const root = tempProject('git-stable');
+    git(root, 'init', '-q');
+    git(root, 'config', 'user.email', 'test@example.invalid');
+    git(root, 'config', 'user.name', 'test');
+    writeFileSync(`${root}/README.md`, 'Readme.\n');
+    git(root, 'add', 'README.md');
+    git(
+      root,
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '-qm',
+      'Limit totals',
+      '-m',
+      'The total must be at least 10.',
+    );
+    const before = await discoverEvidence({ root, config: config() });
+    writeFileSync(`${root}/OTHER.txt`, 'x\n');
+    git(root, 'add', 'OTHER.txt');
+    git(root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Unrelated change');
+    const after = await discoverEvidence({ root, config: config() });
+    const limit = (r: typeof before) =>
+      r.sources.find((s) => s.kind === 'git' && s.summary.includes('Limit totals'));
+    expect(limit(before)?.id).toBeDefined();
+    expect(limit(after)?.id).toBe(limit(before)?.id);
+    const statement = (r: typeof before) =>
+      r.statements.find((st) => st.quote.includes('at least 10') && st.sourceId === limit(r)?.id);
+    expect(statement(after)?.id).toBe(statement(before)?.id);
   });
 
   it('reports a useful skip when the root is not a git repository', async () => {

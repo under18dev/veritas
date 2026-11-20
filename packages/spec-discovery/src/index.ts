@@ -353,9 +353,22 @@ async function collectLocal(
       maxOutputBytes: 1_000_000,
     });
 
-    if (log.exitCode === 0 && log.stdout.trim())
-      inputs.push({ kind: 'git', locator: 'git log', revision, text: log.stdout });
-    else skipped.push({ source: 'git log', reason: 'git log unavailable' });
+    if (log.exitCode === 0 && log.stdout.trim()) {
+      // One source per commit (its subject and body), so a new commit adds a source instead of changing the ids
+      // of every statement from earlier commits.
+      for (const record of log.stdout.split(/^---$/m)) {
+        const [hash, ...message] = record.replace(/^\n+/, '').split('\n');
+        const text = message.join('\n').trim();
+
+        if (!hash || !/^[0-9a-f]{40}$/.test(hash) || !text) continue;
+        inputs.push({
+          kind: 'git',
+          locator: `commit ${hash.slice(0, 12)}`,
+          revision: hash,
+          text: `${text}\n`,
+        });
+      }
+    } else skipped.push({ source: 'git log', reason: 'git log unavailable' });
   }
 
   return inputs;
