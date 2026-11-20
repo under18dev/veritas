@@ -713,7 +713,8 @@ function collectFiles(root: string, includes: string[], excludes: string[]): str
       if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.')) continue;
       const file = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(file);
-      else if (isSourceFile(file)) {
+      // Links are not followed: one could point outside the project root.
+      else if (entry.isFile() && isSourceFile(file)) {
         const relative = toPosixRelative(root, file);
         if (
           includes.some((pattern) =>

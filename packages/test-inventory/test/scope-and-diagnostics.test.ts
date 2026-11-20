@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { VeritasConfig } from '@under18dev/veritas-core';
@@ -20,6 +20,29 @@ describe('scope and diagnostics', () => {
     expect(inventory.tests.map((test) => test.name)).toContain('included');
     expect(inventory.tests.map((test) => test.name)).not.toContain('ignored');
     expect(inventory.diagnostics.some((diagnostic) => diagnostic.file === 'test/broken.test.ts')).toBe(true);
+  });
+
+  it('does not read test files through links that leave the project root', () => {
+    const outside = mkdtempSync(path.join(tmpdir(), 'veritas-outside-'));
+    writeFileSync(
+      path.join(outside, 'external.test.ts'),
+      `import { test } from 'vitest'; test('outside the root', () => {});`,
+    );
+    const root = tempProject({
+      'test/inside.test.ts': `import { test } from 'vitest'; test('inside', () => {});`,
+    });
+    let linked = true;
+    try {
+      symlinkSync(path.join(outside, 'external.test.ts'), path.join(root, 'test/external.test.ts'), 'file');
+    } catch {
+      // Creating file links needs extra privileges on some Windows runners.
+      linked = false;
+    }
+    const names = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests.map((test) => test.name);
+
+    expect(names).toContain('inside');
+    expect(names).not.toContain('outside the root');
+    if (linked) expect(names).toEqual(['inside']);
   });
 
   it('does not treat node or Vitest calls as project symbols', () => {
