@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import {
   gitCommit,
@@ -9,12 +10,13 @@ import {
   PatchAttempt,
   type Property,
   redact,
+  type StageName,
   sha256,
   stableId,
   type VeritasConfig,
   VeritasError,
 } from '@under18dev/veritas-core';
-import { readArtifact } from '@under18dev/veritas-engine';
+import { readArtifact, runVeritas } from '@under18dev/veritas-engine';
 import { type MutationRunResult, runMutation } from '@under18dev/veritas-mutation-adapter';
 import { applyApprovals, loadApprovals } from '@under18dev/veritas-property-engine';
 import { expectedFromSpec } from './oracle.js';
@@ -133,10 +135,54 @@ function snapshot(
   };
 }
 
+/** Formal and property-based results of the run the plan was made from: the state before the patch. */
 /**
- * Formal and property-based results of the run the plan was made from. They are about the implementation, which
- * a plan never changes (only new test files are allowed), so they hold before and after the patch as recorded.
+ * Re-evaluate the formal and property-based results on the patched workspace: prove, plus the mutate and pbt
+ * stages if the plan's run had them, with that run's options, offline. Claims that depend on test
+ * inputs (distinguishability) see the new tests. The run is written inside the workspace, never the repository.
  */
+async function reassess(
+  workspace: string,
+  root: string,
+  runId: string,
+  options: { allowCodeConfig?: boolean; signal?: AbortSignal },
+): Promise<{ runId: string; statuses: Record<string, string>; failed: string[] }> {
+  mkdirSync(path.join(workspace, '.veritas'), { recursive: true });
+  for (const file of ['config.json', 'approvals.json']) {
+    const from = path.join(root, '.veritas', file);
+    if (existsSync(from)) copyFileSync(from, path.join(workspace, '.veritas', file));
+  }
+  const original = readArtifact(root, runId, 'run').data;
+  // Mutant relations (equivalence, distinguishability, detection) need the mutate stage as well.
+  const had = new Set(original.stages.map((s) => s.stage));
+  const optional: StageName[] = ['mutate', 'pbt'];
+  const stages: StageName[] = [
+    'index',
+    'discover',
+    'spec',
+    'map',
+    ...optional.filter((stage) => had.has(stage)),
+    'prove',
+  ];
+  const summary = await runVeritas({
+    root: workspace,
+    command: 'improve',
+    stages,
+    offline: true,
+    includeProposed: original.options?.includeProposed,
+    propertyIds: original.options?.propertyIds,
+    formalEngine: original.options?.formalEngine,
+    allowCodeConfig: options.allowCodeConfig ?? false,
+    // The workspace has no .git: read the revision from the repository so ids and approvals match.
+    gitRoot: root,
+    signal: options.signal,
+  });
+  const failed = summary.run.stages
+    .filter((s) => s.status === 'error' || s.status === 'failed' || s.status === 'cancelled')
+    .map((s) => `${s.stage}=${s.status}`);
+  return { runId: summary.runId, statuses: recordedClaimStatuses(workspace, summary.runId), failed };
+}
+
 function recordedClaimStatuses(root: string, runId: string): Record<string, string> {
   const out: Record<string, string> = {};
   try {
@@ -389,7 +435,18 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         { workspace, before, rolledBack: true },
       );
     }
-    const after = snapshot(testsAfter, mutationAfter, recordedClaimStatuses(root, doc.runId));
+    const reassessed = await reassess(workspace, root, doc.runId, options);
+    if (reassessed.failed.length > 0) {
+      return end(
+        'error',
+        [
+          `formal and property-based re-evaluation failed (${reassessed.failed.join(', ')}, run ${reassessed.runId})`,
+          'the patch was discarded',
+        ],
+        { workspace, before, rolledBack: true },
+      );
+    }
+    const after = snapshot(testsAfter, mutationAfter, reassessed.statuses);
     const killedBefore = new Set(
       mutationBefore.mutants.filter((m) => m.status === 'killed').map((m) => m.id),
     );
@@ -460,7 +517,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         `killed mutants ${before.mutantsKilled} -> ${after.mutantsKilled}, survived ${before.mutantsSurvived} -> ${after.mutantsSurvived}`,
         ...(newlyKilled.length ? [`newly killed: ${newlyKilled.map((m) => m.id).join(', ')}`] : []),
         `added: ${doc.files.map((f) => f.path).join(', ')}`,
-        `formal and property-based results carried over from ${doc.runId} unchanged: only test files were added, so the implementation they check is the same`,
+        `formal and property-based results re-evaluated in ${reassessed.runId} on the patched copy`,
       ],
       { workspace, before, after, rolledBack: false },
     );

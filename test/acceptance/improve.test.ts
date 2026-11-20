@@ -217,9 +217,16 @@ describe('improve on agent-loop', () => {
       expect(attempt.before && attempt.after).toBeTruthy();
       expect(attempt.after?.mutantsKilled).toBeGreaterThan(attempt.before?.mutantsKilled ?? Infinity);
       expect(attempt.after?.mutantsSurvived).toBeLessThan(attempt.before?.mutantsSurvived ?? -1);
-      // Formal and property-based results are carried over: only test files were added.
-      expect(Object.keys(attempt.after?.claimStatuses ?? {}).length).toBeGreaterThan(0);
-      expect(attempt.after?.claimStatuses).toEqual(attempt.before?.claimStatuses);
+      // Formal and property-based results are re-evaluated on the patched copy, not copied from the plan's run.
+      expect(attempt.reasons.join('\n')).toMatch(/formal and property-based results re-evaluated in run-/);
+      const after = attempt.after?.claimStatuses ?? {};
+      expect(Object.keys(after).length).toBeGreaterThan(0);
+      // The implementation did not change, so a claim made again comes out the same. Claims about the survivor
+      // the new test kills (equivalence, distinguishability) are not made again: it is no longer a survivor.
+      const before = attempt.before?.claimStatuses ?? {};
+      const remade = Object.keys(after).filter((id) => id in before);
+      expect(remade.length).toBeGreaterThan(1);
+      for (const id of remade) expect(after[id], id).toBe(before[id]);
       const added = plan.plan?.proposedTestCases[0]?.file as string;
       expect(readFileSync(path.join(dir, added), 'utf8')).toContain('expect(isSenior(65)).toBe(true);');
       expect(projectStatus(dir)).toEqual([`?? ${added}`]);
