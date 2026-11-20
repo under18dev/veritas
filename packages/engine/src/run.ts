@@ -763,7 +763,15 @@ async function runInContext(
       // The two other relations cost a solver call each; at most MAX_RELATION_CLAIMS per run.
       let budget = MAX_RELATION_CLAIMS;
       let overBudget = 0;
-      const spend = () => (budget > 0 ? (budget--, true) : (overBudget++, false));
+      const spend = (): boolean => {
+        if (budget > 0) {
+          budget--;
+          return true;
+        }
+
+        overBudget++;
+        return false;
+      };
 
       // Relation 2: can the inputs a test already uses tell a surviving mutant from the original?
       const inventory = ctx.outputs.get('map') as TestInventory | undefined;
