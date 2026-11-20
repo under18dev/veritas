@@ -211,14 +211,15 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
     outcome = 'inconclusive';
     rationale.push('asserts a project result, but no property is linked to the functions it calls');
   } else if (
-    unresolved &&
+    linkUnknown &&
     relevantKilled.length > 0 &&
     boundaryCoverage.every((b) => b.exercised === 'yes')
   ) {
-    // Kills are recorded per test, so the call through the unresolved import may be what detected them.
+    // Kills are recorded per test, so the code static analysis cannot follow (an unresolved import, a child
+    // process or a dynamic import) may be what detected them.
     outcome = 'inconclusive';
     rationale.push(
-      `kills ${relevantKilled.length} specification-relevant mutant(s), but another call goes through an unresolved import and may be what detected them`,
+      `kills ${relevantKilled.length} specification-relevant mutant(s), but ${unresolved ? 'another call goes through an unresolved import' : 'it also runs code in a child process or through a dynamic import'} and may be what detected them`,
     );
   } else if (relevantKilled.length > 0 && boundaryCoverage.every((b) => b.exercised === 'yes')) {
     outcome = 'meaningful_with_evidence';

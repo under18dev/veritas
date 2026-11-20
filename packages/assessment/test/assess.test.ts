@@ -123,6 +123,13 @@ describe('assessTest', () => {
     expect(a.rationale.join(' ')).toMatch(/unresolved import/);
   });
 
+  it('is not meaningful when the test also runs code static analysis cannot follow', () => {
+    const t = testCase({ id: 'T-a', targetCalls: [call(['1000'])], suspicions: ['opaque_call'] });
+    const a = assessTest(t, input({ mutants: [mutant('M-1', 'killed', ['T-a'], ['T-a'])] }));
+    expect(a.outcome).toBe('inconclusive');
+    expect(a.rationale.join(' ')).toMatch(/child process or through a dynamic import/);
+  });
+
   it('lists a covered timeout mutant as unknown instead of crediting it as a kill', () => {
     const t = testCase({ id: 'T-a', targetCalls: [call(['1000'])] });
     const a = assessTest(
