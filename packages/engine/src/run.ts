@@ -1128,13 +1128,14 @@ export function selectMutationTestFiles(
     !matches(file, testInclude) &&
     !isTestSupportPath(file);
   const inScope = (file: string) => (scope?.length ? matches(file, scope) : isSource(file));
-  const unseen = new Set(
-    inventory.tests
+  const unseen = new Set([
+    ...inventory.files.filter((file) => file.unseenReach).map((file) => file.path),
+    ...inventory.tests
       .filter(
         (test) => test.suspicions.includes('opaque_call') || test.suspicions.includes('unresolved_import'),
       )
       .map((test) => test.file),
-  );
+  ]);
 
   // A file without a recorded test (a custom registration, say) may still run anything.
   const recorded = new Set(inventory.tests.map((test) => test.file));

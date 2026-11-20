@@ -5,15 +5,19 @@ import { selectMutationTestFiles } from '../src/index.js';
 const test = (file: string, suspicions: TestCase['suspicions'] = []) => ({ file, suspicions }) as TestCase;
 
 const inventory = {
-  files: [
-    { path: 'test/a.test.ts', hash: 'a', dependencies: ['src/a.ts', 'src/shared.ts'] },
-    { path: 'test/b.test.ts', hash: 'b', dependencies: ['src/b.ts', 'test/helpers.ts'] },
-    { path: 'test/standalone.test.ts', hash: 'c', dependencies: ['test/helpers.ts'] },
-    { path: 'test/cli.test.ts', hash: 'd', dependencies: ['test/helpers.ts'] },
-    { path: 'test/spawn.test.ts', hash: 'e', dependencies: ['src/b.ts'] },
-    { path: 'test/alias.test.ts', hash: 'f', dependencies: ['src/b.ts'] },
-    { path: 'test/custom.test.ts', hash: 'g', dependencies: ['src/b.ts'] },
-  ],
+  files: (
+    [
+      { path: 'test/a.test.ts', hash: 'a', dependencies: ['src/a.ts', 'src/shared.ts'] },
+      { path: 'test/b.test.ts', hash: 'b', dependencies: ['src/b.ts', 'test/helpers.ts'] },
+      { path: 'test/standalone.test.ts', hash: 'c', dependencies: ['test/helpers.ts'] },
+      { path: 'test/cli.test.ts', hash: 'd', dependencies: ['test/helpers.ts'] },
+      { path: 'test/spawn.test.ts', hash: 'e', dependencies: ['src/b.ts'] },
+      { path: 'test/alias.test.ts', hash: 'f', dependencies: ['src/b.ts'] },
+      { path: 'test/custom.test.ts', hash: 'g', dependencies: ['src/b.ts'] },
+      // One recognized test without suspicions, plus code elsewhere in the file that spawns a process.
+      { path: 'test/mixed.test.ts', hash: 'h', dependencies: ['src/b.ts'], unseenReach: true },
+    ] as { path: string; hash: string; dependencies: string[]; unseenReach?: boolean }[]
+  ).map((file) => ({ unseenReach: false, ...file })),
   tests: [
     test('test/a.test.ts'),
     test('test/b.test.ts'),
@@ -21,6 +25,7 @@ const inventory = {
     test('test/cli.test.ts', ['opaque_call']),
     test('test/spawn.test.ts', ['opaque_call']),
     test('test/alias.test.ts', ['unresolved_import']),
+    test('test/mixed.test.ts'),
   ],
 };
 
@@ -35,6 +40,7 @@ describe('selectMutationTestFiles', () => {
       'test/spawn.test.ts',
       'test/alias.test.ts',
       'test/custom.test.ts',
+      'test/mixed.test.ts',
     ]);
   });
 
@@ -47,6 +53,7 @@ describe('selectMutationTestFiles', () => {
     expect(selected).toContain('test/alias.test.ts');
     // No test case was recognized in it (a custom registration, say), so what it runs is unknown.
     expect(selected).toContain('test/custom.test.ts');
+    expect(selected).toContain('test/mixed.test.ts');
     expect(selected).not.toContain('test/b.test.ts');
   });
 

@@ -24,6 +24,11 @@ export const TestInventory = z.object({
       hash: z.string(),
       /** Files inside the root the test file imports, directly or through other local files (POSIX, sorted). */
       dependencies: z.array(z.string()).default([]),
+      /**
+       * The file or a local file it imports runs code static analysis cannot follow (a child process, a
+       * dynamic import) or imports a relative module that does not resolve, anywhere, recognized test or not.
+       */
+      unseenReach: z.boolean().default(false),
     }),
   ),
   diagnostics: z.array(z.object({ file: z.string(), message: z.string() })),
@@ -124,15 +129,23 @@ export function inventoryTests(options: {
     }
   }
 
-  const files = uniqueFiles.map((file) => ({
-    path: toPosixRelative(root, file),
-    hash: sha256(readFileSync(file)),
-    dependencies: (() => {
-      const source = sourceFiles.get(file);
+  const files = uniqueFiles.map((file) => {
+    const source = sourceFiles.get(file);
+    const dependencies = source ? localDependencies(source, checker, root) : [];
+    const reached = [
+      source,
+      ...dependencies.map((dependency) => sourceFiles.get(path.resolve(root, dependency))),
+    ];
 
-      return source ? localDependencies(source, checker, root) : [];
-    })(),
-  }));
+    return {
+      path: toPosixRelative(root, file),
+      hash: sha256(readFileSync(file)),
+      dependencies,
+      // An unparsed file is unknown too.
+      unseenReach:
+        !source || reached.some((reachedFile) => reachedFile && hasUnseenReach(reachedFile, checker)),
+    };
+  });
 
   return TestInventory.parse({ tests, edges, files, diagnostics });
 }
@@ -892,6 +905,22 @@ function bindingIdentifiers(name: ts.BindingName): ts.Identifier[] {
   return name.elements.flatMap((element) =>
     ts.isBindingElement(element) ? bindingIdentifiers(element.name) : [],
   );
+}
+
+/** Whether a file runs code out of process or through a dynamic import, or imports a relative module that does not resolve. */
+function hasUnseenReach(source: ts.SourceFile, checker: ts.TypeChecker): boolean {
+  return descendants(source).some((node) => {
+    if (ts.isCallExpression(node)) return isOpaqueCall(node, checker);
+    const specifier =
+      ts.isImportDeclaration(node) || ts.isExportDeclaration(node) ? node.moduleSpecifier : undefined;
+
+    return (
+      specifier !== undefined &&
+      ts.isStringLiteral(specifier) &&
+      specifier.text.startsWith('.') &&
+      !checker.getSymbolAtLocation(specifier)
+    );
+  });
 }
 
 /** The relative module specifier a callee is imported from, when TypeScript cannot resolve that module. */

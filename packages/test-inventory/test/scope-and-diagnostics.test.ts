@@ -45,6 +45,30 @@ describe('scope and diagnostics', () => {
     if (linked) expect(names).toEqual(['inside']);
   });
 
+  it('marks a file whose code anywhere runs out of process or imports an unresolved module', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/helpers.ts': `import { spawnSync } from 'node:child_process'; export const cli = () => spawnSync('node', ['x']);`,
+      'test/plain.test.ts': `import { expect, test } from 'vitest'; import { value } from '../src/value.js'; test('plain', () => expect(value(1)).toBe(1));`,
+      'test/custom.test.ts': `
+        import { expect, test } from 'vitest';
+        import { spawnSync } from 'node:child_process';
+        import { value } from '../src/value.js';
+        test('recognized', () => expect(value(1)).toBe(1));
+        const custom = (name: string, fn: () => void) => test(name, fn);
+        custom('unrecognized', () => { spawnSync('node', ['other.js']); });
+      `,
+      'test/via-helper.test.ts': `import { test } from 'vitest'; import { cli } from './helpers.js'; test('cli', () => { cli(); });`,
+      'test/missing.test.ts': `import { test } from 'vitest'; import { gone } from './gone.js'; test('gone', () => gone());`,
+    });
+    const files = inventoryTests({ root, config: VeritasConfig.parse({}) }).files;
+    const unseen = (name: string) => files.find((file) => file.path === name)?.unseenReach;
+    expect(unseen('test/plain.test.ts')).toBe(false);
+    expect(unseen('test/custom.test.ts')).toBe(true);
+    expect(unseen('test/via-helper.test.ts')).toBe(true);
+    expect(unseen('test/missing.test.ts')).toBe(true);
+  });
+
   it('does not treat node or Vitest calls as project symbols', () => {
     const root = tempProject({
       'src/value.ts': 'export const value = (input: number) => input;\n',
