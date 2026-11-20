@@ -23,6 +23,14 @@ describe('lostResults', () => {
     ]);
   });
 
+  it('requires conformance results to be produced again, but not results about mutants', () => {
+    const before = { 'C-conf': 'proven_within_model', 'C-mutant': 'counterexample_found' };
+    expect(lostResults(before, {}, new Set(['C-conf']))).toEqual([
+      'C-conf: proven_within_model -> not produced',
+    ]);
+    expect(lostResults(before, { 'C-conf': 'proven_within_model' }, new Set(['C-conf']))).toEqual([]);
+  });
+
   it('is empty when nothing decided became undecided', () => {
     expect(lostResults({ 'C-a': 'unknown' }, { 'C-a': 'unknown' })).toEqual([]);
     expect(lostResults({ 'C-a': 'timeout' }, { 'C-a': 'proven_within_model' })).toEqual([]);

@@ -200,15 +200,38 @@ async function reassess(
 const UNDECIDED = new Set(['unknown', 'timeout', 'error', 'cancelled', 'semantic_mismatch', 'unsupported']);
 
 /**
- * Results decided before the patch (a proof, a counterexample, a passed property test) that are undecided on the
- * patched copy, as `id: before -> after`. A result not produced again is not counted.
+ * Results decided before the patch (a proof, a counterexample, a passed property test) that are lost on the
+ * patched copy, as `id: before -> after`: undecided there, or, for results in `required`, not produced at all.
+ * `required` holds the conformance claims (about the implementation, not about a mutant), which the same
+ * implementation must reproduce. Mutant claims may legitimately disappear (the new tests kill that mutant), and so
+ * may property-based results whose id changed with a review decision.
  */
-export function lostResults(before: Record<string, string>, after: Record<string, string>): string[] {
+export function lostResults(
+  before: Record<string, string>,
+  after: Record<string, string>,
+  required: ReadonlySet<string> = new Set(),
+): string[] {
   return Object.entries(before)
-    .filter(
-      ([id, status]) => !UNDECIDED.has(status) && after[id] !== undefined && UNDECIDED.has(after[id] ?? ''),
-    )
-    .map(([id, status]) => `${id}: ${status} -> ${after[id]}`);
+    .filter(([id, status]) => {
+      if (UNDECIDED.has(status)) return false;
+      const now = after[id];
+
+      return now === undefined ? required.has(id) : UNDECIDED.has(now);
+    })
+    .map(([id, status]) => `${id}: ${status} -> ${after[id] ?? 'not produced'}`);
+}
+
+/** Ids of the conformance claims (about the implementation itself) of a run. */
+function conformanceClaimIds(root: string, runId: string): Set<string> {
+  try {
+    return new Set(
+      readArtifact(root, runId, 'claims')
+        .data.filter((c) => c.kind === 'conformance')
+        .map((c) => c.id),
+    );
+  } catch {
+    return new Set();
+  }
 }
 
 function recordedClaimStatuses(root: string, runId: string): Record<string, string> {
@@ -495,7 +518,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         { workspace, before, rolledBack: true },
       );
     }
-    const lost = lostResults(before.claimStatuses, reassessed.statuses);
+    const lost = lostResults(before.claimStatuses, reassessed.statuses, conformanceClaimIds(root, doc.runId));
     if (lost.length > 0) {
       return end(
         'error',
