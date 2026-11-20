@@ -1,0 +1,260 @@
+{
+  "node": "26.13.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "cpus": 10,
+  "results": [
+    {
+      "fixture": "small-app",
+      "profile": "quick",
+      "exitCode": 0,
+      "wallMs": 1058,
+      "functions": 10,
+      "tests": 30,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 0,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "small-app",
+      "profile": "standard",
+      "exitCode": 0,
+      "wallMs": 2708,
+      "functions": 10,
+      "tests": 30,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 80,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "small-app",
+      "profile": "deep",
+      "exitCode": 0,
+      "wallMs": 10292,
+      "functions": 10,
+      "tests": 30,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 4403,
+        "mutants": 80,
+        "testRuns": 5010
+      }
+    },
+    {
+      "fixture": "discount-boundary",
+      "profile": "quick",
+      "exitCode": 0,
+      "wallMs": 1055,
+      "functions": 2,
+      "tests": 5,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 0,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "discount-boundary",
+      "profile": "standard",
+      "exitCode": 0,
+      "wallMs": 1662,
+      "functions": 2,
+      "tests": 5,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 17,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "discount-boundary",
+      "profile": "deep",
+      "exitCode": 0,
+      "wallMs": 4498,
+      "functions": 2,
+      "tests": 5,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 1599,
+        "mutants": 17,
+        "testRuns": 1022
+      }
+    },
+    {
+      "fixture": "agent-loop",
+      "profile": "quick",
+      "exitCode": 0,
+      "wallMs": 1005,
+      "functions": 1,
+      "tests": 2,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 0,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "agent-loop",
+      "profile": "standard",
+      "exitCode": 0,
+      "wallMs": 1574,
+      "functions": 1,
+      "tests": 2,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 7,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "agent-loop",
+      "profile": "deep",
+      "exitCode": 0,
+      "wallMs": 3093,
+      "functions": 1,
+      "tests": 2,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 976,
+        "mutants": 7,
+        "testRuns": 1000
+      }
+    },
+    {
+      "fixture": "conflicting-docs",
+      "profile": "quick",
+      "exitCode": 0,
+      "wallMs": 1033,
+      "functions": 1,
+      "tests": 2,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 0,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "conflicting-docs",
+      "profile": "standard",
+      "exitCode": 0,
+      "wallMs": 1465,
+      "functions": 1,
+      "tests": 2,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 7,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "conflicting-docs",
+      "profile": "deep",
+      "exitCode": 0,
+      "wallMs": 4668,
+      "functions": 1,
+      "tests": 2,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 1896,
+        "mutants": 7,
+        "testRuns": 1018
+      }
+    },
+    {
+      "fixture": "equivalent-mutants",
+      "profile": "quick",
+      "exitCode": 0,
+      "wallMs": 1069,
+      "functions": 2,
+      "tests": 3,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 0,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "equivalent-mutants",
+      "profile": "standard",
+      "exitCode": 0,
+      "wallMs": 1676,
+      "functions": 2,
+      "tests": 3,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 13,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "equivalent-mutants",
+      "profile": "deep",
+      "exitCode": 0,
+      "wallMs": 1764,
+      "functions": 2,
+      "tests": 3,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 137,
+        "mutants": 13,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "no-spec",
+      "profile": "quick",
+      "exitCode": 0,
+      "wallMs": 1000,
+      "functions": 1,
+      "tests": 1,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 0,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "no-spec",
+      "profile": "standard",
+      "exitCode": 0,
+      "wallMs": 1457,
+      "functions": 1,
+      "tests": 1,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 0,
+        "mutants": 9,
+        "testRuns": 0
+      }
+    },
+    {
+      "fixture": "no-spec",
+      "profile": "deep",
+      "exitCode": 0,
+      "wallMs": 2329,
+      "functions": 1,
+      "tests": 1,
+      "usage": {
+        "llmTokens": 0,
+        "solverMs": 371,
+        "mutants": 9,
+        "testRuns": 0
+      }
+    }
+  ]
+}

@@ -11,7 +11,7 @@ Analysis must stay fast enough for local use and CI. A budget is only meaningful
 - Budget per run (`benchmarks/budget.json`): `quick` 60 s, `standard` 120 s, `deep` 300 s. A run must also end with a verdict exit code (0, 1 or 4).
 - Baseline (2026-11-19, macOS arm64, Node 26): `small-app` quick 1.2 s, standard 2.9 s, deep 4.7 s; every other fixture under 2.5 s in every profile. Results are in `benchmarks/results/`.
 - CI runs `node benchmarks/run.mjs --check` on every OS and fails when a run exceeds the budget.
-- Usage counters (LLM tokens, solver milliseconds, mutants, test runs) are recorded per stage in `run.json` and in reports; they are measured, not budgeted.
+- Usage counters (LLM tokens, solver milliseconds, mutants, test runs) are recorded per stage in `run.json` and in reports; their budget is ADR 0010.
 
 ## Consequences
 

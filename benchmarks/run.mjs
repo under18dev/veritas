@@ -104,6 +104,15 @@ if (check) {
     const limit = budget.maxWallMs[r.profile];
     if (limit !== undefined && r.wallMs > limit)
       problems.push(`${r.fixture} ${r.profile}: ${r.wallMs} ms exceeds the budget of ${limit} ms`);
+    // Usage counters (LLM tokens, solver time, mutants, test runs) have budgets too; a run without them fails.
+    const usageLimits = budget.maxUsage?.[r.profile] ?? {};
+    for (const [counter, max] of Object.entries(usageLimits)) {
+      const value = r.usage?.[counter];
+      if (typeof value !== 'number')
+        problems.push(`${r.fixture} ${r.profile}: usage counter ${counter} missing`);
+      else if (value > max)
+        problems.push(`${r.fixture} ${r.profile}: ${counter} ${value} exceeds the budget of ${max}`);
+    }
   }
   for (const p of problems) console.error(p);
   if (problems.length) process.exit(1);

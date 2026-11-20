@@ -4,5 +4,25 @@
     "quick": 60000,
     "standard": 120000,
     "deep": 300000
+  },
+  "maxUsage": {
+    "quick": {
+      "llmTokens": 0,
+      "solverMs": 0,
+      "mutants": 0,
+      "testRuns": 0
+    },
+    "standard": {
+      "llmTokens": 0,
+      "solverMs": 0,
+      "mutants": 500,
+      "testRuns": 0
+    },
+    "deep": {
+      "llmTokens": 0,
+      "solverMs": 60000,
+      "mutants": 500,
+      "testRuns": 20000
+    }
   }
 }
