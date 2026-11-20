@@ -60,6 +60,8 @@ describe('scope and diagnostics', () => {
       `,
       'test/via-helper.test.ts': `import { test } from 'vitest'; import { cli } from './helpers.js'; test('cli', () => { cli(); });`,
       'test/missing.test.ts': `import { test } from 'vitest'; import { gone } from './gone.js'; test('gone', () => gone());`,
+      'test/required.test.ts': `import { test } from 'vitest'; test('cjs', () => { require('../src/value.js'); });`,
+      'test/created.test.ts': `import { test } from 'vitest'; import { createRequire } from 'node:module'; const load = createRequire(import.meta.url); test('x', () => { load('../src/value.js'); });`,
     });
     const files = inventoryTests({ root, config: VeritasConfig.parse({}) }).files;
     const unseen = (name: string) => files.find((file) => file.path === name)?.unseenReach;
@@ -67,6 +69,8 @@ describe('scope and diagnostics', () => {
     expect(unseen('test/custom.test.ts')).toBe(true);
     expect(unseen('test/via-helper.test.ts')).toBe(true);
     expect(unseen('test/missing.test.ts')).toBe(true);
+    expect(unseen('test/required.test.ts')).toBe(true);
+    expect(unseen('test/created.test.ts')).toBe(true);
   });
 
   it('does not treat node or Vitest calls as project symbols', () => {

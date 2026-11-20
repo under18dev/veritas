@@ -56,6 +56,8 @@ The model uses mathematical integers. JavaScript uses IEEE-754 doubles. They agr
 - `timeout`: the test run did not finish under the mutant (usually a mutated loop). Counted as detected, as in other mutation tools, but never credited to a specific test as a kill. Each test that covers a specification-relevant timeout mutant lists it under unknowns.
 - `pending`, `unknown`: the mutant was not run, or the backend reported a status Veritas does not recognize. An `unknown` mutant makes the mutation stage `partial`, so the run cannot `pass`; so does a `pending` one, except in an incremental run (`--since`), where mutants outside the change are left out on purpose.
 
+Mutator runs only the test files that could kill the mutants in scope. A test file is left out only when it imports project sources and none of them is in scope. Files are always kept when they, or a local file they import, run code in a child process, load modules at run time (dynamic `import()`, `require`, `createRequire`) or import a relative module that does not resolve. Files in which no test was recognized are also kept. Code that reaches the project only through Vitest configuration (`globalSetup`, plugins) is not seen; if your tests depend on it, set the scope so that those test files import a source in scope.
+
 ## Specifications
 
 - Properties start as `proposed`. Only an explicit approval record makes one `accepted`.

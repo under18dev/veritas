@@ -907,10 +907,18 @@ function bindingIdentifiers(name: ts.BindingName): ts.Identifier[] {
   );
 }
 
-/** Whether a file runs code out of process or through a dynamic import, or imports a relative module that does not resolve. */
+/**
+ * Whether a file runs code out of process, loads modules at run time (dynamic import, `require`, `createRequire`),
+ * or imports a relative module that does not resolve.
+ */
 function hasUnseenReach(source: ts.SourceFile, checker: ts.TypeChecker): boolean {
   return descendants(source).some((node) => {
-    if (ts.isCallExpression(node)) return isOpaqueCall(node, checker);
+    // `require(...)` and `createRequire(...)` load modules at run time, which static imports do not show.
+    if (ts.isCallExpression(node))
+      return (
+        isOpaqueCall(node, checker) ||
+        (ts.isIdentifier(node.expression) && ['require', 'createRequire'].includes(node.expression.text))
+      );
     const specifier =
       ts.isImportDeclaration(node) || ts.isExportDeclaration(node) ? node.moduleSpecifier : undefined;
 
