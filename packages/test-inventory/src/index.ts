@@ -451,6 +451,21 @@ function isOpaqueCall(node: ts.CallExpression, checker: ts.TypeChecker): boolean
   // `require(...)` and `createRequire(...)` load modules at run time, which static imports do not show.
   if (ts.isIdentifier(node.expression) && ['require', 'createRequire'].includes(node.expression.text))
     return true;
+  // A loader made by `createRequire` (`const load = createRequire(import.meta.url); load('./x')`).
+  if (ts.isIdentifier(node.expression)) {
+    const declaration = checker.getSymbolAtLocation(node.expression)?.valueDeclaration;
+    const initializer =
+      declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+        ? skipParens(declaration.initializer)
+        : undefined;
+    if (
+      initializer &&
+      ts.isCallExpression(initializer) &&
+      ts.isIdentifier(initializer.expression) &&
+      initializer.expression.text === 'createRequire'
+    )
+      return true;
+  }
   // By import source, which works without @types/node: `spawnSync(...)` or `cp.spawnSync(...)`.
   const callee = skipParens(node.expression);
   const local = ts.isPropertyAccessExpression(callee) ? skipParens(callee.expression) : callee;

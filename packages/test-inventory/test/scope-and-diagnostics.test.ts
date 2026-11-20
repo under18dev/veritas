@@ -74,6 +74,7 @@ describe('scope and diagnostics', () => {
     // The same calls inside a test make it opaque, so its kills are not credited to the linked call alone.
     const tests = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests;
     expect(tests.find((t) => t.name === 'cjs')?.suspicions).toContain('opaque_call');
+    expect(tests.find((t) => t.name === 'x')?.suspicions).toContain('opaque_call');
   });
 
   it('does not treat node or Vitest calls as project symbols', () => {
