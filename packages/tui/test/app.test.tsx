@@ -54,7 +54,13 @@ const PROPERTY = {
   inputDomain: {},
   citations: ['orders over 1000 get a discount'],
   conflictsWith: [],
-  confidence: 'high',
+  confidence: {
+    sourceQuality: 'primary',
+    agreement: 'single_source',
+    implementationAlignment: 'agree',
+    independence: 'independent',
+    freshness: 'current',
+  },
   implementationAgreement: 'agree',
   experimental: false,
 } as unknown as Property;
@@ -200,6 +206,7 @@ describe('the TUI', () => {
     await until(app, 'discount above 1000');
     await press(app, KEY.enter);
     await until(app, 'orders over 1000 get a discount');
+    expect(app.lastFrame()).toContain('evidence: sourceQuality=primary agreement=single_source');
     await press(app, 'a');
     await until(app, 'Reason to accept P-1');
     await press(app, KEY.enter);

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { Box, Text, useInput } from 'ink';
 import { useState } from 'react';
 import { Confirm, ErrorView, Title, useLoad } from '../components.js';
@@ -23,7 +24,7 @@ export function Home({ api, active, onBack, onChange, version }: ScreenProps) {
       <Text>Project: {api.root}</Text>
       {config.error ? <ErrorView error={config.error} /> : null}
       {config.data?.kind === 'json' || config.data?.kind === 'code' ? (
-        <Text>Configuration: {config.data.file}</Text>
+        <Text>Configuration: {path.relative(api.root, config.data.file) || config.data.file}</Text>
       ) : null}
       {uninitialized ? (
         <Box flexDirection="column" marginTop={1}>

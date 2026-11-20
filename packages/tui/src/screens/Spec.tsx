@@ -12,7 +12,11 @@ export function propertyLines(p: Property, approvals: Approval[], others: Proper
     p.description,
     '',
     `targets: ${p.targetSymbols.join(', ') || '-'}`,
-    `origin: ${p.origin}  confidence: ${p.confidence}  implementation agrees: ${p.implementationAgreement}`,
+    `origin: ${p.origin}  implementation agrees: ${p.implementationAgreement}`,
+    // The evidence vector, field by field: there is no single confidence score.
+    `evidence: ${Object.entries(p.confidence)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(' ')}`,
     ...(p.formalExpression ? [`formal: ${p.formalExpression}`] : []),
     ...(p.assumptions.length ? ['assumptions:', ...p.assumptions.map((a) => `  ${a}`)] : []),
     ...(p.citations.length ? ['', 'cited text:', ...p.citations.map((c) => `  "${c}"`)] : []),

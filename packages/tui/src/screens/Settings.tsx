@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { VeritasConfig } from '@under18dev/veritas-core';
 import { Box, Text, useInput } from 'ink';
 import { useState } from 'react';
@@ -78,7 +79,7 @@ export function Settings({ api, active, onBack, onChange, height, version }: Scr
     return (
       <Box flexDirection="column">
         <Title>Settings</Title>
-        <Text>{data.file} is a code configuration.</Text>
+        <Text>{path.relative(api.root, data.file) || data.file} is a code configuration.</Text>
         <Text dimColor>
           It executes project code, so it is not loaded or edited here. Edit the file directly.
         </Text>
@@ -89,7 +90,7 @@ export function Settings({ api, active, onBack, onChange, height, version }: Scr
 
   return (
     <Box flexDirection="column">
-      <Title>{`Settings (${data.file})`}</Title>
+      <Title>{`Settings (${path.relative(api.root, data.file) || data.file})`}</Title>
       {view.kind === 'list' ? (
         <SelectList
           active={active}

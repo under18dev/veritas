@@ -43,8 +43,10 @@ function Header({ api, version }: { api: TuiApi; version: number }) {
 
   return (
     <Box borderStyle="single" paddingX={1} justifyContent="space-between">
-      <Text bold>veritas · {path.basename(api.root) || api.root}</Text>
-      <Text dimColor>
+      <Box flexShrink={0} marginRight={2}>
+        <Text bold>veritas · {path.basename(api.root) || api.root}</Text>
+      </Box>
+      <Text dimColor wrap="truncate-end">
         {run
           ? `latest ${run.id} · ${run.verdict ?? run.status} · exit ${run.exitCode ?? '-'} · ${run.startedAt}`
           : latest.loading
@@ -87,7 +89,7 @@ export function App({ api }: { api: TuiApi }) {
     <Box flexDirection="column">
       <Header api={api} version={version} />
       <Box>
-        <Box flexDirection="column" width={20} borderStyle="single" paddingX={1}>
+        <Box flexDirection="column" width={24} flexShrink={0} borderStyle="single" paddingX={1}>
           <SelectList
             items={SCREENS.map((s) => ({ label: s.label, value: s.key }))}
             active={focus === 'menu'}
