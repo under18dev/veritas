@@ -304,7 +304,7 @@ export function createServer(options: ServerOptions): McpServer {
     'verify_property',
     {
       description:
-        'Check formalized properties with Z3 within a bounded integer model and replay counterexamples in JavaScript. Results are "proven within the model" at best, never a general proof.',
+        'Check formalized properties with the configured formal backend (formal.backend: Z3 by default, or Lean) within a bounded integer model, replaying counterexamples in JavaScript. Results are "proven within the model" at best, never a general proof.',
       inputSchema: { propertyId: Id('P').optional(), includeProposed: z.boolean().default(false) },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

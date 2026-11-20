@@ -34,7 +34,7 @@ export function buildProgram(
     .version(TOOL_VERSION)
     .option('--json', 'print machine-readable JSON on stdout; logs go to stderr')
     .option('-C, --root <dir>', 'project root', process.cwd())
-    .option('--allow-code-config', 'allow loading veritas.config.{ts,js}, which executes project code')
+    .option('--allow-code-config', 'allow loading veritas.config.{ts,js,mjs}, which executes project code')
     .option(
       '--debug',
       'log child processes, restricted calls of project code, stages and cache use to stderr (also VERITAS_DEBUG=1)',
@@ -106,14 +106,14 @@ export function buildProgram(
     spec
       .command('accept <id>')
       .requiredOption('--reason <text>', 'why')
-      .option('--actor <name>', 'who decides (default: git user.name)'),
+      .option('--actor <name>', 'who decides (default: VERITAS_ACTOR, then git user.name)'),
     (o, a) => specCommand(o, 'accept', a),
   );
   wire(
     spec
       .command('reject <id>')
       .requiredOption('--reason <text>', 'why')
-      .option('--actor <name>', 'who decides (default: git user.name)'),
+      .option('--actor <name>', 'who decides (default: VERITAS_ACTOR, then git user.name)'),
     (o, a) => specCommand(o, 'reject', a),
   );
   wire(spec.command('diff').description('compare properties of the last two runs'), (o) =>
