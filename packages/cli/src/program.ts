@@ -19,6 +19,7 @@ import {
 import { improveCommand } from './commands/improve.js';
 import { initCommand } from './commands/init.js';
 import { configureLogging, emitJson, type GlobalOptions, reportError, stderrSink } from './output.js';
+import { shouldLaunchTui } from './tui.js';
 
 type Handler = (opts: GlobalOptions & Record<string, unknown>, args: string[]) => Promise<ExitCode>;
 
@@ -43,6 +44,10 @@ export function buildProgram(
       new Option('--log-format <format>', 'stderr log format: text, or json (one object per line)')
         .choices(['text', 'json'])
         .default('text'),
+    )
+    .addHelpText(
+      'after',
+      '\nRun `veritas` without arguments in an interactive terminal to open the terminal user interface.',
     )
     .exitOverride()
     .configureOutput({ writeOut, writeErr: (s) => process.stderr.write(s) });
@@ -247,6 +252,12 @@ export function buildProgram(
 }
 
 export async function main(argv: string[]): Promise<ExitCode> {
+  if (shouldLaunchTui(argv, process.stdin, process.stdout, process.env)) {
+    // Loaded only here, so the other commands do not pay for React and Ink at startup.
+    const { startTui } = await import('@under18dev/veritas-tui');
+
+    return (await startTui({ root: process.cwd() })) as ExitCode;
+  }
   let exitCode: ExitCode = ExitCode.Success;
   const json = argv.includes('--json');
   // With --json, help and the version are collected and printed as one JSON object, keeping stdout pure JSON.
