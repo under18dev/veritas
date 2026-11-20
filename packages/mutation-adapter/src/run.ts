@@ -1,13 +1,17 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
+  MUTATOR_DECLARED_VITEST_MAJOR,
+  MUTATOR_MIN_VITEST_MAJOR,
   type Mutant,
   redact,
   redactDeep,
   resolveInsideRoot,
+  resolvePackageVersion,
   runProjectTests,
   type VeritasConfig,
   VeritasError,
+  vitestMajor,
 } from '@under18dev/veritas-core';
 import { detectMutator, PINNED_MUTATOR_VERSION, summarize } from './detect.js';
 import { importMutationReport } from './import.js';
@@ -213,6 +217,20 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   if (!detection.available || detection.binPath === null) {
     return result('unsupported', { backend, detail: detection.detail });
   }
+
+  const vitest = resolvePackageVersion(options.root, 'vitest');
+  const major = vitestMajor(vitest);
+
+  if (major !== null && major < MUTATOR_MIN_VITEST_MAJOR)
+    return result('unsupported', {
+      backend,
+      detail: `mutation testing needs Vitest ${MUTATOR_MIN_VITEST_MAJOR} or later; the project has Vitest ${vitest}`,
+    });
+
+  if (major !== null && major < MUTATOR_DECLARED_VITEST_MAJOR)
+    warnings.push(
+      `@mizchi/mutator declares Vitest ${MUTATOR_DECLARED_VITEST_MAJOR}; the project has Vitest ${vitest}, which has worked but is outside that range`,
+    );
 
   if (detection.origin === 'adapter') {
     warnings.push(`the project has no @mizchi/mutator; using the adapter's own copy at ${detection.binPath}`);

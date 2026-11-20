@@ -22,6 +22,19 @@ export const FEATURES: Record<string, { required: CapabilityName[]; optional: Ca
   report: { required: ['node'], optional: [] },
 };
 
+/**
+ * Vitest versions mutation testing works with. @mizchi/mutator declares Vitest 5; Vitest 4 projects run, while on
+ * Vitest 3 and earlier its test runner integration fails before any mutant is tried.
+ */
+export const MUTATOR_MIN_VITEST_MAJOR = 4;
+export const MUTATOR_DECLARED_VITEST_MAJOR = 5;
+
+export function vitestMajor(version: string | null): number | null {
+  const major = version ? Number.parseInt(version, 10) : Number.NaN;
+
+  return Number.isNaN(major) ? null : major;
+}
+
 export interface FeatureStatus {
   feature: string;
   state: 'enabled' | 'degraded' | 'disabled';
@@ -154,10 +167,15 @@ export async function runDoctor(
   );
 
   const mutator = packageVersion(root, '@mizchi/mutator', bundled);
+  const tooOld = (vitestMajor(vitest) ?? MUTATOR_MIN_VITEST_MAJOR) < MUTATOR_MIN_VITEST_MAJOR;
   add(
     'mutator',
-    mutator.version ? 'available' : 'unavailable',
-    mutator.version ? `@mizchi/mutator resolved from ${mutator.from}` : '@mizchi/mutator not installed',
+    mutator.version && !tooOld ? 'available' : 'unavailable',
+    !mutator.version
+      ? '@mizchi/mutator not installed'
+      : tooOld
+        ? `@mizchi/mutator needs Vitest ${MUTATOR_MIN_VITEST_MAJOR} or later; the project has Vitest ${vitest}`
+        : `@mizchi/mutator resolved from ${mutator.from}`,
     mutator.version,
   );
 

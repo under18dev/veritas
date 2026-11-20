@@ -623,6 +623,19 @@ describe('doctor', () => {
     expect(cap('z3')?.detail).toMatch(/resolved from veritas/);
   });
 
+  it('reports mutation testing unavailable on a Vitest older than 4', async () => {
+    const root = tmp();
+    writeFileSync(path.join(root, 'package.json'), '{"name":"p","devDependencies":{"vitest":"^1.5.3"}}');
+    mkdirSync(path.join(root, 'node_modules/vitest'), { recursive: true });
+    writeFileSync(path.join(root, 'node_modules/vitest/package.json'), '{"name":"vitest","version":"1.5.3"}');
+    const report = await runDoctor(root, null, {}, { '@mizchi/mutator': '0.4.5' });
+    expect(report.capabilities.find((c) => c.name === 'mutator')).toMatchObject({
+      state: 'unavailable',
+      detail: '@mizchi/mutator needs Vitest 4 or later; the project has Vitest 1.5.3',
+    });
+    expect(report.features.find((f) => f.feature === 'mutate')).toMatchObject({ state: 'disabled' });
+  });
+
   it('looks for Lean on the PATH first, then in the elan install directories', () => {
     const exe = process.platform === 'win32' ? 'lean.exe' : 'lean';
     const home = path.join(tmpdir(), 'home');

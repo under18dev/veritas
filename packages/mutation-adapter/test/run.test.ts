@@ -156,6 +156,16 @@ describe('runMutation failures', () => {
     expect(r.backend).toEqual({ name: 'mizchi', version: null });
   });
 
+  it('is unsupported on a Vitest older than 4, with the reason', async () => {
+    const root = tempDir('oldvitest');
+    mkdirSync(path.join(root, 'node_modules/vitest'), { recursive: true });
+    writeFileSync(path.join(root, 'node_modules/vitest/package.json'), '{"name":"vitest","version":"3.2.4"}');
+    const r = await runMutation({ root, config: config(), reportDir: path.join(root, 'out') });
+    expect(r.status).toBe('unsupported');
+    expect(r.detail).toBe('mutation testing needs Vitest 4 or later; the project has Vitest 3.2.4');
+    expect(r.command).toEqual([]);
+  });
+
   it('rejects a relative report dir and unsafe arguments before running anything', async () => {
     const root = tempDir('args');
     expect((await runMutation({ root, config: config(), reportDir: 'out' })).status).toBe('error');
