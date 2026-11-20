@@ -13,6 +13,7 @@ import {
   diffRegistries,
   formalizeProperty,
   loadApprovals,
+  numberOnly,
   recordDecision,
   type StatementInput,
 } from '../src/index.js';
@@ -379,6 +380,22 @@ describe('registry from documentation and code', { timeout: 60_000 }, () => {
     };
     const { registry } = registryFor('discount-boundary', discovery);
     expect(registry.mapping.find((m) => m.statementId === 'ST-copy')?.status).toBe('duplicate');
+  });
+});
+
+describe('numberOnly', () => {
+  it('models only parameters that hold numbers as integers', () => {
+    for (const type of ['number', 'number | undefined', 'number | null', '0 | 1 | 2'])
+      expect(numberOnly(type)).toBe(true);
+    for (const type of [
+      'string | number',
+      'number[]',
+      'Array<number>',
+      '(n: number) => number',
+      '{ n: number }',
+      'string',
+    ])
+      expect(numberOnly(type)).toBe(false);
   });
 });
 

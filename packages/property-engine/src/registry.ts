@@ -86,6 +86,20 @@ function lengthStatement(quote: string, arrayWords: string[]): boolean {
 }
 
 /** Pick the function and parameter a threshold statement talks about, or null when nothing fits clearly. */
+/**
+ * A parameter type that only holds numbers (`number`, numeric literals, optionally with `undefined` or `null`). A union
+ * that also accepts a string or an object (`string | number`) is not modelled as an integer.
+ */
+export function numberOnly(type: string): boolean {
+  if (/[<>()[\]{}&]/.test(type)) return false;
+  const members = type
+    .split('|')
+    .map((t) => t.trim())
+    .filter((t) => t !== 'undefined' && t !== 'null');
+
+  return members.length > 0 && members.every((t) => t === 'number' || /^-?\d+(\.\d+)?$/.test(t));
+}
+
 function mapStatement(
   statement: StatementInput,
   relation: ThresholdRelation,
@@ -99,9 +113,7 @@ function mapStatement(
     if (!fn.exported) continue;
     // Number parameters, and fields of record parameters the function compares (`order.total`).
     const numeric = [
-      ...fn.params
-        .filter((p) => /\bnumber\b/.test(p.type) && !/\[\]|Array</.test(p.type))
-        .map((p) => ({ name: p.name, words: words(p.name) })),
+      ...fn.params.filter((p) => numberOnly(p.type)).map((p) => ({ name: p.name, words: words(p.name) })),
       ...[
         ...new Set(fn.comparisons.map((c) => c.param).filter((n): n is string => n?.includes('.') ?? false)),
       ].map((name) => ({ name, words: words(name.slice(name.indexOf('.') + 1)) })),
