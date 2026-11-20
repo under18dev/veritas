@@ -435,6 +435,19 @@ describe('checkLeanProject (real Lean)', () => {
     expect(check.reasons.join('\n')).toMatch(/symbolic links/);
   });
 
+  it('rejects a linked build directory, which lake would write through', async () => {
+    const dir = project('theorem ok : 1 = 1 := rfl\n');
+    const outside = tmp();
+    symlinkSync(outside, path.join(dir, '.lake'), process.platform === 'win32' ? 'junction' : 'dir');
+    const check = await checkLeanProject(dir, {
+      theorems: ['ok'],
+      timeoutMs: LEAN_TIMEOUT,
+      leanPath: missingBinary,
+    });
+    expect(check.status).toBe('rejected');
+    expect(check.reasons.join('\n')).toMatch(/\.lake: symbolic links/);
+  });
+
   it(
     'reports a syntax error as failed',
     async () => {

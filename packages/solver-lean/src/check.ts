@@ -100,11 +100,12 @@ function scanSources(dir: string): SourceScan {
       a.name.localeCompare(b.name),
     )) {
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
-      if (SKIP_DIRS.has(entry.name)) continue;
+      // Checked before skipping tool directories: lake writes into `.lake`, so a link there leaves the project.
       if (lstatSync(path.join(dir, relPath)).isSymbolicLink()) {
         findings.push(`${relPath}: symbolic links are not accepted in a Lean project`);
         continue;
       }
+      if (SKIP_DIRS.has(entry.name)) continue;
       if (entry.isDirectory()) {
         walk(relPath);
         continue;
