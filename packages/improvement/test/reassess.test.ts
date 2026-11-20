@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lostResults } from '../src/apply.js';
+import { lostResults, requiredClaimIds } from '../src/apply.js';
 
 describe('lostResults', () => {
   it('lists results that were decided before the patch and are undecided after it', () => {
@@ -34,5 +34,24 @@ describe('lostResults', () => {
   it('is empty when nothing decided became undecided', () => {
     expect(lostResults({ 'C-a': 'unknown' }, { 'C-a': 'unknown' })).toEqual([]);
     expect(lostResults({ 'C-a': 'timeout' }, { 'C-a': 'proven_within_model' })).toEqual([]);
+  });
+
+  it('requires claims about mutants that are still not killed, but not about mutants the new tests kill', () => {
+    const claims = [
+      { id: 'C-conf', kind: 'conformance' },
+      { id: 'C-m1', kind: 'bounded_equivalence', mutantId: 'M-1' },
+      { id: 'C-m2', kind: 'distinguishability', mutantId: 'M-2' },
+    ];
+    const required = requiredClaimIds(claims, new Set(['M-1']));
+    expect([...required].sort()).toEqual(['C-conf', 'C-m2']);
+    const before = {
+      'C-conf': 'proven_within_model',
+      'C-m1': 'counterexample_found',
+      'C-m2': 'proven_within_model',
+    };
+    // M-2 still survives, but its claim was not made again: lost.
+    expect(lostResults(before, { 'C-conf': 'proven_within_model' }, required)).toEqual([
+      'C-m2: proven_within_model -> not produced',
+    ]);
   });
 });

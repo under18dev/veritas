@@ -202,9 +202,8 @@ const UNDECIDED = new Set(['unknown', 'timeout', 'error', 'cancelled', 'semantic
 /**
  * Results decided before the patch (a proof, a counterexample, a passed property test) that are lost on the
  * patched copy, as `id: before -> after`: undecided there, or, for results in `required`, not produced at all.
- * `required` holds the conformance claims (about the implementation, not about a mutant), which the same
- * implementation must reproduce. Mutant claims may legitimately disappear (the new tests kill that mutant), and so
- * may property-based results whose id changed with a review decision.
+ * `required` holds the claims that must be produced again (see `requiredClaimIds`). Property-based results may
+ * disappear because their id changes with a review decision.
  */
 export function lostResults(
   before: Record<string, string>,
@@ -221,16 +220,30 @@ export function lostResults(
     .map(([id, status]) => `${id}: ${status} -> ${after[id] ?? 'not produced'}`);
 }
 
-/** Ids of the conformance claims (about the implementation itself) of a run. */
-function conformanceClaimIds(root: string, runId: string): Set<string> {
+/**
+ * Claims of a run that the patched copy must produce again: conformance claims (about the implementation itself)
+ * and claims about a mutant that is still not killed after the patch. A claim about a mutant the new tests kill is
+ * not made again, because only surviving mutants get relation claims.
+ */
+export function requiredClaimIds(
+  claims: { id: string; kind: string; mutantId?: string | undefined }[],
+  killedAfter: ReadonlySet<string>,
+): Set<string> {
+  return new Set(
+    claims
+      .filter((c) => c.kind === 'conformance' || (c.mutantId !== undefined && !killedAfter.has(c.mutantId)))
+      .map((c) => c.id),
+  );
+}
+
+function runClaims(
+  root: string,
+  runId: string,
+): { id: string; kind: string; mutantId?: string | undefined }[] {
   try {
-    return new Set(
-      readArtifact(root, runId, 'claims')
-        .data.filter((c) => c.kind === 'conformance')
-        .map((c) => c.id),
-    );
+    return readArtifact(root, runId, 'claims').data;
   } catch {
-    return new Set();
+    return [];
   }
 }
 
@@ -518,7 +531,12 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         { workspace, before, rolledBack: true },
       );
     }
-    const lost = lostResults(before.claimStatuses, reassessed.statuses, conformanceClaimIds(root, doc.runId));
+    const killedAfter = new Set(mutationAfter.mutants.filter((m) => m.status === 'killed').map((m) => m.id));
+    const lost = lostResults(
+      before.claimStatuses,
+      reassessed.statuses,
+      requiredClaimIds(runClaims(root, doc.runId), killedAfter),
+    );
     if (lost.length > 0) {
       return end(
         'error',
