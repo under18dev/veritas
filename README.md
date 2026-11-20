@@ -43,6 +43,13 @@ npx veritas explain <finding-id>
 
 The [tutorial](https://under18dev.github.io/veritas/guide/tutorial) walks through a complete example.
 
+To use Veritas interactively, install it globally and run `veritas` without arguments in your project. It opens a [terminal UI](https://under18dev.github.io/veritas/guide/tui) for results, specifications, runs, test improvement and settings:
+
+```bash
+npm install -g @under18dev/veritas
+veritas
+```
+
 ## Commands
 
 | Command                                                                | Purpose                                                                      |

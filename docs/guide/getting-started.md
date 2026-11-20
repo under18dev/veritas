@@ -140,5 +140,6 @@ Decisions about specifications are stored in `.veritas/approvals.json`. Keep the
 ## Next steps
 
 - [Tutorial](/guide/tutorial): find and fix a boundary bug in a small project.
+- [Terminal UI](/guide/tui): run `veritas` without arguments to do the same steps interactively.
 - [Specifications](/guide/specifications): accept or reject the rules Veritas found.
 - [CI and GitHub Action](/guide/ci): run Veritas on pull requests.

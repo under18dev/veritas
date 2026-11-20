@@ -140,5 +140,6 @@ npx veritas run --profile standard
 ## 次に読むページ
 
 - [チュートリアル](/ja/guide/tutorial)：小さなプロジェクトで境界のバグを見つけて直します。
+- [ターミナル UI](/ja/guide/tui)：`veritas` を引数なしで実行すると、同じ手順を画面で操作できます。
 - [仕様の確定](/ja/guide/specifications)：Veritas が見つけた規則を accept か reject します。
 - [CI と GitHub Action](/ja/guide/ci)：プルリクエストで Veritas を実行します。
