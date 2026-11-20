@@ -88,10 +88,7 @@ export function buildProgram(
     program
       .command('discover')
       .description('collect specification evidence')
-      .option(
-        '--offline',
-        'Veritas makes no network requests (sources, LLM); project tests still run as with `pnpm test`',
-      )
+      .option('--offline', 'make no network requests: local sources only, no LLM')
       .addOption(new Option('--sources <list>', 'comma-separated: local,github,web,all').default('local'))
       .option('--allow-domain <domain...>', 'allow a web domain (also needs sources.web.enabled in config)')
       .option('--max-pages <n>', 'web page budget'),
@@ -101,18 +98,23 @@ export function buildProgram(
   wire(spec.command('list').description('list properties of the latest run'), (o) =>
     specCommand(o, 'list', []),
   );
-  wire(spec.command('show <id>'), (o, a) => specCommand(o, 'show', a));
+  wire(
+    spec.command('show <id>').description('show a property, its sources and the decisions recorded for it'),
+    (o, a) => specCommand(o, 'show', a),
+  );
   wire(
     spec
       .command('accept <id>')
-      .requiredOption('--reason <text>', 'why')
+      .description('accept a property as the specification (recorded in .veritas/approvals.json)')
+      .requiredOption('--reason <text>', 'reason recorded with the decision')
       .option('--actor <name>', 'who decides (default: VERITAS_ACTOR, then git user.name)'),
     (o, a) => specCommand(o, 'accept', a),
   );
   wire(
     spec
       .command('reject <id>')
-      .requiredOption('--reason <text>', 'why')
+      .description('reject a property (recorded in .veritas/approvals.json)')
+      .requiredOption('--reason <text>', 'reason recorded with the decision')
       .option('--actor <name>', 'who decides (default: VERITAS_ACTOR, then git user.name)'),
     (o, a) => specCommand(o, 'reject', a),
   );
@@ -123,16 +125,16 @@ export function buildProgram(
   wire(
     program
       .command('analyze [path]')
-      .description('index code and tests, map them to properties and assess tests')
-      .option('--since <ref>'),
+      .description('index code and tests, map them to properties and assess tests (only [path], if given)')
+      .option('--since <ref>', 'mark candidates in code changed since this git ref'),
     (o, a) => analyzeCommand(o, a),
   );
   wire(
     program
       .command('mutate')
       .description('run mutation testing and relate mutants to properties')
-      .option('--since <ref>')
-      .option('--scope <glob>')
+      .option('--since <ref>', 'mutate only code changed since this git ref')
+      .option('--scope <glob>', 'mutate only files matching this glob')
       .option(
         '--import <file>',
         'normalize an existing mutation-testing-elements report instead of running mutator',
@@ -159,7 +161,7 @@ export function buildProgram(
       .description(
         'generate fast-check property tests for formalized properties (written under .veritas/generated-tests)',
       )
-      .option('--property <id>')
+      .option('--property <id>', 'generate a test for this property only')
       .option('--dry-run', 'print instead of writing')
       .option('--force', 'replace generated files that were changed since they were written'),
     (o) => testGenerateCommand(o),
@@ -168,9 +170,13 @@ export function buildProgram(
     program
       .command('prove')
       .description('verify formalized properties with an SMT solver (bounded)')
-      .option('--property <id>')
+      .option('--property <id>', 'verify this property only')
       .option('--include-proposed', 'also check properties that are not accepted (experimental)')
-      .addOption(new Option('--engine <engine>').choices(['z3', 'lean']).default('z3')),
+      .addOption(
+        new Option('--engine <engine>', 'z3 (bounded checks) or lean (kernel-checked proofs)')
+          .choices(['z3', 'lean'])
+          .default('z3'),
+      ),
     (o) => proveCommand(o),
   );
   wire(
@@ -197,7 +203,15 @@ export function buildProgram(
     program
       .command('report')
       .description('print the latest results')
-      .addOption(new Option('--format <format>').choices(['text', 'json', 'markdown', 'html', 'sarif']))
+      .addOption(
+        new Option('--format <format>', 'output format (default: text, or json with --json)').choices([
+          'text',
+          'json',
+          'markdown',
+          'html',
+          'sarif',
+        ]),
+      )
       .option('--run <run-id>', 'report on this run instead of the latest'),
     (o) => reportCommand(o),
   );
@@ -205,12 +219,19 @@ export function buildProgram(
     program
       .command('run')
       .description('run the full pipeline')
-      .addOption(new Option('--profile <profile>').choices(['quick', 'standard', 'deep']).default('standard'))
+      .addOption(
+        new Option(
+          '--profile <profile>',
+          'quick (no project code), standard (+ mutation) or deep (+ property tests and proofs)',
+        )
+          .choices(['quick', 'standard', 'deep'])
+          .default('standard'),
+      )
       .option(
         '--offline',
         'Veritas makes no network requests (sources, LLM); project tests still run as with `pnpm test`',
       )
-      .option('--since <ref>')
+      .option('--since <ref>', 'limit mutation to code changed since this git ref')
       .option('--include-proposed', 'also verify properties that are not accepted (experimental)'),
     (o) => runCommandCli(o),
   );
