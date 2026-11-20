@@ -211,11 +211,20 @@ describe('run store', () => {
     ];
     for (const id of ids) {
       mkdirSync(path.join(runs, id, 'proofs'), { recursive: true });
-      writeFileSync(path.join(runs, id, 'run.json'), '{}');
+      writeFileSync(path.join(runs, id, 'trace.jsonl'), '');
+      writeFileSync(
+        path.join(runs, id, ARTIFACT_INDEX_FILE),
+        JSON.stringify({ data: [{ path: 'trace.jsonl' }] }),
+      );
     }
-    // An older run another process is still writing has no run.json yet.
+    // An older run another process is still writing: trace.jsonl exists, but the index does not list it yet.
     const active = 'run-20261030T000000000Z-000-eeeeee';
     mkdirSync(path.join(runs, active), { recursive: true });
+    writeFileSync(path.join(runs, active, 'trace.jsonl'), '');
+    writeFileSync(
+      path.join(runs, active, ARTIFACT_INDEX_FILE),
+      JSON.stringify({ data: [{ path: 'run.json' }] }),
+    );
     mkdirSync(path.join(runs, 'notes'), { recursive: true });
     writeFileSync(path.join(runs, 'run-keep.txt'), 'not a run directory');
     const outside = tmp();

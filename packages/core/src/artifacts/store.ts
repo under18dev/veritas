@@ -2,7 +2,6 @@ import { execFileSync } from 'node:child_process';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   chmodSync,
-  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -271,12 +270,21 @@ export function listRuns(root: string): string[] {
   }
 }
 
+function finished(runDir: string): boolean {
+  try {
+    return readFileSync(path.join(runDir, ARTIFACT_INDEX_FILE), 'utf8').includes('"trace.jsonl"');
+  } catch {
+    return false;
+  }
+}
+
 const RUN_ID = /^run-\d{8}T\d{9}Z-\d{3}-[0-9a-f]{6}$/;
 
 /**
  * Remove run directories under `.veritas/runs` beyond the `keep` newest, never `current`. Only finished runs are
- * removed: real directories named like a run ID that hold `run.json`, which a run writes last, so a run still in
- * progress in another process is left alone. Links and anything else stay. Returns the removed run IDs.
+ * removed: real directories named like a run ID whose artifact index already lists `trace.jsonl`, which a run writes
+ * last (after run.json and the reports; the index is replaced atomically after it), so a run still in progress in
+ * another process is left alone. Links and anything else stay. Returns the removed run IDs.
  */
 export function pruneRuns(root: string, keep: number, current: string): string[] {
   const dir = path.join(root, RUNS_DIR);
@@ -292,7 +300,7 @@ export function pruneRuns(root: string, keep: number, current: string): string[]
         entry.isDirectory() &&
         !entry.isSymbolicLink() &&
         RUN_ID.test(entry.name) &&
-        existsSync(path.join(dir, entry.name, 'run.json')),
+        finished(path.join(dir, entry.name)),
     )
     .map((entry) => entry.name)
     .sort()
