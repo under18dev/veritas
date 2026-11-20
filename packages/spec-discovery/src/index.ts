@@ -236,11 +236,12 @@ async function collectLocal(
   root: string,
   config: VeritasConfig,
   skipped: DiscoveryResult['skipped'],
+  gitRoot: string = root,
 ): Promise<SourceInput[]> {
   const files = walk(root);
   const inputs: SourceInput[] = [];
   const rev = await runCommand('git', ['rev-parse', 'HEAD'], {
-    cwd: root,
+    cwd: gitRoot,
     timeoutMs: 5000,
     maxOutputBytes: 10000,
   });
@@ -298,7 +299,7 @@ async function collectLocal(
   }
   if (revision) {
     const log = await runCommand('git', ['log', '-50', '--format=%H%n%s%n%b%n---'], {
-      cwd: root,
+      cwd: gitRoot,
       timeoutMs: 5000,
       maxOutputBytes: 1_000_000,
     });
@@ -692,6 +693,11 @@ export async function discoverEvidence(options: {
   /** DNS resolver used to refuse hosts resolving to private addresses; default `dns.promises.lookup`. */
   lookup?: HostLookup;
   now?: () => Date;
+  /**
+   * Repository to read the git revision and log from, when `root` is a copy of it without `.git` (default
+   * `root`). Only read: `git rev-parse` and `git log`.
+   */
+  gitRoot?: string;
 }): Promise<DiscoveryResult> {
   const capturedAt = (options.now ?? (() => new Date()))().toISOString();
   const selected = options.sources ?? [
@@ -703,7 +709,7 @@ export async function discoverEvidence(options: {
   const inputs: SourceInput[] = [];
   let networkRequests = 0;
   if (selected.includes('local') && options.config.sources.local)
-    inputs.push(...(await collectLocal(options.root, options.config, skipped)));
+    inputs.push(...(await collectLocal(options.root, options.config, skipped, options.gitRoot)));
   else if (selected.includes('local')) skipped.push({ source: 'local', reason: 'local disabled' });
   if (selected.includes('github')) {
     if (!options.config.sources.github.enabled) skipped.push({ source: 'github', reason: 'github disabled' });

@@ -16,6 +16,7 @@ import {
   evaluatePolicy,
   type Finding,
   type FormalClaim,
+  gitCommit,
   gitOutput,
   hashValue,
   type JsParam,
@@ -108,6 +109,11 @@ export interface RunOptions {
   formalEngine?: 'z3' | 'lean';
   propertyIds?: string[];
   allowCodeConfig?: boolean;
+  /**
+   * Repository whose git revision and log describe `root`, when `root` is a copy without `.git` (for example the
+   * isolated workspace of `improve`). Read only. Source and property ids then match those of the repository.
+   */
+  gitRoot?: string;
   signal?: AbortSignal;
   /** Plain progress messages (info level and above). */
   log?: (message: string) => void;
@@ -243,7 +249,11 @@ async function runInContext(
     files: fullIndex.files.filter((f) => inScope(f.path)),
   };
   const sourceHash = hashValue(code0.files);
-  const store = new RunStore(root, runId, { configHash, sourceHash });
+  const store = new RunStore(root, runId, {
+    configHash,
+    sourceHash,
+    ...(options.gitRoot ? { gitCommit: gitCommit(options.gitRoot) } : {}),
+  });
   const { cache, message: cacheMessage } = openCache(root, config);
   if (cacheMessage) log(cacheMessage);
   const signal = options.signal ?? new AbortController().signal;
@@ -304,6 +314,7 @@ async function runInContext(
         config: discoveryConfig,
         offline: Boolean(options.offline || options.localSourcesOnly),
         ...(options.sources ? { sources: options.sources } : {}),
+        ...(options.gitRoot ? { gitRoot: options.gitRoot } : {}),
       });
       let llmTokens = 0;
       const llmMessages: string[] = [];
