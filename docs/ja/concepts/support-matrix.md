@@ -47,6 +47,7 @@ Lean の証明が扱うのは整数と真偽値の引数だけで、レコード
 | Node.js        | 24 以上。プロジェクトのコードを実行するのは Node.js 25 以上（ネットワークを遮断）があるときだけ（実行中のもの、`VERITAS_SANDBOX_NODE`、PATH 上の `node`）。`sandbox.allowNetworkWithoutIsolation` を設定した場合を除く                                   |
 | OS             | Linux、macOS、Windows                                                                                                                                                                                                                                    |
 | テストランナー | Vitest。mutation テストには Vitest 4 以降が必要です。`@mizchi/mutator` が対応を宣言しているのは Vitest 5 で、Vitest 4 のプロジェクトも警告付きで実行します。Vitest 3 以前では `mutate` を `unsupported` として報告し、ほかのステージはそのまま実行します |
+| 依存パッケージ | `node_modules` にインストールされていること（npm、pnpm、`nodeLinker: node-modules` の Yarn、Bun）。Yarn Plug'n'Play には対応していません |
 | 言語           | TypeScript、JavaScript（ESM）                                                                                                                                                                                                                            |
 
 ## 外部ツールとライセンス

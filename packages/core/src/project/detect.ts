@@ -10,6 +10,8 @@ export interface ProjectInfo {
   tsconfig: string | null;
   vitest: { declared: boolean; installedVersion: string | null; configFile: string | null };
   git: boolean;
+  /** Yarn Plug'n'Play (`.pnp.cjs`): dependencies are not in node_modules, which Veritas resolves from. */
+  plugAndPlay: boolean;
   sourceGlobs: string[];
   testGlobs: string[];
 }
@@ -105,6 +107,7 @@ export function detectProject(root: string): ProjectInfo {
       configFile: VITEST_CONFIGS.find((f) => existsSync(path.join(root, f))) ?? null,
     },
     git: findUp(root, '.git'),
+    plugAndPlay: ['.pnp.cjs', '.pnp.js'].some((f) => findUp(root, f)),
     sourceGlobs: sourceDir ? [`${sourceDir}/**/*.{ts,tsx,js,mjs}`] : ['**/*.{ts,tsx,js,mjs}'],
     testGlobs: ['**/*.{test,spec}.{ts,tsx,js,mjs}'],
   };

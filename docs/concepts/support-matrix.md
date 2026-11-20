@@ -47,6 +47,7 @@ Lean proofs cover integer and boolean parameters only; a property over records o
 | Node.js     | 24 or later; project code runs only under Node.js 25+ (network blocked), unless `sandbox.allowNetworkWithoutIsolation` is set: the running Node.js, `VERITAS_SANDBOX_NODE` or `node` on PATH                                         |
 | OS          | Linux, macOS, Windows                                                                                                                                                                                                                |
 | Test runner | Vitest. Mutation testing needs Vitest 4 or later: `@mizchi/mutator` declares Vitest 5 and also runs Vitest 4 projects, with a warning. On Vitest 3 and earlier, `mutate` is reported as `unsupported` and the other stages still run |
+| Dependencies | Installed in `node_modules` (npm, pnpm, Yarn with `nodeLinker: node-modules`, Bun). Yarn Plug'n'Play is not supported |
 | Languages   | TypeScript, JavaScript (ESM)                                                                                                                                                                                                         |
 
 ## External tools and licenses

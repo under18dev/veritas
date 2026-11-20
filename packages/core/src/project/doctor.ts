@@ -160,9 +160,11 @@ export async function runDoctor(
     vitest ? 'available' : 'unavailable',
     vitest
       ? 'resolved from project'
-      : project.vitest.declared
-        ? 'declared but not installed; run your package manager install'
-        : 'Vitest not found in project',
+      : project.plugAndPlay
+        ? "Yarn Plug'n'Play is not supported; set `nodeLinker: node-modules` in .yarnrc.yml and run `yarn install`"
+        : project.vitest.declared
+          ? 'declared but not installed; run your package manager install'
+          : 'Vitest not found in project',
     vitest,
   );
 

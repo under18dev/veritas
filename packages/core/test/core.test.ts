@@ -623,6 +623,17 @@ describe('doctor', () => {
     expect(cap('z3')?.detail).toMatch(/resolved from veritas/);
   });
 
+  it("explains that Yarn Plug'n'Play is not supported instead of asking to install again", async () => {
+    const root = tmp();
+    writeFileSync(path.join(root, 'package.json'), '{"name":"p","devDependencies":{"vitest":"^4.0.0"}}');
+    writeFileSync(path.join(root, 'yarn.lock'), '');
+    writeFileSync(path.join(root, '.pnp.cjs'), '');
+    const report = await runDoctor(root, null, {}, {});
+    expect(report.capabilities.find((c) => c.name === 'vitest')?.detail).toMatch(
+      /Plug'n'Play is not supported; set `nodeLinker: node-modules`/,
+    );
+  });
+
   it('reports mutation testing unavailable on a Vitest older than 4', async () => {
     const root = tmp();
     writeFileSync(path.join(root, 'package.json'), '{"name":"p","devDependencies":{"vitest":"^1.5.3"}}');
