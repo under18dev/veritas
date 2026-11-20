@@ -40,7 +40,7 @@ All public packages share one version and are published by the `release` workflo
 The workflow checks that the tag is on main and matches the package versions. It runs the same checks as CI and
 publishes every package with provenance through npm trusted publishing. No npm token is stored. A package
 already published at the version is skipped, so a failed run can be re-run. `node scripts/publish.mjs --dry-run`
-shows what would be published.
+shows what would be published. Publishing runs on Linux or macOS.
 
 ## Architecture decisions
 

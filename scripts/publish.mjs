@@ -22,18 +22,16 @@ const expectIndex = args.indexOf('--expect');
 const expected = expectIndex >= 0 ? args[expectIndex + 1]?.replace(/^v/, '') : undefined;
 const inActions = process.env.GITHUB_ACTIONS === 'true';
 
-// On Windows npm and pnpm are .cmd shims, which Node.js only starts through a shell; quote every argument so
-// paths with spaces stay one argument.
-const quote = (arg) => `"${arg.replaceAll('"', '""')}"`;
+// npm and pnpm are started without a shell, so no argument is ever interpreted. On Windows they are .cmd shims,
+// which Node.js only starts through cmd.exe (with its own expansion rules), so publishing runs on Linux or macOS;
+// the release workflow uses Linux.
+if (process.platform === 'win32') {
+  console.error('publish from Linux or macOS (the release workflow runs on Linux)');
+  process.exit(2);
+}
+
 const run = (command, commandArgs, options = {}) => {
-  const result =
-    process.platform === 'win32'
-      ? spawnSync([command, ...commandArgs].map(quote).join(' '), {
-          encoding: 'utf8',
-          shell: true,
-          ...options,
-        })
-      : spawnSync(command, commandArgs, { encoding: 'utf8', ...options });
+  const result = spawnSync(command, commandArgs, { encoding: 'utf8', ...options });
 
   return { code: result.status ?? 1, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
 };
