@@ -276,6 +276,7 @@ it('changed', () => { const x = { a: 1 }; touch(x); expect(x).toEqual({ a: 2 });
 it('called', () => { expect(apply([1], double)).toEqual([2]); });
 it('options function', () => { expect(runWith({ cb: double })).toBe(2); });
 it('inspected', () => { expect(inspect(double)).toBe('function'); });
+it('stored by a built-in', () => { expect(Object.assign({}, { cb: double }).cb).toBeDefined(); });
 it('options callback', () => { let count = 0; run({ cb: () => { count++; } }); expect(count).toBe(1); });
 `,
       extra,
@@ -286,6 +287,8 @@ it('options callback', () => { let count = 0; run({ cb: () => { count++; } }); e
     expect(byName('called').symbols).toEqual(['src/store.ts#apply', 'src/store.ts#double']);
     expect(byName('options callback')).toMatchObject({ symbols: ['src/store.ts#run'], asserted: true });
     expect(byName('options function').symbols).toEqual(['src/store.ts#runWith', 'src/store.ts#double']);
+    // A built-in given an object that holds a function only stores it.
+    expect(byName('stored by a built-in').symbols).toEqual([]);
     // Reading `fn.call` does not call fn.
     expect(byName('inspected').symbols).toEqual(['src/store.ts#inspect']);
     // observe only reads x, so asserting on x checks nothing observe produced.

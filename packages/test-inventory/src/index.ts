@@ -1006,9 +1006,12 @@ function passedProjectFunctions(node: Invocation, ctx: Ctx, projectReceives: boo
   // `expect(fn)` compares the function as a value; it does not run it.
   if (ts.isCallExpression(node) && isAssertionChainCall(node)) return found;
 
-  // A function given directly, or as a value in an object or array literal (`run({ cb: double })`).
+  // A function given directly, or, to project code whose body shows it calls what it gets, as a value in an
+  // object or array literal (`run({ cb: double })`). A built-in such as `Object.assign` may only store those.
   const given = (argument: ts.Expression): ts.Expression[] => {
     const value = skipParens(argument);
+
+    if (!projectReceives) return [value];
 
     if (ts.isObjectLiteralExpression(value))
       return value.properties.flatMap((p) =>
