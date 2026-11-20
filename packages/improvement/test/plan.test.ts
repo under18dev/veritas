@@ -74,6 +74,10 @@ describe('planImprovement', () => {
     expect(result.plan?.patchPreview).toContain(`+++ b/test/veritas-${property.id}.test.ts`);
     expect(result.plan?.touchesProductionCode).toBe(false);
     expect(result.plan?.risks.join()).not.toMatch(/not accepted/);
+    // The wording matches what applying does: it targets the survivor and re-evaluates formal results.
+    expect(result.plan?.goal).toMatch(/aimed at 1 surviving specification-relevant mutant/);
+    expect(result.plan?.risks.join()).not.toMatch(/not re-evaluated/);
+    expect(result.plan?.expectedImpact.join()).toMatch(/re-evaluated on the patched copy/);
     // The dry run writes only under .veritas/improvements.
     expect(projectHash(root)).toBe(before);
     expect(existsSync(path.join(root, doc.files[0]?.path ?? 'x'))).toBe(false);

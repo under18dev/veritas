@@ -621,7 +621,7 @@ function buildPlan(
 
   return {
     id: 'IP-pending',
-    goal: `Add ${tests.length} test(s) whose expected values come from the specification, to kill ${mutants.size} surviving specification-relevant mutant(s) and check uncovered boundaries`,
+    goal: `Add ${tests.length} test(s) whose expected values come from the specification${mutants.size > 0 ? `, aimed at ${mutants.size} surviving specification-relevant mutant(s)` : ''} and at decisive boundary inputs no test checks; applying measures which mutants they kill`,
     targetedPropertyIds: propertyIds,
     observedGaps: [...gaps.entries()].map(([key, findingId]) => ({
       findingId,
@@ -637,13 +637,13 @@ function buildPlan(
     expectedImpact: [
       ...(mutants.size > 0 ? [`kill surviving mutant(s): ${[...mutants].join(', ')}`] : []),
       'measured before/after in an isolated copy; applied only if the killed-mutant count increases and no existing test breaks',
+      'formal and property-based results are re-evaluated on the patched copy before anything is written',
     ],
     risks: [
       ...notAccepted.map(
         (id) =>
           `property ${id} is ${byId.get(id)?.status}, not accepted: the expected values rely on a specification nobody has confirmed yet`,
       ),
-      'formal claims are not re-evaluated after the patch: only test files are added, so the implementation and its claims are unchanged',
     ],
     commands: [
       'veritas improve --apply --plan <plan-id> --approve <approval-token>',

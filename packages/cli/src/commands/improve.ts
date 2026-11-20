@@ -78,7 +78,8 @@ function planText(result: PlanResult): string {
       '',
       'skipped:',
       ...result.skipped.map(
-        (s) => `  ${s.propertyId ?? '-'} ${s.input ? JSON.stringify(s.input) : ''} ${s.reason}`,
+        (s) =>
+          `  ${[s.propertyId, s.mutantId, s.input ? JSON.stringify(s.input) : null].filter(Boolean).join(' ') || '-'}: ${s.reason}`,
       ),
     );
   }
