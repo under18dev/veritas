@@ -42,12 +42,12 @@ Lean proofs cover integer and boolean parameters only; a property over records o
 
 ## Environments
 
-| Item        | Supported                                                                                                                              |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Node.js     | 24 or later; project code runs only under Node.js 25+ (network blocked): the running Node.js, `VERITAS_SANDBOX_NODE` or `node` on PATH |
-| OS          | Linux, macOS, Windows (CI matrix)                                                                                                      |
-| Test runner | Vitest                                                                                                                                 |
-| Languages   | TypeScript, JavaScript (ESM)                                                                                                           |
+| Item        | Supported                                                                                                                                                                                    |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Node.js     | 24 or later; project code runs only under Node.js 25+ (network blocked), unless `sandbox.allowNetworkWithoutIsolation` is set: the running Node.js, `VERITAS_SANDBOX_NODE` or `node` on PATH |
+| OS          | Linux, macOS, Windows (CI matrix)                                                                                                                                                            |
+| Test runner | Vitest                                                                                                                                                                                       |
+| Languages   | TypeScript, JavaScript (ESM)                                                                                                                                                                 |
 
 ## External tools and licenses
 

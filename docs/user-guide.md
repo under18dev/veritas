@@ -51,7 +51,7 @@ veritas prove --engine lean        # Lean 4 kernel check
 veritas test generate              # fast-check tests under .veritas/generated-tests/
 ```
 
-`veritas prove` replays counterexamples in the sandbox. `test generate` only writes the files. When you run them with Vitest, they run with the trust of your own test suite.
+`veritas prove` replays counterexamples in a restricted process. `test generate` only writes the files. When you run them with Vitest, they run with the trust of your own test suite.
 
 ## 6. Improve tests
 
@@ -71,9 +71,11 @@ Veritas runs the analysed project's tests and functions with the same trust as r
 ```bash
 # An image with Veritas, built without any project code.
 printf 'FROM node:26\nRUN npm install -g @under18dev/veritas\n' | docker build -t veritas -
-# Work on a copy, so nothing the project's code does can change your checkout.
-cp -R untrusted-repo /tmp/untrusted-copy && cd /tmp/untrusted-copy
-# Install the dependencies without running their install scripts.
+# Work on a fresh copy, so nothing the project's code does can change your checkout.
+copy=$(mktemp -d) && cp -R untrusted-repo/. "$copy" && cd "$copy"
+# Install the dependencies from the lockfile without running install scripts. Use the project's package
+# manager: `pnpm install --frozen-lockfile --ignore-scripts`, `yarn install --immutable --mode=skip-build`
+# (Yarn 2+) or `bun install --frozen-lockfile --ignore-scripts` instead of npm (enable them with corepack).
 docker run --rm -v "$PWD":/work -w /work veritas npm ci --ignore-scripts
 # Analyse with no network at all.
 docker run --rm --network none -v "$PWD":/work -w /work veritas veritas init --yes
