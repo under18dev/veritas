@@ -307,6 +307,19 @@ describe('main end to end', { timeout: 300_000 }, () => {
     expect(existsSync(path.join(project, '.veritas'))).toBe(false);
   });
 
+  it('keeps a configured fail policy for inconclusive results even when the input says warn', async () => {
+    const project = copyFixture();
+    const base = git(project, 'rev-parse', 'HEAD');
+    const configPath = path.join(project, '.veritas/config.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, Record<string, unknown>>;
+    // No property is accepted, so the coverage threshold cannot be measured: the run is inconclusive.
+    config.policy = { ...config.policy, inconclusiveBehavior: 'fail', minPropertyCoverage: 0.5 };
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    const files = configure(project, base, { profile: 'quick', inconclusive: 'warn' });
+    expect(await main()).toBe(4);
+    expect(outputValues(files.output)['exit-code']).toBe('4');
+  });
+
   it('uses the configured inconclusive policy when the input is left empty', async () => {
     const project = mkdtempSync(path.join(tmpdir(), 'veritas-action-policy-'));
     writeFileSync(path.join(project, 'main.py'), 'print("not a node project")\n');
