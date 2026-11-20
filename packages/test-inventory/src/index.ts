@@ -261,6 +261,22 @@ function analyzeTest(
       if (call) asserted.add(call.node.getStart(source));
     }
   }
+  // A value passed to a helper of this file that asserts on that parameter is asserted too.
+  const helpers = assertingHelpers(source);
+  for (const node of nodes) {
+    if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) continue;
+    const positions = helpers.get(node.expression.text);
+    if (!positions) continue;
+    for (const index of positions) {
+      const argument = node.arguments[index];
+      if (!argument) continue;
+      for (const call of calls) if (contains(argument, call.node)) asserted.add(call.node.getStart(source));
+      if (ts.isIdentifier(argument)) {
+        const call = localCalls.get(argument.text);
+        if (call) asserted.add(call.node.getStart(source));
+      }
+    }
+  }
   const relativeFile = toPosixRelative(root, file);
   const targetCalls = calls.map(({ node, symbol }) => ({
     symbol,
@@ -593,6 +609,44 @@ function callsHelperWithAssertion(body: ts.Node | undefined, source: ts.SourceFi
   };
   ts.forEachChild(source, visit);
   return found;
+}
+
+/**
+ * Functions declared in the file (`function f(...)` or `const f = (...) =>`) mapped to the parameter positions that
+ * the subject of one of their assertions refers to.
+ */
+function assertingHelpers(source: ts.SourceFile): Map<string, Set<number>> {
+  const helpers = new Map<string, Set<number>>();
+  const record = (name: string, fn: ts.SignatureDeclaration & { body?: ts.Node }) => {
+    if (!fn.body) return;
+    const params = fn.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : undefined));
+    const positions = new Set<number>();
+    for (const child of descendants(fn.body)) {
+      if (!ts.isCallExpression(child) || !(isExpectCall(child) || isAssertCall(child))) continue;
+      const subject = child.arguments[0];
+      if (!subject) continue;
+      const used = new Set(
+        [subject, ...descendants(subject)].filter(ts.isIdentifier).map((identifier) => identifier.text),
+      );
+      params.forEach((param, index) => {
+        if (param !== undefined && used.has(param)) positions.add(index);
+      });
+    }
+    if (positions.size > 0) helpers.set(name, positions);
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name) record(node.name.text, node);
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      isFunction(node.initializer)
+    )
+      record(node.name.text, node.initializer);
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(source, visit);
+  return helpers;
 }
 
 function isExpectCall(node: ts.CallExpression): boolean {

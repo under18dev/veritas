@@ -32,9 +32,34 @@ describe('assertion evidence', () => {
         ?.evidence.map((evidence) => evidence.kind),
     ).toEqual(['static_call']);
     expect(byName('helper assertion').suspicions).not.toContain('no_assertion');
+    // The helper asserts on its parameter, so the project call passed to it is asserted.
+    expect(byName('helper assertion').targetCalls[0]?.asserted).toBe(true);
     expect(byName('discarded result').targetCalls[0]?.asserted).toBe(false);
     expect(byName('local const').targetCalls[0]?.asserted).toBe(true);
     expect(byName('direct').targetCalls[0]?.asserted).toBe(true);
+  });
+
+  it('marks a call asserted through a helper only when the helper asserts on that parameter', () => {
+    const root = tempProject({
+      'src/math.ts': 'export function fn(value: number): number { return value + 1; }\n',
+      'test/helpers.test.ts': `
+        import { expect, test } from 'vitest';
+        import { fn } from '../src/math.js';
+        function checkSecond(label: string, value: number) { expect(value).toBe(2); }
+        const checkArrow = (value: number) => expect(value).toBeGreaterThan(0);
+        function ignores(value: number) { expect(1).toBe(1); }
+        test('second parameter', () => { checkSecond('x', fn(1)); });
+        test('arrow helper with a local', () => { const r = fn(1); checkArrow(r); });
+        test('helper ignores the value', () => { ignores(fn(1)); });
+        test('wrong position', () => { checkSecond(String(fn(1)), 0); });
+      `,
+    });
+    const tests = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests;
+    const asserted = (name: string) => tests.find((t) => t.name === name)?.targetCalls[0]?.asserted;
+    expect(asserted('second parameter')).toBe(true);
+    expect(asserted('arrow helper with a local')).toBe(true);
+    expect(asserted('helper ignores the value')).toBe(false);
+    expect(asserted('wrong position')).toBe(false);
   });
 
   it('counts expect.assertions, assert.equal, and snapshot matcher variants', () => {
