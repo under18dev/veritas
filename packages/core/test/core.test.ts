@@ -224,7 +224,7 @@ describe('run store', () => {
     writeFileSync(path.join(runs, active, 'trace.jsonl'), '');
     writeFileSync(
       path.join(runs, active, ARTIFACT_INDEX_FILE),
-      JSON.stringify({ data: [{ path: 'run.json' }] }),
+      JSON.stringify({ data: [{ path: 'run.json' }, { path: 'not-trace.jsonl' }] }),
     );
     mkdirSync(path.join(runs, 'notes'), { recursive: true });
     writeFileSync(path.join(runs, 'run-keep.txt'), 'not a run directory');

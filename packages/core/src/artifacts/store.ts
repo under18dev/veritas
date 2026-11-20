@@ -272,7 +272,11 @@ export function listRuns(root: string): string[] {
 
 function finished(runDir: string): boolean {
   try {
-    return readFileSync(path.join(runDir, ARTIFACT_INDEX_FILE), 'utf8').includes('"trace.jsonl"');
+    const index = JSON.parse(readFileSync(path.join(runDir, ARTIFACT_INDEX_FILE), 'utf8')) as {
+      data?: { path?: unknown }[];
+    };
+
+    return Array.isArray(index.data) && index.data.some((entry) => entry.path === 'trace.jsonl');
   } catch {
     return false;
   }
