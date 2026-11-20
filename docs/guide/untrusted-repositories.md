@@ -1,6 +1,6 @@
 # Untrusted repositories
 
-Veritas runs the code of the project it analyses. Treat running Veritas on a repository the same as running that repository's test suite.
+This page explains which Veritas commands run your project's code, what protection applies while they do, and how to analyse a repository you do not trust. Running Veritas on a repository carries the same risk as running that repository's test suite.
 
 ## The trust model
 

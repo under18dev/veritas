@@ -1,10 +1,10 @@
 # エージェントと MCP
 
-コーディングエージェントから Veritas を使う方法は二つあります。エージェントに `veritas` CLI の使い方を教える Agent Skill と、Veritas をツールとして公開する MCP サーバー `veritas-mcp` です。どちらも CLI と同じエンジンで動きます。
+コーディングエージェントに Veritas を使わせる方法を説明します。`veritas` CLI の使い方をエージェントに指示する Agent Skill と、Veritas をツールとして公開する MCP サーバー `veritas-mcp` の二つがあり、どちらも CLI と同じエンジンで動きます。
 
 ## Agent Skill
 
-スキルは、Veritas のリポジトリにある `skills/veritas/SKILL.md` の一ファイルです。どんなときに Veritas を使うか、どのコマンドを実行するか、結果をどう読むか、どこで止まってあなたに確認するかを、エージェントに伝えます。Agent Skills を読み込めるエージェントなら、どれでも使えます。
+スキルは、Veritas のリポジトリにある `skills/veritas/SKILL.md` の一ファイルです。どんなときに Veritas を使うか、どのコマンドを実行するか、結果をどう読むか、どこで止まってあなたに確認するかを、エージェントに伝えます。Agent Skills を読み込めるエージェントで使えます。
 
 ### 入れ方
 
@@ -16,9 +16,9 @@ curl -fsSL https://raw.githubusercontent.com/under18dev/veritas/main/skills/veri
   -o .claude/skills/veritas/SKILL.md
 ```
 
-スキルは、プロジェクトに `@under18dev/veritas` が入っていること（`npm install -D @under18dev/veritas`）を前提にしています。入っていなければ、エージェントは自分でインストールせず、どう入れるかをあなたに尋ねます。
+スキルは、プロジェクトに `@under18dev/veritas` が入っていること（`npm install -D @under18dev/veritas`）を前提にしています。入っていない場合は、自分でインストールせず、どう入れるかをあなたに尋ねるよう、スキルがエージェントに指示します。
 
-### スキルがエージェントにさせること
+### スキルがエージェントに指示すること
 
 - プロジェクトのコードを動かす操作（`run --profile standard|deep`、`mutate`、`prove`、`improve`）の前に確認を取り、信頼できないリポジトリならコンテナで動かすことを提案する。
 - `init`、`doctor`、`run --profile deep --offline --include-proposed --json` を実行し、続けて `report`、`explain`、`spec list` を使う。
@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/under18dev/veritas/main/skills/veri
 - 改善は `improve --dry-run` で計画し、あなたが承認した計画とトークンだけを適用する。
 - 頼まれない限り、ネットワーク上の出典を有効にしない、README や docs を編集しない、期待値を変えない、`--allow-code-config` を使わない。
 
-エージェントには、「このテストに意味はある？」「コードは README の割引の規則に従っている？」「試されていない境界はどこ？」のように頼めます。
+スキルを入れると、エージェントに「このテストに意味はある？」「コードは README の割引の規則に従っている？」「試されていない境界はどこ？」のように頼めます。
 
 ## MCP サーバー
 
@@ -98,5 +98,5 @@ claude mcp add veritas -- npx -y -p @under18dev/veritas veritas-mcp --root /path
 `--allow-write` を付けると `apply_approved_improvement` が登録されます。`plan_improvement` が返した計画の ID と 64 文字の承認トークンがそのまま必要で、承認した人も記録されます。トークンは、計画を確認してからエージェントに渡してください。適用は新しい一時コピーの中で行い、終わったらコピーは消します。追加するのは新しいテストファイルだけで、結果がよくならなければ取り消し、CI の中では拒否されます。[テストの改善](/ja/guide/improving-tests)を参照してください。
 
 ::: warning
-MCP サーバーは、プロジェクトのテストや関数を `pnpm test` と同じ信頼のもとで実行します。信頼できないリポジトリには使わないでください。[信頼できないリポジトリ](/ja/guide/untrusted-repositories)を参照してください。
+MCP サーバーは、プロジェクトのテストや関数を `npm test` と同じ信頼のもとで実行します。信頼できないリポジトリには使わないでください。[信頼できないリポジトリ](/ja/guide/untrusted-repositories)を参照してください。
 :::

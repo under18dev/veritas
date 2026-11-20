@@ -1,5 +1,7 @@
 # Veritas とは
 
+Veritas が何を確かめ、何を報告し、どこまでを保証しないかを説明します。
+
 Veritas は、TypeScript や JavaScript のプロジェクトのテストが、実際に何を保証しているかを確かめるツールです。プロジェクトにすでにある仕様（README、docs、JSDoc、OpenAPI や JSON Schema、git の履歴、エクスポートした Issue）を読み、コードと Vitest のテストに結び付けます。そのうえで mutation testing、property-based testing、範囲を限った形式検証を実行し、見つけたことを根拠と一緒に報告します。
 
 ## 解決する問題
@@ -29,9 +31,9 @@ Veritas は、テストと仕様の記述ごとに、次の五つに答えます
 - **点数を付けません。** 「87% 良い」のような数字は出しません。テストごとに証拠の一覧（evidence vector）と、5 種類の判定のどれかを示します。[結果の読み方](/ja/guide/reading-results)を参照してください。
 - **正しさの証明はしません。** `proven_within_model` は「示したモデル、範囲、前提の中では反例がない」という意味です。範囲の外の入力、浮動小数点数、`NaN`、対応範囲の外の構文は対象外です。[検証](/ja/guide/verification)を参照してください。
 - **仕様の良し悪しは決めません。** 実装に合わせて仕様や期待値を書き換えることはなく、仕様を勝手に accepted にすることもありません。決めるのは人です。[仕様の確定](/ja/guide/specifications)を参照してください。
-- **サンドボックスではありません。** プロジェクトのテストや関数は、`pnpm test` を実行するのと同じ信頼のもとで動かします。信頼できないコードの扱いは[信頼できないリポジトリ](/ja/guide/untrusted-repositories)を参照してください。
+- **サンドボックスではありません。** プロジェクトのテストや関数は、`npm test` を実行するのと同じ信頼のもとで動かします。信頼できないコードの扱いは[信頼できないリポジトリ](/ja/guide/untrusted-repositories)を参照してください。
 
-## しくみ
+## 実行の流れ
 
 ```text
 CLI / Node API / Agent Skill / MCP server / GitHub Action
@@ -62,11 +64,11 @@ Evidence collectors  Code intelligence  Test inventory
 3. Test inventory が Vitest のテストを見つけ、それぞれが何を呼び、何を assert しているかを調べます。
 4. mutation testing、property-based testing、Z3 や Lean による検査が、Property についての根拠を作ります。
 5. Assessment engine がすべてをまとめ、テストごとの evidence vector、finding（指摘）、終了コード付きの verdict（判定）を出します。
-6. Improvement planner は、accepted な仕様から期待値を取った新しいテストファイルを提案できます。
+6. 依頼すると、Improvement planner が accepted な仕様から期待値を取った新しいテストファイルを提案します。
 
 各部分を担うパッケージは[アーキテクチャ](/ja/concepts/architecture)で説明しています。
 
-## 使い方の選択肢
+## 実行する方法
 
 どの入口も同じエンジンを動かし、同じ成果物を出します。
 

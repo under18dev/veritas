@@ -1,37 +1,37 @@
 # What is Veritas?
 
-Veritas checks what the tests of a TypeScript or JavaScript project actually guarantee. It reads the specification the project already has (README, docs, JSDoc, OpenAPI and JSON Schema, git history, exported issues), relates it to the code and the Vitest tests, runs mutation testing, property-based tests and bounded formal checks, and reports every finding together with the evidence behind it.
+This page explains what Veritas checks, what it reports, and where its results stop.
 
-## The problem
+Veritas checks what the Vitest tests of a TypeScript or JavaScript project actually guarantee. It reads the rules your project already documents (README, `docs/`, JSDoc, OpenAPI and JSON Schema, git history, exported issues), links them to your code and tests, runs mutation testing, property-based tests and bounded formal checks, and reports each finding together with its evidence.
 
-A green test suite says that the tests pass. It does not say what they check. Common cases:
+## The problem it addresses
 
-- A test asserts a constant (`expect(true).toBe(true)`) and never calls the code.
-- A test calls the code but never tries the boundary the documentation describes, so `>` and `>=` behave the same for every input it uses.
-- The documentation says "1000 or more" and the code says `total > 1000`. Every test passes, because no test uses 1000.
+A passing test suite tells you that the tests pass, not what they check. For example:
 
-Coverage does not catch these: the lines run, but nothing checks the result at the input that matters.
+- a test asserts `expect(true).toBe(true)` and never calls your code;
+- a test calls your code but never uses the boundary input your documentation describes;
+- the README says "1000 or more", the code says `total > 1000`, and every test passes because none uses 1000.
 
-## What Veritas answers
+Line coverage reports all of these as covered. Veritas reports them as findings.
 
-For each test and each specification statement, Veritas answers five questions:
+## What you get for each test and rule
 
-| Question                                             | Evidence Veritas uses                                                   |
-| ---------------------------------------------------- | ----------------------------------------------------------------------- |
-| Which specification is this test derived from?       | The quoted source line (file and line), the property built from it      |
-| What does the test observe?                          | Its calls to project functions and its assertions, from static analysis |
-| Which faults would it catch?                         | Mutants it kills and mutants that survive it, from a real mutation run  |
-| What has been checked formally, within which bounds? | Z3 or Lean claims with their domain, assumptions and solver input files |
-| What is still unknown?                               | Anything undecided, unsupported or not run, listed explicitly           |
+| Question                                            | Evidence in the report                                                   |
+| --------------------------------------------------- | ------------------------------------------------------------------------ |
+| Which documented rule does this test relate to?     | The quoted source line (file and line) and the property built from it    |
+| What does the test check?                           | The project functions it calls and the results it asserts                |
+| Which faults would it catch?                        | The mutants it kills and the mutants that survive it                     |
+| What was checked formally, and within which bounds? | Z3 or Lean results with their input domain, assumptions and solver files |
+| What is still unknown?                              | Undecided, unsupported and skipped checks, listed by name                |
 
-## What Veritas is not
+## What Veritas does not do
 
-- **Not a score.** There is no "87% good". Each test gets an evidence vector and one of five outcomes; see [Reading results](/guide/reading-results).
-- **Not a proof of correctness.** `proven_within_model` means "no counterexample within the stated model, bounds and assumptions". Inputs outside the bounds, floats, `NaN` and anything outside the supported subset are not covered. See [Verification](/guide/verification).
-- **Not a judge of the specification.** Veritas never changes a specification or an expected value to match the implementation, and never accepts a specification on its own. People decide; see [Specifications](/guide/specifications).
-- **Not a sandbox.** Veritas runs the project's tests and functions with the same trust as `pnpm test`. For code you do not trust, see [Untrusted repositories](/guide/untrusted-repositories).
+- **It gives no score.** Each test gets an evidence vector and one of five outcomes. See [Reading results](/guide/reading-results).
+- **It does not prove your code correct.** `proven_within_model` means that no counterexample exists within the stated model, bounds and assumptions. See [Verification](/guide/verification).
+- **It does not decide what the specification is.** Every rule it finds stays `proposed` until you accept it, and it never changes a specification or an expected value to match the code. See [Specifications](/guide/specifications).
+- **It does not isolate your project's code.** Veritas runs your tests and functions with the same trust as `npm test`. See [Untrusted repositories](/guide/untrusted-repositories).
 
-## How it works
+## How a run works
 
 ```text
 CLI / Node API / Agent Skill / MCP server / GitHub Action
@@ -57,25 +57,25 @@ Evidence collectors  Code intelligence  Test inventory
        Artifacts / reports / CI exit codes
 ```
 
-1. Evidence collectors read local sources (and, only when enabled, GitHub and the web) and keep each source with its file and line.
-2. The specification engine turns statements such as "Orders with a total of 1000 or more receive a flat discount of 100" into properties bound to a function and a parameter. Code intelligence adds properties inferred from the code itself; those stay hypotheses.
-3. The test inventory finds Vitest tests and what they call and assert.
-4. Mutation testing, property-based tests and Z3 or Lean checks produce evidence about the properties.
-5. The assessment engine combines everything into per-test evidence vectors, findings and a policy verdict with an exit code.
-6. The improvement planner can propose new test files whose expected values come from accepted specifications.
+1. Veritas collects sources and keeps the file and line of every statement.
+2. It turns statements such as "Orders with a total of 1000 or more receive a flat discount of 100" into properties of one function and one parameter. It also infers candidate properties from the code; those are hypotheses, not specifications.
+3. It finds your Vitest tests and what they call and assert.
+4. Mutation testing, property-based tests and Z3 or Lean produce evidence about each property.
+5. The assessment engine produces per-test evidence vectors, findings, a verdict and an exit code.
+6. On request, the improvement planner proposes new test files whose expected values come from accepted properties.
 
-The [architecture page](/concepts/architecture) describes the packages behind each box.
+[Architecture](/concepts/architecture) describes the packages behind each step.
 
-## Surfaces
+## Ways to run it
 
-All entry points run the same engine and produce the same artifacts.
+All entry points use the same engine and write the same artifacts to `.veritas/runs/<run-id>/`.
 
-| Surface       | Use it for                               | Where to start                                                             |
-| ------------- | ---------------------------------------- | -------------------------------------------------------------------------- |
-| CLI `veritas` | Local use and any CI system              | [Getting started](/guide/getting-started), [CLI reference](/reference/cli) |
-| Node API      | Calling Veritas from your own tooling    | [Node API](/reference/api)                                                 |
-| MCP server    | Agents that speak MCP (`veritas-mcp`)    | [Agents and MCP](/guide/agents)                                            |
-| Agent Skill   | Agents that load `SKILL.md` instructions | [Agents and MCP](/guide/agents)                                            |
-| GitHub Action | Pull request checks                      | [CI and GitHub Action](/guide/ci)                                          |
+| Entry point   | Use it for                          | Start here                                                                 |
+| ------------- | ----------------------------------- | -------------------------------------------------------------------------- |
+| CLI `veritas` | Local use and any CI system         | [Getting started](/guide/getting-started), [CLI reference](/reference/cli) |
+| Node API      | Calling Veritas from your own tools | [Node API](/reference/api)                                                 |
+| MCP server    | Agents that use MCP (`veritas-mcp`) | [Agents and MCP](/guide/agents)                                            |
+| Agent Skill   | Agents that load `SKILL.md` files   | [Agents and MCP](/guide/agents)                                            |
+| GitHub Action | Checks on pull requests             | [CI and GitHub Action](/guide/ci)                                          |
 
-Network access is off by default. Results are written to `.veritas/runs/<run-id>/` as JSON, Markdown, HTML and SARIF.
+Veritas makes no network requests unless you enable network sources or an LLM provider.

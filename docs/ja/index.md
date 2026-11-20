@@ -41,17 +41,21 @@ npx veritas init --yes
 npx veritas run --profile standard
 ```
 
+README に「1000 以上」、コードに `total > 1000` と書かれた[チュートリアル](/ja/guide/tutorial)の小さなプロジェクトでは、次のように報告されます。
+
 ```text
-run run-20261120T095804553Z-000-1b553f  verdict: pass_with_warnings (exit 0)
-
+run run-20261120T105459627Z-000-0ed704  verdict: pass_with_warnings (exit 0)
+[...]
 succeeded   mutate
+            mutator 0.4.5: succeeded
             counts: {"killed":16,"survived":1}
+[...]
 succeeded   assess
-            assessments: {"weak_or_incomplete":2,"meaningful_with_evidence":2,"tautological_or_disconnected":1}
-
+            assessments: {"weak_or_incomplete":2,"meaningful_with_evidence":2,"tautological_or_disconnected":1}; 3 finding(s)
+[...]
 findings (3):
   F-0b43c88cc3a6  [confirmed medium] no test detects total > 1000 -> total >= 1000 at src/pricing.ts:3
-  F-628f7fdacb0b  [suspected medium] src/pricing.ts#discountAmount may not satisfy "total >= 1000"
+  F-89435b62ae1e  [suspected medium] src/pricing.ts#discountAmount may not satisfy "total >= 1000"
   F-99e71509e3c4  [suspected low] test "pricing works" does not check project behaviour
 ```
 

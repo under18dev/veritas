@@ -1,6 +1,6 @@
 # LLM providers
 
-Veritas does not need an LLM. Statement extraction is rule-based, and every feature works without one. An LLM can optionally read the free-text statements the rules could not interpret. What it finds becomes `proposed`, experimental properties; it is never accepted automatically and never counts as evidence or proof.
+This page explains how to let an LLM read documentation statements that the built-in rules cannot interpret, and what Veritas sends to it. An LLM is optional: every feature works without one. What an LLM finds becomes experimental `proposed` properties, which are never accepted automatically and never count as evidence or proof.
 
 The default is `llm.provider: "none"`.
 

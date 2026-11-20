@@ -1,12 +1,38 @@
 # Tutorial
 
-This walk-through runs Veritas on `fixtures/discount-boundary`, a small project in the Veritas repository. All output on this page is real output of Veritas 0.1.1, trimmed where marked with `[...]`. Your run IDs and timestamps will differ.
+In this tutorial you create a small project whose code disagrees with its README, let Veritas find the mismatch and the weak tests, decide on the specification, fix the code, and add the missing test through an approved plan.
 
-## The project
+You need Node.js 25 or later (26 recommended), npm and git. Output is trimmed where it shows `[...]`. Run IDs, plan IDs, approval IDs, approval tokens and times in your output will differ.
 
-The README states two pricing rules:
+## Create the project
+
+```bash
+mkdir shop-pricing && cd shop-pricing
+git init
+```
+
+Create the following files.
+
+`package.json`:
+
+```json
+{
+  "name": "shop-pricing",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  }
+}
+```
+
+`README.md`:
 
 ```md
+# shop-pricing
+
+Pricing rules for checkout. Amounts are integer yen.
+
 ## Discount
 
 Orders with a total of 1000 or more receive a flat discount of 100.
@@ -16,7 +42,7 @@ Orders with a total of 1000 or more receive a flat discount of 100.
 Shipping is free for orders of 5000 or more. Otherwise shipping costs 500.
 ```
 
-The implementation, `src/pricing.ts`:
+`src/pricing.ts`. The discount condition uses `>` where the README says "or more":
 
 ```ts
 /** Flat discount applied at checkout. */
@@ -33,52 +59,80 @@ export function shippingFee(total: number): number {
 }
 ```
 
-The README says "1000 or more"; the code says `total > 1000`. At `total = 1000` the README expects 100 and the code returns 0.
+`test/discount-weak.test.ts`, which never tries the boundary:
 
-There are three test files:
+```ts
+import { expect, it } from 'vitest';
+import { discountAmount } from '../src/pricing.js';
 
-| File                             | What it does                                                                   |
-| -------------------------------- | ------------------------------------------------------------------------------ |
-| `test/discount-weak.test.ts`     | Calls `discountAmount(2000)` and `discountAmount(10)`; never tries 1000        |
-| `test/tautological.test.ts`      | `expect(true).toBe(true)`; never calls the code                                |
-| `test/shipping-boundary.test.ts` | Checks `shippingFee(4999)` and `shippingFee(5000)`, both sides of the boundary |
+it('gives a discount on large orders', () => {
+  expect(discountAmount(2000)).toBe(100);
+});
 
-All five tests pass.
-
-## Set up a copy
-
-Work on a copy of the fixture so the repository stays unchanged. In a clone of the Veritas repository, after `pnpm install` and `pnpm build`:
-
-```bash
-VERITAS="$PWD"
-alias veritas="node $VERITAS/packages/cli/dist/bin.js"
-
-src="$VERITAS/fixtures/discount-boundary"
-work=$(mktemp -d)
-cp -R "$src/README.md" "$src/package.json" "$src/src" "$src/test" "$work/"
-
-# Link the fixture's installed dependencies instead of installing them again.
-mkdir -p "$work/node_modules/@mizchi"
-ln -s "$(realpath "$src/node_modules/vitest")" "$work/node_modules/vitest"
-ln -s "$(realpath "$src/node_modules/fast-check")" "$work/node_modules/fast-check"
-ln -s "$(realpath "$src/node_modules/@mizchi/mutator")" "$work/node_modules/@mizchi/mutator"
-
-cd "$work"
-printf 'node_modules\n.veritas/\n.mutator/\n' > .gitignore
-git init -q && git add -A && git commit -qm "initial"
+it('gives no discount on small orders', () => {
+  expect(discountAmount(10)).toBe(0);
+});
 ```
 
-The git repository gives Veritas a commit to record in each run and the git history as an evidence source. In your own project, use `npx veritas` instead of the alias.
+`test/tautological.test.ts`, which never calls the code:
+
+```ts
+import { expect, it } from 'vitest';
+
+it('pricing works', () => {
+  expect(true).toBe(true);
+});
+```
+
+`test/shipping-boundary.test.ts`, which checks both sides of its boundary:
+
+```ts
+import { expect, it } from 'vitest';
+import { shippingFee } from '../src/pricing.js';
+
+it('charges shipping just below the threshold', () => {
+  expect(shippingFee(4999)).toBe(500);
+});
+
+it('ships free exactly at the threshold', () => {
+  expect(shippingFee(5000)).toBe(0);
+});
+```
+
+`.gitignore`:
+
+```text
+node_modules/
+.veritas/*
+!.veritas/config.json
+!.veritas/approvals.json
+.mutator/
+```
+
+Install the dependencies, run the tests and commit:
+
+```bash
+npm install -D vitest @under18dev/veritas
+npx vitest run
+git add -A && git commit -m "Add pricing rules"
+```
+
+```text
+ Test Files  3 passed (3)
+      Tests  5 passed (5)
+```
+
+All five tests pass, although `discountAmount(1000)` returns 0 and the README promises 100.
 
 ## 1. Create the configuration
 
 ```bash
-veritas init --yes
+npx veritas init --yes
 ```
 
 ```text
-wrote [...]/.veritas/config.json
-detected: package manager=unknown, tsconfig=none, vitest=5.1.1, git=true
+wrote [...]/shop-pricing/.veritas/config.json
+detected: package manager=npm, tsconfig=none, vitest=5.1.1, git=true
 next:
   veritas doctor
   veritas discover --offline
@@ -87,14 +141,14 @@ next:
 
 ## 2. Run the standard profile
 
-`standard` adds mutation testing to the static analysis. It runs the project's tests, once per mutant.
+The `standard` profile adds mutation testing to the static analysis: it changes the code in small ways (mutants) and runs your tests against each change.
 
 ```bash
-veritas run --profile standard
+npx veritas run --profile standard
 ```
 
 ```text
-run run-20261120T104641575Z-000-555dcf  verdict: pass_with_warnings (exit 0)
+run run-20261120T105459627Z-000-0ed704  verdict: pass_with_warnings (exit 0)
 
 succeeded   index
             2 function(s) in 1 file(s); 6 inferred candidate(s)
@@ -120,26 +174,26 @@ findings (3):
 
 note: 3 finding(s) to review (not policy failures)
 
-explain a finding: veritas explain <finding-id>; artifacts: .veritas/runs/run-20261120T104641575Z-000-555dcf/
+explain a finding: veritas explain <finding-id>; artifacts: .veritas/runs/run-20261120T105459627Z-000-0ed704/
 ```
 
-What happened:
+What each stage reports:
 
-- `discover` read three sources (the README, the doc comments in `src/pricing.ts`, and the message of the project's one commit) and found three statements in the README.
-- `spec` turned them into properties. All eight are `proposed`: two from the README (`normative`) and six inferred from the code. Nothing is accepted until a person accepts it.
-- `mutate` ran 17 mutants. 16 were killed. One survived: changing `total > 1000` to `total >= 1000` breaks no test.
-- `assess` rated the two discount tests `weak_or_incomplete`, the two shipping tests `meaningful_with_evidence` and the constant assertion `tautological_or_disconnected`.
+- `discover` read three sources (the README, the doc comments in `src/pricing.ts` and the git log) and found three statements in the README.
+- `spec` built eight properties, all `proposed`: two from the README (`normative`) and six inferred from the code.
+- `mutate` ran 17 mutants. One survived: changing `total > 1000` to `total >= 1000` makes no test fail.
+- `assess` rated the two discount tests `weak_or_incomplete`, the two shipping tests `meaningful_with_evidence` and `pricing works` `tautological_or_disconnected`.
 
-The verdict is `pass_with_warnings` with exit code `0`: there are findings to review, but none is a confirmed specification violation yet. The three findings say:
+The verdict is `pass_with_warnings` (exit code `0`): there are findings to review and no confirmed specification violation yet.
 
-- `F-0b43c88cc3a6` is `confirmed`, because a real mutation run showed it: no test notices the `>=` mutant.
-- `F-89435b62ae1e` is `suspected`. The code compares `total` against the same number as the README but with a different operator. Because the README property is only `proposed`, this cannot be more than suspected.
-- `F-99e71509e3c4` flags the test that checks nothing.
+- `F-0b43c88cc3a6` is `confirmed` because the mutation run showed it.
+- `F-89435b62ae1e` is `suspected`: the code compares `total` with the README's number but with a different operator, and the README property is not accepted yet.
+- `F-99e71509e3c4` points at the test that checks nothing.
 
-## 3. Explain a finding
+## 3. See the evidence for a finding
 
 ```bash
-veritas explain F-89435b62ae1e
+npx veritas explain F-89435b62ae1e
 ```
 
 ```text
@@ -157,23 +211,19 @@ test    test/discount-weak.test.ts:4 "gives a discount on large orders"
 test    test/discount-weak.test.ts:8 "gives no discount on small orders"
 assess  T-97fef42e4cf7: weak_or_incomplete - 1 specification-relevant mutant(s) it runs survived: src/pricing.ts:3 total > 1000 -> total >= 1000; boundary not exercised: total >= 1000 (decisive inputs 999, 1000; asserted: none)
 assess  T-8b4efcb90022: weak_or_incomplete - 1 specification-relevant mutant(s) it runs survived: src/pricing.ts:3 total > 1000 -> total >= 1000; boundary not exercised: total >= 1000 (decisive inputs 999, 1000; asserted: none)
-mutant  M-50388e69bfb9 [killed] src/pricing.ts:2 {
 [...]
-mutant  M-aecdf503e7bd [killed] src/pricing.ts:3 total > 1000 -> true
-mutant  M-846bcbfcb4da [killed] src/pricing.ts:3 total > 1000 -> false
 mutant  M-d24bb133285b [survived] src/pricing.ts:3 total > 1000 -> total >= 1000
-mutant  M-78866cd5fd67 [killed] src/pricing.ts:3 total > 1000 -> total <= 1000
 [...]
 
 next: review the property: veritas spec accept P-ee03e6e8b749 --reason "..." or veritas spec reject P-ee03e6e8b749 --reason "..."
 ```
 
-`explain` follows the chain from the quoted README line to the property, the tests that reach the function, their assessments and the mutants. The decisive inputs for `total >= 1000` are 999 and 1000, and neither test asserts either of them. The last line says what to do next: decide whether the README rule is the specification.
+The chain runs from the README line to the property, the tests that call `discountAmount`, their assessments and the mutants. The inputs that decide `total >= 1000` are 999 and 1000, and neither test asserts them. The last line tells you what to do next: decide whether the README rule is the specification.
 
-## 4. Review the properties
+## 4. List the properties
 
 ```bash
-veritas spec list
+npx veritas spec list
 ```
 
 ```text
@@ -187,55 +237,52 @@ P-2eead7f786cb  proposed   inferred  shippingFee: behaviour for negative total (
 P-d7372f0d4de0  proposed   inferred  shippingFee: behaviour for non-integer, NaN, ±Infinity and unsafe-integer values of total
 ```
 
-`normative` properties come from documentation; `inferred` ones come from the code and are hypotheses about what to check, not specifications. `veritas spec show <id>` prints one property with its assumptions, citation and formal model.
+`normative` properties come from your documentation. `inferred` ones come from the code and only suggest what to check. `npx veritas spec show <id>` prints one property with its citation, assumptions and formal model.
 
-## 5. Accept the README rule
+## 5. Accept the discount rule
 
-Suppose the team agrees that the README is the specification for the discount. Record that decision:
+Decide that the README is the specification for the discount, and record it:
 
 ```bash
-veritas spec accept P-ee03e6e8b749 --reason "README is the pricing specification"
+npx veritas spec accept P-ee03e6e8b749 --reason "README is the pricing specification"
 ```
 
 ```text
 recorded accept of P-ee03e6e8b749 by you
 ```
 
-The decision is appended to `.veritas/approvals.json` with the actor (from `--actor`, `VERITAS_ACTOR` or the git user name), the reason and the time:
+The decision is appended to `.veritas/approvals.json` with your name (from `--actor`, `VERITAS_ACTOR` or `git config user.name`), the reason and the time:
 
 ```json
 {
-  "id": "A-aeaeacd1d243",
+  "id": "A-7d000af7e5fa",
   "propertyId": "P-ee03e6e8b749",
   "propertyVersion": 1,
   "decision": "accept",
   "actor": "you",
   "reason": "README is the pricing specification",
-  "decidedAt": "2026-11-20T10:46:53.311Z",
+  "decidedAt": "2026-11-20T10:55:08.580Z",
   "sourceIds": ["src-fa35c6154f0b"]
 }
 ```
 
-The shipping rule is left `proposed` on purpose, to show what `--include-proposed` does in the next step.
+Leave the shipping rule `proposed`. The next step shows how `--include-proposed` treats it.
 
-## 6. Check the properties formally
+## 6. Check the rules with Z3
 
 ```bash
-veritas prove --include-proposed
+npx veritas prove --include-proposed
 ```
 
 ```text
-run run-20261120T104653570Z-000-cd8b2a  verdict: policy_failure (exit 1)
-
+run run-20261120T105508829Z-000-017911  verdict: policy_failure (exit 1)
 [...]
 succeeded   prove
             P-ee03e6e8b749: counterexample_found {"total":"1000"}
             P-e3003339ad77: proven_within_model
 succeeded   assess
             assessments: {"weak_or_incomplete":2,"inconclusive":2,"tautological_or_disconnected":1}; 2 finding(s)
-succeeded   report
-            formats: json, markdown, html, sarif
-
+[...]
 findings (2):
   F-89435b62ae1e  [confirmed high] src/pricing.ts#discountAmount does not satisfy "total >= 1000" for {"total":"1000"} (within the model)
   F-99e71509e3c4  [suspected low] test "pricing works" does not check project behaviour
@@ -244,16 +291,16 @@ note: 1 confirmed specification violation(s)
 [...]
 ```
 
-`prove` translates each formalized property and the function into an SMT query and runs Z3 over the integer domain `[-10000, 10000]`:
+`prove` asks Z3 whether any `total` in `[-10000, 10000]` violates each rule:
 
-- For the accepted discount rule, Z3 found `total = 1000`. Veritas replayed that input in JavaScript, got the same violation, and the finding became `confirmed high`. A confirmed specification violation fails the default policy, so the exit code is `1`.
-- The shipping rule is checked only because of `--include-proposed`. Z3 found no violating input within the domain: `proven_within_model`. Since the property is not accepted, this result is experimental.
-- The shipping tests are `inconclusive` in this run: `prove` does not run mutation testing, so their detection power was not measured in it.
+- For the accepted discount rule, Z3 found `total = 1000`. Veritas ran `discountAmount(1000)` in JavaScript, got the same violation, and the finding became `confirmed high`. A confirmed violation fails the default policy, so the exit code is `1`.
+- The shipping rule was checked only because of `--include-proposed`. No input in the domain violates it. Because it is not accepted, the result counts as experimental.
+- The shipping tests are `inconclusive` in this run because `prove` does not run mutation testing.
 
-`explain` now shows the solver claim and the SMT file:
+Run `explain` again to see the solver result:
 
 ```bash
-veritas explain F-89435b62ae1e
+npx veritas explain F-89435b62ae1e
 ```
 
 ```text
@@ -265,13 +312,13 @@ src/pricing.ts#discountAmount does not satisfy "total >= 1000" for {"total":"100
   solver counterexample {"total":"1000"} reproduced in JavaScript (C-8aad536f8e71)
 [...]
 claim   C-8aad536f8e71 [conformance counterexample_found, none] {"total":"1000"}
-        smt: .veritas/runs/run-20261120T104653570Z-000-cd8b2a/proofs/C-8aad536f8e71.smt2
+        smt: .veritas/runs/run-20261120T105508829Z-000-017911/proofs/C-8aad536f8e71.smt2
 
 next: fix the implementation or change the specification through review
 next: add a test for the counterexample input
 ```
 
-The SMT file is plain SMT-LIB and can be re-run with any Z3:
+The `.smt2` file is plain SMT-LIB, so any Z3 can run it again:
 
 ```text
 ; veritas conformance query: is there an input in the domain that violates the property?
@@ -287,38 +334,38 @@ The SMT file is plain SMT-LIB and can be re-run with any Z3:
 (get-info :reason-unknown)
 ```
 
-## 7. Ask for test improvements
+## 7. Ask for a test improvement
 
 ```bash
-veritas improve --dry-run
+npx veritas improve --dry-run
 ```
 
 ```text
-plan IP-0159001c54ab from run-20261120T104653570Z-000-cd8b2a: needs_spec_decision
+plan IP-c7176a11a5f3 from run-20261120T105508829Z-000-017911: needs_spec_decision
 
 spec violation candidates (not added; expected values unchanged):
   SVC-ec7787ca9234  discountAmount(1000) returns 0, but the specification (README.md:7) documents 100; the test is not added and its expected value is not changed
-  implementation fix proposals: .veritas/improvements/IP-0159001c54ab/implementation-fix-proposal.json
-
-note: every targeted test fails against the implementation: the implementation or the specification needs a decision
-note: run run-20261120T104653570Z-000-cd8b2a has no mutation results; only boundary gaps were considered
+  implementation fix proposals: .veritas/improvements/IP-c7176a11a5f3/implementation-fix-proposal.json
 [...]
-plan: .veritas/improvements/IP-0159001c54ab/plan.json (no project file was written)
+plan: .veritas/improvements/IP-c7176a11a5f3/plan.json (no project file was written)
 ```
 
-Exit code `4`. Veritas would write a test `discountAmount(1000)` expecting 100, taken from the README. That test fails against the current code, so Veritas does not add it, and it does not change the expected value to 0 to make it pass. The outcome is `needs_spec_decision`: either the code or the README has to change, and that is a decision for a person.
+The exit code is `4`. The test Veritas would add, `discountAmount(1000)` expecting 100 from the README, fails against the current code. Veritas does not add it and does not change the expected value to 0. The outcome `needs_spec_decision` means that you have to fix either the code or the README.
 
 ## 8. Fix the code and plan again
 
-The team decides the code is wrong and changes `total > 1000` to `total >= 1000` in `src/pricing.ts`. Veritas never makes this change; it only proposes it in `implementation-fix-proposal.json`. Commit the fix and run the standard profile again:
+Change `total > 1000` to `total >= 1000` in `src/pricing.ts`, then commit the fix together with the configuration and your decision:
 
 ```bash
-git commit -qam "fix: apply the discount at 1000"
-veritas run --profile standard
+git add -A && git commit -m "Apply the discount at 1000"
+npx veritas run --profile standard
 ```
 
 ```text
-run run-20261120T104701460Z-000-7bcf92  verdict: pass_with_warnings (exit 0)
+run run-20261120T105517747Z-000-01dbf1  verdict: pass_with_warnings (exit 0)
+[...]
+succeeded   spec
+            properties: {"accepted":1,"proposed":7}; 0 conflict(s)
 [...]
 succeeded   mutate
             mutator 0.4.5: succeeded
@@ -329,14 +376,14 @@ findings (2):
   F-e2324bef333e  [confirmed medium] no test detects total >= 1000 -> total > 1000 at src/pricing.ts:3
 ```
 
-The property keeps its ID across the commit, so the decision from step 5 still applies (`spec list` shows `P-ee03e6e8b749  accepted`). The mismatch is gone, but the gap remains: the mutant `total >= 1000 -> total > 1000` survives, because still no test uses 1000.
+The discount rule is still accepted, and the mismatch is gone. The gap remains: the mutant `total >= 1000 -> total > 1000` survives because no test uses 1000.
 
 ```bash
-veritas improve --dry-run
+npx veritas improve --dry-run
 ```
 
 ```text
-plan IP-24ed3c83a2e0 from run-20261120T104701460Z-000-7bcf92: planned
+plan IP-a14164357e16 from run-20261120T105517747Z-000-01dbf1: planned
 
 goal: Add 1 test(s) whose expected values come from the specification and at decisive boundary inputs no test checks; applying measures which mutants they kill
 
@@ -346,7 +393,9 @@ proposed tests (expected values from the specification):
 
 gaps:
   F-e2324bef333e  boundary of total >= 1000: total=1000 is not checked by an asserting test
-[...]
+
+budget: 3 iteration(s), 5 file(s), 900000 ms, 1 test retr(y/ies)
+
 patch preview:
 --- /dev/null
 +++ b/test/veritas-P-ee03e6e8b749.test.ts
@@ -364,42 +413,42 @@ skipped:
   M-5b67ad8e53c8: no bounded equivalence check for this mutant
   P-ee03e6e8b749 {"total":"999"}: the value for this input is only an assumption of the formal model, not stated by the source
 
-approval token for plan IP-24ed3c83a2e0: 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
-apply after review: veritas improve --apply --plan IP-24ed3c83a2e0 --approve 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
+approval token for plan IP-a14164357e16: 6735e5d7e6d641b5b63f74f6521d6564c6d4821e0c2acb07a2d33b628063f67b
+apply after review: veritas improve --apply --plan IP-a14164357e16 --approve 6735e5d7e6d641b5b63f74f6521d6564c6d4821e0c2acb07a2d33b628063f67b
 
-plan: .veritas/improvements/IP-24ed3c83a2e0/plan.json (no project file was written)
+plan: .veritas/improvements/IP-a14164357e16/plan.json (no project file was written)
 ```
 
-The plan adds one new test file. Its expected value, 100, comes from the README line, not from running the code. The input 999 is skipped: the README says nothing about orders below 1000, so the value 0 there is only an assumption of the formal model.
+The plan adds one new test file. Its expected value, 100, comes from README line 7. The input 999 is skipped because the README states nothing about totals below 1000.
 
 ## 9. Apply the plan
 
-After reviewing the plan, apply it with the plan ID and the token:
+Review the patch, then apply it with the plan ID and token from your own output:
 
 ```bash
-veritas improve --apply --plan IP-24ed3c83a2e0 --approve 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
+npx veritas improve --apply --plan IP-a14164357e16 --approve 6735e5d7e6d641b5b63f74f6521d6564c6d4821e0c2acb07a2d33b628063f67b
 ```
 
 ```text
-attempt PA-8130e27f7148 for plan IP-24ed3c83a2e0: improved
+attempt PA-ee6c6c6d4bc3 for plan IP-a14164357e16: improved
 before: tests 5 passed / 0 failed, mutants 16 killed / 1 survived
 after:  tests 6 passed / 0 failed, mutants 17 killed / 0 survived
 note: killed mutants 16 -> 17, survived 1 -> 0
 note: newly killed: M-5b67ad8e53c8
 note: added: test/veritas-P-ee03e6e8b749.test.ts
-note: formal and property-based results re-evaluated in run-20261120T104711023Z-000-f78024 on the patched copy
+note: formal and property-based results re-evaluated in run-20261120T105528565Z-000-2f25ef on the patched copy
 ```
 
-Veritas copied the project to a temporary directory, added the test there, ran the tests and mutation testing before and after, and only then wrote the new file into the project. Had the mutation results not improved, nothing would have been written. `git status` now shows one new test file.
+Veritas measured the change in a temporary copy of the project and then wrote the one new file. `git status` shows `test/veritas-P-ee03e6e8b749.test.ts` as untracked. [Improving tests](/guide/improving-tests) describes each step of `--apply`.
 
 ## 10. Run the deep profile
 
 ```bash
-veritas run --profile deep
+npx veritas run --profile deep
 ```
 
 ```text
-run run-20261120T104714190Z-000-59c0fc  verdict: pass_with_warnings (exit 0)
+run run-20261120T105531774Z-000-7ae803  verdict: pass_with_warnings (exit 0)
 [...]
 succeeded   mutate
             mutator 0.4.5: succeeded
@@ -421,11 +470,15 @@ findings (1):
   F-99e71509e3c4  [suspected low] test "pricing works" does not check project behaviour
 ```
 
-All 17 mutants are killed. fast-check ran 1000 inputs against the accepted rule with a recorded seed. Z3 found no input in `[-10000, 10000]` that violates it, and the `property_detection` checks show inputs at which the rule tells each mutant from the original. The two original discount tests are still `weak_or_incomplete`, because they themselves do not check the boundary; the new test is `meaningful_with_evidence`. The tautological test remains for a person to fix or remove.
+- All 17 mutants are killed.
+- fast-check ran the accepted rule against 1000 inputs with a recorded seed.
+- Z3 found no `total` in `[-10000, 10000]` that violates the rule, and found an input at which the rule distinguishes each listed mutant from the original code.
+- The new test is `meaningful_with_evidence`. The two original discount tests stay `weak_or_incomplete` because they do not check the boundary themselves.
+- `pricing works` still checks nothing. Fix it or delete it yourself.
 
-## What to read next
+## Next
 
-- [Reading results](/guide/reading-results) explains every status you saw above.
-- [Specifications](/guide/specifications) covers review, conflicts and `spec diff`.
-- [Verification](/guide/verification) covers Z3, fast-check and Lean in detail.
-- [Improving tests](/guide/improving-tests) covers plans, approvals and rollback.
+- [Reading results](/guide/reading-results) explains every status on this page.
+- [Specifications](/guide/specifications) covers conflicts, rejections and `spec diff`.
+- [Verification](/guide/verification) covers Z3, fast-check and Lean.
+- [CI and GitHub Action](/guide/ci) runs these checks on pull requests.

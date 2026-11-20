@@ -1,21 +1,21 @@
 # Getting started
 
-This page installs Veritas in an existing project, checks the environment and runs the pipeline once.
+This page installs Veritas in your project, checks the environment and runs the pipeline once. For a guided example with a known bug, follow the [tutorial](/guide/tutorial).
 
 ## Requirements
 
-| Item                     | Requirement                                                                                                                                                                                                                                |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Node.js                  | 24 or later to run Veritas                                                                                                                                                                                                                 |
-| Node.js for project code | 25 or later (26 recommended). Property-based tests and counterexample replay call project functions only under a Node.js that can block their network access. Veritas uses the running Node.js, `VERITAS_SANDBOX_NODE` or `node` on `PATH` |
-| Test runner              | Vitest, installed in the project                                                                                                                                                                                                           |
-| Language                 | TypeScript or JavaScript (ESM)                                                                                                                                                                                                             |
-| OS                       | Linux, macOS or Windows                                                                                                                                                                                                                    |
-| Optional                 | git (for `--since` and commit metadata), Lean 4 with Lake installed through [elan](https://github.com/leanprover/elan) for `prove --engine lean`                                                                                           |
+| Item                          | Requirement                                                                                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Node.js                       | 24 or later                                                                                                                           |
+| Node.js for your project code | 25 or later (26 recommended) for property-based tests and counterexample replay, which run your functions with network access blocked |
+| Test runner                   | Vitest, installed in the project                                                                                                      |
+| Language                      | TypeScript or JavaScript (ESM)                                                                                                        |
+| OS                            | Linux, macOS or Windows                                                                                                               |
+| Optional                      | git, for `--since` and commit metadata; Lean 4 and Lake through [elan](https://github.com/leanprover/elan), for `prove --engine lean` |
 
-Z3 (the `z3-solver` WebAssembly build), `@mizchi/mutator` and fast-check are dependencies of the package; nothing else needs to be installed.
+Z3, `@mizchi/mutator` and fast-check come with the package.
 
-With Node.js 24, Veritas still runs, but property-based tests and counterexample replay are not run and the affected results stay inconclusive.
+For property-based tests and counterexample replay, Veritas uses the Node.js it runs on, then `VERITAS_SANDBOX_NODE`, then `node` on `PATH`. If none of them is 25 or later, those checks do not run and their results are reported as inconclusive.
 
 ## Install
 
@@ -39,11 +39,7 @@ bun add -d @under18dev/veritas
 
 :::
 
-The package provides two commands, `veritas` and `veritas-mcp`. Run them with `npx veritas`, `pnpm exec veritas`, `yarn veritas` or `bunx veritas`. The examples in this guide write `veritas` for short.
-
-```bash
-npx veritas --version
-```
+The package provides two commands, `veritas` and `veritas-mcp`. Run them through your package manager (`npx veritas`, `pnpm exec veritas`, `yarn veritas`, `bunx veritas`). Most pages in this guide write `veritas` for short.
 
 ## Create the configuration
 
@@ -53,16 +49,20 @@ npx veritas init --yes
 
 ```text
 wrote /path/to/project/.veritas/config.json
-detected: package manager=unknown, tsconfig=none, vitest=5.1.1, git=true
+detected: package manager=npm, tsconfig=none, vitest=5.1.1, git=true
 next:
   veritas doctor
   veritas discover --offline
   veritas run --profile quick --offline
 ```
 
-`init` detects the package manager, `tsconfig.json`, Vitest and git, and writes `.veritas/config.json`. It refuses to overwrite an existing file unless you pass `--force`; `--dry-run` prints the configuration without writing it. It fails with `VITEST_NOT_FOUND` when the project does not use Vitest.
+| Option      | Effect                                       |
+| ----------- | -------------------------------------------- |
+| `--yes`     | Accept the detected configuration            |
+| `--force`   | Overwrite an existing `.veritas/config.json` |
+| `--dry-run` | Print the configuration without writing it   |
 
-The defaults keep network sources off, the LLM off, and formal checks within the integer domain `[-10000, 10000]`. The [configuration reference](/reference/configuration) lists every setting.
+`init` stops with `VITEST_NOT_FOUND` if the project does not use Vitest. The default configuration turns network sources and LLMs off and uses the integer domain `[-10000, 10000]` for formal checks. Every setting is listed in the [configuration reference](/reference/configuration).
 
 ## Check the environment
 
@@ -70,25 +70,29 @@ The defaults keep network sources off, the LLM off, and formal checks within the
 npx veritas doctor
 ```
 
-`doctor` reports each tool as `available`, `degraded`, `unavailable` or `disabled`, and then which features are enabled and what they are missing. An excerpt:
-
 ```text
 available   node             26.13.1 Node.js >= 24
+available   git              git version 2.50.1 (Apple Git-155) git repository detected
+available   package_manager  npm detected from lockfile
+available   typescript       6.0.3 resolved from project
 available   vitest           5.1.1 resolved from project
 available   mutator          0.4.5 @mizchi/mutator resolved from project
 available   fast_check       4.10.3 resolved from project
-available   z3               5.4.1 z3-solver (wasm) resolved from veritas
+available   z3               5.4.1 z3-solver (wasm) resolved from project
+[...]
 disabled    llm               no LLM provider configured; rule-based analysis only
 disabled    network           network access disabled (default)
 available   sandbox           restricted process (permission model; defence in depth, the project's code is trusted): no writes, child processes or network
 
 enabled   init
 degraded  discover (missing: network, llm)
+degraded  analyze (missing: llm)
 enabled   mutate
+[...]
 enabled   prove (z3)
 ```
 
-`resolved from project` means the project's own copy is used; `resolved from veritas` means the copy installed with Veritas is used. Either is fine. `degraded` with `network` and `llm` missing is the normal state: both are optional and off by default.
+The first part lists each tool as `available`, `degraded`, `unavailable` or `disabled`. The second part lists each command and what it is missing. `degraded` because of `network` and `llm` is the default state: both are optional.
 
 ## Run the pipeline
 
@@ -96,39 +100,25 @@ enabled   prove (z3)
 npx veritas run --profile standard
 ```
 
-| Profile    | Stages                                             | Runs project code        |
-| ---------- | -------------------------------------------------- | ------------------------ |
-| `quick`    | Discovery, code and test analysis, assessment      | No                       |
-| `standard` | `quick` plus mutation testing (the default)        | Yes, the project's tests |
-| `deep`     | `standard` plus property-based tests and Z3 checks | Yes, tests and functions |
+| Profile    | What runs                                             | Executes your code       |
+| ---------- | ----------------------------------------------------- | ------------------------ |
+| `quick`    | Source collection, code and test analysis, assessment | No                       |
+| `standard` | `quick` plus mutation testing (default)               | Your tests               |
+| `deep`     | `standard` plus property-based tests and Z3 checks    | Your tests and functions |
 
-Useful options:
+| Option               | Effect                                                                                                  |
+| -------------------- | ------------------------------------------------------------------------------------------------------- |
+| `--offline`          | Veritas makes no network requests (no web or GitHub sources, no LLM). Your tests run as with `npm test` |
+| `--include-proposed` | Also check properties nobody has accepted; their results stay `suspected`                               |
+| `--since <ref>`      | Mutation-test only what changed since a git ref                                                         |
 
-- `--offline`: Veritas itself makes no network request (no web or GitHub sources, no LLM). The project's own tests still run as `pnpm test` would.
-- `--include-proposed`: also check properties nobody has accepted yet. Their results stay `suspected`.
-- `--since <ref>`: limit mutation testing to what changed since a git ref.
+The command prints each stage, the verdict and the findings, and exits with `0` (success, possibly with warnings), `1` (confirmed policy failure), `2` (configuration or usage error), `3` (tool error) or `4` (inconclusive under a `fail` policy). [Reading results](/guide/reading-results) explains the output.
 
-The command prints the stages, the verdict and the findings, and exits with `0` (success, possibly with warnings), `1` (confirmed policy failure), `2` (configuration or usage error), `3` (tool error) or `4` (inconclusive under a `fail` policy). See [Reading results](/guide/reading-results).
+## Find the results
 
-## Where the results go
+Each run writes `.veritas/runs/<run-id>/`. `veritas report` prints the latest run again and `veritas explain <finding-id>` prints the evidence behind one finding. The files are described in [Reports and artifacts](/reference/reports).
 
-Each run writes a directory `.veritas/runs/<run-id>/`:
-
-| File                                 | Contents                                                                  |
-| ------------------------------------ | ------------------------------------------------------------------------- |
-| `run.json`                           | Command, options, stages, verdict, exit code                              |
-| `evidence.json`                      | Collected sources with provenance                                         |
-| `properties.json`                    | Properties and their review status                                        |
-| `test-map.json`, `assessments.json`  | Tests, their links to properties, evidence vectors                        |
-| `mutation.json`                      | Mutants and their status                                                  |
-| `pbt.json`, `claims.json`, `proofs/` | Property-based tests, formal claims, SMT and Lean files (`deep`, `prove`) |
-| `findings.json`                      | Findings                                                                  |
-| `report.{json,md,html,sarif}`        | Reports                                                                   |
-| `trace.jsonl`                        | Event trace for debugging                                                 |
-
-`veritas report` prints the latest run again; `veritas explain <finding-id>` prints the evidence chain of one finding.
-
-Decisions about specifications go to `.veritas/approvals.json`. A `.gitignore` that keeps the configuration and decisions but not the runs and caches:
+Decisions about specifications are stored in `.veritas/approvals.json`. Keep the configuration and the decisions in version control and ignore the rest:
 
 ```text
 .veritas/*
@@ -141,7 +131,6 @@ Decisions about specifications go to `.veritas/approvals.json`. A `.gitignore` t
 
 ## Next steps
 
-- [Tutorial](/guide/tutorial): a full walk-through on a small project with a boundary bug.
-- [Reading results](/guide/reading-results): verdicts, findings, test outcomes and statuses.
-- [Specifications](/guide/specifications): review and accept what Veritas found in your docs.
+- [Tutorial](/guide/tutorial): find and fix a boundary bug in a small project.
+- [Specifications](/guide/specifications): accept or reject the rules Veritas found.
 - [CI and GitHub Action](/guide/ci): run Veritas on pull requests.

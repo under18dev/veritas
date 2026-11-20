@@ -1,67 +1,10 @@
 # CI and GitHub Action
 
-Veritas runs in CI the same way it runs locally: it writes a run directory, prints a verdict and exits with a code your CI system can act on. This page covers the GitHub Action, the policies that decide the exit code, and plain CLI use in any CI system.
+This page shows how to run Veritas on pull requests with the GitHub Action or the CLI, and how to choose which results fail the build.
 
-## What to commit
+Before you start, commit `.veritas/config.json` (and `.veritas/approvals.json` if you have accepted properties); [Getting started](/guide/getting-started#find-the-results) has a matching `.gitignore`. Without the configuration, `veritas run` stops with `CONFIG_MISSING` (exit code `2`).
 
-CI needs the configuration and, if you use accepted properties, the decisions. Commit `.veritas/config.json` and `.veritas/approvals.json`, and ignore the rest:
-
-```text
-.veritas/*
-!.veritas/config.json
-!.veritas/approvals.json
-.mutator/
-```
-
-Without `.veritas/config.json`, `veritas run` stops with `CONFIG_MISSING` (exit code `2`).
-
-## Exit codes and policies
-
-| Exit code | Verdict                                    | Typical CI meaning     |
-| --------- | ------------------------------------------ | ---------------------- |
-| `0`       | `pass`, `pass_with_warnings`               | Pass                   |
-| `1`       | `policy_failure`                           | Fail                   |
-| `2`       | Configuration or usage error               | Fix the workflow       |
-| `3`       | `tool_error`                               | Infrastructure problem |
-| `4`       | `inconclusive` (only with a `fail` policy) | Your choice            |
-
-The policy lives in `.veritas/config.json`:
-
-```json
-{
-  "policy": {
-    "confirmedViolation": "fail",
-    "inconclusiveBehavior": "warn",
-    "maxNewSurvivors": 0,
-    "minPropertyCoverage": 0.8
-  }
-}
-```
-
-| Setting                       | Values (default)                    | Effect                                                                                                                                                                                             |
-| ----------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `policy.confirmedViolation`   | `fail` or `warn` (`fail`)           | Whether a confirmed specification violation exits `1`                                                                                                                                              |
-| `policy.inconclusiveBehavior` | `fail`, `warn` or `ignore` (`warn`) | `fail` turns inconclusive results (undecided claims, partial or skipped stages) into exit `4`. With `warn` and `ignore` they are listed, and the verdict is never better than `pass_with_warnings` |
-| `policy.maxNewSurvivors`      | integer (unset)                     | Exit `1` when more mutants survive in this run's scope than allowed. With `--since`, the scope is the change. Inconclusive when the run has no mutation results                                    |
-| `policy.minPropertyCoverage`  | 0 to 1 (unset)                      | Exit `1` when the share of accepted properties with at least one `meaningful_with_evidence` test is lower. Inconclusive when there is no accepted property                                         |
-
-Suspected findings never fail the policy. A threshold that cannot be measured is inconclusive, never passed.
-
-## Pull requests: `--since`
-
-On a pull request, limit mutation testing to what changed:
-
-```bash
-veritas run --profile standard --offline --since origin/main
-```
-
-`--since <ref>` needs the ref in the clone, so fetch the full history (`fetch-depth: 0` with `actions/checkout`). `maxNewSurvivors` then counts survivors in the changed code only. Mutants outside the change are left out on purpose, and this does not make the mutation stage partial.
-
-## The GitHub Action
-
-The action in `packages/github-action` runs the same engine as the CLI, offline. It is a composite action: it runs the published `@under18dev/veritas-github-action` package of the same version with the Node.js the job set up. Set up Node.js 25 or later in the job (the example uses 26), so property-based tests and counterexample replay can run project code without network access. Without it they are not run and the results stay inconclusive.
-
-Reference the action by its path in the Veritas repository and a release tag, `under18dev/veritas/packages/github-action@v<version>`. The workflow in `packages/github-action/examples/pull-request.yml`:
+## Add the GitHub Action
 
 ```yaml
 name: veritas
@@ -96,49 +39,90 @@ jobs:
           retention-days: 14
 ```
 
-`fetch-depth: 0` makes the base commit available, so the action can compare against it and skip documentation-only changes. `pnpm/action-setup` is needed only when the project uses pnpm. The [GitHub Action reference](/reference/github-action) lists every input and output in detail.
+- Reference the action as `under18dev/veritas/packages/github-action@v<version>`. It runs the `@under18dev/veritas-github-action` package of the same version with the Node.js set up in the job, offline.
+- Set up Node.js 25 or later so that property-based tests and counterexample replay can run your functions with network access blocked. With an older Node.js those checks do not run and their results are inconclusive.
+- `fetch-depth: 0` makes the base commit available for comparison.
+- `pnpm/action-setup` is needed only if your project uses pnpm.
+- Upload `.veritas/runs/` to keep the reports, the JSON artifacts and `trace.jsonl`. Each run can be reproduced locally with `veritas replay <run-id>`.
 
-### Inputs and outputs
+### Inputs
 
-| Input               | Default    | Meaning                                                                                                        |
-| ------------------- | ---------- | -------------------------------------------------------------------------------------------------------------- |
-| `profile`           | `standard` | `quick`, `standard` or `deep`                                                                                  |
-| `working-directory` | `.`        | Project directory                                                                                              |
-| `since`             | (empty)    | Base SHA. On `pull_request`, the base SHA of the pull request is used when empty; on `push`, the previous head |
-| `inconclusive`      | (empty)    | `warn`, `fail` or `ignore`. Empty uses `policy.inconclusiveBehavior` from the configuration                    |
-| `summary`           | `true`     | Write a step summary                                                                                           |
+| Input               | Default    | Meaning                                                                                              |
+| ------------------- | ---------- | ---------------------------------------------------------------------------------------------------- |
+| `profile`           | `standard` | `quick`, `standard` or `deep`                                                                        |
+| `working-directory` | `.`        | Project directory, relative to the workspace                                                         |
+| `since`             | (empty)    | Base SHA. When empty: the pull request base on `pull_request`, the previous head on `push`           |
+| `inconclusive`      | (empty)    | `warn`, `fail` or `ignore`. When empty, `policy.inconclusiveBehavior` from the configuration applies |
+| `summary`           | `true`     | Write a step summary                                                                                 |
 
-| Output               | Contents                                                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------ |
-| `verdict`            | `pass`, `pass_with_warnings`, `policy_failure`, `tool_error`, `inconclusive`, or `skipped` |
-| `exit-code`          | The Veritas exit code                                                                      |
-| `run-id`             | The run ID                                                                                 |
-| `confirmed-findings` | Number of confirmed findings                                                               |
-| `report-path`        | Path to the run's `run.json`, relative to the workspace; the reports are next to it        |
-| `from-fork`          | `true` for a pull request from a fork                                                      |
+### Outputs
 
-A change that consists only of Markdown files, files under `docs/` or images is skipped with verdict `skipped` and exit code `0`. Each run records `veritas replay <run-id>`, so you can reproduce it locally from the uploaded artifact.
+| Output               | Contents                                                                                  |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| `verdict`            | `pass`, `pass_with_warnings`, `policy_failure`, `tool_error`, `inconclusive` or `skipped` |
+| `exit-code`          | The Veritas exit code                                                                     |
+| `run-id`             | The run ID                                                                                |
+| `confirmed-findings` | Number of confirmed findings                                                              |
+| `report-path`        | Workspace-relative path of the run's `run.json`; the reports are in the same directory    |
+| `from-fork`          | `true` for a pull request from a fork                                                     |
 
-### Fork pull requests
+A change that touches only Markdown files, files under `docs/` or images is skipped with verdict `skipped` and exit code `0`.
 
-The action is safe to run on pull requests from forks through the `pull_request` event:
+### Pull requests from forks
 
-- It never reads a token and never enables network sources.
-- Grant only `contents: read` and check out with `persist-credentials: false`, as in the example.
-- It refuses `pull_request_target`, and `workflow_run` for fork pull requests, because those combine a privileged context with untrusted code.
-- Reports redact token-shaped values and secret environment values.
+On the `pull_request` event, the action:
 
-The project's tests still run (mutation testing executes them). On a fork pull request they run without secrets, the same as any test job.
+- reads no token and enables no network source;
+- refuses `pull_request_target`, and `workflow_run` for fork pull requests, because they run untrusted code with elevated permissions;
+- redacts token-shaped values and secret environment values in reports.
 
-### Artifacts
+Grant only `contents: read` and check out with `persist-credentials: false`, as in the example. Mutation testing runs the pull request's tests, which on a fork pull request run without secrets like any other test job.
 
-Runs are stored under `.veritas/runs/`. Upload them with a retention period, as the example does with 14 days. The run directory contains the reports (`report.html`, `report.md`, `report.sarif`), all JSON artifacts and `trace.jsonl`.
+## Choose what fails the build
 
-## SARIF and code scanning
+| Exit code | Verdict                                    |
+| --------- | ------------------------------------------ |
+| `0`       | `pass`, `pass_with_warnings`               |
+| `1`       | `policy_failure`                           |
+| `2`       | Configuration or usage error               |
+| `3`       | `tool_error`                               |
+| `4`       | `inconclusive` (only with a `fail` policy) |
 
-Every run writes `report.sarif` (SARIF 2.1.0); `veritas report --format sarif` prints it for the latest run. To show findings in GitHub code scanning, upload it with `github/codeql-action/upload-sarif`. That step needs `security-events: write`, which workflows on fork pull requests do not get, so run the upload only for pull requests from the same repository or for pushes.
+Set the policy in `.veritas/config.json`:
 
-## Plain CLI on GitHub Actions
+```json
+{
+  "policy": {
+    "confirmedViolation": "fail",
+    "inconclusiveBehavior": "warn",
+    "maxNewSurvivors": 0,
+    "minPropertyCoverage": 0.8
+  }
+}
+```
+
+| Setting                       | Values (default)                  | Effect                                                                                                                                                                   |
+| ----------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `policy.confirmedViolation`   | `fail`, `warn` (`fail`)           | Exit `1` on a confirmed specification violation                                                                                                                          |
+| `policy.inconclusiveBehavior` | `fail`, `warn`, `ignore` (`warn`) | `fail` turns inconclusive results (undecided claims, partial or skipped stages) into exit `4`; otherwise they are listed and the verdict is at best `pass_with_warnings` |
+| `policy.maxNewSurvivors`      | integer (unset)                   | Exit `1` when more mutants survive in the run's scope; with `--since`, the scope is the change. Inconclusive without mutation results                                    |
+| `policy.minPropertyCoverage`  | 0 to 1 (unset)                    | Exit `1` when a smaller share of accepted properties has a `meaningful_with_evidence` test. Inconclusive without accepted properties                                     |
+
+Suspected findings never fail the build, and a threshold that cannot be measured is inconclusive.
+
+## Check only the change
+
+```bash
+veritas run --profile standard --offline --since origin/main
+```
+
+`--since <ref>` limits mutation testing to code changed since the ref, which must exist in the clone (`fetch-depth: 0`). Mutants outside the change are not run and do not make the mutation stage partial.
+
+## Show findings in code scanning
+
+Every run writes `report.sarif` (SARIF 2.1.0); `veritas report --format sarif` prints the latest one. Upload it with `github/codeql-action/upload-sarif`. That step needs `security-events: write`, which workflows on fork pull requests do not receive, so run it only for pushes and same-repository pull requests.
+
+## Use the CLI in a GitHub workflow
 
 ```yaml
 name: veritas
@@ -169,11 +153,9 @@ jobs:
           retention-days: 14
 ```
 
-This assumes `@under18dev/veritas` is a dev dependency of the project. The `run` step fails the job with the Veritas exit code.
+This requires `@under18dev/veritas` in the project's dev dependencies. The `veritas run` step fails the job through its exit code.
 
-## Other CI systems
-
-Any CI system that runs Node.js can run the CLI. The pattern is the same:
+## Use the CLI in other CI systems
 
 ```bash
 npm ci
@@ -184,7 +166,7 @@ npx veritas report --format html > veritas.html
 exit $status
 ```
 
-- Use `--json` if you need the result as data: stdout then holds only JSON, logs go to stderr.
+- `--json` prints only JSON on stdout and logs on stderr.
 - Keep `.veritas/runs/` as a build artifact.
-- `veritas improve --apply` is refused whenever the `CI` environment variable is set. Planning (`veritas improve --dry-run`) works.
-- `--offline` stops Veritas itself from making network requests; the project's tests can still use the network unless the job has none.
+- `veritas improve --apply` is refused when the `CI` environment variable is set to a value other than empty, `false` or `0`. `veritas improve --dry-run` works in CI.
+- `--offline` stops Veritas from making network requests. Your tests keep whatever network access the job has.

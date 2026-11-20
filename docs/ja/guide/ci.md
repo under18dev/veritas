@@ -1,67 +1,10 @@
 # CI と GitHub Action
 
-CI でも、Veritas の動き方は手元と同じです。実行ディレクトリを書き出し、verdict を表示し、CI が判断に使える終了コードで終わります。このページでは、GitHub Action、終了コードを決めるポリシー、ほかの CI での CLI の使い方を説明します。
+GitHub Action か CLI でプルリクエストに Veritas を実行する方法と、どの結果でビルドを失敗させるかの決め方を説明します。
 
-## リポジトリに入れるもの
+先に `.veritas/config.json` をコミットしてください。accepted な Property があれば `.veritas/approvals.json` もコミットします。対応する `.gitignore` は[はじめに](/ja/guide/getting-started#結果を見る)にあります。設定ファイルがないと、`veritas run` は `CONFIG_MISSING`（終了コード `2`）で止まります。
 
-CI には設定ファイルが必要で、accepted な Property を使うなら決定の記録も必要です。`.veritas/config.json` と `.veritas/approvals.json` をコミットし、ほかは無視します。
-
-```text
-.veritas/*
-!.veritas/config.json
-!.veritas/approvals.json
-.mutator/
-```
-
-`.veritas/config.json` がないと、`veritas run` は `CONFIG_MISSING`（終了コード `2`）で止まります。
-
-## 終了コードとポリシー
-
-| 終了コード | verdict                                     | CI でのふつうの扱い  |
-| ---------- | ------------------------------------------- | -------------------- |
-| `0`        | `pass`、`pass_with_warnings`                | 成功                 |
-| `1`        | `policy_failure`                            | 失敗                 |
-| `2`        | 設定や使い方の誤り                          | ワークフローを直す   |
-| `3`        | `tool_error`                                | 実行環境の問題       |
-| `4`        | `inconclusive`（`fail` ポリシーのときだけ） | 運用に合わせて決める |
-
-ポリシーは `.veritas/config.json` に書きます。
-
-```json
-{
-  "policy": {
-    "confirmedViolation": "fail",
-    "inconclusiveBehavior": "warn",
-    "maxNewSurvivors": 0,
-    "minPropertyCoverage": 0.8
-  }
-}
-```
-
-| 設定                          | 値（既定）                         | 効果                                                                                                                                                                                                                     |
-| ----------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `policy.confirmedViolation`   | `fail` か `warn`（`fail`）         | 確定した仕様違反で終了コード `1` にするか                                                                                                                                                                                |
-| `policy.inconclusiveBehavior` | `fail`、`warn`、`ignore`（`warn`） | `fail` なら、結論の出ていない結果（決着しなかった検証、partial や skipped のステージ）で終了コード `4` にします。`warn` と `ignore` では列挙するだけですが、verdict が `pass_with_warnings` より良くなることはありません |
-| `policy.maxNewSurvivors`      | 整数（未設定）                     | この実行の範囲で生き残った mutant が上限を超えたら終了コード `1`。`--since` を付けた場合、範囲は変更部分です。mutation testing の結果がない実行では inconclusive になります                                              |
-| `policy.minPropertyCoverage`  | 0 から 1（未設定）                 | accepted な Property のうち、`meaningful_with_evidence` のテストが一つ以上あるものの割合が下回ったら終了コード `1`。accepted な Property がなければ inconclusive になります                                              |
-
-suspected の finding でポリシー違反になることはありません。測れなかったしきい値は inconclusive として扱い、通ったことにはしません。
-
-## プルリクエストでは `--since` を使う
-
-プルリクエストでは、mutation testing を変更部分に絞ります。
-
-```bash
-veritas run --profile standard --offline --since origin/main
-```
-
-`--since <ref>` には、その ref が clone に含まれている必要があります。`actions/checkout` では `fetch-depth: 0` で履歴をすべて取得してください。このとき `maxNewSurvivors` は、変更したコードで生き残った mutant だけを数えます。変更の外の mutant は意図して除いているので、それで mutation のステージが partial になることはありません。
-
-## GitHub Action
-
-`packages/github-action` の Action は、CLI と同じエンジンをオフラインで動かします。composite action で、ジョブで用意した Node.js を使い、公開済みの同じバージョンの `@under18dev/veritas-github-action` パッケージを実行します。property-based testing と反例の再実行がネットワークなしでプロジェクトのコードを動かせるよう、ジョブで Node.js 25 以上を用意してください（例では 26 を使っています）。用意しないと、それらは実行されず、結果は inconclusive のままです。
-
-Action は、Veritas リポジトリ内のパスとリリースのタグで `under18dev/veritas/packages/github-action@v<version>` のように参照します。`packages/github-action/examples/pull-request.yml` のワークフローです。
+## GitHub Action を追加する
 
 ```yaml
 name: veritas
@@ -96,17 +39,23 @@ jobs:
           retention-days: 14
 ```
 
-`fetch-depth: 0` は、比較の基準のコミットを取得するためのもので、これがあると Action は基準と比べたり、ドキュメントだけの変更を省いたりできます。`pnpm/action-setup` は、プロジェクトが pnpm を使う場合だけ必要です。入力と出力の詳細は [GitHub Action リファレンス](/ja/reference/github-action)にあります。
+- Action は `under18dev/veritas/packages/github-action@v<version>` で参照します。同じバージョンの `@under18dev/veritas-github-action` パッケージを、ジョブで用意した Node.js を使ってオフラインで実行します。
+- Node.js 25 以上を用意してください。property-based testing と反例の再実行で、ネットワークを遮断して関数を動かすのに必要です。古い Node.js では、これらの検査は行わず、結果は inconclusive になります。
+- `fetch-depth: 0` で、比較の基準になるコミットを取得します。
+- `pnpm/action-setup` は、プロジェクトが pnpm を使う場合だけ必要です。
+- `.veritas/runs/` をアップロードすると、レポート、JSON の成果物、`trace.jsonl` が残ります。どの実行も、手元で `veritas replay <run-id>` を使って再現できます。
 
-### 入力と出力
+### 入力
 
-| 入力                | 既定       | 意味                                                                                                        |
-| ------------------- | ---------- | ----------------------------------------------------------------------------------------------------------- |
-| `profile`           | `standard` | `quick`、`standard`、`deep`                                                                                 |
-| `working-directory` | `.`        | プロジェクトのディレクトリ                                                                                  |
-| `since`             | （空）     | 比較の基準の SHA。空なら、`pull_request` ではプルリクエストの base SHA、`push` では更新前の head を使います |
-| `inconclusive`      | （空）     | `warn`、`fail`、`ignore`。空なら設定ファイルの `policy.inconclusiveBehavior` を使います                     |
-| `summary`           | `true`     | ステップのサマリーを書くか                                                                                  |
+| 入力                | 既定       | 意味                                                                                         |
+| ------------------- | ---------- | -------------------------------------------------------------------------------------------- |
+| `profile`           | `standard` | `quick`、`standard`、`deep`                                                                  |
+| `working-directory` | `.`        | プロジェクトのディレクトリ（ワークスペースからの相対パス）                                   |
+| `since`             | （空）     | 比較の基準の SHA。空なら、`pull_request` ではプルリクエストの base、`push` では更新前の head |
+| `inconclusive`      | （空）     | `warn`、`fail`、`ignore`。空なら設定ファイルの `policy.inconclusiveBehavior` を使います      |
+| `summary`           | `true`     | ステップのサマリーを書くか                                                                   |
+
+### 出力
 
 | 出力                 | 中身                                                                                           |
 | -------------------- | ---------------------------------------------------------------------------------------------- |
@@ -117,28 +66,63 @@ jobs:
 | `report-path`        | 実行の `run.json` のパス（ワークスペースからの相対パス）。レポートは同じディレクトリにあります |
 | `from-fork`          | フォークからのプルリクエストなら `true`                                                        |
 
-変更が Markdown ファイル、`docs/` 以下のファイル、画像だけなら、verdict `skipped`、終了コード `0` で実行を省きます。実行ごとに `veritas replay <run-id>` が記録されるので、アップロードした成果物から手元で再現できます。
+変更が Markdown ファイル、`docs/` 以下のファイル、画像だけの場合は、verdict `skipped`、終了コード `0` で実行を省きます。
 
 ### フォークからのプルリクエスト
 
-`pull_request` イベントであれば、フォークからのプルリクエストでも安全に動かせます。
+`pull_request` イベントでは、Action は次のように動きます。
 
 - トークンを読まず、ネットワーク上の出典も有効にしません。
-- 例のように、権限は `contents: read` だけにし、`persist-credentials: false` でチェックアウトしてください。
-- `pull_request_target` と、フォークのプルリクエストに対する `workflow_run` は拒否します。権限のある環境で信頼できないコードを動かすことになるからです。
+- `pull_request_target` と、フォークのプルリクエストに対する `workflow_run` は拒否します。高い権限で信頼できないコードを動かすことになるからです。
 - レポートでは、トークンの形をした値と秘密の環境変数の値を伏せます。
 
-プロジェクトのテストは実行されます（mutation testing がテストを動かします）。フォークのプルリクエストでは、ほかのテストのジョブと同じく、秘密情報なしで動きます。
+例のとおり、権限は `contents: read` だけにし、`persist-credentials: false` でチェックアウトしてください。mutation testing はプルリクエストのテストを実行します。フォークのプルリクエストでは、ほかのテストのジョブと同じく、秘密情報なしで動きます。
 
-### 成果物
+## ビルドを失敗させる条件を決める
 
-実行結果は `.veritas/runs/` に保存されます。例のように、保存期間（ここでは 14 日）を決めてアップロードしてください。実行ディレクトリには、レポート（`report.html`、`report.md`、`report.sarif`）、すべての JSON の成果物、`trace.jsonl` が入っています。
+| 終了コード | verdict                                     |
+| ---------- | ------------------------------------------- |
+| `0`        | `pass`、`pass_with_warnings`                |
+| `1`        | `policy_failure`                            |
+| `2`        | 設定や使い方の誤り                          |
+| `3`        | `tool_error`                                |
+| `4`        | `inconclusive`（`fail` ポリシーのときだけ） |
 
-## SARIF と code scanning
+ポリシーは `.veritas/config.json` に書きます。
 
-実行ごとに `report.sarif`（SARIF 2.1.0）が書き出され、`veritas report --format sarif` で最新の実行のものを出力できます。GitHub の code scanning に finding を表示するには、`github/codeql-action/upload-sarif` でアップロードします。このステップには `security-events: write` の権限が要り、フォークからのプルリクエストのワークフローにはこの権限が与えられません。アップロードは、同じリポジトリからのプルリクエストか push のときだけ行ってください。
+```json
+{
+  "policy": {
+    "confirmedViolation": "fail",
+    "inconclusiveBehavior": "warn",
+    "maxNewSurvivors": 0,
+    "minPropertyCoverage": 0.8
+  }
+}
+```
 
-## GitHub Actions で CLI を使う
+| 設定                          | 値（既定）                         | 効果                                                                                                                                                                    |
+| ----------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `policy.confirmedViolation`   | `fail`、`warn`（`fail`）           | 確定した仕様違反で終了コード `1` にする                                                                                                                                 |
+| `policy.inconclusiveBehavior` | `fail`、`warn`、`ignore`（`warn`） | `fail` なら、結論の出ていない結果（決着しなかった検証、partial や skipped のステージ）で終了コード `4`。それ以外では列挙だけで、verdict は良くても `pass_with_warnings` |
+| `policy.maxNewSurvivors`      | 整数（未設定）                     | 実行の範囲で生き残った mutant が上限を超えたら終了コード `1`。`--since` では範囲は変更部分。mutation testing の結果がなければ inconclusive                              |
+| `policy.minPropertyCoverage`  | 0〜1（未設定）                     | `meaningful_with_evidence` のテストがある accepted な Property の割合が下回ったら終了コード `1`。accepted な Property がなければ inconclusive                           |
+
+suspected の finding でビルドが失敗することはなく、測れなかったしきい値は inconclusive になります。
+
+## 変更部分だけを検査する
+
+```bash
+veritas run --profile standard --offline --since origin/main
+```
+
+`--since <ref>` は、mutation testing をその ref からの変更部分に絞ります。ref は clone に含まれている必要があります（`fetch-depth: 0`）。変更の外の mutant は実行せず、それで mutation のステージが partial になることはありません。
+
+## code scanning に finding を表示する
+
+実行ごとに `report.sarif`（SARIF 2.1.0）が書き出され、`veritas report --format sarif` で最新のものを出力できます。`github/codeql-action/upload-sarif` でアップロードしてください。このステップには `security-events: write` の権限が要り、フォークのプルリクエストのワークフローにはこの権限が与えられません。push と、同じリポジトリからのプルリクエストのときだけ実行してください。
+
+## GitHub のワークフローで CLI を使う
 
 ```yaml
 name: veritas
@@ -169,11 +153,9 @@ jobs:
           retention-days: 14
 ```
 
-`@under18dev/veritas` がプロジェクトの devDependencies に入っていることを前提にしています。`run` のステップは、Veritas の終了コードでジョブを失敗させます。
+プロジェクトの devDependencies に `@under18dev/veritas` が入っている必要があります。`veritas run` のステップは、終了コードでジョブを失敗させます。
 
-## ほかの CI
-
-Node.js が動く CI なら、どれでも CLI を使えます。手順は同じです。
+## ほかの CI で CLI を使う
 
 ```bash
 npm ci
@@ -184,7 +166,7 @@ npx veritas report --format html > veritas.html
 exit $status
 ```
 
-- 結果をデータとして扱いたいときは `--json` を付けます。標準出力には JSON だけが出て、ログは標準エラー出力に出ます。
+- `--json` を付けると、標準出力には JSON だけが、ログは標準エラー出力に出ます。
 - `.veritas/runs/` はビルドの成果物として残してください。
-- 環境変数 `CI` が設定されていると、`veritas improve --apply` は拒否されます。計画（`veritas improve --dry-run`）は実行できます。
-- `--offline` は Veritas 自身のネットワークアクセスを止めるだけです。ジョブにネットワークがある限り、プロジェクトのテストはネットワークを使えます。
+- 環境変数 `CI` が空、`false`、`0` 以外の値だと、`veritas improve --apply` は拒否されます。`veritas improve --dry-run` は CI でも実行できます。
+- `--offline` は Veritas のネットワークアクセスを止めます。テストは、ジョブにあるネットワークをそのまま使えます。

@@ -1,26 +1,26 @@
 # Improving tests
 
-`veritas improve` proposes new tests for the gaps a run found, and adds them only after you approve the exact plan and only if they measurably help. It never edits production code, existing tests or documentation.
+This page explains how `veritas improve` plans new tests for the gaps a run found, how you approve and apply a plan, and what happens when a plan cannot be applied.
 
-## The rules
+## What `improve` changes
 
-- Only new test files are added. Existing tests are never edited, deleted or weakened; production code, README and docs are never touched.
-- Expected values come from accepted specifications, never from running the implementation. `--include-proposed` explicitly allows proposed properties as well.
+- It adds new test files only. It never edits, deletes or weakens existing tests, and never touches production code, README or docs.
+- Expected values come from accepted properties, never from running your code. `--include-proposed` also allows proposed properties.
 - Planning is the default and writes no project file.
-- Applying needs `--apply`, the plan ID and the approval token printed with that plan.
-- The change is measured in an isolated copy and written to the project only if the results improve. Otherwise nothing is written.
+- Applying needs `--apply` with the plan ID and approval token printed for that plan.
+- A plan is measured in a temporary copy of the project and written only when it improves the results.
 - Applying is refused in CI.
 
-## 1. Plan
+## Plan
 
 ```bash
 veritas improve --dry-run
 ```
 
-`--dry-run` is the default; `veritas improve` alone does the same. The plan is built from the latest run, or from `--run <run-id>`. It is most useful after a run with mutation results (`--profile standard` or `deep`); without them, only boundary gaps are considered.
+`veritas improve` without options does the same. The plan is built from the latest run, or from `--run <run-id>`. Plan after a `standard` or `deep` run: without mutation results, only boundary gaps are considered.
 
 ```text
-plan IP-24ed3c83a2e0 from run-20261120T104701460Z-000-7bcf92: planned
+plan IP-a14164357e16 from run-20261120T105517747Z-000-01dbf1: planned
 
 goal: Add 1 test(s) whose expected values come from the specification and at decisive boundary inputs no test checks; applying measures which mutants they kill
 
@@ -46,90 +46,90 @@ patch preview:
 +  expect(discountAmount(1000)).toBe(100);
 +});
 [...]
-approval token for plan IP-24ed3c83a2e0: 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
-apply after review: veritas improve --apply --plan IP-24ed3c83a2e0 --approve 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
+approval token for plan IP-a14164357e16: 6735e5d7e6d641b5b63f74f6521d6564c6d4821e0c2acb07a2d33b628063f67b
+apply after review: veritas improve --apply --plan IP-a14164357e16 --approve 6735e5d7e6d641b5b63f74f6521d6564c6d4821e0c2acb07a2d33b628063f67b
 
-plan: .veritas/improvements/IP-24ed3c83a2e0/plan.json (no project file was written)
+plan: .veritas/improvements/IP-a14164357e16/plan.json (no project file was written)
 ```
 
-The plan lists the goal, each proposed test with the property and source its expected value comes from, the gaps it addresses, any risks, the budget, the full patch, the inputs it skipped and why, and the approval token. It is saved in `.veritas/improvements/<plan-id>/plan.json`.
+The plan shows the goal, each proposed test with the property and source line its expected value comes from, the gaps it addresses, the budget, the full patch, the inputs it skipped with the reason, and the approval token. It is saved as `.veritas/improvements/<plan-id>/plan.json`.
 
-The token is bound to this plan. If the plan changes, or a property it relies on is rejected after planning, the token no longer matches and the plan has to be made again.
+## Approve and apply
 
-## 2. Review and approve
-
-Read the patch preview. The token is your approval of exactly that patch. Pass `--actor <name>` to record who approved it; otherwise `VERITAS_ACTOR`, then the git user name is used.
-
-## 3. Apply
+Read the patch preview. Passing the token approves exactly that patch.
 
 ```bash
-veritas improve --apply --plan IP-24ed3c83a2e0 --approve 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
+veritas improve --apply --plan IP-a14164357e16 --approve 6735e5d7e6d641b5b63f74f6521d6564c6d4821e0c2acb07a2d33b628063f67b
 ```
 
 ```text
-attempt PA-8130e27f7148 for plan IP-24ed3c83a2e0: improved
+attempt PA-ee6c6c6d4bc3 for plan IP-a14164357e16: improved
 before: tests 5 passed / 0 failed, mutants 16 killed / 1 survived
 after:  tests 6 passed / 0 failed, mutants 17 killed / 0 survived
 note: killed mutants 16 -> 17, survived 1 -> 0
 note: newly killed: M-5b67ad8e53c8
 note: added: test/veritas-P-ee03e6e8b749.test.ts
-note: formal and property-based results re-evaluated in run-20261120T104711023Z-000-f78024 on the patched copy
+note: formal and property-based results re-evaluated in run-20261120T105528565Z-000-2f25ef on the patched copy
 ```
 
-What happens during `--apply`:
+| Option                 | Meaning                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------- |
+| `--plan <id>`          | The plan ID from the dry run                                                          |
+| `--approve <token>`    | The approval token from the dry run                                                   |
+| `--actor <name>`       | Who approves. Default: `VERITAS_ACTOR`, then `git config user.name`                   |
+| `--run <run-id>`       | Plan from this run instead of the latest one                                          |
+| `--include-proposed`   | Also take expected values from proposed properties                                    |
+| `--max-iterations <n>` | Apply attempts allowed for the plan, 1 to 20 (default `improvement.maxIterations`, 3) |
 
-1. The project is copied to a fresh temporary directory, without `node_modules` and tool state; `node_modules` is linked so the project's own Vitest and mutator are used.
-2. The tests and mutation testing run on the copy before the patch.
-3. The new test files are added to the copy, and the tests and mutation testing run again. Mutation testing always runs every mutant here: an imported report (`mutate --import`) or a `--since` selection describes the code before the patch.
-4. The formal and property-based results are re-evaluated on the copy with the stages and options of the run the plan came from, offline.
-5. The new files are written to the project only if every test passes (the new ones and all that passed before), the number of killed mutants increases and the re-evaluation succeeds. Otherwise the attempt is rolled back and the project stays unchanged.
+During `--apply`, Veritas:
 
-`--max-iterations <n>` (1 to 20, default from `improvement.maxIterations`, 3) limits the apply attempts for a plan. Each attempt is recorded in `.veritas/improvements/<plan-id>/` as `attempt-<n>.json`, and each approval as `approval-<n>.json` (approver, time, entry point, token hash).
+1. copies the project to a new temporary directory, without `node_modules` and tool state, and links `node_modules` so your Vitest and mutator are used;
+2. runs the tests and mutation testing on the copy;
+3. adds the new test files to the copy and runs the tests and mutation testing again, on every mutant;
+4. re-evaluates the formal and property-based results on the copy with the stages and options of the run the plan came from, offline;
+5. writes the new files into the project only if every test passes, more mutants are killed and the re-evaluation succeeds. Otherwise it discards the copy and your project is unchanged.
+
+Each attempt is recorded as `.veritas/improvements/<plan-id>/attempt-<n>.json`, and each approval as `approval-<n>.json` with the approver, time, entry point and a hash of the token.
 
 ## Outcomes and exit codes
 
-| Outcome               | Exit code | Meaning                                                                                                                                             |
-| --------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| planned / `improved`  | `0`       | A plan is ready, or an approved plan was applied and improved the results                                                                           |
-| `no_safe_improvement` | `4`       | No test with a specification-derived expected value could be built, or the applied tests failed or killed no additional mutant and were rolled back |
-| `needs_spec_decision` | `4`       | A person has to decide on the specification first                                                                                                   |
-| `blocked`             | `1`       | The patch fails the safety checks, or the plan's attempt budget is used up                                                                          |
-| bad token, CI         | `2`       | Wrong approval token, or `--apply` in CI                                                                                                            |
-| `error`               | `3`       | A tool failed                                                                                                                                       |
+| Outcome               | Exit code | Meaning                                                                                                                        |
+| --------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `planned`, `improved` | `0`       | A plan is ready, or an applied plan improved the results                                                                       |
+| `no_safe_improvement` | `4`       | No test with a specification-derived expected value could be built, or the applied tests failed or killed no additional mutant |
+| `needs_spec_decision` | `4`       | You must decide on the specification first                                                                                     |
+| `blocked`             | `1`       | The patch fails the safety checks, or the plan's attempts are used up                                                          |
+| (error message)       | `2`       | Wrong approval token, or `--apply` in CI                                                                                       |
+| `error`               | `3`       | A tool failed                                                                                                                  |
 
-## needs_spec_decision
+## When a decision is needed
 
-A plan stops with `needs_spec_decision` in two situations:
+A plan stops with `needs_spec_decision` when:
 
-- **The targeted properties are not accepted, or are in conflict.** Review the properties (`veritas spec list`) and accept or reject them, or rerun with `--include-proposed` if you want proposed properties used.
-- **A test built from the specification fails against the code.** Veritas does not add it and does not change its expected value to make it pass. It reports a specification violation candidate and writes an implementation fix proposal:
+- **The targeted properties are not accepted, or conflict.** Accept or reject them with `veritas spec` (see [Specifications](/guide/specifications)), or plan with `--include-proposed`.
+- **A test built from the specification fails against your code.** Veritas reports it as a specification violation candidate, writes an implementation fix proposal, and adds nothing:
 
 ```text
-plan IP-0159001c54ab from run-20261120T104653570Z-000-cd8b2a: needs_spec_decision
+plan IP-c7176a11a5f3 from run-20261120T105508829Z-000-017911: needs_spec_decision
 
 spec violation candidates (not added; expected values unchanged):
   SVC-ec7787ca9234  discountAmount(1000) returns 0, but the specification (README.md:7) documents 100; the test is not added and its expected value is not changed
-  implementation fix proposals: .veritas/improvements/IP-0159001c54ab/implementation-fix-proposal.json
+  implementation fix proposals: .veritas/improvements/IP-c7176a11a5f3/implementation-fix-proposal.json
 ```
 
-Either the code or the specification is wrong. Fix the code yourself, or change the specification through review, then plan again.
+Fix the code, or change the specification and review it again, then plan again.
 
-## Refusals
+## When applying is refused
+
+| Error                 | Cause                                                                                                     | What to do                                                  |
+| --------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `APPROVAL_MISMATCH`   | The token does not belong to the plan, or the plan changed (for example, a property it uses was rejected) | Run `veritas improve --dry-run` again and use the new token |
+| `IMPROVE_APPLY_IN_CI` | The `CI` environment variable is set to a value other than empty, `false` or `0`                          | Apply locally; planning works in CI                         |
+| `IMPROVE_UNSAFE_LINK` | The project contains symbolic links that point outside it                                                 | Replace those links with real files or directories          |
 
 ```text
 error[IMPROVE_APPLY_IN_CI]: applying an improvement is refused in CI (improvement.autoApply is always false)
 hint: run `veritas improve --apply` locally after reviewing the plan
 ```
 
-`--apply` is refused whenever the `CI` environment variable is set to anything other than an empty value, `false` or `0`. Planning still works in CI.
-
-```text
-error[APPROVAL_MISMATCH]: the approval token does not match plan IP-24ed3c83a2e0 (the plan changed or the token is wrong)
-hint: review the plan again with `veritas improve --dry-run` and use the token it prints
-```
-
-A project that contains symbolic links pointing outside the project is refused with `IMPROVE_UNSAFE_LINK`, because the isolated run could write through them. Replace those links with real files or directories before applying.
-
-## From an agent
-
-Through MCP, `plan_improvement` returns the plan and the token, and `apply_approved_improvement` applies it. The apply tool exists only when the server is started with `--allow-write`, and it needs the plan ID and token a person reviewed. See [Agents and MCP](/guide/agents).
+Agents can plan and apply through the MCP server; see [Agents and MCP](/guide/agents).

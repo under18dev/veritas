@@ -1,26 +1,37 @@
 # Reading results
 
-Every run ends with a verdict, an exit code, a list of findings and per-test assessments. This page explains each of them. The full definitions are in [Semantics](/concepts/semantics).
+This page explains the verdict, the exit code, findings, test outcomes and the statuses that appear in Veritas output. The exact definitions are in [Semantics](/concepts/semantics).
 
-## Verdicts and exit codes
+## Verdict and exit code
 
-| Verdict              | Exit code | Meaning                                                                                         |
-| -------------------- | --------- | ----------------------------------------------------------------------------------------------- |
-| `pass`               | `0`       | Every stage succeeded, nothing is inconclusive and there is nothing to review                   |
-| `pass_with_warnings` | `0`       | No policy failure, but there are findings to review or inconclusive results (listed as reasons) |
-| `policy_failure`     | `1`       | A confirmed specification violation, or a configured threshold was not met                      |
-| `inconclusive`       | `4`       | Something could not be decided and `policy.inconclusiveBehavior` is `fail`                      |
-| `tool_error`         | `3`       | A stage failed or ended in an error                                                             |
+The first line of every run shows both:
 
-Exit code `2` means a configuration or usage error, such as a missing `.veritas/config.json` (`CONFIG_MISSING`) or a wrong approval token. Errors are printed as `error[CODE]: message` with a `hint:` line.
+```text
+run run-20261120T105508829Z-000-017911  verdict: policy_failure (exit 1)
+```
 
-Only confirmed findings can fail the policy. Suspected findings never do. Inconclusive results never produce `pass`: with the default `warn` policy the verdict is `pass_with_warnings` and each inconclusive item is listed.
+| Verdict              | Exit code | Meaning                                                                     |
+| -------------------- | --------- | --------------------------------------------------------------------------- |
+| `pass`               | `0`       | Every stage succeeded, nothing is inconclusive and nothing needs review     |
+| `pass_with_warnings` | `0`       | No policy failure, but there are findings to review or inconclusive results |
+| `policy_failure`     | `1`       | A confirmed specification violation, or a configured threshold is not met   |
+| `tool_error`         | `3`       | A stage failed                                                              |
+| `inconclusive`       | `4`       | Something could not be decided and `policy.inconclusiveBehavior` is `fail`  |
 
-With `--json`, stdout holds only the JSON result (`status`, `exitCode`, `runId`, `dir`, `reasons`, `stages`, `findings`) and logs go to stderr.
+Exit code `2` means a configuration or usage error, printed as `error[CODE]: message` followed by a `hint:` line, for example:
+
+```text
+error[APPROVAL_MISMATCH]: the approval token does not match plan IP-a14164357e16 (the plan changed or the token is wrong)
+hint: review the plan again with `veritas improve --dry-run` and use the token it prints
+```
+
+Only confirmed findings fail the policy. Inconclusive results never produce `pass`: under the default `warn` policy the verdict is `pass_with_warnings` and each inconclusive item is listed. [CI and GitHub Action](/guide/ci#choose-what-fails-the-build) shows how to configure the policy.
+
+With `--json`, stdout contains only the JSON result (`status`, `exitCode`, `runId`, `dir`, `reasons`, `stages`, `findings`) and logs go to stderr.
 
 ## Stages
 
-Each line of the run summary is a stage with a status. Only `succeeded` is a success. `failed` and `error` are tool errors; `partial`, `skipped`, `unsupported`, `timeout` and `cancelled` are inconclusive.
+Each block under the verdict is a stage and its status. Only `succeeded` is a success. `failed` and `error` are tool errors. `partial`, `skipped`, `unsupported`, `timeout` and `cancelled` are inconclusive.
 
 ## Findings
 
@@ -28,67 +39,65 @@ Each line of the run summary is a stage with a status. Only `succeeded` is a suc
 F-89435b62ae1e  [confirmed high] src/pricing.ts#discountAmount does not satisfy "total >= 1000" for {"total":"1000"} (within the model)
 ```
 
-A finding has a stable ID, a kind, a certainty and a severity.
+Each finding has an ID, a certainty, a severity and a kind.
 
 | Certainty       | Meaning                                                                                                                                   |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `confirmed`     | Backed by a real run (a mutation run, or a counterexample replayed in JavaScript) and, for specification violations, an accepted property |
-| `suspected`     | Plausible, but a person has to review it (for example, the property is only proposed)                                                     |
-| `informational` | Explains a limitation                                                                                                                     |
+| `confirmed`     | Shown by a real run (a mutation run, or a counterexample replayed in JavaScript); for a specification violation, the property is accepted |
+| `suspected`     | Needs your review, for example because the property is only proposed                                                                      |
+| `informational` | Describes a limitation of the analysis                                                                                                    |
 
-Severity is one of `critical`, `high`, `medium`, `low` and `info`.
+Severity is `critical`, `high`, `medium`, `low` or `info`.
 
-| Kind                           | Typical cause                                              |
-| ------------------------------ | ---------------------------------------------------------- |
-| `spec_implementation_mismatch` | The code disagrees with a documented rule                  |
-| `counterexample`               | A property-based test or solver found a violating input    |
-| `spec_violation_candidate`     | A test built from the specification fails against the code |
-| `spec_conflict`                | Two sources state different rules                          |
-| `survived_mutant`              | No test notices a change in specification-relevant code    |
-| `test_gap`                     | A boundary or behaviour is not checked                     |
-| `tautological_test`            | A test does not check project behaviour                    |
-| `unsupported_semantics`        | Code outside the supported formal subset                   |
-| `stage_failure`                | A stage could not produce its result                       |
+| Kind                           | Typical cause                                               |
+| ------------------------------ | ----------------------------------------------------------- |
+| `spec_implementation_mismatch` | The code disagrees with a documented rule                   |
+| `counterexample`               | A property-based test or the solver found a violating input |
+| `spec_violation_candidate`     | A test built from the specification fails against the code  |
+| `spec_conflict`                | Two sources state different rules                           |
+| `survived_mutant`              | No test notices a change in code that a rule depends on     |
+| `test_gap`                     | A boundary or behaviour is not checked                      |
+| `tautological_test`            | A test does not check project behaviour                     |
+| `unsupported_semantics`        | Code outside the supported formal subset                    |
+| `stage_failure`                | A stage could not produce its result                        |
 
-Confirmed findings of the first three kinds are specification violations; with the default `policy.confirmedViolation: fail` they produce exit code `1`.
+A confirmed finding of one of the first three kinds is a specification violation and, with the default `policy.confirmedViolation: fail`, sets exit code `1`.
 
-## Explaining a finding
+## See the evidence for a finding
 
 ```bash
 veritas explain <finding-id>
 ```
 
-`explain` prints the evidence chain: the source and the quoted line, the properties, the tests that reach the code, their assessments, the mutants, and the solver claims with the path to the SMT or Lean file. The last lines suggest what to do next. The [tutorial](/guide/tutorial) shows a full example.
+`explain` reads the latest run and prints the source and quoted line, the properties, the tests that call the code and their assessments, the mutants, the solver claims with their files, and the suggested next steps. The [tutorial](/guide/tutorial#_3-see-the-evidence-for-a-finding) shows a full example.
 
 ## Test outcomes
 
-Each test gets one of five outcomes:
+| Outcome                        | Meaning                                                                                                                           |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `meaningful_with_evidence`     | The test asserts the result of a project function, kills specification-relevant mutants and asserts every decisive boundary input |
+| `weak_or_incomplete`           | The test checks something, but relevant mutants survive it or it misses a boundary                                                |
+| `tautological_or_disconnected` | The test does not check project behaviour (constant assertions, the target is never called)                                       |
+| `spec_conflict`                | The test relates to a property whose sources conflict                                                                             |
+| `inconclusive`                 | There is not enough evidence: the run has no mutation results, or the code is reached through a dynamic import or a child process |
 
-| Outcome                        | Meaning                                                                                                                                         |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `meaningful_with_evidence`     | An asserted call to a project function kills specification-relevant mutants and asserts every decisive boundary input                           |
-| `weak_or_incomplete`           | The test checks something, but relevant mutants survive or a boundary is not exercised                                                          |
-| `tautological_or_disconnected` | The test does not check project behaviour (constant assertions, the target is never called)                                                     |
-| `spec_conflict`                | The test relates to properties whose sources conflict                                                                                           |
-| `inconclusive`                 | Not enough evidence to decide: for example, no mutation results in this run, or the code is reached through a dynamic import or a child process |
+The outcome summarizes the evidence vector below; it is not a grade.
 
-The outcome summarizes an evidence vector. It is not a grade.
+## Evidence vector
 
-## The evidence vector
+Each assessment in `assessments.json` has these fields and no combined score:
 
-Each assessment in `assessments.json` carries these fields, with no combined score:
+| Field                    | Contents                                                                     |
+| ------------------------ | ---------------------------------------------------------------------------- |
+| `specificationRelevance` | Properties the test relates to, with their review status                     |
+| `assertionRelevance`     | `checks_result`, `weak`, `none` or `unknown`                                 |
+| `mutationDetection`      | Mutants the test killed, mutants that survived it, others                    |
+| `boundaryCoverage`       | Each relevant boundary and whether the test uses it (`yes`, `no`, `unknown`) |
+| `formalEvidence`         | IDs of formal claims about the related properties                            |
+| `sourceConfidence`       | Notes on the quality of the specification sources                            |
+| `unknowns`               | What could not be determined                                                 |
 
-| Field                    | Contents                                                                          |
-| ------------------------ | --------------------------------------------------------------------------------- |
-| `specificationRelevance` | The properties the test relates to, with their review status                      |
-| `assertionRelevance`     | `checks_result`, `weak`, `none` or `unknown`                                      |
-| `mutationDetection`      | Mutants this test killed, mutants that survived it, and others                    |
-| `boundaryCoverage`       | Each relevant boundary and whether the test exercises it (`yes`, `no`, `unknown`) |
-| `formalEvidence`         | IDs of formal claims about the related properties                                 |
-| `sourceConfidence`       | Notes on the quality of the specification sources                                 |
-| `unknowns`               | What could not be determined, in words                                            |
-
-The text report shows the same thing as a rationale line:
+`veritas report` prints the same information as a rationale line:
 
 ```text
 T-97fef42e4cf7: weak_or_incomplete; rationale boundary not exercised: total >= 1000 (decisive inputs 999, 1000; asserted: none); formal evidence C-8aad536f8e71 counterexample_found (conformance, assurance none); unknowns no mutation results for this run; detection power not measured
@@ -96,45 +105,41 @@ T-97fef42e4cf7: weak_or_incomplete; rationale boundary not exercised: total >= 1
 
 ## Verification statuses
 
-Formal claims (Z3, Lean) have one of these statuses:
+| Status                 | Meaning                                                                                 |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| `proven_within_model`  | No counterexample exists within the stated model, domain bounds and assumptions         |
+| `counterexample_found` | The solver found a violating input, and replaying it in JavaScript gave the same result |
+| `semantic_mismatch`    | The solver's counterexample does not reproduce in JavaScript                            |
+| `unknown`              | The solver gave no answer                                                               |
+| `timeout`              | The solver hit `formal.maxSolverMs`                                                     |
+| `unsupported`          | The code or property is outside the supported subset                                    |
+| `error`                | The tool failed                                                                         |
 
-| Status                 | Meaning                                                                                       |
-| ---------------------- | --------------------------------------------------------------------------------------------- |
-| `proven_within_model`  | No counterexample exists within the stated model, domain bounds and assumptions               |
-| `counterexample_found` | The solver found a violating input, and replaying it in JavaScript gave the same result       |
-| `semantic_mismatch`    | The solver's counterexample does not reproduce in JavaScript: the model and the code disagree |
-| `unknown`              | The solver gave no answer                                                                     |
-| `timeout`              | The solver ran out of time (`formal.maxSolverMs`)                                             |
-| `unsupported`          | The code or property is outside the supported subset                                          |
-| `error`                | The tool failed                                                                               |
-
-`unknown`, `timeout`, `unsupported`, `semantic_mismatch` and `error` are never counted as success. Each of them means that the question was not answered, and Veritas will not report an unanswered question as a passed check. They make the run inconclusive; whether that fails CI is up to `policy.inconclusiveBehavior`.
-
-Claims also carry an assurance level: `smt_bounded` for Z3, `kernel_checked` for a Lean proof without `sorry`, `admit` or extra axioms, `none` otherwise. See [Verification](/guide/verification).
+`unknown`, `timeout`, `unsupported`, `semantic_mismatch` and `error` mean the question was not answered, so Veritas never counts them as success. They make the run inconclusive, and `policy.inconclusiveBehavior` decides whether that fails CI. [Verification](/guide/verification) explains each engine and the assurance levels `smt_bounded` and `kernel_checked`.
 
 ## Mutant statuses
 
-| Status                                                     | Meaning                                                                                            |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `killed`                                                   | At least one test failed under the mutant                                                          |
-| `survived`                                                 | Tests ran the mutant and none failed. A test gap candidate, not a bug and not proof of equivalence |
-| `timeout`                                                  | The test run did not finish under the mutant. Counted as detected, never credited to one test      |
-| `suspected_equivalent`                                     | No difference observed; equivalence not shown                                                      |
-| `equivalent_proven`                                        | No input in the stated bounded domain distinguishes it from the original                           |
-| `compile_error`, `runtime_error`, `ignored`, `no_coverage` | Reported by the mutation backend                                                                   |
-| `pending`, `unknown`                                       | Not run, or a status Veritas does not recognize. Makes the mutation stage `partial`                |
+| Status                                                     | Meaning                                                                                       |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `killed`                                                   | At least one test failed under the mutant                                                     |
+| `survived`                                                 | Tests ran the mutant and none failed: a test gap candidate, not a bug and not equivalence     |
+| `timeout`                                                  | The tests did not finish under the mutant; counted as detected but credited to no single test |
+| `suspected_equivalent`                                     | No difference was observed; equivalence is not shown                                          |
+| `equivalent_proven`                                        | No input in the stated bounded domain distinguishes it from the original                      |
+| `compile_error`, `runtime_error`, `ignored`, `no_coverage` | Reported by the mutation backend                                                              |
+| `pending`, `unknown`                                       | Not run, or not recognized; the mutation stage becomes `partial`                              |
 
-A survived mutant is never treated as equivalent on its own. Only a bounded equivalence proof makes it `equivalent_proven`.
+A surviving mutant becomes `equivalent_proven` only through a bounded equivalence proof.
 
-## Reports
+## Print a report
 
 ```bash
-veritas report                        # text summary of the latest run
+veritas report                          # text summary of the latest run
 veritas report --format markdown
 veritas report --format html > report.html
 veritas report --format sarif > veritas.sarif
 veritas report --format json
-veritas report --run <run-id>         # a specific run instead of the latest
+veritas report --run <run-id>           # a specific run
 ```
 
-Each run also writes `report.json`, `report.md`, `report.html` and `report.sarif` to its run directory. The report has ten sections: run metadata, collected evidence, the property ledger, specification mismatches, the tests by properties matrix, mutation outcomes, formal claims, test assessments, improvement proposals and limitations. The [reports reference](/reference/reports) describes the formats and the artifact files.
+Every run also writes `report.json`, `report.md`, `report.html` and `report.sarif` to its run directory. [Reports and artifacts](/reference/reports) describes the sections and files.

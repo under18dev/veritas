@@ -1,10 +1,10 @@
 # Agents and MCP
 
-Coding agents can use Veritas in two ways: through the Agent Skill, which teaches an agent to drive the `veritas` CLI, and through the MCP server `veritas-mcp`, which exposes Veritas as tools. Both run the same engine as the CLI.
+This page shows how to let a coding agent use Veritas: through the Agent Skill, which instructs the agent to run the `veritas` CLI, or through the MCP server `veritas-mcp`, which exposes Veritas as tools. Both use the same engine as the CLI.
 
 ## Agent Skill
 
-The skill is a single file, `skills/veritas/SKILL.md`, in the Veritas repository. It tells an agent when to use Veritas, which commands to run, how to read the results, and where to stop and ask you. It works with any agent that loads Agent Skills.
+The skill is a single file, `skills/veritas/SKILL.md`, in the Veritas repository. It tells an agent when to use Veritas, which commands to run, how to read the results, and when to stop and ask you. Any agent that loads Agent Skills can use it.
 
 ### Install
 
@@ -16,9 +16,9 @@ curl -fsSL https://raw.githubusercontent.com/under18dev/veritas/main/skills/veri
   -o .claude/skills/veritas/SKILL.md
 ```
 
-The skill expects `@under18dev/veritas` to be installed in the project (`npm install -D @under18dev/veritas`). If it is not, the agent asks you how to install it instead of installing anything on its own.
+The skill expects `@under18dev/veritas` to be installed in the project (`npm install -D @under18dev/veritas`). If it is not installed, the skill tells the agent to ask you how to install it rather than install anything itself.
 
-### What the skill makes the agent do
+### What the skill tells the agent
 
 - Ask before running anything that executes project code (`run --profile standard|deep`, `mutate`, `prove`, `improve`), and suggest a container for repositories you do not trust.
 - Run `init`, `doctor`, `run --profile deep --offline --include-proposed --json`, then `report`, `explain` and `spec list`.
@@ -27,7 +27,7 @@ The skill expects `@under18dev/veritas` to be installed in the project (`npm ins
 - Plan improvements with `improve --dry-run`, and apply only the exact plan and token you approved.
 - Never enable network sources, edit README or docs, change expected values, or use `--allow-code-config` unless you ask.
 
-Ask the agent things like "Are these tests meaningful?", "Does the code follow the discount rule in the README?" or "Which boundaries are untested?".
+With the skill installed, you can ask the agent things like "Are these tests meaningful?", "Does the code follow the discount rule in the README?" or "Which boundaries are untested?".
 
 ## MCP server
 
@@ -98,5 +98,5 @@ Without `--allow-write`, the server cannot change project files: the tools write
 With `--allow-write`, `apply_approved_improvement` is registered. It needs the exact plan ID and the 64-character approval token from `plan_improvement`, and records the approver. Give the agent the token only after you have reviewed the plan. Applying runs in a fresh temporary copy, which is deleted afterwards, adds only new test files, rolls back if the results do not improve, and is refused in CI. See [Improving tests](/guide/improving-tests).
 
 ::: warning
-The MCP server runs the project's tests and functions, with the same trust as `pnpm test`. Do not point it at a repository you do not trust; see [Untrusted repositories](/guide/untrusted-repositories).
+The MCP server runs the project's tests and functions, with the same trust as `npm test`. Do not point it at a repository you do not trust; see [Untrusted repositories](/guide/untrusted-repositories).
 :::

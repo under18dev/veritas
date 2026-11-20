@@ -1,12 +1,38 @@
 # チュートリアル
 
-Veritas のリポジトリにある小さなプロジェクト `fixtures/discount-boundary` で、Veritas を一通り動かします。このページの出力はすべて Veritas 0.1.1 の実際の出力で、`[...]` の箇所は省略しています。run ID と日時は、手元では違う値になります。
+コードと README が食い違っている小さなプロジェクトを作り、Veritas で食い違いと弱いテストを見つけます。そのあと仕様を決めてコードを直し、承認した計画で足りないテストを追加します。
 
-## 題材のプロジェクト
+必要なものは Node.js 25 以上（26 を推奨）、npm、git です。出力は `[...]` の箇所で省略しています。run ID、計画の ID、承認の ID、承認トークン、日時は、手元の出力では違う値になります。
 
-README には料金の規則が二つ書かれています。
+## プロジェクトを作る
+
+```bash
+mkdir shop-pricing && cd shop-pricing
+git init
+```
+
+次のファイルを作ります。
+
+`package.json`：
+
+```json
+{
+  "name": "shop-pricing",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  }
+}
+```
+
+`README.md`：
 
 ```md
+# shop-pricing
+
+Pricing rules for checkout. Amounts are integer yen.
+
 ## Discount
 
 Orders with a total of 1000 or more receive a flat discount of 100.
@@ -16,7 +42,7 @@ Orders with a total of 1000 or more receive a flat discount of 100.
 Shipping is free for orders of 5000 or more. Otherwise shipping costs 500.
 ```
 
-実装の `src/pricing.ts` です。
+`src/pricing.ts`。README は「1000 or more（1000 以上）」ですが、割引の条件は `>` になっています。
 
 ```ts
 /** Flat discount applied at checkout. */
@@ -33,52 +59,80 @@ export function shippingFee(total: number): number {
 }
 ```
 
-README は「1000 以上（1000 or more）」、コードは `total > 1000` です。`total = 1000` のとき、README では 100 になるはずが、コードは 0 を返します。
+`test/discount-weak.test.ts`。境界の値を試していません。
 
-テストファイルは三つあります。
+```ts
+import { expect, it } from 'vitest';
+import { discountAmount } from '../src/pricing.js';
 
-| ファイル                         | 内容                                                                   |
-| -------------------------------- | ---------------------------------------------------------------------- |
-| `test/discount-weak.test.ts`     | `discountAmount(2000)` と `discountAmount(10)` を呼ぶ。1000 は試さない |
-| `test/tautological.test.ts`      | `expect(true).toBe(true)` だけで、コードを呼ばない                     |
-| `test/shipping-boundary.test.ts` | `shippingFee(4999)` と `shippingFee(5000)` で、境界の両側を確かめる    |
+it('gives a discount on large orders', () => {
+  expect(discountAmount(2000)).toBe(100);
+});
 
-五つのテストはすべて通ります。
-
-## コピーを用意する
-
-リポジトリを変更しないよう、フィクスチャのコピーで作業します。Veritas のリポジトリを clone し、`pnpm install` と `pnpm build` を済ませた状態で、次を実行します。
-
-```bash
-VERITAS="$PWD"
-alias veritas="node $VERITAS/packages/cli/dist/bin.js"
-
-src="$VERITAS/fixtures/discount-boundary"
-work=$(mktemp -d)
-cp -R "$src/README.md" "$src/package.json" "$src/src" "$src/test" "$work/"
-
-# インストール済みの依存を、入れ直さずにリンクします。
-mkdir -p "$work/node_modules/@mizchi"
-ln -s "$(realpath "$src/node_modules/vitest")" "$work/node_modules/vitest"
-ln -s "$(realpath "$src/node_modules/fast-check")" "$work/node_modules/fast-check"
-ln -s "$(realpath "$src/node_modules/@mizchi/mutator")" "$work/node_modules/@mizchi/mutator"
-
-cd "$work"
-printf 'node_modules\n.veritas/\n.mutator/\n' > .gitignore
-git init -q && git add -A && git commit -qm "initial"
+it('gives no discount on small orders', () => {
+  expect(discountAmount(10)).toBe(0);
+});
 ```
 
-git リポジトリにしておくと、Veritas は実行ごとにコミットを記録し、git の履歴も出典として読みます。自分のプロジェクトでは、エイリアスの代わりに `npx veritas` を使ってください。
+`test/tautological.test.ts`。コードを呼んでいません。
+
+```ts
+import { expect, it } from 'vitest';
+
+it('pricing works', () => {
+  expect(true).toBe(true);
+});
+```
+
+`test/shipping-boundary.test.ts`。境界の両側を確かめています。
+
+```ts
+import { expect, it } from 'vitest';
+import { shippingFee } from '../src/pricing.js';
+
+it('charges shipping just below the threshold', () => {
+  expect(shippingFee(4999)).toBe(500);
+});
+
+it('ships free exactly at the threshold', () => {
+  expect(shippingFee(5000)).toBe(0);
+});
+```
+
+`.gitignore`：
+
+```text
+node_modules/
+.veritas/*
+!.veritas/config.json
+!.veritas/approvals.json
+.mutator/
+```
+
+依存を入れ、テストを実行して、コミットします。
+
+```bash
+npm install -D vitest @under18dev/veritas
+npx vitest run
+git add -A && git commit -m "Add pricing rules"
+```
+
+```text
+ Test Files  3 passed (3)
+      Tests  5 passed (5)
+```
+
+`discountAmount(1000)` は 0 を返し、README は 100 と書いているのに、五つのテストはすべて通ります。
 
 ## 1. 設定ファイルを作る
 
 ```bash
-veritas init --yes
+npx veritas init --yes
 ```
 
 ```text
-wrote [...]/.veritas/config.json
-detected: package manager=unknown, tsconfig=none, vitest=5.1.1, git=true
+wrote [...]/shop-pricing/.veritas/config.json
+detected: package manager=npm, tsconfig=none, vitest=5.1.1, git=true
 next:
   veritas doctor
   veritas discover --offline
@@ -87,14 +141,14 @@ next:
 
 ## 2. standard プロファイルで実行する
 
-`standard` は、静的解析に mutation testing を加えます。mutant ごとにプロジェクトのテストを実行します。
+`standard` プロファイルは、静的解析に mutation testing を加えます。コードを少しずつ書き換えたもの（mutant）を作り、それぞれに対してテストを実行します。
 
 ```bash
-veritas run --profile standard
+npx veritas run --profile standard
 ```
 
 ```text
-run run-20261120T104641575Z-000-555dcf  verdict: pass_with_warnings (exit 0)
+run run-20261120T105459627Z-000-0ed704  verdict: pass_with_warnings (exit 0)
 
 succeeded   index
             2 function(s) in 1 file(s); 6 inferred candidate(s)
@@ -120,26 +174,26 @@ findings (3):
 
 note: 3 finding(s) to review (not policy failures)
 
-explain a finding: veritas explain <finding-id>; artifacts: .veritas/runs/run-20261120T104641575Z-000-555dcf/
+explain a finding: veritas explain <finding-id>; artifacts: .veritas/runs/run-20261120T105459627Z-000-0ed704/
 ```
 
-各ステージで起きたことです。
+各ステージの結果です。
 
-- `discover` は三つの出典（README、`src/pricing.ts` のドキュメントコメント、唯一のコミットのメッセージ）を読み、README から記述を三つ見つけました。
-- `spec` はそれを Property にしました。8 個すべてが `proposed` で、README から来たもの（`normative`）が二つ、コードから推測したものが六つです。人が accepted にするまで、どれも仕様として扱われません。
-- `mutate` は 17 個の mutant を実行し、16 個を kill しました。生き残った一つは `total > 1000` を `total >= 1000` に変えたもので、どのテストも失敗しませんでした。
-- `assess` は、割引の二つのテストを `weak_or_incomplete`、送料の二つのテストを `meaningful_with_evidence`、定数を比べるテストを `tautological_or_disconnected` と判定しました。
+- `discover` は三つの出典（README、`src/pricing.ts` のドキュメントコメント、git log）を読み、README から記述を三つ見つけました。
+- `spec` は Property を 8 個作りました。どれも `proposed` で、README から来たもの（`normative`）が二つ、コードから推測したものが六つです。
+- `mutate` は 17 個の mutant を実行しました。`total > 1000` を `total >= 1000` に変えた mutant だけが生き残り、どのテストも失敗しませんでした。
+- `assess` は、割引の二つのテストを `weak_or_incomplete`、送料の二つのテストを `meaningful_with_evidence`、`pricing works` を `tautological_or_disconnected` と判定しました。
 
-verdict は `pass_with_warnings`、終了コードは `0` です。確認すべき finding はありますが、確定した仕様違反はまだありません。三つの finding の意味は次のとおりです。
+verdict は `pass_with_warnings`（終了コード `0`）です。確認すべき finding はありますが、確定した仕様違反はまだありません。
 
-- `F-0b43c88cc3a6` は `confirmed` です。`>=` に変えた mutant に気づくテストがないことを、実際の mutation testing で確かめたからです。
-- `F-89435b62ae1e` は `suspected` です。コードは README と同じ数で `total` を比べていますが、演算子が違います。README の Property がまだ `proposed` なので、suspected より上にはなりません。
+- `F-0b43c88cc3a6` は、mutation testing で確かめたので `confirmed` です。
+- `F-89435b62ae1e` は `suspected` です。コードは README と同じ数で `total` を比べていますが、演算子が違います。README の Property はまだ accepted ではありません。
 - `F-99e71509e3c4` は、何も確かめていないテストを指しています。
 
 ## 3. finding の根拠を見る
 
 ```bash
-veritas explain F-89435b62ae1e
+npx veritas explain F-89435b62ae1e
 ```
 
 ```text
@@ -157,23 +211,19 @@ test    test/discount-weak.test.ts:4 "gives a discount on large orders"
 test    test/discount-weak.test.ts:8 "gives no discount on small orders"
 assess  T-97fef42e4cf7: weak_or_incomplete - 1 specification-relevant mutant(s) it runs survived: src/pricing.ts:3 total > 1000 -> total >= 1000; boundary not exercised: total >= 1000 (decisive inputs 999, 1000; asserted: none)
 assess  T-8b4efcb90022: weak_or_incomplete - 1 specification-relevant mutant(s) it runs survived: src/pricing.ts:3 total > 1000 -> total >= 1000; boundary not exercised: total >= 1000 (decisive inputs 999, 1000; asserted: none)
-mutant  M-50388e69bfb9 [killed] src/pricing.ts:2 {
 [...]
-mutant  M-aecdf503e7bd [killed] src/pricing.ts:3 total > 1000 -> true
-mutant  M-846bcbfcb4da [killed] src/pricing.ts:3 total > 1000 -> false
 mutant  M-d24bb133285b [survived] src/pricing.ts:3 total > 1000 -> total >= 1000
-mutant  M-78866cd5fd67 [killed] src/pricing.ts:3 total > 1000 -> total <= 1000
 [...]
 
 next: review the property: veritas spec accept P-ee03e6e8b749 --reason "..." or veritas spec reject P-ee03e6e8b749 --reason "..."
 ```
 
-`explain` は、README から引用した行、Property、その関数を呼ぶテストと評価、mutant を順にたどって表示します。`total >= 1000` の境界を決める入力は 999 と 1000 ですが、どちらのテストもこの二つを assert していません。最後の行は次にすべきことで、README の規則を仕様として認めるかどうかを決めるよう促しています。
+README の行から Property、`discountAmount` を呼ぶテストとその評価、mutant までが順に並びます。`total >= 1000` の境界を決める入力は 999 と 1000 ですが、どちらのテストもこの値を assert していません。最後の行は次にすべきことで、README の規則を仕様にするかどうかを決めるよう促しています。
 
-## 4. Property を確認する
+## 4. Property を一覧にする
 
 ```bash
-veritas spec list
+npx veritas spec list
 ```
 
 ```text
@@ -187,55 +237,52 @@ P-2eead7f786cb  proposed   inferred  shippingFee: behaviour for negative total (
 P-d7372f0d4de0  proposed   inferred  shippingFee: behaviour for non-integer, NaN, ±Infinity and unsafe-integer values of total
 ```
 
-`normative` はドキュメントから来た Property、`inferred` はコードから推測した Property です。`inferred` は何を確かめるべきかの仮説で、仕様ではありません。`veritas spec show <id>` を使うと、一つの Property の前提、出典、形式モデルを確認できます。
+`normative` はドキュメントから、`inferred` はコードから来た Property です。`inferred` は確かめる対象の候補にすぎません。`npx veritas spec show <id>` で、一つの Property の出典、前提、形式モデルを確認できます。
 
-## 5. README の規則を accepted にする
+## 5. 割引の規則を accepted にする
 
-チームで話し合い、割引については README を仕様とすることにしたとします。その決定を記録します。
+割引については README を仕様とする、と決めて記録します。
 
 ```bash
-veritas spec accept P-ee03e6e8b749 --reason "README is the pricing specification"
+npx veritas spec accept P-ee03e6e8b749 --reason "README is the pricing specification"
 ```
 
 ```text
 recorded accept of P-ee03e6e8b749 by you
 ```
 
-決定は `.veritas/approvals.json` に追記されます。決めた人（`--actor`、`VERITAS_ACTOR`、git のユーザー名の順に使います）、理由、日時が残ります。
+決定は `.veritas/approvals.json` に追記されます。名前（`--actor`、`VERITAS_ACTOR`、`git config user.name` の順に使います）、理由、日時が残ります。
 
 ```json
 {
-  "id": "A-aeaeacd1d243",
+  "id": "A-7d000af7e5fa",
   "propertyId": "P-ee03e6e8b749",
   "propertyVersion": 1,
   "decision": "accept",
   "actor": "you",
   "reason": "README is the pricing specification",
-  "decidedAt": "2026-11-20T10:46:53.311Z",
+  "decidedAt": "2026-11-20T10:55:08.580Z",
   "sourceIds": ["src-fa35c6154f0b"]
 }
 ```
 
-送料の規則は、次の手順で `--include-proposed` の働きを見るため、あえて `proposed` のままにしておきます。
+送料の規則は `proposed` のままにします。次の手順で、`--include-proposed` を付けたときの扱いを確かめます。
 
-## 6. 形式的に検査する
+## 6. Z3 で規則を検査する
 
 ```bash
-veritas prove --include-proposed
+npx veritas prove --include-proposed
 ```
 
 ```text
-run run-20261120T104653570Z-000-cd8b2a  verdict: policy_failure (exit 1)
-
+run run-20261120T105508829Z-000-017911  verdict: policy_failure (exit 1)
 [...]
 succeeded   prove
             P-ee03e6e8b749: counterexample_found {"total":"1000"}
             P-e3003339ad77: proven_within_model
 succeeded   assess
             assessments: {"weak_or_incomplete":2,"inconclusive":2,"tautological_or_disconnected":1}; 2 finding(s)
-succeeded   report
-            formats: json, markdown, html, sarif
-
+[...]
 findings (2):
   F-89435b62ae1e  [confirmed high] src/pricing.ts#discountAmount does not satisfy "total >= 1000" for {"total":"1000"} (within the model)
   F-99e71509e3c4  [suspected low] test "pricing works" does not check project behaviour
@@ -244,16 +291,16 @@ note: 1 confirmed specification violation(s)
 [...]
 ```
 
-`prove` は、形式化した Property と関数を SMT のクエリに変換し、整数の範囲 `[-10000, 10000]` で Z3 に解かせます。
+`prove` は、`[-10000, 10000]` の範囲に規則を破る `total` があるかを Z3 に問います。
 
-- accepted にした割引の規則について、Z3 は `total = 1000` を見つけました。Veritas はこの入力を JavaScript で実行し直して同じ違反を確かめ、finding を `confirmed high` にしました。確定した仕様違反は既定のポリシーで失敗になるので、終了コードは `1` です。
-- 送料の規則は、`--include-proposed` を付けたので検査されました。範囲内に違反する入力はなく、`proven_within_model` です。Property が accepted でないため、この結果は実験的な扱いです。
-- 送料のテストはこの実行では `inconclusive` です。`prove` は mutation testing を実行しないので、検出力を測れていません。
+- accepted にした割引の規則では、Z3 が `total = 1000` を見つけました。Veritas が JavaScript で `discountAmount(1000)` を実行して同じ違反を確かめたので、finding は `confirmed high` になりました。確定した違反は既定のポリシーで失敗になり、終了コードは `1` です。
+- 送料の規則は `--include-proposed` を付けたので検査され、範囲内に違反はありませんでした。accepted ではないので、この結果は実験的な扱いです。
+- 送料のテストがこの実行で `inconclusive` なのは、`prove` が mutation testing を実行しないからです。
 
-`explain` には、ソルバーの結果と SMT ファイルが加わります。
+もう一度 `explain` を実行すると、ソルバーの結果が加わっています。
 
 ```bash
-veritas explain F-89435b62ae1e
+npx veritas explain F-89435b62ae1e
 ```
 
 ```text
@@ -265,13 +312,13 @@ src/pricing.ts#discountAmount does not satisfy "total >= 1000" for {"total":"100
   solver counterexample {"total":"1000"} reproduced in JavaScript (C-8aad536f8e71)
 [...]
 claim   C-8aad536f8e71 [conformance counterexample_found, none] {"total":"1000"}
-        smt: .veritas/runs/run-20261120T104653570Z-000-cd8b2a/proofs/C-8aad536f8e71.smt2
+        smt: .veritas/runs/run-20261120T105508829Z-000-017911/proofs/C-8aad536f8e71.smt2
 
 next: fix the implementation or change the specification through review
 next: add a test for the counterexample input
 ```
 
-SMT ファイルはふつうの SMT-LIB なので、どの Z3 でも実行し直せます。
+`.smt2` のファイルはふつうの SMT-LIB なので、どの Z3 でも実行し直せます。
 
 ```text
 ; veritas conformance query: is there an input in the domain that violates the property?
@@ -287,38 +334,38 @@ SMT ファイルはふつうの SMT-LIB なので、どの Z3 でも実行し直
 (get-info :reason-unknown)
 ```
 
-## 7. テストの改善を提案させる
+## 7. テストの改善を計画させる
 
 ```bash
-veritas improve --dry-run
+npx veritas improve --dry-run
 ```
 
 ```text
-plan IP-0159001c54ab from run-20261120T104653570Z-000-cd8b2a: needs_spec_decision
+plan IP-c7176a11a5f3 from run-20261120T105508829Z-000-017911: needs_spec_decision
 
 spec violation candidates (not added; expected values unchanged):
   SVC-ec7787ca9234  discountAmount(1000) returns 0, but the specification (README.md:7) documents 100; the test is not added and its expected value is not changed
-  implementation fix proposals: .veritas/improvements/IP-0159001c54ab/implementation-fix-proposal.json
-
-note: every targeted test fails against the implementation: the implementation or the specification needs a decision
-note: run run-20261120T104653570Z-000-cd8b2a has no mutation results; only boundary gaps were considered
+  implementation fix proposals: .veritas/improvements/IP-c7176a11a5f3/implementation-fix-proposal.json
 [...]
-plan: .veritas/improvements/IP-0159001c54ab/plan.json (no project file was written)
+plan: .veritas/improvements/IP-c7176a11a5f3/plan.json (no project file was written)
 ```
 
-終了コードは `4` です。Veritas は README から期待値 100 を取って `discountAmount(1000)` のテストを作ろうとしますが、今のコードではこのテストが失敗します。そのためテストは追加せず、通るように期待値を 0 に変えることもしません。結果は `needs_spec_decision` で、コードと README のどちらを直すかは人が決めることになります。
+終了コードは `4` です。README から期待値 100 を取った `discountAmount(1000)` のテストは、今のコードでは失敗します。Veritas はこのテストを追加せず、期待値を 0 に変えることもしません。`needs_spec_decision` は、コードと README のどちらを直すかをあなたが決める必要がある、という意味です。
 
 ## 8. コードを直して、もう一度計画する
 
-チームはコードが誤りだと判断し、`src/pricing.ts` の `total > 1000` を `total >= 1000` に直します。この変更を Veritas が行うことはなく、`implementation-fix-proposal.json` で提案するだけです。修正をコミットし、standard プロファイルで実行し直します。
+`src/pricing.ts` の `total > 1000` を `total >= 1000` に直し、設定と決定と一緒にコミットしてから、もう一度実行します。
 
 ```bash
-git commit -qam "fix: apply the discount at 1000"
-veritas run --profile standard
+git add -A && git commit -m "Apply the discount at 1000"
+npx veritas run --profile standard
 ```
 
 ```text
-run run-20261120T104701460Z-000-7bcf92  verdict: pass_with_warnings (exit 0)
+run run-20261120T105517747Z-000-01dbf1  verdict: pass_with_warnings (exit 0)
+[...]
+succeeded   spec
+            properties: {"accepted":1,"proposed":7}; 0 conflict(s)
 [...]
 succeeded   mutate
             mutator 0.4.5: succeeded
@@ -329,14 +376,14 @@ findings (2):
   F-e2324bef333e  [confirmed medium] no test detects total >= 1000 -> total > 1000 at src/pricing.ts:3
 ```
 
-コミットしても Property の ID は変わらないので、手順 5 の決定はそのまま有効です（`spec list` には `P-ee03e6e8b749  accepted` と表示されます）。仕様との食い違いはなくなりましたが、テストの穴は残っています。1000 を使うテストがまだないので、`total >= 1000 -> total > 1000` の mutant が生き残ります。
+割引の規則は accepted のままで、仕様との食い違いはなくなりました。ただし、1000 を使うテストがないので、`total >= 1000 -> total > 1000` の mutant が生き残っています。
 
 ```bash
-veritas improve --dry-run
+npx veritas improve --dry-run
 ```
 
 ```text
-plan IP-24ed3c83a2e0 from run-20261120T104701460Z-000-7bcf92: planned
+plan IP-a14164357e16 from run-20261120T105517747Z-000-01dbf1: planned
 
 goal: Add 1 test(s) whose expected values come from the specification and at decisive boundary inputs no test checks; applying measures which mutants they kill
 
@@ -346,7 +393,9 @@ proposed tests (expected values from the specification):
 
 gaps:
   F-e2324bef333e  boundary of total >= 1000: total=1000 is not checked by an asserting test
-[...]
+
+budget: 3 iteration(s), 5 file(s), 900000 ms, 1 test retr(y/ies)
+
 patch preview:
 --- /dev/null
 +++ b/test/veritas-P-ee03e6e8b749.test.ts
@@ -364,42 +413,42 @@ skipped:
   M-5b67ad8e53c8: no bounded equivalence check for this mutant
   P-ee03e6e8b749 {"total":"999"}: the value for this input is only an assumption of the formal model, not stated by the source
 
-approval token for plan IP-24ed3c83a2e0: 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
-apply after review: veritas improve --apply --plan IP-24ed3c83a2e0 --approve 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
+approval token for plan IP-a14164357e16: 6735e5d7e6d641b5b63f74f6521d6564c6d4821e0c2acb07a2d33b628063f67b
+apply after review: veritas improve --apply --plan IP-a14164357e16 --approve 6735e5d7e6d641b5b63f74f6521d6564c6d4821e0c2acb07a2d33b628063f67b
 
-plan: .veritas/improvements/IP-24ed3c83a2e0/plan.json (no project file was written)
+plan: .veritas/improvements/IP-a14164357e16/plan.json (no project file was written)
 ```
 
-計画は、新しいテストファイルを一つ追加するものです。期待値の 100 は、コードを実行して得た値ではなく、README の行から取っています。入力 999 は見送られました。README は 1000 未満の注文について何も書いていないので、そこで 0 になるというのは形式モデルの前提にすぎないからです。
+計画は、新しいテストファイルを一つ加えるものです。期待値の 100 は README の 7 行目から取っています。README は 1000 未満について何も書いていないので、入力 999 は見送られています。
 
 ## 9. 計画を適用する
 
-計画を確認したら、計画の ID とトークンを渡して適用します。
+パッチを確認したら、自分の出力に表示された計画の ID とトークンで適用します。
 
 ```bash
-veritas improve --apply --plan IP-24ed3c83a2e0 --approve 1e24dc6568c711848c1115f616bbd411d9a9cfe98a34045bb2fca774f1f949f6
+npx veritas improve --apply --plan IP-a14164357e16 --approve 6735e5d7e6d641b5b63f74f6521d6564c6d4821e0c2acb07a2d33b628063f67b
 ```
 
 ```text
-attempt PA-8130e27f7148 for plan IP-24ed3c83a2e0: improved
+attempt PA-ee6c6c6d4bc3 for plan IP-a14164357e16: improved
 before: tests 5 passed / 0 failed, mutants 16 killed / 1 survived
 after:  tests 6 passed / 0 failed, mutants 17 killed / 0 survived
 note: killed mutants 16 -> 17, survived 1 -> 0
 note: newly killed: M-5b67ad8e53c8
 note: added: test/veritas-P-ee03e6e8b749.test.ts
-note: formal and property-based results re-evaluated in run-20261120T104711023Z-000-f78024 on the patched copy
+note: formal and property-based results re-evaluated in run-20261120T105528565Z-000-2f25ef on the patched copy
 ```
 
-Veritas はプロジェクトを一時ディレクトリにコピーし、そこにテストを加え、加える前と後でテストと mutation testing を実行しました。結果がよくなったことを確かめてから、新しいファイルをプロジェクトに書き込んでいます。結果がよくならなければ、何も書き込みません。`git status` を見ると、新しいテストファイルが一つ増えています。
+Veritas はプロジェクトの一時コピーで効果を測ってから、新しいファイルを一つだけ書き込みました。`git status` には、追跡されていないファイルとして `test/veritas-P-ee03e6e8b749.test.ts` が表示されます。`--apply` の手順は[テストの改善](/ja/guide/improving-tests)で説明しています。
 
 ## 10. deep プロファイルで実行する
 
 ```bash
-veritas run --profile deep
+npx veritas run --profile deep
 ```
 
 ```text
-run run-20261120T104714190Z-000-59c0fc  verdict: pass_with_warnings (exit 0)
+run run-20261120T105531774Z-000-7ae803  verdict: pass_with_warnings (exit 0)
 [...]
 succeeded   mutate
             mutator 0.4.5: succeeded
@@ -421,11 +470,15 @@ findings (1):
   F-99e71509e3c4  [suspected low] test "pricing works" does not check project behaviour
 ```
 
-17 個の mutant がすべて kill されました。fast-check は、記録したシードで、accepted な規則を 1000 個の入力で試しました。Z3 は `[-10000, 10000]` の範囲に規則を破る入力がないことを確かめ、`property_detection` の検査は、規則が各 mutant を元のコードと区別できる入力を示しています。もとからある割引の二つのテストは、それ自体が境界を確かめていないので `weak_or_incomplete` のままで、新しいテストは `meaningful_with_evidence` です。定数を比べるテストは、直すか消すかを人が決めるために残っています。
+- 17 個の mutant がすべて kill されました。
+- fast-check は、記録したシードで、accepted な規則を 1000 個の入力で試しました。
+- Z3 は `[-10000, 10000]` の範囲に規則を破る `total` がないことを確かめ、表示された各 mutant について、規則が元のコードと区別できる入力を見つけました。
+- 新しいテストは `meaningful_with_evidence` です。もとからある割引の二つのテストは、それ自体が境界を確かめていないので `weak_or_incomplete` のままです。
+- `pricing works` は何も確かめていません。直すか削除してください。
 
 ## 次に読むページ
 
-- [結果の読み方](/ja/guide/reading-results)：ここで出てきた状態をすべて説明しています。
-- [仕様の確定](/ja/guide/specifications)：レビュー、食い違い、`spec diff` について。
-- [検証](/ja/guide/verification)：Z3、fast-check、Lean の詳細。
-- [テストの改善](/ja/guide/improving-tests)：計画、承認、ロールバック。
+- [結果の読み方](/ja/guide/reading-results)：このページに出てきた状態の意味。
+- [仕様の確定](/ja/guide/specifications)：食い違い、reject、`spec diff`。
+- [検証](/ja/guide/verification)：Z3、fast-check、Lean。
+- [CI と GitHub Action](/ja/guide/ci)：プルリクエストでの実行。

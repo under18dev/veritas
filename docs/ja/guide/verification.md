@@ -1,18 +1,20 @@
 # 検証
 
-Veritas は三つの方法で Property を検査します。Z3 による範囲を限った SMT の検査、fast-check による property-based testing、Lean 4 によるカーネル検査つきの証明です。どれも「コードは正しいか」より狭い問いに答えるもので、結果にはどの問いに答えたかが必ず付きます。
+Veritas が Property をコードと照らし合わせる三つの方法（Z3、fast-check、Lean 4）と、それぞれの結果が何を保証するか、検査を自分で再実行する方法を説明します。
 
-| エンジン   | コマンド                                      | 結果                                    | 確かめられる範囲                                |
-| ---------- | --------------------------------------------- | --------------------------------------- | ----------------------------------------------- |
-| Z3         | `veritas prove`、`veritas run --profile deep` | `smt_bounded` の結果                    | 整数モデルで、範囲内のすべての入力              |
-| fast-check | `veritas run --profile deep`                  | シードを記録した property-based testing | 抽出した入力を、実際の JavaScript で実行        |
-| Lean 4     | `veritas prove --engine lean`                 | `kernel_checked` の結果                 | Lean のモデルについての、カーネルで検査した証明 |
+| エンジン   | コマンド                                      | 結果                                    | 対象                                               |
+| ---------- | --------------------------------------------- | --------------------------------------- | -------------------------------------------------- |
+| Z3         | `veritas prove`、`veritas run --profile deep` | `smt_bounded` の結果                    | 整数モデルで、範囲内のすべての入力                 |
+| fast-check | `veritas run --profile deep`                  | シードを記録した property-based testing | 抽出した入力を JavaScript で実行                   |
+| Lean 4     | `veritas prove --engine lean`                 | `kernel_checked` の結果                 | 関数の Lean モデルについて、カーネルで検査した証明 |
 
-既定では、三つとも accepted な Property だけを検査します。`--include-proposed` を付けると proposed な Property も加わりますが、その結果は `suspected` のままで、実験的なものとして扱われます。
+三つとも accepted な Property を検査します。`--include-proposed` を付けると proposed な Property も検査しますが、結果は `suspected` のままです。
 
-## Z3
+## Z3 で Property を検査する
 
-`veritas prove` は、形式化した Property と、そこから呼ばれる関数を SMT-LIB のクエリに変換し、範囲内に Property を破る入力があるかを Z3 に問います。Z3 は `z3-solver` の WebAssembly 版を別プロセスで動かすので、別にインストールする必要はありません。
+```bash
+veritas prove
+```
 
 ```text
 succeeded   prove
@@ -20,58 +22,70 @@ succeeded   prove
             P-e3003339ad77: proven_within_model
 ```
 
-### 対応している範囲
+`prove` は Property と、そこから呼ばれる関数を SMT-LIB のクエリにし、範囲内に Property を破る入力があるかを Z3 に問います。Z3 は同梱の WebAssembly 版を別プロセスで動かします。
 
-形式検証の対象は、範囲を限った安全な整数、真偽値、それらを持つ単純なレコードと配列を扱う純粋な関数です。
+| 設定                    | 既定              | 意味                                       |
+| ----------------------- | ----------------- | ------------------------------------------ |
+| `formal.integerDomain`  | `[-10000, 10000]` | 整数の入力の範囲                           |
+| `formal.maxSolverMs`    | `30000`           | クエリ一つあたりの制限時間                 |
+| `formal.maxArrayLength` | `3`               | 配列の引数ごとにモデル化する要素数（1〜8） |
+
+### 対応しているコード
+
+形式検証の対象は、次の条件を満たす純粋な関数です。
 
 - 引数と戻り値が `number`（範囲を限った整数として扱います）か `boolean`
-- プロパティがすべて `number` か `boolean` のレコードの引数と、`formal.maxArrayLength` 個（既定 3、最大 8）までの数値か真偽値の配列の引数
+- プロパティがすべて `number` か `boolean` のレコードの引数と、`formal.maxArrayLength` 個までの `number[]` や `boolean[]` の引数
 - `if`/`else`、三項演算子、`return`、`const`、`+ - *`、比較、`=== !==`、`&& || !`、同じファイルにある対応範囲内の関数の呼び出し
 
 割り算、`%`、`**`、浮動小数点数、`NaN`、`Infinity`、`==`、`??`、暗黙の型変換、ループ、`let`/`var`、非同期処理、副作用、入出力は `unsupported` になります。表の全体は[対応環境](/ja/concepts/support-matrix)にあります。
 
-値の範囲は `formal.integerDomain`（既定は `[-10000, 10000]`）、ソルバーの制限時間は `formal.maxSolverMs`（既定は 30000 ミリ秒）で決まります。
+### 反例の再実行
 
-### 反例は JavaScript で実行し直す
+整数モデルと JavaScript の結果が一致するのは、値が安全な整数に収まっているあいだだけです。そのため Veritas は、反例をすべて実際の関数で実行し直します。実行は制限をかけた Node.js のプロセス（Node.js 25 以上）で行います。
 
-整数モデルと JavaScript の結果が一致するのは、すべての値が安全な整数に収まっているあいだだけです。そのため、Z3 が見つけた反例はすべて、制限をかけた Node.js のプロセスで、実際の関数に対して実行し直します。
+- JavaScript でも同じ違反になれば `counterexample_found` です。
+- 結果が違えば `semantic_mismatch` です。`formal.integerDomain` を狭めるか、その関数はテストで確かめてください。
 
-- JavaScript でも同じ違反になれば、結果は `counterexample_found` です。
-- ならなければ `semantic_mismatch` です。モデルとコードの意味がずれているので、バグとも証明とも言えません。`formal.integerDomain` を狭めるか、その関数はテストで確かめてください。
+Node.js 25 以上がなければ再実行は行わず、結果は inconclusive です。
 
-再実行には Node.js 25 以上が必要です（[はじめに](/ja/guide/getting-started#必要なもの)を参照）。ない場合、結果は inconclusive のままです。
+### クエリを再実行する
 
-結果ごとに、`.veritas/runs/<run-id>/proofs/` にファイルが書き出されます。クエリ（`<claim>.smt2`）、ソルバーの出力（`<claim>.out`）、再実行の記録（`<claim>.replay.json`）です。クエリはふつうの SMT-LIB なので、どの Z3 でも実行できます（`z3 -smt2 proofs/<claim>.smt2`）。
+結果ごとに、`.veritas/runs/<run-id>/proofs/` に `<claim>.smt2`（クエリ）、`<claim>.out`（ソルバーの出力）、`<claim>.replay.json`（再実行の記録）が書き出されます。クエリはふつうの SMT-LIB です。
 
-### 四つの関係
+```bash
+z3 -smt2 .veritas/runs/<run-id>/proofs/<claim>.smt2
+```
 
-形式検証の結果はどれも、「範囲内のすべての入力について、前提が成り立てば本体も成り立つ」という同じ形のクエリです。種類（kind）は、本体が何を表すかを示します。
+### Property、テスト、mutant の関係
 
-| 種類                  | 問い                                                             | `counterexample_found` の意味                                            | `proven_within_model` の意味                      |
-| --------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------- |
-| `conformance`         | 実装は Property を満たすか                                       | 満たさない入力があり、JavaScript で再実行しても同じ                      | 範囲内にそのような入力はない                      |
-| `bounded_equivalence` | 生き残った mutant を元のコードと区別できる入力はあるか           | 区別できる入力がある。その入力を使うテストなら mutant を kill できる     | 範囲内にはない。mutant は `equivalent_proven`     |
-| `distinguishability`  | テストがすでに使っている入力で、生き残った mutant を区別できるか | できる。テストは違いのある箇所を通っているが、assertion が確かめていない | どの入力でもできない。テストに新しい入力が要る    |
-| `property_detection`  | Property は mutant を元のコードと区別できるか                    | Property が変更を検出する入力がある                                      | 範囲内では、Property はこの mutant を区別できない |
+どの結果も「範囲内のすべての入力で、前提が成り立てば本体も成り立つか」という同じ形の有界のクエリです。種類（kind）は、本体が表すものを示します。
 
-`veritas prove` が検査するのは conformance です。残りの三つは mutation testing の結果が必要なので、`veritas run --profile deep` で実行されます。
+| 種類                  | 問い                                                             | `counterexample_found`                                           | `proven_within_model`                         |
+| --------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------- |
+| `conformance`         | 実装は Property を満たすか                                       | 満たさない入力があり、JavaScript でも同じ                        | 範囲内にそのような入力はない                  |
+| `bounded_equivalence` | 生き残った mutant を元のコードと区別できる入力はあるか           | ある。その入力を使うテストなら mutant を kill できる             | 範囲内にはない。mutant は `equivalent_proven` |
+| `distinguishability`  | テストがすでに使っている入力で、生き残った mutant を区別できるか | できる。違いのある箇所は通っているが、assertion が確かめていない | できない。テストに新しい入力が要る            |
+| `property_detection`  | Property は mutant を元のコードと区別できるか                    | Property が変更を検出する入力がある                              | 範囲内では、この mutant を区別できない        |
+
+`veritas prove` が検査するのは conformance です。残りの三つは mutation testing の結果を使い、`veritas run --profile deep` で実行されます。
 
 ```text
 P-ee03e6e8b749 vs mutant M-5b67ad8e53c8: detects it with {"total":"1000"}
 ```
 
-distinguishability が使うのは、引数がすべて範囲内の整数か真偽値のリテラルであるテストの呼び出しだけです。distinguishability と property_detection の検査は、一回の実行で合わせて 40 件までです。見送った件数はステージのメッセージに出ます。
+distinguishability が使うのは、引数がすべて範囲内の整数か真偽値のリテラルであるテストの呼び出しだけです。distinguishability と property_detection の検査は一回の実行で合わせて 40 件までで、見送った件数が表示されます。
 
-## fast-check
+## property-based testing を実行する
 
-`veritas run --profile deep` の `pbt` ステージは、形式化した Property を fast-check の property として、実際の関数に対して実行します。実行するのは制限をかけた Node.js のプロセス（Node.js 25 以上）です。入力は形式検証と同じ範囲（範囲を限った整数、真偽値、それらのレコードと配列）から取り、Property の境界の値も加えます。文字列、浮動小数点数、`NaN` は生成しません。
+`veritas run --profile deep` の `pbt` ステージは、形式化した Property を fast-check の property として、実際の関数に対して実行します。実行は制限をかけた Node.js のプロセス（Node.js 25 以上）で行います。入力は範囲を限った整数、真偽値、それらのレコードと配列で、Property の境界の値も加えます。文字列、浮動小数点数、`NaN` は生成しません。
 
 ```text
 succeeded   pbt
             P-ee03e6e8b749: passed
 ```
 
-シード、実行回数、失敗したときの反例と縮小（shrink）の経路は `pbt.json` に記録されます。実行回数は `pbt.numRuns`（既定 1000）、シードは `pbt.seed` を設定しない限り Property ごとに決まります。property-based testing が通ったことは、試した入力についての経験的な根拠で、証明ではありません。
+`pbt.json` には、シード、実行回数、失敗したときの反例と縮小（shrink）の経路が記録されます。実行回数は `pbt.numRuns`（既定 1000）で決まり、シードは `pbt.seed` で固定しない限り Property ごとに決まります。通ったことは、試した入力についての根拠で、証明ではありません。
 
 ### property-based testing を再実行する
 
@@ -80,25 +94,25 @@ veritas test replay PBT-ed9a14f78b2b
 ```
 
 ```text
-PBT-ed9a14f78b2b (P-ee03e6e8b749, run run-20261120T104714190Z-000-59c0fc, seed -1082472862, 1000 runs)
+PBT-ed9a14f78b2b (P-ee03e6e8b749, run run-20261120T105531774Z-000-7ae803, seed -1082472862, 1000 runs)
 recorded: passed
 replayed: passed
 reproduced
 ```
 
-`test replay` は、記録したシードと縮小の経路で同じテストを実行し直します。記録どおりの結果になれば `0`、ならなければ `4` で終わります。`--run <run-id>` で、探す実行を指定できます。失敗したテストの ID は、finding の `replay:` の行にあります。
+`test replay` は、記録したシードと縮小の経路でテストを実行し直します。記録どおりなら `0`、違えば `4` で終わります。`--run <run-id>` で実行を指定できます。失敗したテストの ID は、finding の `replay:` の行に出ます。
 
 ### テストファイルを生成する
 
 ```bash
-veritas test generate                       # 形式化したすべての Property
-veritas test generate --property <id>       # 一つの Property
-veritas test generate --dry-run             # 書き出さずに表示
+veritas test generate                   # 形式化したすべての Property
+veritas test generate --property <id>   # 一つの Property
+veritas test generate --dry-run         # 書き出さずに表示
 ```
 
-`test generate` は、fast-check のテストを `.veritas/generated-tests/<property-id>.test.ts` に書き出します。各ファイルの先頭のコメントには、値の範囲、シード、実行回数が書かれます。accepted でない Property のテストには `[experimental]` と付きます。Veritas はこれらのファイルを実行しません。Vitest で実行するのは、プロジェクトのテストを実行するのと同じことです。書き出したあとで編集したファイルは、`--force` を付けたときだけ置き換えます。
+`test generate` は fast-check のテストを `.veritas/generated-tests/<property-id>.test.ts` に書き出します。各ファイルの先頭のコメントに、値の範囲、シード、実行回数が書かれ、accepted でない Property のテストには `[experimental]` が付きます。Veritas はこのファイルを実行しないので、自分のテストと同じように Vitest で実行してください。編集したファイルは、`--force` を付けたときだけ置き換えます。
 
-## Lean 4
+## Lean 4 で証明する
 
 ```bash
 veritas prove --engine lean
@@ -109,15 +123,17 @@ succeeded   prove
             P-ee03e6e8b749 (lean): proven_within_model [kernel_checked]
 ```
 
-Lean のバックエンドは、関数の Lean モデルと Property の定理を生成し、`lake build` でビルドします。Lean 4 と Lake が必要で、[elan](https://github.com/leanprover/elan) で入れます。`veritas doctor` は `PATH` と `~/.elan/bin` を探します。見つからなければ、Lean の結果は理由付きで `unsupported` になります。
+Veritas は関数の Lean モデルと Property の定理を生成し、`lake build` でビルドします。Lean 4 と Lake は [elan](https://github.com/leanprover/elan) で入れてください。`veritas doctor` は `PATH` と `~/.elan/bin` を探します。見つからなければ、Lean の結果は `unsupported` になります。
 
-結果が `kernel_checked` になるのは、ビルドが成功し、定理が Lean の標準の公理（`propext`、`Classical.choice`、`Quot.sound`）以外に依存していないときだけです。`sorry`、`admit`、`native_decide`、その他の公理を使った証明は受け入れません。
+`kernel_checked` になるのは、ビルドが成功し、定理が `propext`、`Classical.choice`、`Quot.sound` 以外の公理に依存していないときだけです。`sorry`、`admit`、`native_decide`、その他の公理を使った証明は受け入れません。
 
-Lean が扱えるのは整数と真偽値の引数だけで、レコードや配列を含む Property は `unsupported` になります。Lean のモデルと JavaScript のコードの対応は、この証明とは別に確かめる必要があります。ほかの方法で確かめていない限り、レポートには未解決の前提として表示されます。Lean のビルドには制限時間はありますが、メモリの上限はありません。
+- Lean が扱うのは整数と真偽値の引数だけで、レコードや配列を含む Property は `unsupported` です。
+- Lean のモデルは Property の形式モデルから生成します。TypeScript のコードと対応しているかは証明されておらず、どの Lean の結果にも semantic gaps として記載されます。
+- Lean のビルドには制限時間がありますが、メモリの上限はありません。
 
-## `proven_within_model` が意味すること
+## `proven_within_model` の意味
 
-`proven_within_model` は、「示したモデル、値の範囲、前提の中では、Property を破る入力がない」という意味です。結果にはそれぞれ範囲、前提、意味のずれ（semantic gaps）が付きます。
+示したモデル、値の範囲、前提の中では、Property を破る入力がない、という意味です。どの結果にも、それらが記載されます。
 
 ```text
 assumptions integers are mathematical integers restricted to the stated domains; functions are pure and terminate;
@@ -128,8 +144,8 @@ intermediate value is a safe integer; inputs outside the stated domains, non-int
 
 次のことは意味しません。
 
-- 範囲の外の入力、浮動小数点数、`NaN`、`-0` でも実装が正しいこと
-- 仕様そのものが正しいこと（誤った規則でも、accepted なら証明できてしまいます）
-- テストがよいこと（形式検証の結果はコードについての主張で、テストについての主張ではありません）
+- 範囲の外の入力や、浮動小数点数、`NaN`、`-0` でもコードが正しいこと
+- 仕様が正しいこと（accepted な規則が誤っていても証明できます）
+- テストがよいこと（結果はコードについてのもので、テストについてのものではありません）
 
-結果を伝えるときは、範囲と一緒に伝えてください。「証明済み」ではなく、「`total` が `[-10000, 10000]` の範囲では反例がない」と書きます。
+結果は範囲と一緒に伝えてください。たとえば「`total` が `[-10000, 10000]` の範囲では反例がない」と書きます。
