@@ -74,7 +74,7 @@ const FORBIDDEN = new RegExp(
 const KERNEL_BYPASS = /skipKernelTC|\b(moreLeanArgs|weakLeanArgs|leanOptions|moreServerOptions)\b/g;
 
 const THEOREM = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
-const MODULE_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MODULE_SEGMENT = /^[\p{L}_][\p{L}\p{N}_]*$/u;
 const OUTPUT_CAP = 64 * 1024;
 const SKIP_DIRS = new Set(['.lake', '.git', 'node_modules']);
 
@@ -111,11 +111,14 @@ function scanSources(dir: string): SourceScan {
       }
       const isLean = entry.name.endsWith('.lean');
       if (!isLean && relPath !== 'lakefile.toml') continue;
-      const text = readFileSync(path.join(dir, relPath), 'utf8');
-      text.split('\n').forEach((line, i) => {
-        const tokens = [...(isLean ? line.matchAll(FORBIDDEN) : []), ...line.matchAll(KERNEL_BYPASS)];
-        for (const match of tokens) findings.push(`${relPath}:${i + 1}: forbidden token \`${match[0]}\``);
-      });
+      const raw = readFileSync(path.join(dir, relPath), 'utf8');
+      // Lean sources are judged without comments and string literals, over the whole file, so a command split
+      // across lines is seen and a word in a comment is not. The Lake configuration is judged as written.
+      const text = isLean ? stripLean(raw) : raw;
+      const lineAt = (offset: number) => text.slice(0, offset).split('\n').length;
+      const tokens = [...(isLean ? text.matchAll(FORBIDDEN) : []), ...text.matchAll(KERNEL_BYPASS)];
+      for (const match of tokens)
+        findings.push(`${relPath}:${lineAt(match.index ?? 0)}: forbidden token \`${match[0]}\``);
       if (!isLean) continue;
       if (relPath === 'lakefile.lean') continue;
       leanTexts.push({ relPath, text });
@@ -126,19 +129,81 @@ function scanSources(dir: string): SourceScan {
   walk('');
   // Imports: only the project's own modules and the core library; options: only the allowlisted ones.
   for (const { relPath, text } of leanTexts) {
-    text.split('\n').forEach((line, i) => {
-      const imported = /^\s*import\s+(.+)$/.exec(line)?.[1];
-      for (const mod of imported?.trim().split(/\s+/) ?? [])
-        if (!modules.includes(mod) && !ALLOWED_IMPORT_ROOTS.has(mod.split('.')[0] ?? ''))
-          findings.push(
-            `${relPath}:${i + 1}: import of \`${mod}\` is not allowed (only the project's modules, Init and Std)`,
-          );
-      for (const m of line.matchAll(/\bset_option\s+([A-Za-z0-9_.]+)/g))
-        if (!ALLOWED_OPTIONS.has(m[1] ?? ''))
-          findings.push(`${relPath}:${i + 1}: \`set_option ${m[1]}\` is not allowed`);
-    });
+    const lineAt = (offset: number) => text.slice(0, offset).split('\n').length;
+    for (const m of text.matchAll(/(?<![\p{L}\p{N}_'.])import\s+(?:runtime\s+)?(\S+)/gu)) {
+      const mod = (m[1] ?? '').replace(/[«»]/g, '');
+      if (!modules.includes(mod) && !ALLOWED_IMPORT_ROOTS.has(mod.split('.')[0] ?? ''))
+        findings.push(
+          `${relPath}:${lineAt(m.index ?? 0)}: import of \`${mod}\` is not allowed (only the project's modules, Init and Std)`,
+        );
+    }
+    for (const m of text.matchAll(/(?<![\p{L}\p{N}_'.])set_option\s+(\S+)/gu))
+      if (!ALLOWED_OPTIONS.has(m[1] ?? ''))
+        findings.push(`${relPath}:${lineAt(m.index ?? 0)}: \`set_option ${m[1]}\` is not allowed`);
   }
   return { modules, findings };
+}
+
+/**
+ * Lean source with comments (`--`, nested `/- -/`), string literals (`"..."`, raw `r#"..."#`) and character
+ * literals replaced by spaces, keeping every newline so offsets map to the same lines. When unsure it keeps the
+ * text: that can only make the check stricter, never hide code from it.
+ */
+export function stripLean(source: string): string {
+  const out = source.split('');
+  const blank = (from: number, to: number) => {
+    for (let k = from; k < to && k < out.length; k++) if (out[k] !== '\n') out[k] = ' ';
+  };
+  const identChar = (ch: string | undefined) => ch !== undefined && /[\p{L}\p{N}_'!?]/u.test(ch);
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i] as string;
+    const next = source[i + 1];
+    if (ch === '-' && next === '-') {
+      const end = source.indexOf('\n', i);
+      const stop = end === -1 ? source.length : end;
+      blank(i, stop);
+      i = stop;
+    } else if (ch === '/' && next === '-') {
+      let depth = 0;
+      let j = i;
+      while (j < source.length) {
+        if (source[j] === '/' && source[j + 1] === '-') {
+          depth++;
+          j += 2;
+        } else if (source[j] === '-' && source[j + 1] === '/') {
+          depth--;
+          j += 2;
+          if (depth === 0) break;
+        } else j++;
+      }
+      blank(i, j);
+      i = j;
+    } else if (ch === 'r' && !identChar(source[i - 1]) && /^r#*"/.test(source.slice(i, i + 260))) {
+      const hashes = (/^r(#*)"/.exec(source.slice(i, i + 260))?.[1] ?? '').length;
+      const close = `"${'#'.repeat(hashes)}`;
+      const end = source.indexOf(close, i + 2 + hashes);
+      if (end === -1) break; // unterminated: keep the rest as code
+      blank(i, end + close.length);
+      i = end + close.length;
+    } else if (ch === '"') {
+      let j = i + 1;
+      while (j < source.length && source[j] !== '"') j += source[j] === '\\' ? 2 : 1;
+      if (j >= source.length) break; // unterminated: keep the rest as code
+      blank(i, j + 1);
+      i = j + 1;
+    } else if (ch === "'" && !identChar(source[i - 1])) {
+      // A character literal such as '"' or '\n'; a prime inside an identifier (x') is not one.
+      const literal = /^'(?:\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|.)|[^\\'\n])'/u.exec(
+        source.slice(i, i + 12),
+      );
+      if (literal) {
+        blank(i, i + literal[0].length);
+        i += literal[0].length;
+      } else i++;
+    } else i++;
+  }
+  return out.join('');
 }
 
 function cap(text: string): string {

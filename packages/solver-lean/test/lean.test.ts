@@ -395,6 +395,32 @@ describe('checkLeanProject (real Lean)', () => {
     expect(allowed.reasons.join('\n')).not.toMatch(/not allowed|forbidden/);
   });
 
+  it('sees commands split across lines and code after tricky literals, but not words in comments', async () => {
+    const check = (source: string) =>
+      checkLeanProject(project(source), {
+        theorems: ['ok'],
+        timeoutMs: LEAN_TIMEOUT,
+        leanPath: missingBinary,
+      });
+    const rejected: [string, RegExp][] = [
+      ['set_option\n  debug.skipKernelTC true in\ntheorem ok : 1 = 1 := rfl\n', /skipKernelTC/],
+      ['import\n  Mathlib\ntheorem ok : 1 = 1 := rfl\n', /import of `Mathlib`/],
+      // A raw string or character literal that looks like it opens a string or comment must not hide code.
+      ['def s := r#"a"--"#\ntheorem ok : 1 = 1 := by sorry\n', /`sorry`/],
+      ['def c := \'"\'\ntheorem ok : 1 = 1 := by sorry\ndef d := "x"\n', /`sorry`/],
+      ['/- outer /- inner -/ still comment -/ #eval 1\ntheorem ok : 1 = 1 := rfl\n', /`#eval`/],
+    ];
+    for (const [source, reason] of rejected) {
+      const result = await check(source);
+      expect(result.status, source).toBe('rejected');
+      expect(result.reasons.join('\n'), source).toMatch(reason);
+    }
+    const clean = await check(
+      '-- never use sorry or #eval here\n/- set_option debug.x true; import Mathlib -/\ndef msg := "sorry, #eval"\ntheorem ok : 1 = 1 := rfl\n',
+    );
+    expect(clean.reasons.join('\n')).not.toMatch(/forbidden|not allowed/);
+  });
+
   it('rejects symbolic links inside the project', async () => {
     const dir = project('theorem ok : 1 = 1 := rfl\n');
     const outside = tmp();
