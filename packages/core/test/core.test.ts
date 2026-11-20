@@ -151,6 +151,15 @@ describe('redaction', () => {
       'fetch https://[REDACTED]@example.com/x',
     );
     expect(redact('Authorization: Bearer abcdefgh12345678', {})).not.toContain('abcdefgh12345678');
+    // In an Authorization header every value is a credential, whatever its shape.
+    expect(redact('curl -H "Bearer abcdefghijklmnop"', {})).toBe('curl -H "Bearer [REDACTED]"');
+    for (const short of ['auth=shortsecret', 'token=abc', 'https://h/x?token=short&page=2'])
+      expect(redact(short, {})).not.toMatch(/shortsecret|=abc|=short/);
+    expect(redact('https://h/x?token=short&page=2', {})).toBe('https://h/x?[REDACTED]&page=2');
+    expect(redact('Authorization: Bearer abcdefghijklmnopqrstuvwxyz', {})).toBe(
+      'Authorization: Bearer [REDACTED]',
+    );
+    expect(redact('authorization="Basic dXNlcjpwYXNz"', {})).toBe('authorization="Basic [REDACTED]"');
     // Prose is left alone.
     for (const prose of ['Basic authentication is required', 'Token budget exhausted', 'auth: required'])
       expect(redact(prose, {})).toBe(prose);

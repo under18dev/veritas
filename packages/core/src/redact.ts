@@ -10,16 +10,22 @@ const PATTERNS: RegExp[] = [
   /AKIA[0-9A-Z]{16}/g,
   /xox[abprs]-[A-Za-z0-9-]{10,}/g,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  // An assignment (`token=...`, as in query strings, env files and flags) always holds a value, however short.
+  /\b(?:password|passwd|secret|token|api[_-]?key|authorization|auth)=["']?(?!(?:Bearer|Basic|Token|Digest)\s)[^\s"'&]+/gi,
   /\b(?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*["']?[^\s"']{6,}/gi,
-  // `authorization=...` / `auth: ...` only with a credential-like value (12+ characters, no spaces).
+  // `authorization: ...` / `auth: ...` only with a credential-like value (12+ characters, no spaces).
   /\b(?:authorization|auth)\s*[:=]\s*["']?[^\s"']{12,}/gi,
 ];
 
 /** Secrets that keep their surroundings: URL credentials (`https://user:pass@host`) and HTTP auth schemes. */
 const KEEP_PREFIX: [RegExp, string][] = [
   [/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[REDACTED]@'],
-  // Only credential-shaped values (long, with a digit), so prose such as "Basic authentication" stays readable.
-  [/\b(Bearer|Basic|Token)\s+(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{16,}/g, '$1 [REDACTED]'],
+  // In an Authorization header the value is a credential whatever its shape.
+  [/(\bauthorization\s*[:=]\s*["']?(?:Bearer|Basic|Token|Digest)\s+)[^\s"']+/gi, '$1[REDACTED]'],
+  // Bearer values are opaque tokens of any shape; prose rarely puts a 16+ character word after "Bearer".
+  [/\b(Bearer)\s+[A-Za-z0-9._~+/=-]{16,}/g, '$1 [REDACTED]'],
+  // Basic and Token only with credential-shaped values (long, with a digit), so "Basic authentication" stays readable.
+  [/\b(Basic|Token)\s+(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{16,}/g, '$1 [REDACTED]'],
 ];
 
 /** Command-line flags whose next argument is a secret (`--token abc`). */
