@@ -87,7 +87,7 @@ During `--apply`, Veritas:
 2. runs the tests and mutation testing on the copy;
 3. adds the new test files to the copy and runs the tests and mutation testing again, on every mutant;
 4. re-evaluates the formal and property-based results on the copy with the stages and options of the run the plan came from, offline;
-5. writes the new files into the project only if every test passes, more mutants are killed and the re-evaluation succeeds. Otherwise it discards the copy and your project is unchanged.
+5. writes the new files into the project only if every test passes, more mutants are killed, and the re-evaluation completes without an error and leaves every result that was decided before (a proof, a counterexample, a passed property-based test) decided. Results that were already undecided may stay `unknown` or `timeout`; the attempt records them. Otherwise it discards the copy and your project is unchanged.
 
 Each attempt is recorded as `.veritas/improvements/<plan-id>/attempt-<n>.json`, and each approval as `approval-<n>.json` with the approver, time, entry point and a hash of the token.
 
