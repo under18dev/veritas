@@ -292,6 +292,11 @@ function checkKind(options: ProveOptions): void {
       if (calls.size < 2) fail('the property must call both the original and the mutant model');
       if (kind === 'distinguishability' && ir.preconditions.length === 0)
         fail('the inputs to check must be restricted to the test inputs (restrictToInputs)');
+      if (
+        (kind === 'bounded_equivalence' || kind === 'distinguishability') &&
+        !isEquivalence(ir.body, ir.params, boundModels(options))
+      )
+        fail('the property must be original(params) == mutant(params) (equivalenceProperty)');
       if (kind === 'property_detection' && !isDetection(ir.body, boundModels(options)))
         fail('the property must be property(original) implies property(mutant) (detectionProperty)');
       break;
@@ -340,6 +345,21 @@ function callsIn(e: Expr, out = new Set<string>()): Set<string> {
  * (a model bound to the JavaScript export) renamed to a model that is not bound and that the left side does
  * not call. Anything else (`A implies A`, swapped or unrelated sides) is refused.
  */
+/**
+ * `original(x, y, ...) == mutant(x, y, ...)` over exactly the parameters in order, where the original is a
+ * model bound to its JavaScript export and the mutant is a different, unbound model.
+ */
+function isEquivalence(body: Expr, params: PropertyIR['params'], bound: Set<string>): boolean {
+  if (body.kind !== 'binary' || body.op !== '==') return false;
+  const { left, right } = body;
+  if (left.kind !== 'call' || right.kind !== 'call' || left.fn === right.fn) return false;
+  if (bound.has(left.fn) === bound.has(right.fn)) return false;
+  const overParams = (call: Extract<Expr, { kind: 'call' }>) =>
+    call.args.length === params.length &&
+    call.args.every((arg, i) => arg.kind === 'var' && arg.name === params[i]?.name);
+  return overParams(left) && overParams(right);
+}
+
 function isDetection(body: Expr, bound: Set<string>): boolean {
   if (body.kind !== 'binary' || body.op !== 'implies') return false;
   const left = callsIn(body.left);

@@ -528,7 +528,9 @@ describe('solver result cache', () => {
       propertyId: 'P-cubes',
       ir: equivalenceProperty(orig, never, { min: '-100000000', max: '100000000' }),
       root,
-      bindings: [],
+      bindings: [
+        { modelName: 'original', modulePath: path.join(root, 'src/cubes.ts'), exportName: 'sumsTo33' },
+      ],
       timeoutMs: 200,
       cache,
       mutantId: 'M-3',
@@ -660,6 +662,35 @@ describe('distinguishability and property detection', () => {
     await expect(proveProperty({ ...base, kind: 'bounded_equivalence', ir: conformance })).rejects.toThrow(
       /mutant id is required/,
     );
+    // Equivalence and distinguishability must be exactly original(params) == mutant(params).
+    const orig = translated(translateFile(root, 'src/pricing.ts', 'discountAmount', 'original'));
+    const mut = mutantOf(root, 'total > 2000', 'mutant');
+    const equivalence = equivalenceProperty(orig, mut);
+    const eq = equivalence.body as Extract<typeof equivalence.body, { kind: 'binary' }>;
+    const bound = [{ ...binding(root, 'discountAmount'), modelName: 'original' }];
+    const swappedArgs = {
+      ...eq,
+      left: { ...(eq.left as object), args: [{ kind: 'int', value: '1' }] },
+    } as typeof eq;
+    for (const forged of [
+      { ...eq, op: '>' },
+      { ...eq, left: eq.right, right: eq.right },
+      swappedArgs,
+    ] as const)
+      for (const kind of ['bounded_equivalence', 'distinguishability'] as const)
+        await expect(
+          proveProperty({
+            ...base,
+            bindings: bound,
+            kind,
+            ir: { ...equivalence, preconditions: [{ kind: 'bool', value: true }], body: forged as never },
+            mutantId: 'M-1',
+          }),
+        ).rejects.toThrow(new RegExp(`${kind} claim refused`));
+    // Neither side bound to the original export: not original vs mutant.
+    await expect(
+      proveProperty({ ...base, kind: 'bounded_equivalence', ir: equivalence, mutantId: 'M-1' }),
+    ).rejects.toThrow(/bounded_equivalence claim refused/);
     await expect(
       proveProperty({ ...base, kind: 'conformance', ir: conformance, mutantId: 'M-1' }),
     ).rejects.toThrow(/not a mutant/);
