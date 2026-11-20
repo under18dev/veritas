@@ -10,6 +10,8 @@ export interface InitOptions {
   force?: boolean;
   /** Write nothing; return the config that would be written. */
   dryRun?: boolean;
+  /** Write this configuration (validated) instead of the proposed one, e.g. after the user's answers. */
+  config?: VeritasConfig;
 }
 
 export interface InitResult {
@@ -71,7 +73,7 @@ export function initProject(root: string, options: InitOptions = {}): InitResult
       'pass --force to overwrite it',
     );
   }
-  const config = proposeConfig(project);
+  const config = options.config ? ConfigSchema.parse(options.config) : proposeConfig(project);
   const nextSteps = ['veritas doctor', 'veritas discover --offline', 'veritas run --profile quick --offline'];
 
   if (!project.vitest.installedVersion) nextSteps.unshift('install dependencies so Vitest can be resolved');

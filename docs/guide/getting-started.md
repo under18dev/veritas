@@ -72,6 +72,21 @@ next:
 
 `init` stops with `VITEST_NOT_FOUND` if the project does not use Vitest. The default configuration turns network sources and LLMs off and uses the integer domain `[-10000, 10000]` for formal checks. Every setting is listed in the [configuration reference](/reference/configuration).
 
+### Answer the questions in a terminal
+
+Without `--yes`, `init` run in a terminal asks about the settings it cannot detect. Pressing Enter keeps the default for each question, so nothing changes unless you say yes.
+
+| Question                                                       | What a yes does                                                                                                                                                                                                           |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LLM provider                                                   | Sets `llm.provider` (`claude`, `claude-code`, `codex` or `openai`); each is marked as available or not set up. `codex` also needs your permission for its read-only shell to read local files (`llm.allowCodexFileReads`) |
+| GitHub issues and pull requests                                | Turns on `sources.github` for the repository (the `origin` remote is offered); read only in runs without `--offline`                                                                                                      |
+| Web pages                                                      | Turns on `sources.web` for the domains you list; fetched only in runs without `--offline`                                                                                                                                 |
+| Install Lean 4 (only when it is missing)                       | Downloads the official elan installer from GitHub and installs the stable Lean 4 toolchain into `~/.elan`, where `veritas doctor` looks                                                                                   |
+| Use Lean instead of Z3                                         | Sets `formal.backend` to `lean`. Lean covers integers and booleans only; Z3 also covers records and arrays                                                                                                                |
+| Add `@mizchi/mutator` to the project (only when it is missing) | Runs your package manager to add it as a dev dependency, so mutation testing uses the project's Vitest, test environments and plugins                                                                                     |
+
+You then see the resulting configuration and confirm writing it. Installs run only after that confirmation; if Lean cannot be installed, proofs stay on Z3. With `--yes`, `--json`, in CI or without a terminal, `init` asks nothing, installs nothing and writes the detected configuration.
+
 ## Check the environment
 
 ```bash

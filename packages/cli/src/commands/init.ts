@@ -1,6 +1,111 @@
+import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { ExitCode, initProject, VeritasError } from '@under18dev/veritas-core';
+import {
+  detectProject,
+  ExitCode,
+  gitOutput,
+  initProject,
+  llmAvailability,
+  resolveCommand,
+  resolvePackageVersion,
+  runDoctor,
+  type VeritasConfig,
+  VeritasError,
+} from '@under18dev/veritas-core';
+import { bundledTools } from '@under18dev/veritas-engine';
+import { isCi } from '@under18dev/veritas-improvement';
 import { emitJson, emitText, type GlobalOptions, log } from '../output.js';
+import { type Prompter, runInitWizard, type WizardAction, type WizardEnvironment } from './init-wizard.js';
+
+/** `owner/name` of a GitHub `origin` remote (`git@github.com:o/n.git`, `https://github.com/o/n`). */
+export function githubRepoFromRemote(url: string | null): string | null {
+  const match = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url?.trim() ?? '');
+
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+
+async function leanAvailable(root: string): Promise<boolean> {
+  const report = await runDoctor(root, null, process.env, bundledTools());
+
+  return report.capabilities.find((c) => c.name === 'lean')?.state === 'available';
+}
+
+/** Run a program with the user's terminal attached, so installers can show progress and ask their own questions. */
+function runAttached(command: string, args: string[], cwd: string): Promise<boolean> {
+  const resolved = resolveCommand(command);
+
+  if (!resolved) return Promise.resolve(false);
+
+  return new Promise((resolve) => {
+    const child = spawn(resolved.command, [...resolved.prefix, ...args], { cwd, stdio: 'inherit' });
+    child.on('error', () => resolve(false));
+    child.on('exit', (code) => resolve(code === 0));
+  });
+}
+
+/** Download the official elan installer and run it; elan then installs the stable Lean 4 toolchain. */
+async function installLean(root: string): Promise<boolean> {
+  const windows = process.platform === 'win32';
+  const url = `https://raw.githubusercontent.com/leanprover/elan/master/elan-init.${windows ? 'ps1' : 'sh'}`;
+  const dir = mkdtempSync(path.join(tmpdir(), 'veritas-elan-'));
+
+  try {
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      log(`could not download the elan installer (${response.status} from ${url})`);
+
+      return false;
+    }
+    const script = path.join(dir, path.basename(url));
+    writeFileSync(script, await response.text());
+
+    return windows
+      ? await runAttached('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], root)
+      : await runAttached('sh', [script, '-y', '--default-toolchain', 'stable', '--no-modify-path'], root);
+  } catch (error) {
+    log(`could not install Lean: ${(error as Error).message}`);
+
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function readlinePrompter(): Prompter & { close(): void } {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+
+  return { ask: (question) => rl.question(question), say: (line) => log(line), close: () => rl.close() };
+}
+
+/** Carry out what the user agreed to; a failed Lean install puts proofs back on Z3. */
+async function perform(actions: WizardAction[], config: VeritasConfig, root: string): Promise<VeritasConfig> {
+  const next = structuredClone(config);
+
+  for (const action of actions) {
+    if (action.kind === 'install-lean') {
+      log('installing Lean 4 with elan...');
+      const ok = (await installLean(root)) && (await leanAvailable(root));
+
+      if (ok) log('Lean 4 is installed (in ~/.elan/bin, where `veritas doctor` also looks)');
+      else {
+        log('Lean 4 could not be installed; proofs stay on Z3. See https://lean-lang.org/install/');
+        next.formal.backend = 'z3';
+      }
+    } else {
+      log(`running ${action.command.join(' ')}...`);
+      const [command, ...args] = action.command as [string, ...string[]];
+
+      if (!(await runAttached(command, args, root)))
+        log(`\`${action.command.join(' ')}\` failed; mutation testing uses the copy bundled with Veritas`);
+    }
+  }
+
+  return next;
+}
 
 export async function initCommand(
   opts: GlobalOptions & { yes?: boolean; force?: boolean; dryRun?: boolean },
@@ -14,6 +119,8 @@ export async function initCommand(
 
     return ExitCode.Success;
   }
+  let config = preview.config;
+  let actions: WizardAction[] = [];
 
   if (!opts.yes) {
     if (!process.stdin.isTTY) {
@@ -24,18 +131,42 @@ export async function initCommand(
         'pass --yes',
       );
     }
-    log(JSON.stringify(preview.config, null, 2));
-    const rl = createInterface({ input: process.stdin, output: process.stderr });
-    const answer = await rl.question(`Write ${preview.file}? [y/N] `);
-    rl.close();
+    const prompter = readlinePrompter();
 
-    if (!/^y(es)?$/i.test(answer.trim())) {
-      log('aborted; nothing written');
+    try {
+      // The questions are for a person at a terminal: never with --json or in CI.
+      if (!opts.json && !isCi(process.env)) {
+        const env: WizardEnvironment = {
+          project: detectProject(opts.root),
+          llm: (provider) => llmAvailability(provider, process.env, opts.root, { allowCodexFileReads: true }),
+          leanAvailable: () => leanAvailable(opts.root),
+          githubRepo: () => githubRepoFromRemote(gitOutput(opts.root, ['remote', 'get-url', 'origin'])),
+          projectHasMutator: resolvePackageVersion(opts.root, '@mizchi/mutator') !== null,
+          mutatorVersion: bundledTools()['@mizchi/mutator'] ?? null,
+        };
+        ({ config, actions } = await runInitWizard(preview.config, env, prompter));
+      }
+      log(JSON.stringify(config, null, 2));
 
-      return ExitCode.UserError;
+      for (const action of actions)
+        log(
+          action.kind === 'install-lean'
+            ? 'then: install Lean 4 with elan'
+            : `then: run ${action.command.join(' ')}`,
+        );
+      const answer = await prompter.ask(`Write ${preview.file}? [y/N] `);
+
+      if (!/^y(es)?$/i.test(answer.trim())) {
+        log('aborted; nothing written or installed');
+
+        return ExitCode.UserError;
+      }
+    } finally {
+      prompter.close();
     }
+    config = await perform(actions, config, opts.root);
   }
-  const result = initProject(opts.root, { force: opts.force });
+  const result = initProject(opts.root, { force: opts.force, config });
 
   if (opts.json) {
     emitJson({ status: 'written', ...result });
