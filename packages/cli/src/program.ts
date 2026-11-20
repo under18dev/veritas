@@ -22,7 +22,13 @@ import { configureLogging, emitJson, type GlobalOptions, reportError, stderrSink
 
 type Handler = (opts: GlobalOptions & Record<string, unknown>, args: string[]) => Promise<ExitCode>;
 
-export function buildProgram(setExit: (code: ExitCode) => void): Command {
+/**
+ * `writeOut` receives what Commander prints on stdout (help and the version); by default it goes to stdout.
+ */
+export function buildProgram(
+  setExit: (code: ExitCode) => void,
+  writeOut: (text: string) => void = (text) => process.stdout.write(text),
+): Command {
   const program = new Command('veritas')
     .description('Specification-aware test verification for TypeScript/JavaScript projects')
     .version(TOOL_VERSION)
@@ -39,7 +45,7 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
         .default('text'),
     )
     .exitOverride()
-    .configureOutput({ writeErr: (s) => process.stderr.write(s) });
+    .configureOutput({ writeOut, writeErr: (s) => process.stderr.write(s) });
 
   const wire = (cmd: Command, handler: Handler) =>
     cmd.action(async (...actionArgs: unknown[]) => {
@@ -217,16 +223,34 @@ export function buildProgram(setExit: (code: ExitCode) => void): Command {
 
 export async function main(argv: string[]): Promise<ExitCode> {
   let exitCode: ExitCode = ExitCode.Success;
-  const program = buildProgram((code) => {
-    exitCode = code;
-  });
+  const json = argv.includes('--json');
+  // With --json, help and the version are collected and printed as one JSON object, keeping stdout pure JSON.
+  let out = '';
+  const program = buildProgram(
+    (code) => {
+      exitCode = code;
+    },
+    json
+      ? (text) => {
+          out += text;
+        }
+      : undefined,
+  );
   try {
     await program.parseAsync(argv);
   } catch (error) {
     if (error instanceof CommanderError) {
-      if (error.exitCode === 0) return ExitCode.Success;
+      if (error.exitCode === 0) {
+        if (json && out)
+          emitJson(
+            error.code === 'commander.version'
+              ? { status: 'ok', version: out.trim() }
+              : { status: 'ok', help: out },
+          );
+        return ExitCode.Success;
+      }
       // Usage errors (unknown command or option, invalid choice) are user errors; with --json they are JSON too.
-      if (argv.includes('--json'))
+      if (json)
         emitJson({
           status: 'error',
           category: 'user',
@@ -237,7 +261,7 @@ export async function main(argv: string[]): Promise<ExitCode> {
         });
       return ExitCode.UserError;
     }
-    return reportError(error, argv.includes('--json'));
+    return reportError(error, json);
   }
   return exitCode;
 }

@@ -112,6 +112,25 @@ describe('exit codes and output contract', () => {
     }
   });
 
+  it('prints help and the version as JSON on stdout with --json', () => {
+    const dir = copyFixture('discount-boundary');
+    const version = runCli(['--json', '--version'], dir);
+    expect(version.status).toBe(0);
+    expect(json(version)).toMatchObject({ status: 'ok', version: expect.stringMatching(/^\d+\.\d+\.\d+/) });
+    for (const args of [
+      ['--json', '--help'],
+      ['--json', 'prove', '--help'],
+      ['help', 'mutate', '--json'],
+    ]) {
+      const help = runCli(args, dir);
+      expect(help.status, args.join(' ')).toBe(0);
+      expect(json<{ status: string; help: string }>(help)).toMatchObject({
+        status: 'ok',
+        help: expect.stringContaining('Usage: veritas'),
+      });
+    }
+  });
+
   it('rejects option values it cannot honour instead of ignoring them', () => {
     const dir = copyFixture('discount-boundary');
     expect(runCli(['init', '--yes'], dir).status).toBe(0);
