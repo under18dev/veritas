@@ -472,13 +472,11 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
     else info = { ...none, opaque: ts.isCallExpression(node) && isOpaqueCall(node, ctx.checker) };
   }
   const known = new Set(info.targets.map((t) => t.symbol));
-  // Built-ins such as `map` and test helpers call the functions they are given. Project code may only store
-  // them, so a function handed to project code is not counted as called.
+  // Built-ins such as `map` and test helpers call the functions they are given. Project code is followed into:
+  // a function it only stores (`registry.push(fn)`) is not counted as called.
   const projectReceives =
     info.targets.some((t) => t.ownArgs) || (!direct && projectReceiver(node, ctx) !== undefined);
-  const passed = projectReceives
-    ? []
-    : passedProjectFunctions(node, ctx).filter((symbol) => !known.has(symbol));
+  const passed = passedProjectFunctions(node, ctx, projectReceives).filter((symbol) => !known.has(symbol));
 
   if (passed.length > 0)
     info = {
@@ -1002,18 +1000,20 @@ function aliasTarget(expression: ts.Expression, checker: ts.TypeChecker): ts.Sym
  * Project functions an invocation is given as values (`[1, 2].map(double)`, `run(object, compare)`): the code it
  * calls runs them, so their results are part of its result.
  */
-function passedProjectFunctions(node: Invocation, ctx: Ctx): string[] {
+function passedProjectFunctions(node: Invocation, ctx: Ctx, projectReceives: boolean): string[] {
   const found: string[] = [];
 
   // `expect(fn)` compares the function as a value; it does not run it.
   if (ts.isCallExpression(node) && isAssertionChainCall(node)) return found;
 
-  for (const argument of argumentsOf(node)) {
+  for (const [index, argument] of argumentsOf(node).entries()) {
     const value = skipParens(argument);
 
     if (!ts.isIdentifier(value) && !ts.isPropertyAccessExpression(value)) continue;
 
     if (ctx.checker.getTypeAtLocation(value).getCallSignatures().length === 0) continue;
+
+    if (projectReceives && !mayCallArgument(node, index, ctx.checker)) continue;
     const id = projectSymbolId(aliasTarget(value, ctx.checker), ctx.checker, ctx.projectSet, ctx.root);
 
     if (id) found.push(id);
@@ -1095,6 +1095,59 @@ function mayChangeArgument(node: Invocation, index: number, checker: ts.TypeChec
     if (ts.isConditionalExpression(parent) && parent.condition === use) return false;
 
     return true;
+  });
+}
+
+/** Methods that keep a value in a collection without calling it. */
+const STORING_METHODS = new Set(['push', 'unshift', 'set', 'add', 'splice', 'concat']);
+
+/**
+ * Whether the function an invocation runs may call its `index`-th argument: its body calls that parameter, or
+ * passes it to a call other than one that only stores it. Unknown bodies count as "may".
+ */
+function mayCallArgument(node: Invocation, index: number, checker: ts.TypeChecker): boolean {
+  const symbol = aliasTarget(calleeOf(node), checker);
+  const resolved = symbol && symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+  const fn = (resolved?.declarations ?? [])
+    .map((d) => (ts.isVariableDeclaration(d) && d.initializer ? skipParens(d.initializer) : d))
+    .find(
+      (d): d is ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | ts.MethodDeclaration =>
+        isFunctionLike(d) && d.body !== undefined,
+    );
+
+  if (!fn?.body) return true;
+  const parameter = fn.parameters[index];
+
+  if (!parameter || parameter.dotDotDotToken || !ts.isIdentifier(parameter.name)) return true;
+  const target = checker.getSymbolAtLocation(parameter.name);
+
+  return descendants(fn.body).some((item) => {
+    if (!ts.isIdentifier(item) || checker.getSymbolAtLocation(item) !== target) return false;
+    let use: ts.Node = item;
+
+    while (
+      ts.isParenthesizedExpression(use.parent) ||
+      ts.isNonNullExpression(use.parent) ||
+      ts.isAsExpression(use.parent)
+    )
+      use = use.parent;
+    const parent = use.parent;
+
+    // `cb(...)`, `cb?.(...)`, `cb.call(...)`, `cb.apply(...)`.
+    if (ts.isCallExpression(parent) && parent.expression === use) return true;
+
+    if (ts.isPropertyAccessExpression(parent) && ['call', 'apply'].includes(parent.name.text)) return true;
+
+    if (
+      (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
+      parent.arguments?.includes(use as ts.Expression)
+    ) {
+      const callee = skipParens(parent.expression);
+
+      return !(ts.isPropertyAccessExpression(callee) && STORING_METHODS.has(callee.name.text));
+    }
+
+    return false;
   });
 }
 

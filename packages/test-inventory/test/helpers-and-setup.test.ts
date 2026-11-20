@@ -261,19 +261,26 @@ export function register(fn: (n: number) => number) { registry.push(fn); return 
 export function double(n: number) { return n * 2; }
 export function observe(x: { a: number }) { return x.a > 0; }
 export function touch(x: { a: number }) { x.a += 1; }
+export function apply(xs: number[], fn: (n: number) => number) { return xs.map((n) => fn(n)); }
+export function run(options: { cb: () => void }) { options.cb(); }
 `,
     };
     const byName = inventory(
       `import { expect, it } from 'vitest';
-import { double, observe, register, touch } from '../src/store.js';
+import { apply, double, observe, register, run, touch } from '../src/store.js';
 it('stored', () => { expect(register(double)).toBe(true); });
 it('read only', () => { const x = { a: 1 }; observe(x); expect(x).toEqual({ a: 1 }); });
 it('changed', () => { const x = { a: 1 }; touch(x); expect(x).toEqual({ a: 2 }); });
+it('called', () => { expect(apply([1], double)).toEqual([2]); });
+it('options callback', () => { let count = 0; run({ cb: () => { count++; } }); expect(count).toBe(1); });
 `,
       extra,
     );
     // register is asserted; double, which it only stores, is not counted as called.
     expect(byName('stored').symbols).toEqual(['src/store.ts#register']);
+    // apply calls the function it is given, and run calls a callback given in an options object.
+    expect(byName('called').symbols).toEqual(['src/store.ts#apply', 'src/store.ts#double']);
+    expect(byName('options callback')).toMatchObject({ symbols: ['src/store.ts#run'], asserted: true });
     // observe only reads x, so asserting on x checks nothing observe produced.
     expect(byName('read only').asserted).toBe(false);
     expect(byName('changed').asserted).toBe(true);
