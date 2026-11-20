@@ -221,17 +221,17 @@ export function lostResults(
 }
 
 /**
- * Claims of a run that the patched copy must produce again: conformance claims (about the implementation itself)
- * and claims about a mutant that is still not killed after the patch. A claim about a mutant the new tests kill is
- * not made again, because only surviving mutants get relation claims.
+ * Claims of a run that the patched copy must produce again: conformance claims (about the implementation itself) and
+ * claims about a mutant, except a mutant the new tests kill, whose claims change with its status. A mutant that was
+ * already killed before the patch keeps its claims.
  */
 export function requiredClaimIds(
   claims: { id: string; kind: string; mutantId?: string | undefined }[],
-  killedAfter: ReadonlySet<string>,
+  newlyKilled: ReadonlySet<string>,
 ): Set<string> {
   return new Set(
     claims
-      .filter((c) => c.kind === 'conformance' || (c.mutantId !== undefined && !killedAfter.has(c.mutantId)))
+      .filter((c) => c.kind === 'conformance' || (c.mutantId !== undefined && !newlyKilled.has(c.mutantId)))
       .map((c) => c.id),
   );
 }
@@ -531,11 +531,14 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         { workspace, before, rolledBack: true },
       );
     }
-    const killedAfter = new Set(mutationAfter.mutants.filter((m) => m.status === 'killed').map((m) => m.id));
+    const killedBefore = new Set(
+      mutationBefore.mutants.filter((m) => m.status === 'killed').map((m) => m.id),
+    );
+    const newlyKilled = mutationAfter.mutants.filter((m) => m.status === 'killed' && !killedBefore.has(m.id));
     const lost = lostResults(
       before.claimStatuses,
       reassessed.statuses,
-      requiredClaimIds(runClaims(root, doc.runId), killedAfter),
+      requiredClaimIds(runClaims(root, doc.runId), new Set(newlyKilled.map((m) => m.id))),
     );
     if (lost.length > 0) {
       return end(
@@ -548,10 +551,6 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
       );
     }
     const after = snapshot(testsAfter, mutationAfter, reassessed.statuses);
-    const killedBefore = new Set(
-      mutationBefore.mutants.filter((m) => m.status === 'killed').map((m) => m.id),
-    );
-    const newlyKilled = mutationAfter.mutants.filter((m) => m.status === 'killed' && !killedBefore.has(m.id));
 
     if (after.mutantsKilled <= before.mutantsKilled) {
       return end(

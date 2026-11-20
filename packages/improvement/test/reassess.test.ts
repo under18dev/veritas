@@ -36,6 +36,15 @@ describe('lostResults', () => {
     expect(lostResults({ 'C-a': 'timeout' }, { 'C-a': 'proven_within_model' })).toEqual([]);
   });
 
+  it('requires claims about mutants that were already killed before the patch', () => {
+    const claims = [{ id: 'C-m0', kind: 'property_detection', mutantId: 'M-0' }];
+    // M-0 was killed before the patch, so it is not newly killed and its claim must be made again.
+    const required = requiredClaimIds(claims, new Set(['M-1']));
+    expect(lostResults({ 'C-m0': 'counterexample_found' }, {}, required)).toEqual([
+      'C-m0: counterexample_found -> not produced',
+    ]);
+  });
+
   it('requires claims about mutants that are still not killed, but not about mutants the new tests kill', () => {
     const claims = [
       { id: 'C-conf', kind: 'conformance' },
