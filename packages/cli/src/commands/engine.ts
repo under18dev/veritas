@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   ExitCode as Exit,
   type ExitCode,
+  isPlainRelativePath,
   redact,
   type StageName,
   VeritasError,
@@ -227,7 +228,9 @@ export async function explainCommand(opts: Opts, args: string[]): Promise<ExitCo
       `claim   ${c.id} [${c.kind} ${c.status}, ${c.assurance}] ${c.counterexample ? JSON.stringify(c.counterexample) : ''}`,
     );
     if (c.solverInputArtifact)
-      lines.push(`        smt: .veritas/runs/${explanation.runId}/${c.solverInputArtifact}`);
+      lines.push(
+        `        smt: ${isPlainRelativePath(c.solverInputArtifact) ? `.veritas/runs/${explanation.runId}/${c.solverInputArtifact}` : '(unsafe location omitted)'}`,
+      );
   }
   lines.push('', ...f.nextActions.map((a) => `next: ${a}`));
   emitText(lines.join('\n'));

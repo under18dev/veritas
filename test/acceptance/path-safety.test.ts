@@ -68,4 +68,22 @@ describe('project root containment', () => {
     expect([0, 2, 3]).toContain(run.status);
     expect(readdirSync(outside).sort()).toEqual(['NOTES.md', 'secret.ts']);
   });
+
+  it('does not print a tampered artifact path from a run as a location', () => {
+    const dir = copyFixture('discount-boundary', { git: true, linkDeps: true });
+    expect(runCli(['init', '--yes'], dir).status).toBe(0);
+    const prove = json<{ runId: string; findings: { id: string }[] }>(
+      runCli(['prove', '--include-proposed', '--json'], dir),
+    );
+    const finding = prove.findings[0];
+    expect(finding).toBeDefined();
+    const file = path.join(dir, '.veritas/runs', prove.runId, 'claims.json');
+    const claims = JSON.parse(readFileSync(file, 'utf8'));
+    for (const claim of claims.data) claim.solverInputArtifact = '../../../outside.smt2';
+    writeFileSync(file, JSON.stringify(claims));
+    const explain = runCli(['explain', finding?.id as string], dir);
+    expect(explain.status, explain.stderr).toBe(0);
+    expect(explain.stdout).not.toContain('outside.smt2');
+    expect(explain.stdout).toContain('unsafe location omitted');
+  });
 });
