@@ -54,6 +54,14 @@ describe('run context', () => {
     expect(text).toMatch(/later event\(s\) were dropped/);
   });
 
+  it('stays within even a tiny cap', () => {
+    for (const cap of [100, 200]) {
+      const trace = traceCollector(cap);
+      for (let i = 0; i < 10; i++) trace.sink({ time: 't', level: 'debug', message: `event ${i}` });
+      expect(Buffer.byteLength(trace.text(), 'utf8')).toBeLessThanOrEqual(cap);
+    }
+  });
+
   it('keeps a bounded trace and says how many events it dropped', () => {
     const trace = traceCollector(400);
     for (let i = 0; i < 20; i++) trace.sink({ time: 't', level: 'debug', message: `event ${i}` });

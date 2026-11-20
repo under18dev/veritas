@@ -103,10 +103,10 @@ export function traceCollector(maxBytes = 4 * 1024 * 1024): { sink: LogSink; tex
       lines.push(line);
       bytes += size;
     },
-    text: () =>
-      `${[
-        ...lines,
-        ...(dropped
+    text: () => {
+      const kept = [...lines];
+      const closing = () =>
+        dropped
           ? [
               JSON.stringify({
                 time: new Date().toISOString(),
@@ -114,7 +114,15 @@ export function traceCollector(maxBytes = 4 * 1024 * 1024): { sink: LogSink; tex
                 message: `trace truncated at ${maxBytes} bytes; ${dropped} later event(s) were dropped`,
               }),
             ]
-          : []),
-      ].join('\n')}\n`,
+          : [];
+      // Drop kept events from the end until everything, the closing line included, fits the cap.
+      let out = `${[...kept, ...closing()].join('\n')}\n`;
+      while (Buffer.byteLength(out, 'utf8') > maxBytes && kept.length > 0) {
+        kept.pop();
+        dropped++;
+        out = `${[...kept, ...closing()].join('\n')}\n`;
+      }
+      return Buffer.byteLength(out, 'utf8') <= maxBytes ? out : '';
+    },
   };
 }

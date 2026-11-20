@@ -150,9 +150,12 @@ describe('redaction', () => {
     expect(redact('fetch https://alice:s3cr3tpass@example.com/x', {})).toBe(
       'fetch https://[REDACTED]@example.com/x',
     );
-    expect(redact('Authorization: Bearer abcdefghijklmnop', {})).not.toContain('abcdefghijklmnop');
+    expect(redact('Authorization: Bearer abcdefgh12345678', {})).not.toContain('abcdefgh12345678');
+    // Prose is left alone.
+    for (const prose of ['Basic authentication is required', 'Token budget exhausted', 'auth: required'])
+      expect(redact(prose, {})).toBe(prose);
     expect(
-      redactArgs(['--token', 'arbitrary-value-1', '--root', '/p', '--authorization=xyz123456'], {}),
+      redactArgs(['--token', 'arbitrary-value-1', '--root', '/p', '--authorization=xyz123456789abc'], {}),
     ).toEqual(['--token', '[REDACTED]', '--root', '/p', '--[REDACTED]']);
   });
 });

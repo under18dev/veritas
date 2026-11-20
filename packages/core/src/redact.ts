@@ -10,13 +10,16 @@ const PATTERNS: RegExp[] = [
   /AKIA[0-9A-Z]{16}/g,
   /xox[abprs]-[A-Za-z0-9-]{10,}/g,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  /\b(?:password|passwd|secret|token|api[_-]?key|authorization|auth)\s*[:=]\s*["']?[^\s"']{6,}/gi,
+  /\b(?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*["']?[^\s"']{6,}/gi,
+  // `authorization=...` / `auth: ...` only with a credential-like value (12+ characters, no spaces).
+  /\b(?:authorization|auth)\s*[:=]\s*["']?[^\s"']{12,}/gi,
 ];
 
 /** Secrets that keep their surroundings: URL credentials (`https://user:pass@host`) and HTTP auth schemes. */
 const KEEP_PREFIX: [RegExp, string][] = [
   [/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[REDACTED]@'],
-  [/\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{8,}/g, '$1 [REDACTED]'],
+  // Only credential-shaped values (long, with a digit), so prose such as "Basic authentication" stays readable.
+  [/\b(Bearer|Basic|Token)\s+(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{16,}/g, '$1 [REDACTED]'],
 ];
 
 /** Command-line flags whose next argument is a secret (`--token abc`). */
