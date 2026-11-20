@@ -9,7 +9,7 @@ The Node.js permission model protects against accidents; it is not a security bo
 ## Decision
 
 - Veritas runs project code with the same trust as the project's own test suite (`pnpm test`). The restrictions above remain as defence in depth and are not described as a sandbox for untrusted code.
-- To analyse a repository you do not trust, run Veritas itself inside an isolated environment, for example a container without network access. The user guide gives a command.
+- To analyse a repository you do not trust, run Veritas itself inside an isolated environment, for example a container without network access. [Untrusted repositories](/guide/untrusted-repositories) gives a command.
 - Everything else is unchanged:
   - repository, web, issue and LLM content is untrusted data;
   - writes need approval and stay inside the project;

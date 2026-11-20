@@ -86,3 +86,6 @@ jobs:
       - name: schemas are up to date
         if: matrix.os == 'ubuntu-latest'
         run: pnpm schemas && git diff --exit-code schemas
+      - name: documentation site builds (no dead links)
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 26
+        run: pnpm docs:build

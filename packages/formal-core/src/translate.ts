@@ -459,7 +459,7 @@ function statements(stmts: readonly ts.Statement[], scope: Scope, owner: ts.Node
 }
 
 /**
- * Translate an exported pure function in the supported subset (see docs/semantics.md) into an IR function
+ * Translate an exported pure function in the supported subset (see docs/concepts/semantics.md) into an IR function
  * model. Anything outside the subset is reported with its line, never approximated.
  */
 export function translateFunction(options: TranslateOptions): TranslationResult {

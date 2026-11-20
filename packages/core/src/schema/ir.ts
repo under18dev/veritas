@@ -3,7 +3,7 @@ import { z } from 'zod';
 /**
  * Property IR: a small, solver-neutral expression language for bounded properties.
  * Sorts are deliberately limited to mathematical integers within an explicit domain and booleans.
- * Mapping these to JS semantics is a separate, recorded obligation (see docs/semantics.md).
+ * Mapping these to JS semantics is a separate, recorded obligation (see docs/concepts/semantics.md).
  */
 export const Sort = z.enum(['int', 'bool']);
 export type Sort = z.infer<typeof Sort>;
