@@ -145,6 +145,16 @@ function versionAt(text: string): (offset: number) => string | undefined {
   };
 }
 
+/**
+ * Markdown with its fenced code blocks blanked out, line breaks kept so line numbers still match. Comments in an
+ * example (`// at most 3 requests at a time`) describe that example, not a rule of the API.
+ */
+export function withoutCodeBlocks(text: string): string {
+  return text.replace(/^([ \t]*)(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1\2[ \t]*$/gm, (block) =>
+    block.replace(/[^\n]/g, ' '),
+  );
+}
+
 function extract(text: string, sourceId: string, stale: boolean): NormativeStatement[] {
   const output: NormativeStatement[] = [];
   const releaseOf = versionAt(text);
@@ -173,6 +183,12 @@ function extract(text: string, sourceId: string, stale: boolean): NormativeState
       const value = hit[1]?.replaceAll(',', '');
 
       if (!value) continue;
+      // A percentage ("up to 97% less") is a ratio, not a value a parameter is compared with.
+      const after = raw.slice(
+        (hit.index ?? 0) + hit[0].indexOf(hit[1] as string) + (hit[1] as string).length,
+      );
+
+      if (/^\s*(?:%|％|percent\b|パーセント)/i.test(after)) continue;
       const before = raw.slice(0, hit.index ?? 0);
       const q = before.match(/([A-Za-z_$][\w$.-]*|[A-Za-z][A-Za-z -]{1,40}?)(?:\s+of)?\s*$/);
       const quantity = q?.[1]?.trim().split(/\s+/).at(-1) ?? 'value';
@@ -931,7 +947,11 @@ export async function discoverEvidence(options: {
     statements.push(
       ...(input.kind === 'standard'
         ? schemaStatements(input.text, source.id)
-        : extract(input.text, source.id, stale)),
+        : extract(
+            /\.mdx?$/i.test(input.locator) ? withoutCodeBlocks(input.text) : input.text,
+            source.id,
+            stale,
+          )),
     );
   }
   provenance.push(...derivedAndSuperseded(sources, statements, inputs, sourceByInput));

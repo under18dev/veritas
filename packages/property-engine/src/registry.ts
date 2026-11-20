@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { BehaviorCandidate, CodeIndex, FunctionInfo } from '@under18dev/veritas-code-intelligence';
 import {
   type EvidenceSource,
@@ -100,17 +101,57 @@ export function numberOnly(type: string): boolean {
   return members.length > 0 && members.every((t) => t === 'number' || /^-?\d+(\.\d+)?$/.test(t));
 }
 
+/**
+ * The functions a statement can be about, from where it was written. A comment in a source file is about a function
+ * of that file, the one it documents when it sits right above or inside it. A documentation page named after an
+ * exported function (`docs/reference/array/chunk.md`) is about that function. Elsewhere, any exported function.
+ */
+export function statementScope(
+  statement: Pick<StatementInput, 'range'>,
+  source: Pick<EvidenceSource, 'kind' | 'locator'> | undefined,
+  functions: FunctionInfo[],
+): (fn: FunctionInfo) => boolean {
+  if (!source) return () => true;
+  const locator = source.locator.split('\\').join('/');
+
+  if (source.kind === 'code') {
+    const inFile = functions.filter((fn) => fn.file === locator);
+    const line = statement.range.start;
+    // The function whose body contains the line, or the first one starting within a few lines after it (JSDoc).
+    const around = inFile.find((fn) => {
+      const range = fn.location.range;
+
+      return range !== undefined && line >= range.start - 15 && line <= range.end;
+    });
+
+    return around ? (fn) => fn === around : (fn) => fn.file === locator;
+  }
+
+  if (source.kind === 'docs' || source.kind === 'readme') {
+    const page = path.posix
+      .basename(locator)
+      .replace(/\.[^.]+$/, '')
+      .toLowerCase();
+    const named = functions.some((fn) => fn.exported && fn.name.toLowerCase() === page);
+
+    if (named) return (fn) => fn.name.toLowerCase() === page;
+  }
+
+  return () => true;
+}
+
 function mapStatement(
   statement: StatementInput,
   relation: ThresholdRelation,
   index: CodeIndex,
+  inScope: (fn: FunctionInfo) => boolean = () => true,
 ): Target | null {
   const quoteWords = new Set([...words(statement.quote), ...statement.subjects.flatMap(words)]);
   const quantityWords = words(relation.quantity);
   const scored: Target[] = [];
 
   for (const fn of index.functions) {
-    if (!fn.exported) continue;
+    if (!fn.exported || !inScope(fn)) continue;
     // Number parameters, and fields of record parameters the function compares (`order.total`).
     const numeric = [
       ...fn.params.filter((p) => numberOnly(p.type)).map((p) => ({ name: p.name, words: words(p.name) })),
@@ -283,7 +324,7 @@ export function buildRegistry(options: BuildOptions): Registry {
       continue;
     }
     const relation = statement.relation;
-    const target = mapStatement(statement, relation, code);
+    const target = mapStatement(statement, relation, code, statementScope(statement, source, code.functions));
 
     if (!target) {
       mapping.push({

@@ -220,6 +220,32 @@ it('really constant', () => { const expected = [1]; expect([1]).toEqual(expected
     expect(byName('really constant').suspicions).toContain('tautological_assertion');
   });
 
+  it('links counters a callback increments and locals that store project results', () => {
+    const extra = {
+      'src/fns.ts': `export function each(items: number[], cb: () => void) { for (const _ of items) cb(); }
+export function parse(text: string) { return Number(text); }
+export function create(proto: object) { return Object.create(proto); }
+`,
+    };
+    const byName = inventory(
+      `import { expect, it } from 'vitest';
+import { create, each, parse } from '../src/fns.js';
+it('increment', () => { let count = 0; each([1, 2], () => { count++; }); expect(count).toBe(2); });
+it('pushed', () => { const out: number[] = []; ['1'].forEach((t) => { out.push(parse(t)); }); expect(out).toEqual([1]); });
+it('stored on a property', () => {
+  function Shape() {}
+  const holder: { proto?: object } = {};
+  holder.proto = create(Shape.prototype);
+  expect(holder.proto instanceof Shape).toBe(true);
+});
+`,
+      extra,
+    );
+    expect(byName('increment')).toMatchObject({ symbols: ['src/fns.ts#each'], asserted: true });
+    expect(byName('pushed')).toMatchObject({ symbols: ['src/fns.ts#parse'], asserted: true });
+    expect(byName('stored on a property')).toMatchObject({ symbols: ['src/fns.ts#create'], asserted: true });
+  });
+
   it('links the expected side of an assertion and the state of an object a project method ran on', () => {
     const byName = inventory(`${header}
       it('reversed', () => { expect([2, 3]).toContain(fn(1)); });

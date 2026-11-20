@@ -344,6 +344,19 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
     for (const callback of callbacks) bind(writtenOuterIdentifiers(callback, checker), [call], true);
   };
 
+  // The variable at the root of `a.b[c]`, when it is declared in this file.
+  const localRoot = (expression: ts.Expression): ts.Identifier | undefined => {
+    let current = skipParens(expression);
+
+    while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current))
+      current = skipParens(current.expression);
+
+    if (!ts.isIdentifier(current)) return undefined;
+    const declaration = checker.getSymbolAtLocation(current)?.valueDeclaration;
+
+    return declaration?.getSourceFile() === source ? current : undefined;
+  };
+
   for (const node of descendants(body)) {
     if (ts.isTryStatement(node) && node.catchClause?.variableDeclaration)
       bind(
@@ -360,6 +373,24 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
       ts.isIdentifier(node.left)
     )
       bind([node.left], sourcesOf([node.right]));
+
+    // Storing a project result in a local (`Circle.prototype = create(...)`, `actual.push(parse(x))`) makes the
+    // local carry it.
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      (ts.isPropertyAccessExpression(node.left) || ts.isElementAccessExpression(node.left))
+    ) {
+      const local = localRoot(node.left);
+
+      if (local) bind([local], sourcesOf([node.right]), true);
+    }
+
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const local = localRoot(node.expression.expression);
+
+      if (local) bind([local], sourcesOf([...node.arguments]), true);
+    }
 
     if (ts.isForOfStatement(node) && ts.isVariableDeclarationList(node.initializer))
       bind(
@@ -639,6 +670,11 @@ function writtenOuterIdentifiers(callback: ts.Node, checker: ts.TypeChecker): ts
       target = rootOf(node.left);
     else if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression))
       target = rootOf(node.expression.expression);
+    else if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
+    )
+      target = rootOf(node.operand);
     const declaration = target && checker.getSymbolAtLocation(target)?.valueDeclaration;
 
     if (

@@ -3,6 +3,27 @@ import { discoverEvidence } from '../src/index.js';
 import { config, tempProject, writeProjectFile } from './helpers.js';
 
 describe('statement extraction', () => {
+  it('reads no threshold from code examples in Markdown or from percentages', async () => {
+    const root = tempProject('examples');
+    writeProjectFile(
+      root,
+      'docs/guide.md',
+      [
+        'The bundle is up to 97% smaller.',
+        '',
+        '```ts',
+        '// Limit to at most 3 concurrent requests.',
+        'run(tasks, 3);',
+        '```',
+        '',
+        'The count must be at most 5.',
+      ].join('\n'),
+    );
+    const result = await discoverEvidence({ root, config: config() });
+    const thresholds = result.statements.filter((s) => s.relation.kind === 'threshold');
+    expect(thresholds.map((s) => [s.quote, s.range.start])).toEqual([['The count must be at most 5.', 8]]);
+  });
+
   it('handles every English and Japanese threshold family, separators, and modality', async () => {
     const root = tempProject('phrases');
     writeProjectFile(

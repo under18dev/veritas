@@ -16,6 +16,7 @@ import {
   numberOnly,
   recordDecision,
   type StatementInput,
+  statementScope,
 } from '../src/index.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -380,6 +381,37 @@ describe('registry from documentation and code', { timeout: 60_000 }, () => {
     };
     const { registry } = registryFor('discount-boundary', discovery);
     expect(registry.mapping.find((m) => m.statementId === 'ST-copy')?.status).toBe('duplicate');
+  });
+});
+
+describe('statementScope', () => {
+  const fn = (name: string, file: string, start: number, end: number) =>
+    ({ name, file, exported: true, location: { file, range: { start, end } } }) as never;
+  const functions = [
+    fn('chunk', 'src/chunk.ts', 10, 20),
+    fn('times', 'src/times.ts', 5, 9),
+    fn('sum', 'src/chunk.ts', 30, 40),
+  ];
+
+  it('limits a source comment to the function it documents, and a named page to that function', () => {
+    const inChunk = statementScope(
+      { range: { start: 3, end: 3 } },
+      { kind: 'code', locator: 'src/chunk.ts' },
+      functions,
+    );
+    expect(functions.filter(inChunk).map((f: { name: string }) => f.name)).toEqual(['chunk']);
+    const page = statementScope(
+      { range: { start: 1, end: 1 } },
+      { kind: 'docs', locator: 'docs/reference/chunk.md' },
+      functions,
+    );
+    expect(functions.filter(page).map((f: { name: string }) => f.name)).toEqual(['chunk']);
+    const intro = statementScope(
+      { range: { start: 1, end: 1 } },
+      { kind: 'docs', locator: 'docs/intro.md' },
+      functions,
+    );
+    expect(functions.filter(intro)).toHaveLength(3);
   });
 });
 
