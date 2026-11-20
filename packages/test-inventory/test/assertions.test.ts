@@ -48,10 +48,16 @@ describe('assertion evidence', () => {
         function checkSecond(label: string, value: number) { expect(value).toBe(2); }
         const checkArrow = (value: number) => expect(value).toBeGreaterThan(0);
         function ignores(value: number) { expect(1).toBe(1); }
+        function same(value: number) { expect(value).toBe(value); }
         test('second parameter', () => { checkSecond('x', fn(1)); });
         test('arrow helper with a local', () => { const r = fn(1); checkArrow(r); });
         test('helper ignores the value', () => { ignores(fn(1)); });
         test('wrong position', () => { checkSecond(String(fn(1)), 0); });
+        test('self comparison', () => { same(fn(1)); });
+        test('shadowed helper', () => {
+          const checkArrow = (value: number) => value;
+          checkArrow(fn(1));
+        });
       `,
     });
     const tests = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests;
@@ -60,6 +66,8 @@ describe('assertion evidence', () => {
     expect(asserted('arrow helper with a local')).toBe(true);
     expect(asserted('helper ignores the value')).toBe(false);
     expect(asserted('wrong position')).toBe(false);
+    expect(asserted('self comparison')).toBe(false);
+    expect(asserted('shadowed helper')).toBe(false);
   });
 
   it('counts expect.assertions, assert.equal, and snapshot matcher variants', () => {

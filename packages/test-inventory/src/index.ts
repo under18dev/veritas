@@ -265,7 +265,9 @@ function analyzeTest(
   const helpers = assertingHelpers(source);
   for (const node of nodes) {
     if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) continue;
-    const positions = helpers.get(node.expression.text);
+    // Resolved through the checker, so a shadowing local of the same name is not mistaken for the helper.
+    const declarations = checker.getSymbolAtLocation(node.expression)?.declarations ?? [];
+    const positions = declarations.map((declaration) => helpers.get(declaration)).find(Boolean);
     if (!positions) continue;
     for (const index of positions) {
       const argument = node.arguments[index];
@@ -612,37 +614,40 @@ function callsHelperWithAssertion(body: ts.Node | undefined, source: ts.SourceFi
 }
 
 /**
- * Functions declared in the file (`function f(...)` or `const f = (...) =>`) mapped to the parameter positions that
- * the subject of one of their assertions refers to.
+ * Function declarations of the file (`function f(...)`, or the declaration of `const f = (...) =>`) mapped to the
+ * parameter positions that the subject of one of their assertions refers to, without comparing it with itself.
  */
-function assertingHelpers(source: ts.SourceFile): Map<string, Set<number>> {
-  const helpers = new Map<string, Set<number>>();
-  const record = (name: string, fn: ts.SignatureDeclaration & { body?: ts.Node }) => {
+function assertingHelpers(source: ts.SourceFile): Map<ts.Node, Set<number>> {
+  const helpers = new Map<ts.Node, Set<number>>();
+  const names = (node: ts.Node) =>
+    new Set([node, ...descendants(node)].filter(ts.isIdentifier).map((identifier) => identifier.text));
+  const record = (declaration: ts.Node, fn: ts.SignatureDeclaration & { body?: ts.Node }) => {
     if (!fn.body) return;
     const params = fn.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : undefined));
     const positions = new Set<number>();
     for (const child of descendants(fn.body)) {
       if (!ts.isCallExpression(child) || !(isExpectCall(child) || isAssertCall(child))) continue;
-      const subject = child.arguments[0];
+      if (isAssertionCountCall(child)) continue;
+      const [subject, ...expected] = comparedValues(child);
       if (!subject) continue;
-      const used = new Set(
-        [subject, ...descendants(subject)].filter(ts.isIdentifier).map((identifier) => identifier.text),
-      );
+      const inSubject = names(subject);
+      const inExpected = new Set(expected.flatMap((value) => [...names(value)]));
       params.forEach((param, index) => {
-        if (param !== undefined && used.has(param)) positions.add(index);
+        // Comparing a parameter with itself (`expect(v).toBe(v)`) always holds and asserts nothing.
+        if (param !== undefined && inSubject.has(param) && !inExpected.has(param)) positions.add(index);
       });
     }
-    if (positions.size > 0) helpers.set(name, positions);
+    if (positions.size > 0) helpers.set(declaration, positions);
   };
   const visit = (node: ts.Node) => {
-    if (ts.isFunctionDeclaration(node) && node.name) record(node.name.text, node);
+    if (ts.isFunctionDeclaration(node) && node.name) record(node, node);
     if (
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
       node.initializer &&
       isFunction(node.initializer)
     )
-      record(node.name.text, node.initializer);
+      record(node, node.initializer);
     ts.forEachChild(node, visit);
   };
   ts.forEachChild(source, visit);
