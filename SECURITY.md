@@ -6,6 +6,6 @@ Please report vulnerabilities privately through GitHub's security advisories for
 
 ## Scope
 
-Veritas reads untrusted repository content and, when enabled, GitHub issues and web pages, and it executes project code (tests, mutants, property checks). The [threat model](docs/threat-model.md) lists the controls: untrusted text is treated as data, writes are confined to the project root, child processes get an allowlisted environment, project functions run in a Node.js permission-model sandbox, network access is off by default, and improvement patches need explicit approval.
+Veritas reads untrusted repository content and, when enabled, GitHub issues and web pages, and it executes project code (tests, mutants, property checks). The [threat model](docs/threat-model.md) lists the controls: untrusted text is treated as data, writes are confined to the project root, child processes get an allowlisted environment, project functions run in a separate process restricted by the Node.js permission model (defence in depth, not a security boundary), network access is off by default, and improvement patches need explicit approval.
 
-Running Veritas on a repository you do not trust still executes that repository's tests. Use an isolated machine or container for untrusted code.
+Veritas treats the analysed project's code as trusted code (ADR 0011): running Veritas on a repository executes that repository's tests and functions. For a repository you do not trust, run Veritas inside an isolated machine or container; the user guide has a command.

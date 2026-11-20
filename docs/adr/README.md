@@ -12,5 +12,6 @@
 | [0008](0008-package-name.md)          | npm package name                              | Accepted |
 | [0009](0009-performance-budget.md)    | Performance budget                            | Accepted |
 | [0010](0010-usage-budget.md)          | Usage budget                                  | Accepted |
+| [0011](0011-trusted-project-code.md)  | Project code is trusted code                  | Accepted |
 
 New ADRs use the next number and the sections Context, Decision, Consequences.

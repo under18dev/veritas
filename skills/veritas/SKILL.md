@@ -29,7 +29,7 @@ If the package is not available from the registry, ask the user how they install
 ## Before you start
 
 1. Confirm the project uses Node.js 24+ and Vitest, and that its dependencies are installed.
-2. Ask before running anything that executes project code: `mutate`, `run --profile standard|deep`, `prove` and `improve` run the project's tests or functions (in temporary copies and a restricted sandbox, but still project code).
+2. Ask before running anything that executes project code: `mutate`, `run --profile standard|deep`, `prove` and `improve` run the project's tests or functions (in temporary copies and restricted processes, but with the trust of the project's own tests). For a repository the user does not trust, propose running Veritas in a container without network access instead (see the user guide).
 3. Network sources are off by default. Do not enable `sources.web` or `sources.github` in `.veritas/config.json` unless the user asks; never add domains on your own.
 
 ## Workflow

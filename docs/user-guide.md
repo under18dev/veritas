@@ -64,6 +64,24 @@ Only new test files are added, and only when mutation results improve in an isol
 
 After the patched tests pass, the copy also runs mutation testing again. It then re-evaluates the formal and property-based results with the stages and options of the run the plan came from (offline). Like the before and after measurements, this always runs mutator on every mutant: an imported report (`--import`) or a `--since` selection describes the code before the patch. If the re-evaluation fails, the patch is discarded. A project with symbolic links pointing outside it is refused (`IMPROVE_UNSAFE_LINK`), because the isolated run could write through them.
 
+## Untrusted repositories
+
+Veritas runs the analysed project's tests and functions with the same trust as running the project's own test suite (ADR 0011). The restricted processes it uses protect against accidents, not against hostile code. To analyse a repository you do not trust, run Veritas inside a container without network access, on a copy of the repository. Docker works on Linux, and through Docker Desktop on macOS and Windows:
+
+```bash
+# An image with Veritas, built without any project code.
+printf 'FROM node:26\nRUN npm install -g @under18dev/veritas\n' | docker build -t veritas -
+# Work on a copy, so nothing the project's code does can change your checkout.
+cp -R untrusted-repo /tmp/untrusted-copy && cd /tmp/untrusted-copy
+# Install the dependencies without running their install scripts.
+docker run --rm -v "$PWD":/work -w /work veritas npm ci --ignore-scripts
+# Analyse with no network at all.
+docker run --rm --network none -v "$PWD":/work -w /work veritas veritas init --yes
+docker run --rm --network none -v "$PWD":/work -w /work veritas veritas run --offline --profile deep
+```
+
+Lean is not part of this image; add elan to it if you use `prove --engine lean`.
+
 ## Configuration
 
 `.veritas/config.json` is validated against `schemas/config.json`. Important settings:

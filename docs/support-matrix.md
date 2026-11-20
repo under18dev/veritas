@@ -13,7 +13,7 @@ What works in the current build.
 | Property registry               | proposed / reviewed / accepted / rejected / conflicted / superseded, append-only approvals                                                                                                   |
 | Test inventory                  | Vitest `it`/`test`/`describe` incl. modifiers, assertions, mocks, snapshots                                                                                                                  |
 | Mutation testing                | `@mizchi/mutator` 0.4.x                                                                                                                                                                      |
-| Property-based testing          | fast-check, in a permission-model sandbox, fixed seeds                                                                                                                                       |
+| Property-based testing          | fast-check, in a restricted process (permission model; project code is trusted, ADR 0011), fixed seeds                                                                                       |
 | Z3 checks                       | Bounded integer/boolean subset (see below), `z3-solver` (WASM)                                                                                                                               |
 | Lean checks                     | Lean 4 with Lake when installed; proofs using `sorry`, `admit`, `native_decide` or extra axioms are rejected                                                                                 |
 | Assessment and findings         | Evidence vectors; no single score                                                                                                                                                            |
@@ -57,7 +57,7 @@ Veritas is licensed under Apache-2.0. `pnpm licenses:check` fails when an instal
 | ----------------------------- | ---------- | ---------------------------------------------------- |
 | `@mizchi/mutator`             | MIT        | npm dependency, run as a separate process            |
 | `z3-solver` (Z3)              | MIT        | npm dependency, WASM build                           |
-| fast-check                    | MIT        | npm dependency, run in a sandboxed process           |
+| fast-check                    | MIT        | npm dependency, run in a restricted process          |
 | Lean 4 and Lake               | Apache-2.0 | Installed separately by the user (elan); not bundled |
 | `@anthropic-ai/sdk`           | Apache-2.0 | npm dependency of the optional Claude adapter        |
 | lightningcss (through Vitest) | MPL-2.0    | Unmodified transitive dependency; never bundled      |
