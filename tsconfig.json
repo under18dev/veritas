@@ -35,6 +35,9 @@
       "path": "packages/engine"
     },
     {
+      "path": "packages/tui"
+    },
+    {
       "path": "packages/property-testing"
     },
     {
