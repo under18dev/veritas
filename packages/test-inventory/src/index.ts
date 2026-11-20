@@ -819,8 +819,9 @@ function analyzeTest(
     suspicions.push('no_assertion');
 
   if (tautological) suspicions.push('tautological_assertion');
-  // Code that runs when the file loads (outside any function) runs before every test in it.
-  const loading = moduleLoadReach(source, checker);
+  // Code that runs when the file loads (outside any function), its own or that of the local modules it imports,
+  // runs before every test in it.
+  const loading = fileLoadReach(source, ctx);
   const opaque = analysis?.opaque === true || loading.opaque;
   const unresolved = unresolvedImports.size > 0 || loading.unresolved;
 
@@ -928,6 +929,23 @@ function bindingIdentifiers(name: ts.BindingName): ts.Identifier[] {
 }
 
 const moduleLoadCache = new WeakMap<ts.SourceFile, { opaque: boolean; unresolved: boolean }>();
+const fileLoadCache = new WeakMap<ts.SourceFile, { opaque: boolean; unresolved: boolean }>();
+
+/** `moduleLoadReach` of a test file and of every local file it imports, transitively. */
+function fileLoadReach(source: ts.SourceFile, ctx: Ctx): { opaque: boolean; unresolved: boolean } {
+  const cached = fileLoadCache.get(source);
+  if (cached) return cached;
+  const files = [
+    source,
+    ...localDependencies(source, ctx.checker, ctx.root).map((file) =>
+      ctx.program.getSourceFile(path.resolve(ctx.root, file)),
+    ),
+  ].filter((file): file is ts.SourceFile => file !== undefined);
+  const reach = files.map((file) => moduleLoadReach(file, ctx.checker));
+  const result = { opaque: reach.some((r) => r.opaque), unresolved: reach.some((r) => r.unresolved) };
+  fileLoadCache.set(source, result);
+  return result;
+}
 
 /**
  * What a file runs when it loads: opaque calls outside any function, and relative imports or re-exports that do
