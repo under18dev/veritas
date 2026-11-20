@@ -47,7 +47,7 @@ bun add -d @under18dev/veritas
 npm install -g @under18dev/veritas
 ```
 
-`veritas` と `veritas-mcp` が `PATH` から使えるようになります。プロジェクトで実行すると、Vitest、`@mizchi/mutator`、fast-check は、プロジェクトに入っていればそれを使います。
+`veritas` と `veritas-mcp` が `PATH` から使えるようになります。プロジェクトで実行すると、Vitest、`@mizchi/mutator`、fast-check は、プロジェクトに入っていればそれを使います。テストで happy-dom や jsdom などのテスト環境や Vitest のプラグインを使っている場合は、`@mizchi/mutator` もプロジェクトに入れてください（`npm install -D @mizchi/mutator`）。Veritas に同梱の mutator は Veritas 側の Vitest でテストを実行するため、それらを読み込めません。
 
 ## 設定ファイルを作る
 

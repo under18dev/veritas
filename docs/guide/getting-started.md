@@ -47,7 +47,7 @@ To use Veritas without adding it to each project, install it globally:
 npm install -g @under18dev/veritas
 ```
 
-This puts `veritas` and `veritas-mcp` on your `PATH`. When you run it in a project, Vitest, `@mizchi/mutator` and fast-check are taken from the project if it has them installed.
+This puts `veritas` and `veritas-mcp` on your `PATH`. When you run it in a project, Vitest, `@mizchi/mutator` and fast-check are taken from the project if it has them installed. If your tests use a test environment such as happy-dom or jsdom, or Vitest plugins, add `@mizchi/mutator` to the project too (`npm install -D @mizchi/mutator`): the copy that comes with Veritas runs the tests with its own Vitest, which cannot load them.
 
 ## Create the configuration
 
