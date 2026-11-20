@@ -1,0 +1,54 @@
+name: release
+
+# Publishes the npm packages when a version tag (v0.2.0) is pushed. npm trusted publishing (OIDC) authorises the
+# upload, so no npm token is stored in the repository; each package is published with provenance.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - name: The tag is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Install Lean (elan)
+        shell: bash
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
+          sh elan-init.sh -y --default-toolchain stable --no-modify-path
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Download the Lean toolchain
+        run: lean --version && lake --version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm licenses:check
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:acceptance
+      - name: clean install from packed tarballs
+        run: node scripts/clean-install-check.mjs
+      - name: Publish
+        run: node scripts/publish.mjs --expect "$GITHUB_REF_NAME"
