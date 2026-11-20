@@ -30,6 +30,18 @@ Run one package's tests with `pnpm exec vitest run --project unit packages/<name
 - Tests: no `.skip`, `.only` or `.todo` (lint enforces it). Fixtures in `fixtures/` encode ground truth in their `FIXTURE.md`; expected results are written from that table, never copied from tool output.
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Releases
+
+All public packages share one version and are published by the `release` workflow, never by hand:
+
+1. Set the version on every package and commit it on main: `node scripts/set-version.mjs 0.2.0`.
+2. Push a tag for that commit: `git tag v0.2.0 && git push origin v0.2.0`.
+
+The workflow checks that the tag is on main and matches the package versions. It runs the same checks as CI and
+publishes every package with provenance through npm trusted publishing. No npm token is stored. A package
+already published at the version is skipped, so a failed run can be re-run. `node scripts/publish.mjs --dry-run`
+shows what would be published.
+
 ## Architecture decisions
 
 Record design decisions as ADRs in `docs/adr/` before relying on them.
