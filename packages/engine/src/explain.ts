@@ -6,7 +6,7 @@ import type {
   TestAssessment,
   TestCase,
 } from '@under18dev/veritas-core';
-import { VeritasError } from '@under18dev/veritas-core';
+import { isPlainRelativePath, VeritasError } from '@under18dev/veritas-core';
 import type { DiscoveryResult } from '@under18dev/veritas-spec-discovery';
 import { readArtifact, readLatest } from './project.js';
 
@@ -85,4 +85,51 @@ export function explainFinding(root: string, findingId: string): Explanation {
       (c) => finding.claimIds.includes(c.id) || finding.propertyIds.includes(c.propertyId),
     ),
   };
+}
+
+/** The evidence chain of a finding as the lines `veritas explain` prints (the TUI shows the same lines). */
+export function explanationLines(explanation: Explanation): string[] {
+  const f = explanation.finding;
+  const lines = [
+    `${f.id} [${f.certainty} ${f.severity}] ${f.kind}`,
+    f.title,
+    '',
+    ...f.explanation.map((e) => `  ${e}`),
+    '',
+  ];
+
+  for (const s of explanation.sources)
+    lines.push(
+      `source  ${s.kind} ${s.locator}${s.range ? `:${s.range.start}` : ''}  "${s.summary.slice(0, 120)}"`,
+    );
+
+  for (const st of explanation.statements) lines.push(`quote   line ${st.range.start}: "${st.quote}"`);
+
+  for (const p of explanation.properties)
+    lines.push(`property ${p.id} [${p.status}, ${p.origin}] ${p.description}`);
+
+  for (const t of explanation.tests)
+    lines.push(`test    ${t.file}:${t.location.range?.start ?? '?'} "${t.name}"`);
+
+  for (const a of explanation.assessments)
+    lines.push(`assess  ${a.testId}: ${a.outcome} - ${a.rationale.join('; ')}`);
+
+  for (const m of explanation.mutants)
+    lines.push(
+      `mutant  ${m.id} [${m.status}] ${m.location.file}:${m.location.range?.start} ${m.original} -> ${m.replacement}`,
+    );
+
+  for (const c of explanation.claims) {
+    lines.push(
+      `claim   ${c.id} [${c.kind} ${c.status}, ${c.assurance}] ${c.counterexample ? JSON.stringify(c.counterexample) : ''}`,
+    );
+
+    if (c.solverInputArtifact)
+      lines.push(
+        `        smt: ${isPlainRelativePath(c.solverInputArtifact) ? `.veritas/runs/${explanation.runId}/${c.solverInputArtifact}` : '(unsafe location omitted)'}`,
+      );
+  }
+  lines.push('', ...f.nextActions.map((a) => `next: ${a}`));
+
+  return lines;
 }

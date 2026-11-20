@@ -3,7 +3,6 @@ import path from 'node:path';
 import {
   ExitCode as Exit,
   type ExitCode,
-  isPlainRelativePath,
   redact,
   type StageName,
   VeritasError,
@@ -14,6 +13,7 @@ import {
   decideProperty,
   diffLatest,
   explainFinding,
+  explanationLines,
   generateTests,
   listProperties,
   PROFILE_STAGES,
@@ -218,48 +218,7 @@ export async function explainCommand(opts: Opts, args: string[]): Promise<ExitCo
 
     return Exit.Success;
   }
-  const f = explanation.finding;
-  const lines = [
-    `${f.id} [${f.certainty} ${f.severity}] ${f.kind}`,
-    f.title,
-    '',
-    ...f.explanation.map((e) => `  ${e}`),
-    '',
-  ];
-
-  for (const s of explanation.sources)
-    lines.push(
-      `source  ${s.kind} ${s.locator}${s.range ? `:${s.range.start}` : ''}  "${s.summary.slice(0, 120)}"`,
-    );
-
-  for (const st of explanation.statements) lines.push(`quote   line ${st.range.start}: "${st.quote}"`);
-
-  for (const p of explanation.properties)
-    lines.push(`property ${p.id} [${p.status}, ${p.origin}] ${p.description}`);
-
-  for (const t of explanation.tests)
-    lines.push(`test    ${t.file}:${t.location.range?.start ?? '?'} "${t.name}"`);
-
-  for (const a of explanation.assessments)
-    lines.push(`assess  ${a.testId}: ${a.outcome} - ${a.rationale.join('; ')}`);
-
-  for (const m of explanation.mutants)
-    lines.push(
-      `mutant  ${m.id} [${m.status}] ${m.location.file}:${m.location.range?.start} ${m.original} -> ${m.replacement}`,
-    );
-
-  for (const c of explanation.claims) {
-    lines.push(
-      `claim   ${c.id} [${c.kind} ${c.status}, ${c.assurance}] ${c.counterexample ? JSON.stringify(c.counterexample) : ''}`,
-    );
-
-    if (c.solverInputArtifact)
-      lines.push(
-        `        smt: ${isPlainRelativePath(c.solverInputArtifact) ? `.veritas/runs/${explanation.runId}/${c.solverInputArtifact}` : '(unsafe location omitted)'}`,
-      );
-  }
-  lines.push('', ...f.nextActions.map((a) => `next: ${a}`));
-  emitText(lines.join('\n'));
+  emitText(explanationLines(explanation).join('\n'));
 
   return Exit.Success;
 }

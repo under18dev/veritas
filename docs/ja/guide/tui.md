@@ -43,7 +43,7 @@ veritas
 
 ### 結果
 
-run を新しい順に一覧します。run を選ぶと、コマンド、profile、verdict、終了コード、policy の理由、ステージ、finding が表示されます。finding を選ぶと、その根拠（説明、場所、引用した出典、Property、テスト、mutant、ソルバーの claim、次の対応）が表示されます。内容は `veritas explain <finding-id>` と同じです。
+run を新しい順に一覧します。run を選ぶと、コマンド、profile、verdict、終了コード、policy の理由、ステージ、finding が表示されます。finding を選ぶと、その根拠（説明、場所、引用した出典、Property、テスト、mutant、ソルバーの claim、次の対応）が表示されます。表示する行は `veritas explain <finding-id>` の出力と同じです。
 
 ### 仕様
 

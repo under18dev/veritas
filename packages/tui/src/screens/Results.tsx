@@ -1,53 +1,9 @@
 import type { Finding } from '@under18dev/veritas-core';
-import type { Explanation } from '@under18dev/veritas-engine';
+import { explanationLines } from '@under18dev/veritas-engine';
 import { Box, Text, useInput } from 'ink';
 import { useState } from 'react';
 import { ErrorView, Pager, SelectList, Title, useLoad } from '../components.js';
 import type { ScreenProps } from '../screen.js';
-
-/** The evidence chain of a finding as text lines. */
-export function explanationLines(e: Explanation): string[] {
-  const f = e.finding;
-  const lines = [
-    `${f.id}  ${f.kind}  ${f.severity} / ${f.certainty}`,
-    f.title,
-    '',
-    ...f.explanation,
-    ...(f.locations.length
-      ? ['', 'locations:', ...f.locations.map((l) => `  ${l.file}${l.range ? `:${l.range.start}` : ''}`)]
-      : []),
-  ];
-  const section = (title: string, items: string[]) => {
-    if (items.length) lines.push('', `${title}:`, ...items.map((s) => `  ${s}`));
-  };
-
-  section(
-    'sources',
-    e.sources.map((s) => `${s.id} ${s.locator}`),
-  );
-  section(
-    'properties',
-    e.properties.map((p) => `${p.id} [${p.status}] ${p.description}`),
-  );
-  section(
-    'tests',
-    e.tests.map((t) => `${t.file}: ${[...t.suitePath, t.name].join(' > ')}`),
-  );
-  section(
-    'mutants',
-    e.mutants.map((m) => `${m.id} [${m.status}] ${m.original} -> ${m.replacement}`),
-  );
-  section(
-    'claims',
-    e.claims.map(
-      (c) =>
-        `${c.id} [${c.status}] ${c.kind}${c.counterexample ? ` counterexample ${JSON.stringify(c.counterexample)}` : ''}`,
-    ),
-  );
-  section('next actions', f.nextActions);
-
-  return lines;
-}
 
 type View =
   | { kind: 'runs' }

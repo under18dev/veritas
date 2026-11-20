@@ -1,4 +1,16 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeSync,
+} from 'node:fs';
+import path from 'node:path';
 import {
   type Approval,
   CODE_CONFIGS,
@@ -74,6 +86,35 @@ function noRun(error: unknown): boolean {
   return error instanceof VeritasError && NO_RUN.has(error.code);
 }
 
+/**
+ * Replace a file inside the project atomically: the content goes to a new temporary file next to it, created
+ * exclusively (an existing file or link of that name is never opened), and is renamed over the target, which replaces
+ * the directory entry instead of writing through a link. An interruption leaves the previous file intact.
+ */
+export function replaceFile(root: string, file: string, content: string): void {
+  const dir = realpathSync(path.dirname(file));
+  const base = realpathSync(root);
+
+  if (dir !== base && !dir.startsWith(`${base}${path.sep}`))
+    throw new VeritasError('user', 'PATH_OUTSIDE_ROOT', `${path.dirname(file)} resolves outside the project`);
+  const target = path.join(dir, path.basename(file));
+  const tmp = path.join(dir, `.${path.basename(file)}.${randomBytes(6).toString('hex')}.tmp`);
+  const fd = openSync(tmp, 'wx', 0o644);
+
+  try {
+    writeSync(fd, content);
+    fsyncSync(fd);
+    closeSync(fd);
+    renameSync(tmp, target);
+  } catch (error) {
+    try {
+      closeSync(fd);
+    } catch {}
+    rmSync(tmp, { force: true });
+    throw error;
+  }
+}
+
 export function createApi(root: string): TuiApi {
   return {
     root,
@@ -141,7 +182,7 @@ export function createApi(root: string): TuiApi {
     writeConfig: (raw) => {
       // The same validation the CLI applies on load: a value it would refuse is never written.
       parseConfig(raw, JSON_CONFIG);
-      writeFileSync(resolveInsideRoot(root, JSON_CONFIG), `${JSON.stringify(raw, null, 2)}\n`);
+      replaceFile(root, resolveInsideRoot(root, JSON_CONFIG), `${JSON.stringify(raw, null, 2)}\n`);
     },
   };
 }

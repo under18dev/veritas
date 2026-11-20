@@ -43,7 +43,7 @@ Shows the project directory, the configuration file and the state of each featur
 
 ### Results
 
-Lists the runs, newest first. Choose a run to see its command, profile, verdict, exit code, policy reasons, stages and findings. Choose a finding to see its evidence: the explanation, locations, cited sources, properties, tests, mutants, solver claims and next actions. This is the same information as `veritas explain <finding-id>`.
+Lists the runs, newest first. Choose a run to see its command, profile, verdict, exit code, policy reasons, stages and findings. Choose a finding to see its evidence: the explanation, locations, cited sources, properties, tests, mutants, solver claims and next actions. These are the same lines that `veritas explain <finding-id>` prints.
 
 ### Specifications
 

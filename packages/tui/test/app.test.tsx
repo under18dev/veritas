@@ -89,9 +89,9 @@ function fakeApi(overrides: Partial<TuiApi> = {}): TuiApi {
         finding: FINDING,
         properties: [PROPERTY],
         sources: [],
-        statements: [],
+        statements: [{ range: { start: 3 }, quote: 'orders over 1000 get a discount' }],
         tests: [],
-        assessments: [],
+        assessments: [{ testId: 'T-1', outcome: 'weak_or_incomplete', rationale: ['no boundary input'] }],
         mutants: [],
         claims: [],
       }) as never,
@@ -187,8 +187,11 @@ describe('the TUI', () => {
     await press(app, KEY.enter);
     await until(app, 'boundary is not checked');
     await press(app, KEY.enter);
-    await until(app, 'add a test at 1000');
-    expect(app.lastFrame()).toContain('P-1 [proposed] discount above 1000');
+    await until(app, 'next: add a test at 1000');
+    // The same lines as `veritas explain`, statements and assessments included.
+    expect(app.lastFrame()).toContain('quote   line 3: "orders over 1000 get a discount"');
+    expect(app.lastFrame()).toContain('assess  T-1: weak_or_incomplete - no boundary input');
+    expect(app.lastFrame()).toContain('property P-1 [proposed, docs] discount above 1000');
   });
 
   it('records a decision only with a reason', async () => {
