@@ -153,7 +153,8 @@
           "no_assertion",
           "tautological_assertion",
           "target_not_called",
-          "unconditional_mock"
+          "unconditional_mock",
+          "unresolved_import"
         ]
       }
     },

@@ -1,0 +1,100 @@
+import { VeritasConfig } from '@under18dev/veritas-core';
+import { describe, expect, it } from 'vitest';
+import { inventoryTests } from '../src/index.js';
+import { tempProject } from './helpers.js';
+
+const shipping =
+  'export function shippingCents(subtotalCents: number): number {\n  return subtotalCents > 50 ? 0 : 7;\n}\n';
+
+function shippingTest(specifier: string, body = 'expect(shippingCents(51)).toBe(0);'): string {
+  return `import { describe, expect, it } from 'vitest';
+import { shippingCents } from '${specifier}';
+describe('shipping', () => { it('ships free over threshold', () => { ${body} }); });
+`;
+}
+
+function inventory(files: Record<string, string>) {
+  return inventoryTests({ root: tempProject(files), config: VeritasConfig.parse({}) });
+}
+
+describe('module resolution without a tsconfig', () => {
+  it('links a call through an extensionless relative import in an ESM package', () => {
+    const result = inventory({
+      'package.json': '{"type":"module"}',
+      'src/shipping.ts': shipping,
+      'test/shipping.test.ts': shippingTest('../src/shipping'),
+    });
+    const testCase = result.tests.at(0);
+    if (!testCase) throw new Error('missing shipping test');
+
+    expect(testCase.calledSymbols).toEqual(['src/shipping.ts#shippingCents']);
+    expect(testCase.targetCalls.map((call) => call.asserted)).toEqual([true]);
+    expect(testCase.suspicions).toEqual([]);
+    expect(result.edges).toHaveLength(1);
+  });
+
+  it('still links a `.js` specifier to its `.ts` source', () => {
+    const result = inventory({
+      'package.json': '{"type":"module"}',
+      'src/shipping.ts': shipping,
+      'test/shipping.test.ts': shippingTest('../src/shipping.js'),
+    });
+
+    expect(result.tests.at(0)?.calledSymbols).toEqual(['src/shipping.ts#shippingCents']);
+    expect(result.tests.at(0)?.suspicions).toEqual([]);
+  });
+
+  it('keeps flagging a constant assertion as tautological and disconnected', () => {
+    const result = inventory({
+      'src/shipping.ts': shipping,
+      'test/shipping.test.ts': shippingTest('../src/shipping', 'expect(true).toBe(true);'),
+    });
+
+    expect(result.tests.at(0)?.suspicions).toEqual(['tautological_assertion', 'target_not_called']);
+  });
+});
+
+describe('module resolution that fails', () => {
+  const nodenext = JSON.stringify({ compilerOptions: { module: 'nodenext', moduleResolution: 'nodenext' } });
+
+  it('marks a call through an unresolved relative import instead of claiming the target is not called', () => {
+    const result = inventory({
+      'package.json': '{"type":"module"}',
+      'tsconfig.json': nodenext,
+      'src/shipping.ts': shipping,
+      'test/shipping.test.ts': shippingTest('../src/shipping'),
+    });
+    const testCase = result.tests.at(0);
+    if (!testCase) throw new Error('missing shipping test');
+
+    expect(testCase.calledSymbols).toEqual([]);
+    expect(testCase.suspicions).toEqual(['unresolved_import']);
+    expect(result.diagnostics.some((diagnostic) => diagnostic.file === 'test/shipping.test.ts')).toBe(true);
+  });
+
+  it('also marks namespace imports', () => {
+    const result = inventory({
+      'package.json': '{"type":"module"}',
+      'tsconfig.json': nodenext,
+      'src/shipping.ts': shipping,
+      'test/shipping.test.ts': `import { expect, it } from 'vitest';
+import * as shipping from '../src/shipping';
+it('ships free over threshold', () => { expect(shipping.shippingCents(51)).toBe(0); });
+`,
+    });
+
+    expect(result.tests.at(0)?.suspicions).toEqual(['unresolved_import']);
+  });
+
+  it('ignores unresolved bare specifiers such as an uninstalled test runner', () => {
+    const result = inventory({
+      'src/shipping.ts': shipping,
+      'test/shipping.test.ts': `import { expect, it } from 'vitest';
+import { helper } from 'not-installed';
+it('uses a package', () => { expect(helper(1)).toBe(1); });
+`,
+    });
+
+    expect(result.tests.at(0)?.suspicions).toEqual(['target_not_called']);
+  });
+});

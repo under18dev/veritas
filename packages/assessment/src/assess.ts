@@ -65,6 +65,7 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
       .flatMap(argumentValues),
   );
   const assertedCall = test.targetCalls.some((c) => c.asserted);
+  const unresolved = test.suspicions.includes('unresolved_import');
 
   const boundaryCoverage: EvidenceVector['boundaryCoverage'] = [];
   for (const p of properties) {
@@ -95,13 +96,23 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
   if (test.nondeterminism.length > 0)
     unknowns.push(`non-deterministic inputs: ${test.nondeterminism.join(', ')}`);
   if (test.usesMocks) unknowns.push('uses mocks; observed behaviour may not be the real implementation');
+  if (unresolved)
+    unknowns.push(
+      'a call goes through a relative import TypeScript could not resolve; its link to project code is unknown (see the inventory diagnostics)',
+    );
   for (const c of claims)
     if (c.status !== 'proven_within_model' && c.status !== 'counterexample_found')
       unknowns.push(`formal claim ${c.id} is ${c.status}`);
 
   const vector: EvidenceVector = {
     specificationRelevance: properties.map((p) => ({ propertyId: p.id, status: p.status })),
-    assertionRelevance: assertedCall ? 'checks_result' : test.assertionCount > 0 ? 'weak' : 'none',
+    assertionRelevance: assertedCall
+      ? 'checks_result'
+      : test.assertionCount === 0
+        ? 'none'
+        : unresolved
+          ? 'unknown'
+          : 'weak',
     mutationDetection: {
       killed: killed.map((m) => m.id),
       survived: survived.map((m) => m.id),
@@ -122,12 +133,18 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
     test.suspicions.includes('tautological_assertion') ||
     test.suspicions.includes('target_not_called') ||
     test.suspicions.includes('no_assertion') ||
-    !assertedCall;
+    (!assertedCall && !unresolved);
   if (disconnected) {
     outcome = 'tautological_or_disconnected';
     if (test.suspicions.length) rationale.push(`static analysis: ${test.suspicions.join(', ')}`);
     if (!assertedCall) rationale.push('no assertion checks the result of a project function');
     if (input.mutationAvailable && killed.length === 0) rationale.push('killed no mutant');
+  } else if (!assertedCall) {
+    // Only reachable with an unresolved import: the asserted call may be project code, so do not judge it.
+    outcome = 'inconclusive';
+    rationale.push(
+      'the asserted call could not be linked to a project symbol because its import did not resolve',
+    );
   } else if (properties.some((p) => p.status === 'conflicted')) {
     outcome = 'spec_conflict';
     rationale.push(

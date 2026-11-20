@@ -23,8 +23,15 @@ export const TestCase = z.object({
   usesMocks: z.boolean(),
   usesSnapshots: z.boolean(),
   nondeterminism: z.array(z.string()),
+  /** `unresolved_import`: a call goes through a relative import TypeScript could not resolve, so its target is unknown. */
   suspicions: z.array(
-    z.enum(['no_assertion', 'tautological_assertion', 'target_not_called', 'unconditional_mock']),
+    z.enum([
+      'no_assertion',
+      'tautological_assertion',
+      'target_not_called',
+      'unconditional_mock',
+      'unresolved_import',
+    ]),
   ),
   granularity: z.enum(['test', 'suite']),
 });
