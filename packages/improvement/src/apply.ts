@@ -16,7 +16,7 @@ import {
   type VeritasConfig,
   VeritasError,
 } from '@under18dev/veritas-core';
-import { readArtifact, runVeritas } from '@under18dev/veritas-engine';
+import { readArtifact, recordedRunOptions, runVeritas } from '@under18dev/veritas-engine';
 import { type MutationRunResult, runMutation } from '@under18dev/veritas-mutation-adapter';
 import { applyApprovals, loadApprovals } from '@under18dev/veritas-property-engine';
 import { expectedFromSpec } from './oracle.js';
@@ -138,7 +138,7 @@ function snapshot(
 /** Formal and property-based results of the run the plan was made from: the state before the patch. */
 /**
  * Re-evaluate the formal and property-based results on the patched workspace: prove, plus the mutate and pbt
- * stages if the plan's run had them, with that run's options, offline. Claims that depend on test
+ * stages if the plan's run had them, with that run's options (see below), offline. Claims that depend on test
  * inputs (distinguishability) see the new tests. The run is written inside the workspace, never the repository.
  */
 async function reassess(
@@ -164,14 +164,16 @@ async function reassess(
     ...optional.filter((stage) => had.has(stage)),
     'prove',
   ];
+  // Everything the run was made with, except the mutation input: like the before/after measurement, the copy
+  // always runs mutator on all mutants, because an imported report or a `--since` selection describes the code
+  // before the patch.
+  const { mutationReport: _report, since: _since, ...recorded } = recordedRunOptions(original);
   const summary = await runVeritas({
+    ...recorded,
     root: workspace,
     command: 'improve',
     stages,
     offline: true,
-    includeProposed: original.options?.includeProposed,
-    propertyIds: original.options?.propertyIds,
-    formalEngine: original.options?.formalEngine,
     allowCodeConfig: options.allowCodeConfig ?? false,
     // The workspace has no .git: read the revision from the repository so ids and approvals match.
     gitRoot: root,
