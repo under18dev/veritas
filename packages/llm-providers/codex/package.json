@@ -1,8 +1,13 @@
 {
   "name": "@under18dev/veritas-llm-codex",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Codex CLI adapter (uses your own ChatGPT login) for the Veritas LLM interface",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/under18dev/veritas.git",
+    "directory": "packages/llm-providers/codex"
+  },
   "type": "module",
   "exports": {
     ".": {

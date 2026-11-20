@@ -1,8 +1,13 @@
 {
   "name": "@under18dev/veritas-solver-lean",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Lean 4 translation and kernel checking for Veritas properties",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/under18dev/veritas.git",
+    "directory": "packages/solver-lean"
+  },
   "type": "module",
   "exports": {
     ".": {

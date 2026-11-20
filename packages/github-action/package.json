@@ -1,9 +1,14 @@
 {
   "name": "@under18dev/veritas-github-action",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "GitHub Action running Veritas on pull requests",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/under18dev/veritas.git",
+    "directory": "packages/github-action"
+  },
   "type": "module",
   "exports": {
     ".": {

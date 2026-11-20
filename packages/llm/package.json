@@ -1,8 +1,13 @@
 {
   "name": "@under18dev/veritas-llm",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Provider-neutral LLM interface for Veritas: budgets, redaction, input hashing",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/under18dev/veritas.git",
+    "directory": "packages/llm"
+  },
   "type": "module",
   "exports": {
     ".": {

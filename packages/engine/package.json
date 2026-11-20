@@ -1,8 +1,13 @@
 {
   "name": "@under18dev/veritas-engine",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Orchestrates Veritas stages and persists run artifacts (the Node API)",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/under18dev/veritas.git",
+    "directory": "packages/engine"
+  },
   "type": "module",
   "exports": {
     ".": {
