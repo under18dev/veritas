@@ -347,7 +347,7 @@ async function collectLocal(
   }
 
   if (revision) {
-    const log = await runCommand('git', ['log', '-50', '--format=%H%n%s%n%b%n---'], {
+    const log = await runCommand('git', ['log', '-50', '--format=%x1e%H%x1f%s%n%b'], {
       cwd: gitRoot,
       timeoutMs: 5000,
       maxOutputBytes: 1_000_000,
@@ -356,9 +356,10 @@ async function collectLocal(
     if (log.exitCode === 0 && log.stdout.trim()) {
       // One source per commit (its subject and body), so a new commit adds a source instead of changing the ids
       // of every statement from earlier commits.
-      for (const record of log.stdout.split(/^---$/m)) {
-        const [hash, ...message] = record.replace(/^\n+/, '').split('\n');
-        const text = message.join('\n').trim();
+      // Records start with \x1e and the hash ends with \x1f: control characters a commit message cannot hold.
+      for (const record of log.stdout.split('\x1e')) {
+        const [hash, message = ''] = record.split('\x1f');
+        const text = message.trim();
 
         if (!hash || !/^[0-9a-f]{40}$/.test(hash) || !text) continue;
         inputs.push({

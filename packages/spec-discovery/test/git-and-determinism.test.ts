@@ -23,6 +23,36 @@ describe('git history and reproducibility', () => {
     expect(commit?.revision).toMatch(/^[0-9a-f]{40}$/);
   });
 
+  it('reads every commit whole, even when a message contains a separator-like line', async () => {
+    const root = tempProject('git-separator');
+    git(root, 'init', '-q');
+    git(root, 'config', 'user.email', 'test@example.invalid');
+    git(root, 'config', 'user.name', 'test');
+    writeFileSync(`${root}/README.md`, 'Readme.\n');
+    git(root, 'add', 'README.md');
+    git(
+      root,
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '-qm',
+      'First',
+      '-m',
+      'before\n---\nThe total must be at least 10.',
+    );
+    writeFileSync(`${root}/B.txt`, 'b\n');
+    git(root, 'add', 'B.txt');
+    git(root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Second');
+    const result = await discoverEvidence({ root, config: config() });
+    const commits = result.sources.filter((s) => s.kind === 'git');
+    expect(commits).toHaveLength(2);
+    expect(
+      result.statements.some(
+        (st) => st.quote.includes('at least 10') && commits.some((c) => c.id === st.sourceId),
+      ),
+    ).toBe(true);
+  });
+
   it('keeps the id of a commit message source when later commits are added', async () => {
     const root = tempProject('git-stable');
     git(root, 'init', '-q');
