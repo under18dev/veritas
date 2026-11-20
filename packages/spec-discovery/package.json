@@ -1,6 +1,6 @@
 {
   "name": "@under18dev/veritas-spec-discovery",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Evidence collection and normative statement extraction for Veritas",
   "license": "Apache-2.0",
   "repository": {

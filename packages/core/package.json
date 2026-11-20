@@ -1,6 +1,6 @@
 {
   "name": "@under18dev/veritas-core",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Domain model, schemas, artifact store and orchestration core for Veritas",
   "license": "Apache-2.0",
   "repository": {
