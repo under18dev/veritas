@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Sets one version on every workspace package (the packages share a version): node scripts/set-version.mjs 0.2.0
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { workspacePackages } from './workspace-packages.mjs';
@@ -22,6 +22,28 @@ writeFileSync(
     `@under18dev/veritas-github-action@${version}`,
   ),
 );
+
+// Workflows in the example, the action README and the documentation pin the action to its version tag.
+const pinned = [
+  path.join(repo, 'packages/github-action/README.md'),
+  ...readdirSync(path.join(repo, 'packages/github-action/examples')).map((f) =>
+    path.join(repo, 'packages/github-action/examples', f),
+  ),
+  ...readdirSync(path.join(repo, 'docs'), { recursive: true })
+    .map(String)
+    .filter((f) => f.endsWith('.md') && !f.split(path.sep).includes('.vitepress'))
+    .map((f) => path.join(repo, 'docs', f)),
+];
+
+for (const file of pinned) {
+  const text = readFileSync(file, 'utf8');
+  const next = text.replace(
+    /(under18dev\/veritas\/packages\/github-action@v)[0-9A-Za-z.+-]+/g,
+    `$1${version}`,
+  );
+
+  if (next !== text) writeFileSync(file, next);
+}
 
 for (const { dir } of workspacePackages(repo)) {
   const file = path.join(repo, dir, 'package.json');
