@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, linkSync, mkdirSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   type ArtifactMeta,
@@ -43,6 +44,8 @@ export function writePlanArtifact<S extends z.ZodType>(
   schema: S,
   data: z.input<S>,
   context: StoreContext,
+  /** Fail with EEXIST instead of replacing an existing file (used to claim attempt numbers). */
+  options: { exclusive?: boolean } = {},
 ): string {
   const parsed = schema.safeParse(data);
   if (!parsed.success) {
@@ -69,9 +72,17 @@ export function writePlanArtifact<S extends z.ZodType>(
     sourceHash: context.sourceHash,
   };
   mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
+  // A unique temporary name: concurrent writers in one process or several never share it.
+  const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
   writeFileSync(tmp, `${JSON.stringify({ meta, data: redactDeep(parsed.data) }, null, 2)}\n`);
-  renameSync(tmp, file);
+  if (options.exclusive) {
+    // link fails atomically when the name is taken, so two writers can never both claim it.
+    try {
+      linkSync(tmp, file);
+    } finally {
+      unlinkSync(tmp);
+    }
+  } else renameSync(tmp, file);
   return path.relative(root, file).split(path.sep).join('/');
 }
 

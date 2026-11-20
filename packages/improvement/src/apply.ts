@@ -202,39 +202,60 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
     );
   }
   const config = loaded.config;
-  const n = attemptCount(root, planId) + 1;
   const token = approvalTokenFor(doc);
+  const approvalId = stableId('AP', { planId, token });
+  const context = {
+    runId: doc.runId,
+    configHash: loaded.hash,
+    sourceHash: doc.runSourceHash,
+    gitCommit: gitCommit(root),
+  };
+  // The approval is recorded before anything runs: who approved this exact content, when and how. Writing
+  // approval-<n>.json exclusively claims attempt number n, so concurrent applies never share or overwrite one.
+  const env = options.env ?? process.env;
+  const { actor, actorSource } = options.actor?.trim()
+    ? {
+        actor: options.actor.trim(),
+        actorSource: options.via === 'mcp' ? ('claimed_by_client' as const) : ('option' as const),
+      }
+    : env.VERITAS_ACTOR?.trim()
+      ? { actor: env.VERITAS_ACTOR.trim(), actorSource: 'env' as const }
+      : { actor: gitOutput(root, ['config', 'user.name'])?.trim() || 'unknown', actorSource: 'git' as const };
+  let n = attemptCount(root, planId) + 1;
+  for (;;) {
+    try {
+      writePlanArtifact(
+        root,
+        planId,
+        `approval-${n}.json`,
+        ImprovementApproval,
+        {
+          approvalId,
+          planId,
+          tokenSha256: sha256(options.approvalToken),
+          actor,
+          actorSource,
+          approvedAt: new Date().toISOString(),
+          via: options.via ?? 'api',
+        },
+        context,
+        { exclusive: true },
+      );
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      n++;
+    }
+  }
   const base = {
     id: stableId('PA', { planId, n }),
     planId,
-    approvalId: stableId('AP', { planId, token }),
+    approvalId,
     patch: doc.plan.patchPreview,
     ...(doc.implementationFixProposals[0]
       ? { implementationFixProposalId: doc.implementationFixProposals[0].id }
       : {}),
   };
-  // The approval is recorded before anything runs: who approved this exact content, when and how.
-  const env = options.env ?? process.env;
-  const actor =
-    options.actor?.trim() ||
-    env.VERITAS_ACTOR?.trim() ||
-    gitOutput(root, ['config', 'user.name'])?.trim() ||
-    'unknown';
-  writePlanArtifact(
-    root,
-    planId,
-    `approval-${n}.json`,
-    ImprovementApproval,
-    {
-      approvalId: base.approvalId,
-      planId,
-      tokenSha256: sha256(options.approvalToken),
-      actor,
-      approvedAt: new Date().toISOString(),
-      via: options.via ?? 'api',
-    },
-    { runId: doc.runId, configHash: loaded.hash, sourceHash: doc.runSourceHash, gitCommit: gitCommit(root) },
-  );
   const persist = (attempt: PatchAttempt): PatchAttempt => {
     writePlanArtifact(root, planId, `attempt-${n}.json`, PatchAttempt, attempt, {
       runId: doc.runId,

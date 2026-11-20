@@ -379,6 +379,43 @@ describe('applyImprovement refusals', () => {
     ]);
   });
 
+  it('gives concurrent applies distinct attempt numbers and records where the approver name came from', async () => {
+    const { root } = seniorProject();
+    const result = await planImprovement({ root, maxIterations: 5 });
+    const token = result.approvalToken ?? '';
+    const [a, b] = await Promise.all([
+      applyImprovement({
+        root,
+        planId: result.planId,
+        approvalToken: token,
+        env: {},
+        actor: 'Ann',
+        via: 'cli',
+      }),
+      applyImprovement({
+        root,
+        planId: result.planId,
+        approvalToken: token,
+        env: {},
+        actor: 'Bot',
+        via: 'mcp',
+      }),
+    ]);
+    expect(a.id).not.toBe(b.id);
+    const dir = path.join(root, '.veritas/improvements', result.planId);
+    const files = filesUnder(root, `.veritas/improvements/${result.planId}`);
+    expect(files.filter((f) => f.startsWith('approval-'))).toEqual(['approval-1.json', 'approval-2.json']);
+    expect(files.filter((f) => f.startsWith('attempt-'))).toEqual(['attempt-1.json', 'attempt-2.json']);
+    expect(files.some((f) => f.endsWith('.tmp'))).toBe(false);
+    const approvals = ['approval-1.json', 'approval-2.json'].map(
+      (f) => JSON.parse(readFileSync(path.join(dir, f), 'utf8')).data,
+    );
+    expect(approvals.map((x) => [x.actor, x.actorSource]).sort()).toEqual([
+      ['Ann', 'option'],
+      ['Bot', 'claimed_by_client'],
+    ]);
+  });
+
   it('refuses to apply a plan that has nothing to apply', async () => {
     const { root } = seniorProject({ status: 'conflicted' });
     const result = await planImprovement({ root });

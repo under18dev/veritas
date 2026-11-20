@@ -1,3 +1,5 @@
+import { realpathSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { redact, type StageName, VeritasError } from '@under18dev/veritas-core';
@@ -122,9 +124,20 @@ function summarize(summary: RunSummary) {
  * improvement API is registered separately with an approval token.
  */
 export function createServer(options: ServerOptions): McpServer {
+  // Programmatic callers get the same checks as the command: an existing directory and a sane concurrency limit.
+  const maxConcurrent = options.maxConcurrent ?? 1;
+  if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 16)
+    throw new VeritasError('user', 'OPTION_INVALID', 'maxConcurrent must be an integer from 1 to 16');
+  let root: string;
+  try {
+    root = realpathSync(path.resolve(options.root));
+  } catch {
+    throw new VeritasError('user', 'ROOT_NOT_FOUND', `project root does not exist: ${options.root}`);
+  }
+  if (!statSync(root).isDirectory())
+    throw new VeritasError('user', 'ROOT_NOT_FOUND', `project root is not a directory: ${options.root}`);
   const server = new McpServer({ name: 'veritas', version: options.version ?? '0.0.0' });
-  const gate = new Semaphore(options.maxConcurrent ?? 1);
-  const root = options.root;
+  const gate = new Semaphore(maxConcurrent);
 
   const runStages = (
     extra: Extra,

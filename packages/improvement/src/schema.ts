@@ -107,6 +107,11 @@ export const ImprovementApproval = z.object({
   /** SHA-256 of the approval token, so the record names exactly the plan content that was approved. */
   tokenSha256: Sha256,
   actor: z.string().min(1),
+  /**
+   * Where the name comes from: `--actor`, `VERITAS_ACTOR`, the git user, or an MCP client's own claim. None of
+   * these is authenticated; they record who the operator said approved.
+   */
+  actorSource: z.enum(['option', 'env', 'git', 'claimed_by_client']),
   approvedAt: z.iso.datetime({ offset: true }),
   via: z.enum(['cli', 'mcp', 'api']),
 });
