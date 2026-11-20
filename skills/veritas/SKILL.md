@@ -17,6 +17,15 @@ Veritas relates a project's documented rules (README, docs, JSDoc, schemas, expo
 
 Do not use it to prove a program correct in general, or for projects without Vitest.
 
+## Install
+
+```bash
+npm install -D @under18dev/veritas   # or pnpm add -D, yarn add -D; provides the `veritas` and `veritas-mcp` commands
+npx veritas --version
+```
+
+If the package is not available from the registry, ask the user how they install it (for example from a checkout with `pnpm install && pnpm build`, then `node <checkout>/packages/cli/dist/bin.js`). Do not install anything else (Lean, Z3 binaries, global packages) without asking.
+
 ## Before you start
 
 1. Confirm the project uses Node.js 24+ and Vitest, and that its dependencies are installed.
@@ -33,6 +42,8 @@ npx veritas report                     # text summary of the latest run
 npx veritas explain <finding-id>       # evidence chain: source quote -> property -> tests -> mutants -> solver claim
 npx veritas spec list                  # properties with status (proposed / accepted / conflicted / ...)
 ```
+
+More commands: `npx veritas test replay <pbt-id>` replays a property-based counterexample with its seed (the id is in the finding's `replay:` line); `npx veritas mutate --import <report.json>` reads an existing mutation-testing-elements report (for example from Stryker) instead of running mutation testing.
 
 Profiles: `quick` (no project code executed: discovery, analysis, assessment), `standard` (+ mutation), `deep` (+ property-based tests and Z3). `--include-proposed` also checks properties nobody has accepted yet; those results stay `suspected`.
 
@@ -63,6 +74,16 @@ npx veritas improve --apply --plan <plan-id> --approve <token>   # only after th
 - Show the plan, including any `spec_violation_candidate` tests (they would fail against the current code; they are proposals for the user, not patches).
 - Apply only with the user's explicit approval of that plan and token. `--apply` is refused in CI.
 - Veritas measures the change in an isolated copy and writes only new test files, and only if mutation results improve. Otherwise it rolls back and the repository stays unchanged.
+
+## Fallbacks
+
+Use what `doctor` reports instead of retrying:
+
+- mutation testing `disabled` (no mutator or Vitest): run `--profile quick`, or `mutate --import` an existing report, and say mutation evidence is missing;
+- `sandbox` unavailable (Node.js below 25): property tests and counterexample replay are not run; report the affected results as inconclusive, or ask the user for Node.js 25+ (`VERITAS_SANDBOX_NODE`);
+- `lean` unavailable: use the default Z3 engine; do not install Lean unless asked;
+- no LLM configured: rule-based extraction still works; statements it cannot read stay unmapped, which is reported, not guessed;
+- a run is `partial` or `inconclusive`: report which stage and why (`veritas report`), then stop.
 
 ## Stop conditions
 

@@ -120,6 +120,22 @@ describe('the Agent Skill matches the CLI', () => {
   const skill = readFileSync(path.join(REPO_ROOT, 'skills/veritas/SKILL.md'), 'utf8');
   const top = help(CLI, []);
 
+  it('has every section an agent needs: install, permissions, workflow, evidence, fallbacks, stop conditions', () => {
+    const headings = [...skill.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+    for (const section of [
+      'When to use',
+      'Install',
+      'Before you start',
+      'Workflow',
+      'Reading results',
+      'Improving tests',
+      'Fallbacks',
+      'Stop conditions',
+      'Never',
+    ])
+      expect(headings).toContain(section);
+  });
+
   it('uses only subcommands, options and option values that the CLI accepts', () => {
     const found = invocations(skill, top);
     // Sanity check that the parser sees the documented workflow.
