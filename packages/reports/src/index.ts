@@ -209,8 +209,12 @@ function evidenceSummary(i: ReportInput): string {
   if (i.sources.length === 0) return 'none';
   const statementsOf = new Map<string, ReportInput['statements']>();
 
-  for (const st of i.statements)
-    statementsOf.set(st.sourceId, [...(statementsOf.get(st.sourceId) ?? []), st]);
+  for (const st of i.statements) {
+    const list = statementsOf.get(st.sourceId);
+
+    if (list) list.push(st);
+    else statementsOf.set(st.sourceId, [st]);
+  }
   const count = (id: string) => statementsOf.get(id)?.length ?? 0;
   const kinds = [...new Set(i.sources.map((s) => s.kind))].sort();
   const lines = [
@@ -225,7 +229,10 @@ function evidenceSummary(i: ReportInput): string {
     );
 
     for (const s of [...members]
-      .sort((a, b) => count(b.id) - count(a.id) || a.locator.localeCompare(b.locator))
+      // A plain comparison, so the examples do not depend on the locale of the machine.
+      .sort(
+        (a, b) => count(b.id) - count(a.id) || (a.locator < b.locator ? -1 : a.locator > b.locator ? 1 : 0),
+      )
       .slice(0, EXAMPLE_SOURCES))
       lines.push(
         `  - ${s.id}: ${s.kind} ${s.locator}${s.range ? `:${s.range.start}` : ''}, ${plural(count(s.id), 'statement', 'statements')}${(
