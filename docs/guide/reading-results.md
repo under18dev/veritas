@@ -119,7 +119,7 @@ mutator normally stops running a mutant's tests at the first one that fails, so 
 
 A test that is still reported after the check comes with one of these:
 
-- "killed none of the N mutant(s) it runs": the test ran N mutants of the code it imports and none of them made it fail. Changing that code did not change what it checks, which is strong evidence that it does not check that code. Read the test: it may check only a mock it set up itself, or code that the mutants did not touch.
+- "killed none of the N mutant(s) it runs": the test ran N mutants and none of them made it fail. This says only that those N changes did not affect what it checks. When N is small, or the check ran out of time before it reached the code the test is about, it is weak evidence: the test may well check code that no mutant it ran touched, such as a global or a spy the project code calls. It is stronger when N is large and the mutants sit in the code the test calls. Read the test before acting on it.
 - "N other mutant(s) it covers were killed by another test first": the test covers these mutants, but it was not run on them, so whether it would detect them is not known.
 - neither line: no mutant of this run ran against the test, for example because the check was skipped, ran out of time, or the code it reaches produced no mutant. The finding then rests on static analysis alone.
 
