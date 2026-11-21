@@ -67,6 +67,56 @@ describe('test helpers', () => {
     expect(test.asserted).toBe(true);
   });
 
+  it('treats assertion helpers kept under src/ as test code, through re-exports', () => {
+    const extra = {
+      'src/check.ts': `import { fn } from './math.js';
+export function minLength(n: number) { return (value: string) => value.length >= n; }
+export const label = (value: number) => String(fn(value));
+`,
+      // Imports expect from Vitest: an assertion helper, even though it lives in src/.
+      'src/vitest/expectValid.ts': `import { expect } from 'vitest';
+export function expectValid(check: (value: string) => boolean, values: string[]): void {
+  for (const value of values) expect(check(value)).toBe(true);
+}
+export function expectNothing(check: unknown): void { expect(1).toBe(1); }
+`,
+      'src/vitest/index.ts': "export * from './expectValid.js';\n",
+      // Imports only a type and a config helper from Vitest: still project code.
+      'src/plugin.ts': `import type { expect } from 'vitest';
+import { defineConfig } from 'vitest/config';
+export function plugin(n: number): number { return n * 2; }
+export const config = defineConfig;
+`,
+    };
+    const get = inventory(
+      `import { describe, expect, it } from 'vitest';
+      import { minLength } from '../src/check.js';
+      import { plugin } from '../src/plugin.js';
+      import { expectNothing, expectValid } from '../src/vitest/index.js';
+      describe('minLength', () => {
+        const check = minLength(2);
+        it('asserted through the helper', () => { expectValid(check, ['ab', 'abc']); });
+        it('inline argument', () => { expectValid(minLength(1), ['a']); });
+        it('helper ignores the argument', () => { expectNothing(minLength(3)); });
+        it('plugin stays project code', () => { expect(plugin(1)).toBe(2); });
+      });
+    `,
+      extra,
+    );
+    for (const name of ['asserted through the helper', 'inline argument']) {
+      const test = get(name);
+      expect(test.symbols, name).toEqual(['src/check.ts#minLength']);
+      expect(test.asserted, name).toBe(true);
+      expect(test.suspicions, name).not.toContain('no_assertion');
+    }
+    // The helper is followed (its assertion counts), but it does not check the value it is given.
+    const ignored = get('helper ignores the argument');
+    expect(ignored.symbols).toEqual(['src/check.ts#minLength']);
+    expect(ignored.asserted).toBe(false);
+    expect(ignored.suspicions).not.toContain('no_assertion');
+    expect(get('plugin stays project code').symbols).toEqual(['src/plugin.ts#plugin']);
+  });
+
   it('follows what an arrow helper returns from an enclosing variable', () => {
     const test = inventory(`${header}
       describe('suite', () => {

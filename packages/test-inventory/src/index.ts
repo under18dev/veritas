@@ -65,7 +65,17 @@ export function inventoryTests(options: {
 
   for (const sourceFile of program.getSourceFiles())
     sourceFiles.set(path.resolve(sourceFile.fileName), sourceFile);
-  const projectSet = new Set(projectFiles.map((file) => path.resolve(file)));
+  // Assertion helpers kept with the source (`src/vitest/expectIssue.ts`) are test code: they stay in the program
+  // so their imports resolve, but calls into them are followed as helpers, not counted as project targets.
+  const projectSet = new Set(
+    projectFiles
+      .map((file) => path.resolve(file))
+      .filter((file) => {
+        const source = sourceFiles.get(file);
+
+        return !source || !importsVitestAssertions(source);
+      }),
+  );
   const tests: TestCaseType[] = [];
   const diagnostics: { file: string; message: string }[] = [];
 
@@ -425,13 +435,17 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
 
     for (const { node } of calls) if (contains(value, node)) asserted.add(node);
   }
-  // A value passed to a helper of this file that asserts on that parameter is asserted too. The helper is
-  // resolved through the checker, so a shadowing local of the same name is not mistaken for it.
-  const helpers = assertingHelpers(source);
+  // A value passed to a test helper that asserts on that parameter is asserted too. The helper is resolved
+  // through the checker, so a shadowing local of the same name is not mistaken for it, and an imported helper
+  // (through any re-exports) is looked up in the file that declares it.
   for (const node of descendants(body)) {
     if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) continue;
-    const declarations = checker.getSymbolAtLocation(node.expression)?.declarations ?? [];
-    const positions = declarations.map((declaration) => helpers.get(declaration)).find(Boolean);
+    let symbol = checker.getSymbolAtLocation(node.expression);
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    const positions = (symbol?.declarations ?? [])
+      .filter((declaration) => isTestCodeFile(declaration.getSourceFile(), ctx))
+      .map((declaration) => assertingHelpers(declaration.getSourceFile()).get(declaration))
+      .find(Boolean);
     for (const index of positions ?? []) {
       const argument = node.arguments[index];
       if (!argument) continue;
@@ -612,6 +626,45 @@ function helperInfo(body: ts.Node, ctx: Ctx): CallInfo {
   return info;
 }
 
+/** Whether a file is test code inside the root: not project code, a declaration file or a dependency. */
+function isTestCodeFile(sourceFile: ts.SourceFile, ctx: Ctx): boolean {
+  const file = path.resolve(sourceFile.fileName);
+  const relative = path.relative(ctx.root, file);
+
+  return !(
+    sourceFile.isDeclarationFile ||
+    ctx.projectSet.has(file) ||
+    relative.startsWith('..') ||
+    path.isAbsolute(relative) ||
+    relative.split(path.sep).includes('node_modules')
+  );
+}
+
+/**
+ * Whether a file imports Vitest's assertions as values (`import { expect } from 'vitest'`): it asserts, so it is
+ * test code wherever it lives. Importing anything else from Vitest (a config helper, `vi`) does not count.
+ */
+function importsVitestAssertions(source: ts.SourceFile): boolean {
+  return source.statements.some((statement) => {
+    if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) return false;
+
+    if (!ts.isStringLiteral(statement.moduleSpecifier) || statement.moduleSpecifier.text !== 'vitest')
+      return false;
+    const bindings = statement.importClause?.namedBindings;
+
+    return (
+      bindings !== undefined &&
+      ts.isNamedImports(bindings) &&
+      bindings.elements.some(
+        (element) =>
+          !element.isTypeOnly && VITEST_ASSERTIONS.has((element.propertyName ?? element.name).text),
+      )
+    );
+  });
+}
+
+const VITEST_ASSERTIONS = new Set(['expect', 'assert', 'expectTypeOf', 'assertType']);
+
 /** The body of the function a call invokes, when that function is test code inside the root. */
 function helperBody(node: Invocation, ctx: Ctx): ts.Node | undefined {
   let symbol = ctx.checker.getSymbolAtLocation(calleeOf(node));
@@ -624,19 +677,7 @@ function helperBody(node: Invocation, ctx: Ctx): ts.Node | undefined {
         ? skipParens(declaration.initializer)
         : declaration;
 
-    if (!isFunctionLike(fn) || !fn.body) continue;
-    const sourceFile = fn.getSourceFile();
-    const file = path.resolve(sourceFile.fileName);
-    const relative = path.relative(ctx.root, file);
-
-    if (
-      sourceFile.isDeclarationFile ||
-      ctx.projectSet.has(file) ||
-      relative.startsWith('..') ||
-      path.isAbsolute(relative) ||
-      relative.split(path.sep).includes('node_modules')
-    )
-      continue;
+    if (!isFunctionLike(fn) || !fn.body || !isTestCodeFile(fn.getSourceFile(), ctx)) continue;
 
     return fn.body;
   }
