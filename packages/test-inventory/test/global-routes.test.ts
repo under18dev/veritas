@@ -374,4 +374,78 @@ describe('links through globals and mocked modules', () => {
     ])
       expect(byName(name), name).toBe('none');
   });
+
+  it('records a hand-off to a global only when it runs before the project call', () => {
+    const byName = asserted(
+      {
+        'src/models.ts':
+          'declare global { interface Window { monaco?: { dispose(): void } } }\nexport function closeAll(): void { window.monaco?.dispose(); }\n',
+      },
+      `
+        import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+        import { closeAll } from '../src/models.js';
+        const shared = vi.fn();
+        const late = vi.fn();
+        const other = vi.fn();
+        const stray = vi.fn();
+        function install() { window.monaco = { dispose: stray }; }
+        describe('with setup', () => {
+          beforeEach(() => { window.monaco = { dispose: shared }; });
+          it('installed by a before hook', () => {
+            closeAll();
+            expect(shared).toHaveBeenCalled();
+          });
+        });
+        describe('elsewhere', () => {
+          afterEach(() => { window.monaco = { dispose: late }; });
+          it('installed by an after hook', () => {
+            closeAll();
+            expect(late).not.toHaveBeenCalled();
+          });
+          it('installed after the call', () => {
+            const dispose = vi.fn();
+            closeAll();
+            window.monaco = { dispose };
+            expect(dispose).not.toHaveBeenCalled();
+          });
+          it('installed by a helper nothing calls', () => {
+            closeAll();
+            expect(stray).not.toHaveBeenCalled();
+          });
+          it('installed in another test', () => {
+            window.monaco = { dispose: other };
+          });
+          it('mock of another test', () => {
+            closeAll();
+            expect(other).not.toHaveBeenCalled();
+          });
+          it('installed by a local function called before', () => {
+            const dispose = vi.fn();
+            const put = () => { window.monaco = { dispose }; };
+            put();
+            closeAll();
+            expect(dispose).toHaveBeenCalled();
+          });
+          it('local function called only after', () => {
+            const dispose = vi.fn();
+            const put = () => { window.monaco = { dispose }; };
+            closeAll();
+            put();
+            expect(dispose).not.toHaveBeenCalled();
+          });
+        });
+      `,
+    );
+
+    expect(byName('installed by a before hook')).toBe('reachable');
+    expect(byName('installed by a local function called before')).toBe('reachable');
+    for (const name of [
+      'installed by an after hook',
+      'installed after the call',
+      'installed by a helper nothing calls',
+      'mock of another test',
+      'local function called only after',
+    ])
+      expect(byName(name), name).toBe('none');
+  });
 });

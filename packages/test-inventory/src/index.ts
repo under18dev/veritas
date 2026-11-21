@@ -1201,7 +1201,22 @@ function analyzeBody(
         if (observed.has(entry) || executedAt(entry.node) > root.at) continue;
         const reach = projectReach(entry.target.symbol, ctx);
 
-        for (const route of routes) if (routeReached(route, reach)) noteReached(entry, route.label);
+        const at = executedAt(entry.node);
+
+        for (const route of routes)
+          if (
+            routeReached(route, reach) &&
+            // The mock must be handed over before the call runs, by code that runs: setup counts as before.
+            (route.handOffs === undefined ||
+              route.handOffs.some((node) => {
+                const handed = handOffAt(node, body, checker);
+
+                return (
+                  handed < at || (handed === Number.NEGATIVE_INFINITY && at === Number.NEGATIVE_INFINITY)
+                );
+              }))
+          )
+            noteReached(entry, route.label);
       }
     }
   }
@@ -5529,7 +5544,12 @@ function globalMemberWritten(left: ts.Expression, checker: ts.TypeChecker): stri
 }
 
 /** A value a test file hands to a mocked module or a global, and where project code would meet it. */
-type MockHolder = { value: ts.Node; module?: string; global?: string };
+/**
+ * A value a test file hands to a mocked module or a global, and where project code would meet it. `node` is the code
+ * that hands it over, which must run before the project call; a hoisted module mock factory (`hoisted`) applies to
+ * the whole file wherever it is written.
+ */
+type MockHolder = { value: ts.Node; node: ts.Node; hoisted?: boolean; module?: string; global?: string };
 
 /**
  * Per function, the globals it assigns one of its parameters to, or a value built from it, by parameter index
@@ -5595,7 +5615,7 @@ function fileMockHolders(source: ts.SourceFile, ctx: Ctx): MockHolder[] {
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
       const name = globalMemberWritten(node.left, checker);
 
-      if (name !== undefined) holders.push({ value: node.right, global: name });
+      if (name !== undefined) holders.push({ value: node.right, node, global: name });
       continue;
     }
 
@@ -5605,14 +5625,16 @@ function fileMockHolders(source: ts.SourceFile, ctx: Ctx): MockHolder[] {
     if (role === 'module_hoisted') {
       const file = specifierFile(node.arguments[0]);
 
-      if (file !== undefined && node.arguments[1]) holders.push({ value: node.arguments[1], module: file });
+      if (file !== undefined && node.arguments[1])
+        holders.push({ value: node.arguments[1], node, hoisted: true, module: file });
       continue;
     }
 
     if (role === 'stub_global') {
       const name = literalString(node.arguments[0]);
 
-      if (name !== undefined && node.arguments[1]) holders.push({ value: node.arguments[1], global: name });
+      if (name !== undefined && node.arguments[1])
+        holders.push({ value: node.arguments[1], node, global: name });
       continue;
     }
     const callee = skipParens(node.expression);
@@ -5627,7 +5649,7 @@ function fileMockHolders(source: ts.SourceFile, ctx: Ctx): MockHolder[] {
       while (ts.isPropertyAccessExpression(receiver)) receiver = unwrapExpression(receiver.expression);
       const file = ts.isIdentifier(receiver) ? mockedModuleOf(receiver, ctx) : undefined;
 
-      if (file !== undefined) holders.push({ value: node.arguments[0], module: file });
+      if (file !== undefined) holders.push({ value: node.arguments[0], node, module: file });
       continue;
     }
 
@@ -5651,7 +5673,7 @@ function fileMockHolders(source: ts.SourceFile, ctx: Ctx): MockHolder[] {
       for (const [index, name] of globalSetter(fn, checker)) {
         const argument = node.arguments[index];
 
-        if (argument) holders.push({ value: argument, global: name });
+        if (argument) holders.push({ value: argument, node, global: name });
       }
   }
   fileMockHoldersCache.set(source, holders);
@@ -5706,11 +5728,68 @@ function holdsMockRoot(value: ts.Node, root: MockReference, checker: ts.TypeChec
 }
 
 /** A way project code could reach a mock or the page without being handed it, with a label for reports. */
-type Route = { label: string } & (
+type Route = {
+  label: string;
+  /**
+   * The code that hands the mock over (an assignment to a global, a spy's creation, a configured result), any of
+   * which must run before the project call; absent when the route does not depend on order (an import from a module
+   * a hoisted mock replaces).
+   */
+  handOffs?: ts.Node[];
+} & (
   | { kind: 'module'; file: string }
   | { kind: 'global'; name: string }
   | { kind: 'member'; symbol: ts.Symbol }
 );
+
+/**
+ * Where in a test's run code outside or inside its body runs, relative to the body's own positions: in the body,
+ * where it runs (a local function where it is called, never if it is not); before the body when it is module or
+ * describe-level code of a describe enclosing the test, or a `beforeEach`/`beforeAll` hook there; never otherwise
+ * (another test, an `after` hook, a helper nothing shown calls).
+ */
+function handOffAt(node: ts.Node, body: ts.Node, checker: ts.TypeChecker): number {
+  if (contains(body, node)) return invokedAt(node, body, checker);
+  const callback = body.parent;
+  const registration = callback?.parent;
+
+  for (let current = node.parent; current; current = current.parent) {
+    if (!isFunctionLike(current)) continue;
+    let fn: ts.Node = current;
+
+    while (ts.isParenthesizedExpression(fn.parent)) fn = fn.parent;
+    const call = fn.parent;
+
+    if (!ts.isCallExpression(call) || !call.arguments.includes(fn as ts.Expression))
+      return Number.POSITIVE_INFINITY;
+    const suite = describeRegistration(call);
+
+    if (suite?.callback === fn) {
+      // Code in a describe runs when tests are collected, for the tests inside it only.
+      if (!registration || !contains(fn, registration)) return Number.POSITIVE_INFINITY;
+      continue;
+    }
+
+    if (testRegistration(call)) return Number.POSITIVE_INFINITY;
+    const callee = skipParens(call.expression);
+
+    // `vi.hoisted(() => …)` runs when the file loads.
+    if (ts.isCallExpression(call) && mockCall(call, checker) !== undefined) continue;
+
+    if (!ts.isIdentifier(callee) || !runner.setup.has(runnerName(callee))) return Number.POSITIVE_INFINITY;
+    // A setup hook runs before the tests of the describe it is in.
+    let scope: ts.Node | undefined = call.parent;
+
+    while (scope && !(isFunctionLike(scope) && describeRegistration(scope.parent as ts.CallExpression)))
+      scope = scope.parent;
+
+    return !scope || (registration && contains(scope, registration))
+      ? Number.NEGATIVE_INFINITY
+      : Number.POSITIVE_INFINITY;
+  }
+
+  return Number.NEGATIVE_INFINITY;
+}
 
 /**
  * What code reads, followed through the functions, components and values it names: globals (`document`, `fetch`,
@@ -6048,18 +6127,32 @@ function mockRoutes(root: MockReference & { identifier: ts.Identifier }, ctx: Ct
       continue;
     const member = checker.getTypeAtLocation(object).getProperty(name);
 
-    if (member) routes.push({ kind: 'member', symbol: member, label: `spied ${object.getText()}.${name}` });
+    if (member)
+      routes.push({
+        kind: 'member',
+        symbol: member,
+        label: `spied ${object.getText()}.${name}`,
+        handOffs: [value],
+      });
   }
 
   for (const holder of fileMockHolders(source, ctx))
     if (holdsMockRoot(holder.value, root, checker)) {
-      if (holder.module !== undefined) moduleRoute(holder.module);
+      if (holder.module !== undefined)
+        routes.push({
+          kind: 'module',
+          file: holder.module,
+          label: `mocked module ${moduleLabel(holder.module, ctx)}`,
+          ...(holder.hoisted ? {} : { handOffs: [holder.node] }),
+        });
 
-      if (
-        holder.global !== undefined &&
-        !routes.some((route) => route.kind === 'global' && route.name === holder.global)
-      )
-        routes.push({ kind: 'global', name: holder.global, label: `global ${holder.global}` });
+      if (holder.global !== undefined)
+        routes.push({
+          kind: 'global',
+          name: holder.global,
+          label: `global ${holder.global}`,
+          handOffs: [holder.node],
+        });
     }
 
   return routes;

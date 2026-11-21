@@ -252,4 +252,49 @@ describe('Jest tests', () => {
     expect(byName(tests, 'counts assertions').assertionCount).toBeGreaterThan(0);
     expect(byName(tests, 'pricing works').suspicions).toContain('tautological_assertion');
   });
+
+  it('records routes through jest.mock and jest.spyOn as possible links, never as assertions', () => {
+    const root = tempProject({
+      'src/api.ts': 'export function send(x: string): void { void x; }\n',
+      'src/log.ts': "import { send } from './api.js';\nexport function log(m: string): void { send(m); }\n",
+      'src/scroll.ts':
+        "export function reveal(el: Element): void { el.scrollIntoView({ block: 'nearest' }); }\n",
+      'src/pure.ts': 'export function idle(): number { return 1; }\n',
+      'test/routes.test.ts': `
+        import { send } from '../src/api.js';
+        import { log } from '../src/log.js';
+        import { reveal } from '../src/scroll.js';
+        import { idle } from '../src/pure.js';
+        jest.mock('../src/api.js');
+        it('mocked module', () => {
+          log('hi');
+          expect(send).toHaveBeenCalledWith('hi');
+        });
+        it('prototype spy', () => {
+          const spy = jest.spyOn(Element.prototype, 'scrollIntoView');
+          reveal(document.body);
+          expect(spy).toHaveBeenCalled();
+        });
+        it('code reaching neither', () => {
+          idle();
+          expect(send).not.toHaveBeenCalled();
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of ['mocked module', 'prototype spy']) {
+      const test = byName(tests, name);
+      expect(
+        test.targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(false);
+      expect(test.suspicions, name).toContain('reachable_by_name');
+    }
+    expect(byName(tests, 'mocked module').targetCalls[0]?.reachedVia).toEqual(['mocked module src/api.ts']);
+    expect(byName(tests, 'prototype spy').targetCalls[0]?.reachedVia).toEqual([
+      'spied Element.prototype.scrollIntoView',
+    ]);
+    expect(byName(tests, 'code reaching neither').suspicions).not.toContain('reachable_by_name');
+  });
 });
