@@ -196,9 +196,17 @@ describe('sentence splitting', () => {
     const root = tempProject('release-files');
     writeProjectFile(root, 'CHANGELOG.md', 'Uploads must be at most 5 MB.\n');
     writeProjectFile(root, 'RELEASE_NOTES', 'Retries must be at most 3.\n');
+    writeProjectFile(root, 'RELEASE-1.2.3.md', 'Exports must be at most 10 MB.\n');
+    writeProjectFile(root, 'CHANGELOG.en.md', 'Tabs must be at most 50.\n');
     writeProjectFile(root, '.github/workflows/release-linux.yml', 'name: must run on ubuntu-22.04\n');
+    writeProjectFile(root, 'release.config.js', 'module.exports = {}; // must be at most 3.\n');
     const result = await discoverEvidence({ root, config: config(), offline: true });
-    expect(result.sources.map((s) => s.locator).sort()).toEqual(['CHANGELOG.md', 'RELEASE_NOTES']);
+    expect(result.sources.map((s) => s.locator).sort()).toEqual([
+      'CHANGELOG.en.md',
+      'CHANGELOG.md',
+      'RELEASE-1.2.3.md',
+      'RELEASE_NOTES',
+    ]);
   });
 
   it('keeps a sentence closed by emphasis, code or a footnote, and a unit before the dot', () => {
@@ -240,6 +248,13 @@ describe('sentence splitting', () => {
     expect(quotes('The value must be > 0.Next must be < 5.')).toEqual([
       'The value must be > 0.Next must be < 5.',
     ]);
+  });
+
+  it('extracts a requirement wrapped in emphasis at the end of a line', async () => {
+    const root = tempProject('emphasis-requirement');
+    writeProjectFile(root, 'docs/auth.md', '**Users must log in.**\n');
+    const result = await discoverEvidence({ root, config: config(), offline: true });
+    expect(result.statements.map((s) => [s.quote, s.modality])).toEqual([['**Users must log in.**', 'must']]);
   });
 
   it('extracts every threshold of a document with emphasis, units and footnotes', async () => {
