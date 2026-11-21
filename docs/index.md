@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Veritas
   text: What does your test actually guarantee?
-  tagline: Specification-aware test verification for TypeScript and Vitest — backed by mutants, counterexamples and proofs, not a score.
+  tagline: Specification-aware test verification for TypeScript and Vitest. It answers with mutants, counterexamples and proofs instead of a score.
   actions:
     - theme: brand
       text: Get started
@@ -20,13 +20,13 @@ features:
   - title: Specifications from your docs
     details: Reads README, docs, changelogs and code, and turns rules such as "1000 or more" into properties with the exact source line. Nothing becomes accepted without your review.
   - title: Mutants with meaning
-    details: Runs real mutation testing and links every surviving mutant to the specification it violates, so a gap reads as "nobody checks total = 1000", not as a percentage.
-  - title: Counterexamples, not hunches
+    details: Runs real mutation testing and links every surviving mutant to the specification it violates, so a gap reads as "nobody checks total = 1000" rather than a percentage.
+  - title: Counterexamples you can replay
     details: Checks properties with Z3 and fast-check, replays every counterexample in JavaScript, and reports semantic gaps between the model and the language instead of hiding them.
   - title: Proofs within stated bounds
     details: Bounded integer models in Z3 and kernel-checked Lean 4 proofs. Claims always carry their domain and assumptions; sorry, admit and extra axioms are never verified.
-  - title: Evidence, not a score
-    details: Each test gets an evidence vector — specification relevance, assertions, kills, boundaries, formal claims, unknowns — and one of five honest outcomes.
+  - title: An evidence vector for each test
+    details: Each test gets an evidence vector (specification relevance, assertions, kills, boundaries, formal claims, unknowns) and one of five outcomes. There is no score.
   - title: Built for CI and agents
     details: One engine behind the CLI, Node API, MCP server, Agent Skill and GitHub Action, with stable JSON, SARIF and exit codes. Offline by default.
 ---
@@ -59,6 +59,6 @@ findings (3):
   F-99e71509e3c4  [suspected low] test "pricing works" does not check project behaviour
 ```
 
-Veritas does not tell you that your tests are "87% good". It tells you which specification each test checks, which faults it would catch, what has been checked formally and within which bounds — and what is still unknown.
+Veritas does not tell you that your tests are "87% good". It tells you which specification each test checks, which faults it would catch, what has been checked formally and within which bounds, and what is still unknown.
 
 </div>

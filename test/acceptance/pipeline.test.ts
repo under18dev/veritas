@@ -401,6 +401,64 @@ describe('test and property discriminating power', () => {
 });
 
 describe('changes since a git ref', () => {
+  it('runs mutation only with the tests that reach a file changed since the ref', () => {
+    const dir = setup('discount-boundary');
+    const git = (...args: string[]) =>
+      spawnSync(
+        'git',
+        ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args],
+        {
+          cwd: dir,
+          stdio: 'ignore',
+        },
+      );
+    writeFileSync(
+      path.join(dir, 'src/other.ts'),
+      'export function twice(n: number): number {\n  return n * 2;\n}\n',
+    );
+    writeFileSync(
+      path.join(dir, 'test/other.test.ts'),
+      "import { expect, it } from 'vitest';\nimport { twice } from '../src/other';\nit('doubles', () => { expect(twice(2)).toBe(4); });\n",
+    );
+    git('add', '-A');
+    git('commit', '-q', '-m', 'other');
+    writeFileSync(
+      path.join(dir, 'src/other.ts'),
+      'export function twice(n: number): number {\n  return n + n;\n}\n',
+    );
+    // A new file git does not track yet, and its test.
+    writeFileSync(
+      path.join(dir, 'src/fresh.ts'),
+      'export function half(n: number): number {\n  return n / 2;\n}\n',
+    );
+    writeFileSync(
+      path.join(dir, 'test/fresh.test.ts'),
+      "import { expect, it } from 'vitest';\nimport { half } from '../src/fresh';\nit('halves', () => { expect(half(4)).toBe(2); });\n",
+    );
+    const result = runCli(['mutate', '--since', 'HEAD', '--json'], dir);
+    expect([0, 1, 4], result.stderr).toContain(result.status);
+    const runId = json<RunJson>(result).runId;
+    const config = readFileSync(
+      path.join(dir, '.veritas/runs', runId, 'mutation/vitest.mutation.config.mjs'),
+      'utf8',
+    );
+    const files = JSON.parse(/const files = (\[.*\]);/.exec(config)?.[1] ?? '[]') as string[];
+    const names = files.map((f) => path.basename(f));
+    expect(names).toContain('other.test.ts');
+    expect(names).toContain('fresh.test.ts');
+    // The tests of the unchanged src/pricing.ts are left out. (A test that imports no project file is kept, since
+    // what it runs is not known.)
+    expect(names).not.toContain('discount-weak.test.ts');
+    expect(names).not.toContain('shipping-boundary.test.ts');
+    // Mutants of the unchanged file were outside --since: pending, not "no coverage".
+    const mutation = JSON.parse(readFileSync(path.join(dir, '.veritas/runs', runId, 'mutation.json'), 'utf8'))
+      .data as {
+      mutants: { status: string; location: { file: string } }[];
+    };
+    const unchanged = mutation.mutants.filter((m) => m.location.file === 'src/pricing.ts');
+    expect(unchanged.every((m) => m.status !== 'no_coverage')).toBe(true);
+  });
+
   it('marks properties of changed code with the change and refuses refs that look like options', () => {
     const dir = setup('discount-boundary');
     const file = path.join(dir, 'src/pricing.ts');
@@ -466,6 +524,19 @@ describe('existing mutation reports', () => {
     };
     expect(mutation.backend).toEqual({ name: 'imported', version: '9.0.0' });
     expect(mutation.mutants.map((m) => [m.status, m.relevance])).toEqual([['survived', 'spec_relevant']]);
+  });
+
+  it('keeps every --scope given to mutate, not only the last one', () => {
+    const dir = setup('discount-boundary');
+    writeFileSync(path.join(dir, 'reports-mutation.json'), JSON.stringify(strykerReport));
+    const args = ['--import', 'reports-mutation.json', '--scope', 'src/pricing.ts', '--scope', 'test'];
+    const result = runCli(['mutate', ...args, '--json'], dir);
+    expect([0, 4], result.stderr).toContain(result.status);
+    const { runId } = json<RunJson>(result);
+    const run = JSON.parse(readFileSync(path.join(dir, '.veritas/runs', runId, 'run.json'), 'utf8')).data as {
+      scope: { paths: string[] };
+    };
+    expect(run.scope.paths).toEqual(['src/pricing.ts', 'test']);
   });
 
   it('never treats an empty report, or pending mutants with --since, as complete mutation evidence', () => {

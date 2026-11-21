@@ -1,0 +1,74 @@
+name: benchmark-comment
+
+# Posts the report of a finished benchmark run on its pull request. The artifact comes from a run of the pull request's
+# code, so it is read as data only: this workflow checks out the default branch (never the pull request), writes the
+# comment with that branch's benchmarks/compare.mjs, takes the pull request's details from the API, and comments only
+# when the pull request's head is the commit that was measured.
+on:
+  workflow_run:
+    workflows: [benchmark]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: benchmarks
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - uses: actions/download-artifact@v4
+        with:
+          name: benchmark
+          path: out
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # The pull requests GitHub links to the run (empty for one from a fork).
+          RUN_PULLS: ${{ toJSON(github.event.workflow_run.pull_requests) }}
+        run: |
+          set -euo pipefail
+          number=$(jq -r '.number' out/pr.json)
+          [[ "$number" =~ ^[0-9]+$ ]] || { echo "invalid pull request number"; exit 1; }
+          # The artifact names the pull request; trust it only when that pull request's head is the measured commit, on
+          # the repository and branch the run came from (two pull requests can share a commit, not a head branch).
+          read -r head_sha head_repo head_branch base_ref base_sha < <(gh api "repos/$REPO/pulls/$number" \
+            --jq '"\(.head.sha) \(.head.repo.full_name) \(.head.ref) \(.base.ref) \(.base.sha)"')
+          [ "$head_sha" = "$RUN_SHA" ] || { echo "the pull request is not at the measured commit; not commenting"; exit 0; }
+          [ "$head_repo" = "$RUN_REPO" ] && [ "$head_branch" = "$RUN_BRANCH" ] \
+            || { echo "the pull request's head is not the branch that was measured; not commenting"; exit 1; }
+          # When GitHub names the run's pull requests, the artifact's must be one of them: a branch can have pull
+          # requests to several bases.
+          if [ "$(jq 'length' <<< "$RUN_PULLS")" -gt 0 ]; then
+            jq -e --argjson n "$number" 'any(.[]; .number == $n)' <<< "$RUN_PULLS" > /dev/null \
+              || { echo "the run is not linked to pull request $number; not commenting"; exit 1; }
+          fi
+          node benchmarks/compare.mjs \
+            --base out/fixtures-base.json --head out/fixtures-head.json \
+            --real-base out/real-base.json --real-head out/real-head.json \
+            --base-ref "$base_ref@${base_sha:0:7}" --head-ref "merge of ${head_sha:0:7}" > body.md
+          existing=$(gh api "repos/$REPO/issues/$number/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- veritas-benchmark -->"))) | .id' \
+            | head -n 1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$existing" -F body=@body.md > /dev/null
+          else
+            gh api -X POST "repos/$REPO/issues/$number/comments" -F body=@body.md > /dev/null
+          fi

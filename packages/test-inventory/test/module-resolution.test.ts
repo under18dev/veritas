@@ -70,12 +70,60 @@ it('a', async () => { expect(a()).toBe(1); await import('../src/b.js'); path.sep
 `,
     });
 
+    // src/types.ts is re-exported as a type only, which runs nothing.
     expect(result.files).toEqual([
       expect.objectContaining({
         path: 'test/a.test.ts',
-        dependencies: ['src/a.ts', 'src/b.ts', 'src/types.ts'],
+        dependencies: ['src/a.ts', 'src/b.ts'],
       }),
     ]);
+  });
+
+  it('follows a barrel symbol by symbol, and counts whole what may run otherwise', () => {
+    const dependencies = (test: string, extra: Record<string, string> = {}) =>
+      inventory({
+        'src/index.ts':
+          "export { used } from './used.js';\nexport * from './star.js';\nexport { other } from './other.js';\n",
+        'src/used.ts': "import { helper } from './helper.js';\nexport function used() { return helper(); }\n",
+        'src/helper.ts': 'export const helper = () => 1;\n',
+        'src/star.ts': 'export function starred() { return 2; }\n',
+        'src/other.ts': 'export function other() { return 3; }\n',
+        'src/effect.ts': "export const registry = new Map();\nregistry.set('x', 1);\n",
+        'src/types.ts': 'export interface Shape { x: number }\n',
+        'test/a.test.ts': `import { expect, it, vi } from 'vitest';\n${test}\n`,
+        ...extra,
+      }).files[0]?.dependencies;
+
+    expect(
+      dependencies("import { used } from '../src/index.js';\nit('a', () => { expect(used()).toBe(1); });"),
+    ).toEqual(['src/helper.ts', 'src/used.ts']);
+    expect(
+      dependencies("import { starred } from '../src/index.js';\nit('a', () => { starred(); });"),
+    ).toEqual(['src/star.ts']);
+    expect(dependencies("import * as lib from '../src/index.js';\nit('a', () => { lib.other(); });")).toEqual(
+      ['src/other.ts'],
+    );
+    // A namespace passed on may reach any export.
+    expect(
+      dependencies("import * as lib from '../src/index.js';\nit('a', () => { Object.keys(lib); });"),
+    ).toEqual(['src/helper.ts', 'src/index.ts', 'src/other.ts', 'src/star.ts', 'src/used.ts']);
+    expect(dependencies("import '../src/other.js';\nit('a', () => {});")).toEqual(['src/other.ts']);
+    expect(
+      dependencies(
+        "import type { Shape } from '../src/types.js';\nimport { type Shape as S } from '../src/types.js';\nit('a', () => {});",
+      ),
+    ).toEqual([]);
+    expect(
+      dependencies(
+        "vi.mock('../src/star.js');\nit('a', async () => { await vi.importActual('../src/other.js'); });",
+      ),
+    ).toEqual(['src/other.ts', 'src/star.ts']);
+    // A module that runs code when loaded counts even when nothing it exports is used.
+    expect(
+      dependencies("import { used } from '../src/index.js';\nit('a', () => { used(); });", {
+        'src/index.ts': "export { used } from './used.js';\nexport { registry } from './effect.js';\n",
+      }),
+    ).toEqual(['src/effect.ts', 'src/helper.ts', 'src/used.ts']);
   });
 });
 

@@ -47,12 +47,41 @@ export interface AssessInput {
  *   and exercises the boundary of every linked threshold property;
  * - inconclusive: anything that cannot be decided (e.g. no mutation data, no linked property).
  */
-export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
-  const edges = input.edges.filter((e) => e.testId === test.id);
+interface InputIndex {
+  edges: Map<string, AssessInput['edges']>;
+  killed: Map<string, AssessInput['mutants']>;
+  covered: Map<string, AssessInput['mutants']>;
+}
+
+/** Edges and mutants by test id (in input order), so assessing every test does not scan them for each one. */
+function indexOf(input: AssessInput): InputIndex {
+  const push = <T>(map: Map<string, T[]>, key: string, value: T) => {
+    const list = map.get(key);
+    if (list) list.push(value);
+    else map.set(key, [value]);
+  };
+  const index: InputIndex = { edges: new Map(), killed: new Map(), covered: new Map() };
+
+  for (const edge of input.edges) push(index.edges, edge.testId, edge);
+
+  for (const mutant of input.mutants) {
+    for (const id of new Set(mutant.killedBy)) push(index.killed, id, mutant);
+    for (const id of new Set(mutant.coveredBy)) push(index.covered, id, mutant);
+  }
+  return index;
+}
+
+export function assessTest(
+  test: TestCase,
+  input: AssessInput,
+  index: InputIndex = indexOf(input),
+): TestAssessment {
+  const edges = index.edges.get(test.id) ?? [];
   const propertyIds = [...new Set(edges.map((e) => e.propertyId).filter((id): id is string => id !== null))];
-  const properties = input.properties.filter((p) => propertyIds.includes(p.id));
-  const killed = input.mutants.filter((m) => m.killedBy.includes(test.id));
-  const covered = input.mutants.filter((m) => m.coveredBy.includes(test.id));
+  const wanted = new Set(propertyIds);
+  const properties = input.properties.filter((p) => wanted.has(p.id));
+  const killed = index.killed.get(test.id) ?? [];
+  const covered = index.covered.get(test.id) ?? [];
   const survived = covered.filter((m) => m.status === 'survived');
   const relevantKilled = killed.filter((m) => m.relevance === 'spec_relevant');
   const relevantSurvived = survived.filter(
@@ -68,8 +97,11 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
   const assertedCall = test.targetCalls.some((c) => c.asserted);
   const unresolved = test.suspicions.includes('unresolved_import');
   const opaque = test.suspicions.includes('opaque_call');
-  // Static analysis could not see everything the test reaches, so a missing link is not proof of none.
-  const linkUnknown = unresolved || opaque;
+  const progressOnly = test.suspicions.includes('progress_only');
+  const callerSupplied = test.suspicions.includes('caller_supplied');
+  // Static analysis could not see everything the test reaches, or the test checks when a call settles rather than
+  // what it returns: either way a missing link is not proof of none.
+  const linkUnknown = unresolved || opaque || progressOnly || callerSupplied;
 
   const boundaryCoverage: EvidenceVector['boundaryCoverage'] = [];
 
@@ -96,8 +128,15 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
   ];
   const unknowns: string[] = [];
 
+  // Some reports list a killing test without listing it as covering, so a kill also counts as running the mutant.
+  const ranMutants = covered.length > 0 || killed.length > 0;
+
   if (!input.mutationAvailable)
     unknowns.push('no mutation results for this run; detection power not measured');
+  else if (!ranMutants)
+    unknowns.push(
+      'no mutant of this run is recorded as run by this test (outside the mutation scope, or coverage not reported)',
+    );
 
   if (test.granularity === 'suite') unknowns.push('analysed at suite level only');
 
@@ -168,7 +207,9 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
 
     if (!assertedCall) rationale.push('no assertion checks the result of a project function');
 
-    if (input.mutationAvailable && killed.length === 0) rationale.push('killed no mutant');
+    // Only a test that ran mutants can be said to have missed them; others were outside the mutation scope.
+    if (input.mutationAvailable && covered.length > 0 && killed.length === 0)
+      rationale.push(`killed none of the ${covered.length} mutant(s) it runs`);
   } else if (!assertedCall) {
     // Only reachable when the link is unknown: the asserted value may come from project code, so do not judge it.
     outcome = 'inconclusive';
@@ -181,6 +222,16 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
     if (opaque)
       rationale.push(
         'the asserted values come from a child process or a dynamic import, which static analysis cannot follow',
+      );
+
+    if (progressOnly)
+      rationale.push(
+        'asserts only on constants recorded after awaiting a project call: it checks that the call settles (does not block), which static analysis cannot link to the call',
+      );
+
+    if (callerSupplied)
+      rationale.push(
+        "registered inside a shared or parameterized suite: what it calls comes from the suite's caller, which static analysis does not follow",
       );
   } else if (properties.some((p) => p.status === 'conflicted')) {
     outcome = 'spec_conflict';
@@ -240,7 +291,9 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
   } else {
     outcome = 'inconclusive';
     rationale.push(
-      'linked to properties but killed no specification-relevant mutant or boundary coverage is partial',
+      ranMutants
+        ? 'linked to properties but killed no specification-relevant mutant or boundary coverage is partial'
+        : 'linked to properties, but it ran no mutant of this run (outside the mutation scope, or coverage not reported)',
     );
   }
 
@@ -264,7 +317,10 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
 }
 
 export function assessTests(input: AssessInput): TestAssessment[] {
-  return input.tests.map((t) => assessTest(t, input));
+  // Built for this call only: an input changed and passed again gets a fresh index.
+  const index = indexOf(input);
+
+  return input.tests.map((t) => assessTest(t, input, index));
 }
 
 /**

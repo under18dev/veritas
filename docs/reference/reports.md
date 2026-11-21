@@ -1,6 +1,6 @@
 # Reports and artifacts
 
-This page describes the report formats, the sections of a report, the files of a run directory under `.veritas/runs/<run-id>/`, the metadata the files carry, and how secrets are removed. The CLI, the Node API, the MCP server and the GitHub Action write the same files. For how to interpret a report, see [Reading results](/guide/reading-results).
+The CLI, the Node API, the MCP server and the GitHub Action write the same files. This reference covers the report formats, the sections of a report, the files of a run directory under `.veritas/runs/<run-id>/`, the metadata the files carry, and how secrets are removed. For how to interpret a report, see [Reading results](/guide/reading-results).
 
 ## Report formats
 

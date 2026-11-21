@@ -1,7 +1,5 @@
 # What is Veritas?
 
-This page explains what Veritas checks, what it reports, and where its results stop.
-
 Veritas checks what the Vitest tests of a TypeScript or JavaScript project actually guarantee. It reads the rules your project already documents (README, `docs/`, JSDoc, OpenAPI and JSON Schema, git history, exported issues), links them to your code and tests, runs mutation testing, property-based tests and bounded formal checks, and reports each finding together with its evidence.
 
 ## The problem it addresses
@@ -26,10 +24,10 @@ In the second and third case every line runs, so line coverage counts the code a
 
 ## What Veritas does not do
 
-- **It gives no score.** Each test gets an evidence vector and one of five outcomes. See [Reading results](/guide/reading-results).
-- **It does not prove your code correct.** `proven_within_model` means that no counterexample exists within the stated model, bounds and assumptions. See [Verification](/guide/verification).
-- **It does not decide what the specification is.** No rule it finds becomes `accepted` unless you accept it, and it never changes a specification or an expected value to match the code. See [Specifications](/guide/specifications).
-- **It does not isolate your project's code.** Veritas runs your tests and functions with the same trust as `npm test`. See [Untrusted repositories](/guide/untrusted-repositories).
+- There is no score. Each test gets an evidence vector and one of five outcomes ([Reading results](/guide/reading-results)).
+- Veritas does not prove your code correct. `proven_within_model` means that no counterexample exists within the stated model, bounds and assumptions ([Verification](/guide/verification)).
+- Deciding what the specification is stays with you. No rule Veritas finds becomes `accepted` unless you accept it, and it never changes a specification or an expected value to match the code ([Specifications](/guide/specifications)).
+- Your project's code is not isolated: Veritas runs your tests and functions with the same trust as `npm test` ([Untrusted repositories](/guide/untrusted-repositories)).
 
 ## How a run works
 

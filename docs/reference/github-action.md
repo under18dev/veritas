@@ -1,6 +1,6 @@
 # GitHub Action
 
-This page is the reference for the Veritas GitHub Action: an example workflow, how versions are pinned, the inputs and outputs, exit codes, supported events, and the rules that keep pull requests from forks safe. The action runs the same analysis as `veritas run`, offline. For how to fit it into a CI setup, see [CI and GitHub Action](/guide/ci).
+The Veritas GitHub Action runs the same analysis as `veritas run`, offline. Below are an example workflow, how versions are pinned, the inputs and outputs, exit codes, supported events, and the rules that keep pull requests from forks safe. For how to fit it into a CI setup, see [CI and GitHub Action](/guide/ci).
 
 ## Example workflow
 

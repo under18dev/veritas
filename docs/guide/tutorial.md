@@ -157,7 +157,7 @@ succeeded   discover
 succeeded   spec
             properties: {"proposed":8}; 0 conflict(s)
 succeeded   map
-            5 test(s), 4 symbol edge(s)
+            5 test registration(s) (a loop or .each counts once), 4 symbol edge(s)
 succeeded   mutate
             mutator 0.4.5: succeeded
             counts: {"killed":16,"survived":1}

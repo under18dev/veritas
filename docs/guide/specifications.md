@@ -1,6 +1,6 @@
 # Specifications
 
-This page explains where Veritas finds the rules it checks against, how a rule becomes a property, and how you accept, reject and track properties. Veritas never decides on its own what your specification is: it creates each property as `proposed`, or `conflicted` when sources disagree, and only you can accept one.
+Veritas never decides on its own what your specification is. It creates each property as `proposed`, or `conflicted` when sources disagree, and only you can accept one. Read on for where Veritas finds the rules it checks against, how a rule becomes a property, and how you accept, reject and track properties.
 
 ## Where rules come from
 

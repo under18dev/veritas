@@ -1,6 +1,6 @@
 # Node API
 
-`@under18dev/veritas` が Node.js 向けに公開している関数と型をまとめます。各関数は、対応する `veritas` コマンドと同じステージを実行し、`.veritas/runs/<run-id>/` に同じ種類のファイルを書き、同じ方法で決めた verdict と終了コードを返します。ただし、既定値が CLI と違うものがあります。CLI と同じ動作にするには、下の表のオプションを指定してください。
+`@under18dev/veritas` が Node.js 向けに公開している関数と型の一覧です。各関数は、対応する `veritas` コマンドと同じステージを実行し、`.veritas/runs/<run-id>/` に同じ種類のファイルを書き、同じ方法で決めた verdict と終了コードを返します。ただし、既定値が CLI と違うものがあります。CLI と同じ動作にするには、下の表のオプションを指定してください。
 
 ```bash
 pnpm add -D @under18dev/veritas

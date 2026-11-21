@@ -1,6 +1,6 @@
 # CI と GitHub Action
 
-GitHub Action か CLI でプルリクエストに Veritas を実行する方法と、どの結果でビルドを失敗させるかの決め方を説明します。
+GitHub Action か CLI で、プルリクエストに対して Veritas を実行し、どの結果でビルドを失敗させるかを決めます。
 
 先に `.veritas/config.json` をコミットしてください。accepted な Property があれば `.veritas/approvals.json` もコミットします。対応する `.gitignore` は[はじめに](/ja/guide/getting-started#結果を見る)にあります。設定ファイルがないと、`veritas run` は `CONFIG_MISSING`（終了コード `2`）で止まります。
 

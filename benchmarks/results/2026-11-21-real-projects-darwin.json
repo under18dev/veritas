@@ -1,0 +1,366 @@
+{
+  "date": "2026-11-21",
+  "veritasCommit": "44074b1",
+  "machine": {
+    "cpu": "Apple M4",
+    "memoryGb": 16,
+    "os": "macOS 26 (Darwin 25.5.0)",
+    "node": "v26.13.1"
+  },
+  "note": "One veritas process per row, --offline, no LLM. seconds = wall-clock time; peakRssMb = maximum resident set size of the veritas process. Mutation rows ran with cache.enabled false. es-toolkit --since compares against a local commit that emptied src/math/{clamp,inRange,range,sum}.ts, so those four files count as changed. The two pathe standard runs were measured at commit 3a7395d (same code paths as 44074b1 apart from fixes outside these runs).",
+  "runs": [
+    {
+      "project": "unjs/defu",
+      "commit": "82632b6",
+      "command": "veritas run --profile quick --offline",
+      "exitCode": 0,
+      "seconds": 1.5,
+      "peakRssMb": 437,
+      "functions": 3,
+      "tests": 23,
+      "mutants": null,
+      "stageMs": {
+        "index": 3,
+        "discover": 54,
+        "spec": 4,
+        "map": 297,
+        "assess": 3,
+        "report": 0
+      }
+    },
+    {
+      "project": "unjs/scule",
+      "commit": "5bc6804",
+      "command": "veritas run --profile quick --offline",
+      "exitCode": 0,
+      "seconds": 1.3,
+      "peakRssMb": 399,
+      "functions": 11,
+      "tests": 11,
+      "mutants": null,
+      "stageMs": {
+        "index": 3,
+        "discover": 45,
+        "spec": 3,
+        "map": 289,
+        "assess": 3,
+        "report": 0
+      }
+    },
+    {
+      "project": "antfu/utils",
+      "commit": "91f8cf7",
+      "command": "veritas run --profile quick --offline",
+      "exitCode": 0,
+      "seconds": 1.4,
+      "peakRssMb": 332,
+      "functions": 80,
+      "tests": 32,
+      "mutants": null,
+      "stageMs": {
+        "index": 6,
+        "discover": 40,
+        "spec": 4,
+        "map": 334,
+        "assess": 4,
+        "report": 0
+      }
+    },
+    {
+      "project": "unjs/pathe",
+      "commit": "bc7477a",
+      "command": "veritas run --profile quick --offline",
+      "exitCode": 0,
+      "seconds": 1.7,
+      "peakRssMb": 467,
+      "functions": 50,
+      "tests": 62,
+      "mutants": null,
+      "stageMs": {
+        "index": 5,
+        "discover": 42,
+        "spec": 4,
+        "map": 539,
+        "assess": 9,
+        "report": 0
+      }
+    },
+    {
+      "project": "unjs/ufo",
+      "commit": "f06c800",
+      "command": "veritas run --profile quick --offline",
+      "exitCode": 0,
+      "seconds": 1.4,
+      "peakRssMb": 324,
+      "functions": 70,
+      "tests": 54,
+      "mutants": null,
+      "stageMs": {
+        "index": 7,
+        "discover": 81,
+        "spec": 7,
+        "map": 262,
+        "assess": 5,
+        "report": 1
+      }
+    },
+    {
+      "project": "open-circle/valibot",
+      "commit": "40fae94",
+      "command": "veritas run --profile quick --offline",
+      "exitCode": 0,
+      "seconds": 11.4,
+      "peakRssMb": 1089,
+      "functions": 299,
+      "tests": 3194,
+      "mutants": null,
+      "stageMs": {
+        "index": 13,
+        "discover": 141,
+        "spec": 9,
+        "map": 8314,
+        "assess": 140,
+        "report": 0
+      }
+    },
+    {
+      "project": "toss/es-toolkit",
+      "commit": "24e7a7b",
+      "command": "veritas run --profile quick --offline",
+      "exitCode": 0,
+      "seconds": 12.1,
+      "peakRssMb": 1459,
+      "functions": 840,
+      "tests": 5333,
+      "mutants": null,
+      "stageMs": {
+        "index": 30,
+        "discover": 1167,
+        "spec": 40,
+        "map": 4971,
+        "assess": 346,
+        "report": 0
+      }
+    },
+    {
+      "project": "honojs/hono",
+      "commit": "75ff8e3",
+      "command": "veritas run --profile quick --offline",
+      "exitCode": 0,
+      "seconds": 10.7,
+      "peakRssMb": 1320,
+      "functions": 654,
+      "tests": 3298,
+      "mutants": null,
+      "stageMs": {
+        "index": 22,
+        "discover": 86,
+        "spec": 13,
+        "map": 7190,
+        "assess": 166,
+        "report": 0
+      }
+    },
+    {
+      "project": "date-fns/date-fns",
+      "commit": "a9739fb",
+      "command": "veritas run --profile quick --offline",
+      "exitCode": 0,
+      "seconds": 8.6,
+      "peakRssMb": 954,
+      "functions": 916,
+      "tests": 2900,
+      "mutants": null,
+      "stageMs": {
+        "index": 41,
+        "discover": 578,
+        "spec": 46,
+        "map": 2731,
+        "assess": 195,
+        "report": 1
+      }
+    },
+    {
+      "project": "colinhacks/zod",
+      "commit": "2a343ed",
+      "command": "veritas run --profile quick --offline",
+      "exitCode": 0,
+      "seconds": 15.0,
+      "peakRssMb": 1903,
+      "functions": 1128,
+      "tests": 2721,
+      "mutants": null,
+      "stageMs": {
+        "index": 51,
+        "discover": 100,
+        "spec": 17,
+        "map": 9620,
+        "assess": 224,
+        "report": 0
+      }
+    },
+    {
+      "project": "unjs/defu",
+      "commit": "82632b6",
+      "command": "veritas run --profile standard --offline",
+      "exitCode": 0,
+      "seconds": 5.4,
+      "peakRssMb": 528,
+      "functions": 3,
+      "tests": 23,
+      "mutants": {
+        "killed": 67,
+        "survived": 14,
+        "compile_error": 25,
+        "no_coverage": 1
+      },
+      "stageMs": {
+        "index": 3,
+        "discover": 55,
+        "spec": 3,
+        "map": 285,
+        "mutate": 3775,
+        "assess": 6,
+        "report": 0
+      }
+    },
+    {
+      "project": "unjs/ufo",
+      "commit": "f06c800",
+      "command": "veritas run --profile standard --offline",
+      "exitCode": 0,
+      "seconds": 44.4,
+      "peakRssMb": 2050,
+      "functions": 70,
+      "tests": 54,
+      "mutants": {
+        "killed": 759,
+        "survived": 111,
+        "timeout": 11,
+        "compile_error": 165,
+        "no_coverage": 63
+      },
+      "stageMs": {
+        "index": 6,
+        "discover": 83,
+        "spec": 6,
+        "map": 259,
+        "mutate": 42678,
+        "assess": 31,
+        "report": 0
+      }
+    },
+    {
+      "project": "open-circle/valibot",
+      "commit": "40fae94",
+      "command": "veritas mutate --scope src/actions/minValue/minValue.ts",
+      "exitCode": 0,
+      "seconds": 14.6,
+      "peakRssMb": 891,
+      "functions": 1,
+      "tests": 3194,
+      "mutants": {
+        "killed": 8,
+        "survived": 1,
+        "compile_error": 13
+      },
+      "stageMs": {
+        "index": 2,
+        "discover": 143,
+        "spec": 7,
+        "map": 7808,
+        "mutate": 4830,
+        "assess": 101
+      }
+    },
+    {
+      "project": "toss/es-toolkit",
+      "commit": "24e7a7b",
+      "command": "veritas run --profile deep --offline --since b0cdf77",
+      "exitCode": 0,
+      "seconds": 45.1,
+      "peakRssMb": 1380,
+      "functions": 840,
+      "tests": 5333,
+      "mutants": {
+        "killed": 46,
+        "survived": 4,
+        "timeout": 2,
+        "compile_error": 16,
+        "pending": 13134
+      },
+      "stageMs": {
+        "index": 129,
+        "discover": 1144,
+        "spec": 39,
+        "map": 4865,
+        "mutate": 27122,
+        "pbt": 1,
+        "prove": 4,
+        "assess": 1883,
+        "report": 0
+      }
+    },
+    {
+      "project": "unjs/pathe",
+      "commit": "bc7477a",
+      "veritasCommit": "3a7395d",
+      "command": "veritas run --profile standard --offline",
+      "exitCode": 0,
+      "seconds": 98.6,
+      "peakRssMb": 2237,
+      "functions": 50,
+      "tests": 62,
+      "mutants": {
+        "killed": 605,
+        "survived": 107,
+        "timeout": 13,
+        "compile_error": 270,
+        "runtime_error": 2,
+        "ignored": 1,
+        "no_coverage": 19,
+        "pending": 4
+      },
+      "stageMs": {
+        "index": 4,
+        "discover": 47,
+        "spec": 4,
+        "map": 540,
+        "mutate": 96019,
+        "assess": 33,
+        "report": 0
+      },
+      "mutateStatus": "partial"
+    },
+    {
+      "project": "unjs/pathe",
+      "commit": "bc7477a",
+      "veritasCommit": "3a7395d",
+      "command": "veritas run --profile standard --offline",
+      "exitCode": 0,
+      "seconds": 93.1,
+      "peakRssMb": 2260,
+      "functions": 50,
+      "tests": 62,
+      "mutants": {
+        "killed": 609,
+        "survived": 107,
+        "timeout": 13,
+        "compile_error": 270,
+        "runtime_error": 2,
+        "ignored": 1,
+        "no_coverage": 19
+      },
+      "stageMs": {
+        "index": 6,
+        "discover": 44,
+        "spec": 3,
+        "map": 550,
+        "mutate": 90912,
+        "assess": 31,
+        "report": 0
+      },
+      "mutateStatus": "succeeded"
+    }
+  ]
+}

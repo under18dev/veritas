@@ -1,6 +1,6 @@
 # CLI リファレンス
 
-`veritas` のコマンドとオプション、終了コードと verdict、読み取る環境変数、JSON 出力をまとめます。パイプラインを実行するコマンド（`discover`、`analyze`、`mutate`、`prove`、`run`、`replay`）は、結果を `.veritas/runs/<run-id>/` に書き出します。各ファイルについては[レポートと成果物](/ja/reference/reports)を参照してください。
+`veritas` のコマンドとオプション、終了コードと verdict、読み取る環境変数、JSON 出力のリファレンスです。パイプラインを実行するコマンド（`discover`、`analyze`、`mutate`、`prove`、`run`、`replay`）は、結果を `.veritas/runs/<run-id>/` に書き出します。各ファイルについては[レポートと成果物](/ja/reference/reports)を参照してください。
 
 ```bash
 veritas [グローバルオプション] <command> [オプション]
@@ -83,7 +83,7 @@ veritas explain F-0b43c88cc3a6
 
 ### `init` と `doctor`
 
-`init` はパッケージマネージャー、`tsconfig.json`、ソースとテストの glob を検出して、`.veritas/config.json` を書き出します。既存の設定は `--force` を付けない限り上書きしません。プロジェクトが Vitest を使っていなければ、`VITEST_NOT_FOUND` で失敗します。
+`init` はパッケージマネージャー、`tsconfig.json`、ソースとテストの glob を検出して、`.veritas/config.json` を書き出します。ソースの glob には、ルートと、`pnpm-workspace.yaml`（`packages:`）または `package.json` の `workspaces` で宣言した各 workspace パッケージの `src/`（または `lib/`）が入ります（パスそのものか、末尾が `*` のパターンに対応）。テストの glob には、`*.test.*` と `*.spec.*` に加えて、`test.ts`（`.tsx`、`.js`、`.mjs` も）という名前のファイルと `__tests__/` の下のファイルも入ります。ただし、そのようなファイルが `vitest` から import している場合に限ります。既存の設定は `--force` を付けない限り上書きしません。プロジェクトが Vitest を使っていなければ、`VITEST_NOT_FOUND` で失敗します。
 
 `doctor` は、各ケイパビリティ（`node`、`git`、`package_manager`、`typescript`、`vitest`、`mutator`、`fast_check`、`z3`、`lean`、`llm`、`network`、`sandbox`）の状態と、それが影響する機能を一覧にします。mutator、fast-check、Z3 は、プロジェクトにインストールされていればそれを使い、なければ Veritas と一緒にインストールされたものを使います。どちらを使うかも `doctor` に表示されます。LLM の CLI については、ログインしているかどうかだけを確かめます。
 

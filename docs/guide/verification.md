@@ -1,6 +1,6 @@
 # Verification
 
-This page explains the three ways Veritas checks properties against your code (Z3, fast-check and Lean 4), what each result covers, and how to rerun a check yourself.
+Veritas checks properties against your code in three ways: Z3, fast-check and Lean 4. For each one you will find what its results cover and how to rerun a check yourself.
 
 | Engine     | Command                                       | Result                                   | Covers                                                      |
 | ---------- | --------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------- |

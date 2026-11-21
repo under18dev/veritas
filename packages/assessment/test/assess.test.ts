@@ -89,6 +89,33 @@ describe('assessTest', () => {
     expect(a.rationale.join(' ')).toMatch(/no assertion checks the result/);
   });
 
+  it('says a disconnected test killed no mutant only when it ran mutants, not when it was outside the scope', () => {
+    const t = testCase({ id: 'T-a', suspicions: ['no_assertion'], assertionCount: 0 });
+    const ran = assessTest(t, input({ mutants: [mutant('M-1', 'survived', [], ['T-a', 'T-b'])] }));
+    expect(ran.outcome).toBe('tautological_or_disconnected');
+    expect(ran.rationale).toContain('killed none of the 1 mutant(s) it runs');
+
+    const outside = assessTest(t, input({ mutants: [mutant('M-1', 'survived', [], ['T-b'])] }));
+    expect(outside.outcome).toBe('tautological_or_disconnected');
+    expect(outside.rationale.join(' ')).not.toMatch(/killed/);
+    expect(outside.vector.unknowns.join(' ')).toMatch(
+      /no mutant of this run is recorded as run by this test/,
+    );
+
+    // A kill counts as running the mutant even when the report does not list the test as covering it.
+    const killedOnly = assessTest(t, input({ mutants: [mutant('M-1', 'killed', ['T-a'], [])] }));
+    expect(killedOnly.vector.unknowns.join(' ')).not.toMatch(/no mutant of this run/);
+  });
+
+  it('does not say a test outside the mutation scope killed no specification-relevant mutant', () => {
+    const t = testCase({ id: 'T-a', targetCalls: [call(['1000'])] });
+    const outside = assessTest(t, input({ mutants: [mutant('M-1', 'survived', [], ['T-b'])] }));
+    expect(outside.outcome).toBe('inconclusive');
+    expect(outside.rationale.join(' ')).toMatch(/ran no mutant of this run/);
+    const ran = assessTest(t, input({ mutants: [mutant('M-1', 'killed', ['T-b'], ['T-a', 'T-b'])] }));
+    expect(ran.rationale.join(' ')).toMatch(/killed no specification-relevant mutant/);
+  });
+
   it('is inconclusive, not disconnected, when the asserted call goes through an unresolved import', () => {
     const t = testCase({ id: 'T-a', calledSymbols: [], suspicions: ['unresolved_import'] });
     const a = assessTest(t, input());
@@ -96,6 +123,29 @@ describe('assessTest', () => {
     expect(a.vector.assertionRelevance).toBe('unknown');
     expect(a.rationale.join(' ')).toMatch(/import did not resolve/);
     expect(a.limitations.join(' ')).toMatch(/could not resolve/);
+  });
+
+  it('is inconclusive, not disconnected, when the test checks only that an awaited call settles', () => {
+    const t = testCase({ id: 'T-a', targetCalls: [call(['1'], false)], suspicions: ['progress_only'] });
+    const a = assessTest(t, input());
+    expect(a.outcome).toBe('inconclusive');
+    expect(a.vector.assertionRelevance).toBe('unknown');
+    expect(a.rationale.join(' ')).toMatch(/checks that the call settles/);
+  });
+
+  it('sees changes to an input passed again', () => {
+    const t = testCase({ id: 'T-a', targetCalls: [call(['1000'], true)] });
+    const data = input({ mutants: [] });
+    expect(assessTest(t, data).vector.mutationDetection.killed).toEqual([]);
+    data.mutants.push(mutant('M-1', 'killed', ['T-a'], ['T-a']));
+    expect(assessTest(t, data).vector.mutationDetection.killed).toEqual(['M-1']);
+  });
+
+  it('is inconclusive, not disconnected, when the test belongs to a suite its caller supplies', () => {
+    const t = testCase({ id: 'T-a', calledSymbols: [], suspicions: ['caller_supplied'] });
+    const a = assessTest(t, input());
+    expect(a.outcome).toBe('inconclusive');
+    expect(a.rationale.join(' ')).toMatch(/shared or parameterized suite/);
   });
 
   it('is inconclusive, not disconnected, when the test checks only types', () => {

@@ -50,10 +50,19 @@ function secretValues(env: NodeJS.ProcessEnv): string[] {
   return values;
 }
 
+/**
+ * Every pattern below needs one of these substrings, so a text with none of them (and no secret value) is returned
+ * as is without running each pattern over it.
+ */
+const MAY_HOLD_SECRET =
+  /sk-|gh[pousr]_|github_pat_|AKIA|xox[abprs]-|-----BEGIN|passw|secret|token|api[_-]?key|auth|:\/\/|bearer|basic/i;
+
 function redactWith(text: string, secrets: string[]): string {
   let out = text;
 
   for (const value of secrets) if (out.includes(value)) out = out.split(value).join(REDACTED);
+
+  if (!MAY_HOLD_SECRET.test(out)) return out;
 
   for (const [pattern, replacement] of KEEP_PREFIX) out = out.replace(pattern, replacement);
 
@@ -64,6 +73,16 @@ function redactWith(text: string, secrets: string[]): string {
 
 export function redact(text: string, env: NodeJS.ProcessEnv = process.env): string {
   return redactWith(text, secretValues(env));
+}
+
+/**
+ * `redact` with the secret environment values collected once, for code that redacts many strings in one go
+ * (reading environment variables on every call is the slow part).
+ */
+export function createRedactor(env: NodeJS.ProcessEnv = process.env): (text: string) => string {
+  const secrets = secretValues(env);
+
+  return (text) => redactWith(text, secrets);
 }
 
 /** Redact every string inside a JSON-like value. Secret environment values are collected once per call. */

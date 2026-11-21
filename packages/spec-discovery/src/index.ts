@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import path from 'node:path';
 import {
+  createRedactor,
   EvidenceSource,
   redact,
   resolveInsideRoot,
@@ -87,8 +88,11 @@ function lineRange(text: string, start: number, end: number): SourceRange {
   return { start: line(start), end: line(end) };
 }
 
-function cleanQuote(text: string): string {
-  return redact(text.replace(/\s+/g, ' ').trim()).slice(0, 300);
+type Redact = (text: string) => string;
+
+/** Collapsed and redacted; `redactText` is made once per discovery run, so secrets are read once, not per statement. */
+function cleanQuote(text: string, redactText: Redact = (t) => redact(t)): string {
+  return redactText(text.replace(/\s+/g, ' ').trim()).slice(0, 300);
 }
 
 function subjects(text: string): string[] {
@@ -178,7 +182,7 @@ export function withoutCodeBlocks(text: string): string {
     .join('\n');
 }
 
-function extract(text: string, sourceId: string, stale: boolean): NormativeStatement[] {
+function extract(text: string, sourceId: string, stale: boolean, redactText: Redact): NormativeStatement[] {
   const output: NormativeStatement[] = [];
   const releaseOf = versionAt(text);
 
@@ -186,7 +190,7 @@ function extract(text: string, sourceId: string, stale: boolean): NormativeState
     const raw = match[0].trim();
 
     if (!raw) continue;
-    const quote = cleanQuote(raw);
+    const quote = cleanQuote(raw, redactText);
     const flags: string[] = [];
 
     if (
@@ -292,7 +296,7 @@ function exportedDocs(text: string): string {
   return output.join('\n');
 }
 
-function sourceFrom(input: SourceInput, capturedAt: string): EvidenceSource {
+function sourceFrom(input: SourceInput, capturedAt: string, redactText: Redact): EvidenceSource {
   const contentHash = sha256(input.text);
   // The id depends on what the source says, not on the commit it was read at: a commit that leaves the text
   // unchanged must keep source, statement and property ids (and the approvals recorded against them).
@@ -311,7 +315,7 @@ function sourceFrom(input: SourceInput, capturedAt: string): EvidenceSource {
     capturedAt,
     contentHash,
     derivedFrom: [],
-    summary: redact(cleanQuote(input.text)),
+    summary: cleanQuote(input.text, redactText),
     trust: 'untrusted_data',
   });
 }
@@ -420,7 +424,7 @@ async function collectLocal(
   return inputs;
 }
 
-function schemaStatements(text: string, sourceId: string): NormativeStatement[] {
+function schemaStatements(text: string, sourceId: string, redactText: Redact): NormativeStatement[] {
   const out: NormativeStatement[] = [];
   const re = /["']?(exclusiveMinimum|exclusiveMaximum|minimum|maximum)["']?\s*:\s*(true|false|-?\d[\d,]*)/gi;
 
@@ -431,7 +435,7 @@ function schemaStatements(text: string, sourceId: string): NormativeStatement[] 
     if (!key || !value || value === 'true' || value === 'false') continue;
     const operator: '<' | '<=' | '>' | '>=' =
       key === 'minimum' ? '>=' : key === 'maximum' ? '<=' : key === 'exclusiveminimum' ? '>' : '<';
-    const quote = cleanQuote(match[0]);
+    const quote = cleanQuote(match[0], redactText);
     const range = lineRange(text, match.index ?? 0, (match.index ?? 0) + match[0].length);
     const relation = {
       kind: 'threshold' as const,
@@ -821,8 +825,9 @@ function derivedAndSuperseded(
     'web',
     'runtime',
   ];
+  const byId = new Map(sources.map((s) => [s.id, s]));
   const rank = (id: string) => {
-    const source = sources.find((s) => s.id === id);
+    const source = byId.get(id);
 
     return [order.indexOf(source?.kind ?? 'runtime'), source?.locator ?? id] as const;
   };
@@ -845,23 +850,38 @@ function derivedAndSuperseded(
     if (original) for (const copy of copies) add({ from: copy, to: original, relation: 'derived_from' });
   }
 
-  for (const input of inputs) {
+  // Only a text that says outdated/obsolete/superseded/supersedes/replaces can supersede another source, so the
+  // others are not compared with every source (which is quadratic in the number of sources).
+  const candidates = inputs.filter((input) =>
+    /\b(?:outdated|obsolete|superseded|supersedes|replaces)\b/i.test(input.text),
+  );
+  const patterns =
+    candidates.length === 0
+      ? []
+      : sources.flatMap((other) => {
+          const name = escapeRegExp(path.posix.basename(other.locator).replace(/\.(md|markdown|txt)$/i, ''));
+
+          return name.length < 3
+            ? []
+            : [
+                {
+                  other,
+                  mentions: new RegExp(
+                    `\\b${name}(?:\\.\\w+)?\\b[^.\\n]{0,40}\\b(?:is|are)\\s+(?:outdated|obsolete|superseded)\\b|\\b(?:supersedes|replaces)\\s+(?:the\\s+)?\\S*${name}\\b`,
+                    'i',
+                  ),
+                },
+              ];
+        });
+
+  for (const input of candidates) {
     const source = sourceByInput.get(input);
 
     if (!source) continue;
 
-    for (const other of sources) {
-      if (other.id === source.id) continue;
-      const name = escapeRegExp(path.posix.basename(other.locator).replace(/\.(md|markdown|txt)$/i, ''));
-
-      if (name.length < 3) continue;
-      const mentions = new RegExp(
-        `\\b${name}(?:\\.\\w+)?\\b[^.\\n]{0,40}\\b(?:is|are)\\s+(?:outdated|obsolete|superseded)\\b|\\b(?:supersedes|replaces)\\s+(?:the\\s+)?\\S*${name}\\b`,
-        'i',
-      );
-
-      if (mentions.test(input.text)) add({ from: source.id, to: other.id, relation: 'supersedes' });
-    }
+    for (const { other, mentions } of patterns)
+      if (other.id !== source.id && mentions.test(input.text))
+        add({ from: source.id, to: other.id, relation: 'supersedes' });
   }
 
   return [...edges.values()];
@@ -884,6 +904,8 @@ export async function discoverEvidence(options: {
    */
   gitRoot?: string;
 }): Promise<DiscoveryResult> {
+  // One redactor per run: secret environment values are read once, and concurrent runs never share it.
+  const redactText = createRedactor();
   const capturedAt = (options.now ?? (() => new Date()))().toISOString();
   const selected = options.sources ?? [
     'local',
@@ -951,7 +973,7 @@ export async function discoverEvidence(options: {
   const sourceByInput = new Map<SourceInput, EvidenceSource>();
 
   for (const input of inputs) {
-    const source = sourceFrom(input, capturedAt);
+    const source = sourceFrom(input, capturedAt, redactText);
     sources.push(source);
     sourceByInput.set(input, source);
   }
@@ -974,13 +996,14 @@ export async function discoverEvidence(options: {
     const stale = /(?:^|\/)v1(?:\/|$)|deprecated|(?:^|\/)old(?:\/|$)/i.test(input.locator);
     statements.push(
       ...(input.kind === 'standard'
-        ? schemaStatements(input.text, source.id)
+        ? schemaStatements(input.text, source.id, redactText)
         : extract(
             /\.mdx?$/i.test(input.locator) || input.kind === 'issue' || input.kind === 'pr'
               ? withoutCodeBlocks(input.text)
               : input.text,
             source.id,
             stale,
+            redactText,
           )),
     );
   }

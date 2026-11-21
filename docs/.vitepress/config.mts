@@ -45,6 +45,7 @@ function sidebar(prefix: '' | '/ja', t: Record<string, string>): DefaultTheme.Si
         { text: t.architecture, link: `${prefix}/concepts/architecture` },
         { text: t.security, link: `${prefix}/concepts/security` },
         { text: t.support, link: `${prefix}/concepts/support-matrix` },
+        { text: t.performance, link: `${prefix}/concepts/performance` },
         { text: t.adr, link: '/adr/' },
       ],
     },
@@ -78,6 +79,7 @@ const en = {
   semantics: 'Semantics',
   architecture: 'Architecture',
   security: 'Security model',
+  performance: 'Performance',
   support: 'Support matrix',
   adr: 'Design decisions (ADR)',
 };
@@ -109,6 +111,7 @@ const ja: typeof en = {
   semantics: 'セマンティクス',
   architecture: 'アーキテクチャ',
   security: 'セキュリティモデル',
+  performance: '性能',
   support: '対応環境',
   adr: '設計判断（ADR、英語）',
 };

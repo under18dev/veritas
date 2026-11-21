@@ -1,6 +1,6 @@
 # Getting started
 
-This page installs Veritas in your project, checks the environment and runs the pipeline once. For a guided example with a known bug, follow the [tutorial](/guide/tutorial).
+Install Veritas in your project, check the environment and run the pipeline once. For a guided example with a known bug, follow the [tutorial](/guide/tutorial).
 
 ## Requirements
 
@@ -47,7 +47,7 @@ To use Veritas without adding it to each project, install it globally:
 npm install -g @under18dev/veritas
 ```
 
-This puts `veritas` and `veritas-mcp` on your `PATH`. When you run it in a project, Vitest, `@mizchi/mutator` and fast-check are taken from the project if it has them installed. If your tests use a test environment such as happy-dom or jsdom, or Vitest plugins, add `@mizchi/mutator` to the project too (`npm install -D @mizchi/mutator`): the copy that comes with Veritas runs the tests with its own Vitest, which cannot load them.
+This puts `veritas` and `veritas-mcp` on your `PATH`. When you run it in a project, Vitest, `@mizchi/mutator` and fast-check are taken from the project if it has them installed. The copy of `@mizchi/mutator` that comes with Veritas runs the project's Vitest, but loads some of its own files from where Veritas is installed. If mutation testing reports that your tests fail without mutants while they pass on their own, add `@mizchi/mutator` to the project too (`npm install -D @mizchi/mutator`).
 
 ## Create the configuration
 
@@ -83,7 +83,7 @@ Without `--yes`, `init` run in a terminal asks about the settings it cannot dete
 | Web pages                                                      | Turns on `sources.web` for the domains you list; fetched only in runs without `--offline`                                                                                                                                 |
 | Install Lean 4 (only when it is missing)                       | Downloads the official elan installer from GitHub and installs the stable Lean 4 toolchain into `~/.elan`, where `veritas doctor` looks                                                                                   |
 | Use Lean instead of Z3                                         | Sets `formal.backend` to `lean`. Lean covers integers and booleans only; Z3 also covers records and arrays                                                                                                                |
-| Add `@mizchi/mutator` to the project (only when it is missing) | Runs your package manager to add it as a dev dependency, so mutation testing uses the project's Vitest, test environments and plugins                                                                                     |
+| Add `@mizchi/mutator` to the project (only when it is missing) | Runs your package manager to add it as a dev dependency, so mutation testing loads all of mutator's files from the project instead of from where Veritas is installed                                                     |
 
 You then see the resulting configuration and confirm writing it. Installs run only after that confirmation; if Lean cannot be installed, proofs stay on Z3. With `--json` or in CI, these questions are skipped and nothing is installed; `init` still asks before writing the detected configuration. `--yes` writes it without asking, and is required without a terminal.
 

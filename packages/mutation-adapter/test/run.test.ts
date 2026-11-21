@@ -412,7 +412,7 @@ describe('runMutation on the discount fixture (real mutator)', () => {
       const r = await runMutation({ root, config: config(), reportDir: path.join(root, 'out') });
       expect(r).toMatchObject({ status: 'failed', exitCode: 4 });
       expect(r.detail).toMatch(/baseline/);
-      // With the bundled copy, the detail says the tests ran on Veritas's Vitest and how to use the project's.
+      // With the bundled copy, the detail says files from outside the project ran and how to avoid that.
       const ownCopy = r.warnings.some((w) => w.includes("adapter's own copy"));
       expect(/add @mizchi\/mutator to the project's devDependencies/.test(r.detail ?? '')).toBe(ownCopy);
       expect(r.mutants).toEqual([]);

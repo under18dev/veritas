@@ -1,6 +1,6 @@
 # レポートと成果物
 
-レポートの形式と節、`.veritas/runs/<run-id>/` にできるファイル、各ファイルが持つメタデータ、秘密情報の扱いをまとめます。CLI、Node API、MCP サーバー、GitHub Action のどれから実行しても、同じファイルができます。レポートの読み取り方は[結果の読み方](/ja/guide/reading-results)を参照してください。
+CLI、Node API、MCP サーバー、GitHub Action のどれから実行しても、同じファイルができます。このリファレンスには、レポートの形式と節、`.veritas/runs/<run-id>/` にできるファイル、各ファイルが持つメタデータ、秘密情報の扱いを載せています。レポートの読み取り方は[結果の読み方](/ja/guide/reading-results)を参照してください。
 
 ## レポートの形式
 

@@ -19,6 +19,7 @@ import {
   ArtifactIndex,
   ContentCache,
   canonicalJson,
+  detectProject,
   ExitCode,
   evaluatePolicy,
   type Finding,
@@ -46,6 +47,7 @@ import {
   stableId,
   VeritasConfig,
   VeritasError,
+  workspacePackages,
 } from '../src/index.js';
 
 const tmp = () => mkdtempSync(path.join(tmpdir(), 'veritas-core-'));
@@ -606,7 +608,8 @@ describe('schemas', () => {
   });
 });
 
-describe('doctor', () => {
+// doctor runs git, lean and lake to read their versions; on a busy machine that exceeds the 5 s default.
+describe('doctor', { timeout: 30_000 }, () => {
   it('reports the tools the Veritas installation brings when the project has none', async () => {
     const root = tmp();
     writeFileSync(path.join(root, 'package.json'), '{"name":"p"}');
@@ -621,6 +624,54 @@ describe('doctor', () => {
     expect(cap('fast_check')).toMatchObject({ state: 'available', version: '4.5.6' });
     expect(cap('z3')).toMatchObject({ state: 'available', version: '7.8.9' });
     expect(cap('z3')?.detail).toMatch(/resolved from veritas/);
+  });
+
+  it('includes the sources of workspace packages and other test file conventions', () => {
+    const root = tmp();
+    writeFileSync(path.join(root, 'package.json'), '{"name":"p","devDependencies":{"vitest":"^4.0.0"}}');
+    writeFileSync(path.join(root, 'pnpm-workspace.yaml'), "packages:\n  - '.'\n  - 'adapters/*'\n");
+    for (const dir of ['src', 'adapters/one/src', 'adapters/two', 'lib/__tests__'])
+      mkdirSync(path.join(root, dir), { recursive: true });
+    writeFileSync(path.join(root, 'adapters/one/package.json'), '{}');
+    writeFileSync(path.join(root, 'adapters/two/package.json'), '{}');
+    writeFileSync(path.join(root, 'src/test.ts'), "import { it } from 'vitest';\n");
+    writeFileSync(path.join(root, 'lib/__tests__/a.ts'), "import { expect } from 'vitest';\n");
+    const project = detectProject(root);
+    expect(project.sourceGlobs).toEqual([
+      'src/**/*.{ts,tsx,js,mjs}',
+      'adapters/one/src/**/*.{ts,tsx,js,mjs}',
+    ]);
+    expect(project.testGlobs).toEqual([
+      '**/*.{test,spec}.{ts,tsx,js,mjs}',
+      '**/test.{ts,tsx,js,mjs}',
+      '**/__tests__/**/*.{ts,tsx,js,mjs}',
+    ]);
+    expect(workspacePackages(root, { workspaces: ['adapters/*'] })).toEqual(['adapters/one', 'adapters/two']);
+    // The flow form of pnpm-workspace.yaml.
+    writeFileSync(path.join(root, 'pnpm-workspace.yaml'), "packages: ['adapters/*']\n");
+    expect(workspacePackages(root, null)).toEqual(['adapters/one', 'adapters/two']);
+  });
+
+  it('does not take a test.ts or __tests__ file that does not use Vitest for a test', () => {
+    const root = tmp();
+    writeFileSync(path.join(root, 'package.json'), '{"name":"p","devDependencies":{"vitest":"^4.0.0"}}');
+    mkdirSync(path.join(root, 'src/__tests__'), { recursive: true });
+    writeFileSync(path.join(root, 'src/test.ts'), 'export const sample = 1;\n');
+    writeFileSync(path.join(root, 'src/__tests__/fixtures.ts'), 'export const data = [];\n');
+    expect(detectProject(root).testGlobs).toEqual(['**/*.{test,spec}.{ts,tsx,js,mjs}']);
+  });
+
+  it('finds Vitest files deeper under __tests__ and side-effect imports of vitest', () => {
+    const root = tmp();
+    writeFileSync(path.join(root, 'package.json'), '{"name":"p","devDependencies":{"vitest":"^4.0.0"}}');
+    mkdirSync(path.join(root, 'src/__tests__/unit'), { recursive: true });
+    writeFileSync(path.join(root, 'src/__tests__/unit/foo.ts'), "import { it } from 'vitest';\n");
+    writeFileSync(path.join(root, 'src/test.ts'), "import 'vitest';\n");
+    expect(detectProject(root).testGlobs).toEqual([
+      '**/*.{test,spec}.{ts,tsx,js,mjs}',
+      '**/test.{ts,tsx,js,mjs}',
+      '**/__tests__/**/*.{ts,tsx,js,mjs}',
+    ]);
   });
 
   it("explains that Yarn Plug'n'Play is not supported instead of asking to install again", async () => {

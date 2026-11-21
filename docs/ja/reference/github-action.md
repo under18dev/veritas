@@ -1,6 +1,6 @@
 # GitHub Action
 
-Veritas の GitHub Action について、ワークフローの例、バージョンの固定方法、入力と出力、終了コード、対応するイベント、フォークからのプルリクエストを安全に扱うための規則をまとめます。Action は `veritas run` と同じ分析をオフラインで実行します。CI への組み込み方は [CI と GitHub Action](/ja/guide/ci) を参照してください。
+Veritas の GitHub Action は、`veritas run` と同じ分析をオフラインで実行します。以下に、ワークフローの例、バージョンの固定方法、入力と出力、終了コード、対応するイベント、フォークからのプルリクエストを安全に扱うための規則を載せます。CI への組み込み方は [CI と GitHub Action](/ja/guide/ci) を参照してください。
 
 ## ワークフローの例
 

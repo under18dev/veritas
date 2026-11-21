@@ -1,6 +1,6 @@
 # Improving tests
 
-This page explains how `veritas improve` plans new tests for the gaps a run found, how you approve and apply a plan, and what happens when a plan cannot be applied.
+`veritas improve` plans new tests for the gaps a run found. You approve a plan before it is applied, and the last sections cover what happens when a plan cannot be applied.
 
 ## What `improve` changes
 

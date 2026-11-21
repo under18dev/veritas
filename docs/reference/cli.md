@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists the commands and options of `veritas`, its exit codes and verdicts, the environment variables it reads, and its JSON output. The commands that run the pipeline (`discover`, `analyze`, `mutate`, `prove`, `run` and `replay`) write their results to `.veritas/runs/<run-id>/`; the files are described in [Reports and artifacts](/reference/reports).
+The commands and options of `veritas`, its exit codes and verdicts, the environment variables it reads, and its JSON output. The commands that run the pipeline (`discover`, `analyze`, `mutate`, `prove`, `run` and `replay`) write their results to `.veritas/runs/<run-id>/`; the files are described in [Reports and artifacts](/reference/reports).
 
 ```bash
 veritas [global options] <command> [options]
@@ -81,7 +81,7 @@ With the global `--json` option, stdout contains exactly one JSON value and noth
 
 ### `init` and `doctor`
 
-`init` detects the package manager, `tsconfig.json` and the source and test globs, and writes `.veritas/config.json`. It does not overwrite an existing configuration unless you pass `--force`, and fails with `VITEST_NOT_FOUND` when the project does not use Vitest.
+`init` detects the package manager, `tsconfig.json` and the source and test globs, and writes `.veritas/config.json`. The source globs cover `src/` (or `lib/`) of the root and of every workspace package declared in `pnpm-workspace.yaml` (`packages:`) or in the `workspaces` field of `package.json` (literal paths and a trailing `*`). Besides `*.test.*` and `*.spec.*`, files named `test.ts` (and `.tsx`, `.js`, `.mjs`) and files under `__tests__/` become test globs when such a file imports from `vitest`. It does not overwrite an existing configuration unless you pass `--force`, and fails with `VITEST_NOT_FOUND` when the project does not use Vitest.
 
 `doctor` lists each capability (`node`, `git`, `package_manager`, `typescript`, `vitest`, `mutator`, `fast_check`, `z3`, `lean`, `llm`, `network`, `sandbox`), its state, and the features it affects. Mutator, fast-check and Z3 are taken from the project when it installs them, and otherwise from the copies installed with Veritas; `doctor` shows which. For LLM CLIs, it checks only whether you are logged in.
 

@@ -1,6 +1,6 @@
 # Agents and MCP
 
-This page shows how to let a coding agent use Veritas: through the Agent Skill, which instructs the agent to run the `veritas` CLI, or through the MCP server `veritas-mcp`, which exposes Veritas as tools. Both use the same engine as the CLI.
+A coding agent can use Veritas in two ways: through the Agent Skill, which instructs the agent to run the `veritas` CLI, or through the MCP server `veritas-mcp`, which exposes Veritas as tools. Both use the same engine as the CLI.
 
 ## Agent Skill
 

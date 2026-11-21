@@ -182,7 +182,7 @@ veritas mutate [options]
 | Option            | Description                                                                       | Values | Default |
 | ----------------- | --------------------------------------------------------------------------------- | ------ | ------- |
 | `--since <ref>`   | mutate only code changed since this git ref                                       |        |         |
-| `--scope <glob>`  | mutate only files matching this glob                                              |        |         |
+| `--scope <glob>`  | mutate only files matching this glob (repeatable)                                 |        |         |
 | `--import <file>` | normalize an existing mutation-testing-elements report instead of running mutator |        |         |
 | `--kill-matrix`   | run every covering test for every mutant and report the kill matrix (slower)      |        |         |
 
@@ -239,7 +239,7 @@ veritas prove [options]
 
 | Option               | Description                                                | Values       | Default |
 | -------------------- | ---------------------------------------------------------- | ------------ | ------- |
-| `--property <id>`    | verify this property only                                  |              |         |
+| `--property <id>`    | verify this property only (repeatable)                     |              |         |
 | `--include-proposed` | also check properties that are not accepted (experimental) |              |         |
 | `--engine <engine>`  | z3 (bounded checks) or lean (kernel-checked proofs)        | `z3`, `lean` | `z3`    |
 

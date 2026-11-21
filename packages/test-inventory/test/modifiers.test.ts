@@ -54,4 +54,25 @@ describe('Vitest registration modifiers', () => {
     expect(testCase.suitePath).toEqual(['generated']);
     expect(testCase.modifiers).toContain('each');
   });
+
+  it('registers the test of skipIf, runIf and for, not the call that makes the registration', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/conditional.test.ts': `
+        import { describe, expect, test } from 'vitest';
+        import { value } from '../src/value.js';
+        test.skipIf(!('File' in globalThis))('conditional', () => { expect(value(1)).toBe(1); });
+        describe.runIf(true)('suite', () => {
+          test.for([1, 2])('row %i', (n) => { expect(value(n)).toBe(n); });
+        });
+      `,
+    });
+    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+
+    expect(inventory.tests.map((t) => [t.name, t.suitePath, t.modifiers])).toEqual([
+      ['conditional', [], []],
+      ['row %i', ['suite'], ['each']],
+    ]);
+    expect(inventory.tests.every((t) => t.targetCalls.some((call) => call.asserted))).toBe(true);
+  });
 });

@@ -5,6 +5,7 @@ import { render } from 'ink-testing-library';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App.js';
 import type { TuiApi } from '../src/api.js';
+import { abbreviateHome } from '../src/screens/Home.js';
 import { applyStageEvent } from '../src/screens/Run.js';
 import { leaves, parseValue, setAt, validate } from '../src/screens/Settings.js';
 
@@ -185,6 +186,22 @@ describe('the TUI', () => {
     await press(app, 'y');
     await until(app, 'Created the configuration');
     expect(api.init).toHaveBeenCalled();
+  });
+
+  it('keeps a long project path on one line, cut at the start, with the home directory as ~', async () => {
+    const root = `/home/someone/${'very-long-directory-name/'.repeat(8)}shop`;
+    const app = await open(fakeApi({ root }), 0);
+    await until(app, 'Project: …');
+    const line =
+      app
+        .lastFrame()
+        ?.split('\n')
+        .find((l) => l.includes('Project: ')) ?? '';
+    expect(line).toMatch(/Project: …\S*\/shop /);
+    expect(app.lastFrame()).not.toMatch(/^\s*very-long-directory-name/m);
+    expect(abbreviateHome('/home/someone/work/shop', '/home/someone')).toBe('~/work/shop');
+    expect(abbreviateHome('/home/someone', '/home/someone')).toBe('~');
+    expect(abbreviateHome('/home/someone2/shop', '/home/someone')).toBe('/home/someone2/shop');
   });
 
   it('follows a run to a finding and its evidence', async () => {

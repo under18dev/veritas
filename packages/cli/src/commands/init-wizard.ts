@@ -15,7 +15,7 @@ export interface WizardEnvironment {
   leanAvailable(): Promise<boolean>;
   /** `owner/name` of the git remote `origin` on GitHub, if any. */
   githubRepo(): string | null;
-  /** Whether the project itself has @mizchi/mutator (the bundled copy runs Veritas's own Vitest). */
+  /** Whether the project itself has @mizchi/mutator (the bundled copy loads some of its files from outside the project). */
   projectHasMutator: boolean;
   /** The mutator version Veritas runs, to add the same one to the project. */
   mutatorVersion: string | null;
@@ -181,7 +181,7 @@ export async function runInitWizard(
     if (
       yes(
         await prompter.ask(
-          `Add @mizchi/mutator to the project (\`${command.join(' ')}\`)? Mutation testing then uses the project's Vitest, test environments and plugins. [y/N] `,
+          `Add @mizchi/mutator to the project (\`${command.join(' ')}\`)? Mutation testing then loads all of mutator's files from the project instead of from where Veritas is installed. [y/N] `,
         ),
       )
     )

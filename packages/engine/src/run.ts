@@ -60,6 +60,7 @@ import {
 } from '@under18dev/veritas-formal-core';
 import { LlmClient, type LlmProvider } from '@under18dev/veritas-llm';
 import {
+  countMutants,
   importMutationResult,
   locateMutator,
   MutationRunResult,
@@ -302,11 +303,46 @@ async function runInContext(
 
   const stages: Stage[] = [];
   const add = (stage: Stage) => wanted.has(stage.name) && stages.push(stage);
+  // Project-relative files changed since --since (committed or not), when the run selects mutation tests by them.
+  let changedSince: string[] | undefined | null = null;
+  const changedSinceFiles = (): string[] | undefined => {
+    if (changedSince === null) {
+      const lines = (output: string | null) =>
+        output
+          ?.split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
+      // Changed since the ref (committed or not), plus new files git does not track yet.
+      const diff =
+        !options.scope?.length && options.since
+          ? lines(
+              gitOutput(root, [
+                'diff',
+                '--name-only',
+                '--relative',
+                '--no-color',
+                '--no-ext-diff',
+                options.since,
+                '--',
+              ]),
+            )
+          : undefined;
+      changedSince = diff
+        ? [...diff, ...(lines(gitOutput(root, ['ls-files', '--others', '--exclude-standard'])) ?? [])]
+        : undefined;
+    }
+
+    return changedSince;
+  };
   const mutationTestFiles = (mapped: TestInventory | undefined): string[] | undefined => {
     if (config.analysis.testFramework !== 'vitest') return undefined;
 
+    // With --since, mutator only mutates what changed, so only tests that reach a changed file can kill a mutant.
+    const changed = changedSinceFiles();
+    const scope = options.scope?.length ? options.scope : changed?.length ? changed : undefined;
+
     try {
-      return selectMutationTestFiles(mapped ?? inventoryTests({ root, config }), config, options.scope);
+      return selectMutationTestFiles(mapped ?? inventoryTests({ root, config }), config, scope);
     } catch {
       return undefined;
     }
@@ -488,7 +524,10 @@ async function runInContext(
       return {
         status: 'succeeded',
         output: inventory,
-        messages: [`${inventory.tests.length} test(s), ${inventory.edges.length} symbol edge(s)`],
+        messages: [
+          // Counted as written in the test files, so Vitest, which counts each case of a loop or .each, may report more.
+          `${inventory.tests.length} test registration(s) (a loop or .each counts once), ${inventory.edges.length} symbol edge(s)`,
+        ],
       };
     },
   });
@@ -546,6 +585,19 @@ async function runInContext(
         cache.set('mutation', cacheKey, result);
 
       if (cached) result.rawReportPath = null;
+      // Tests were chosen by the changed files, so mutator calls a mutant of an unchanged file "no coverage". It
+      // was outside --since and not run: pending, as without the narrower test selection.
+      const changed = testFiles ? changedSinceFiles() : undefined;
+
+      if (changed?.length) {
+        const inChange = new Set(changed);
+        result.mutants = result.mutants.map((m) =>
+          m.status === 'no_coverage' && !inChange.has(m.location.file)
+            ? { ...m, status: 'pending' as const }
+            : m,
+        );
+        result.counts = countMutants(result.mutants);
+      }
       mutants = result.mutants;
       // The mutator writes its own report files; index them so they carry the run metadata and a hash.
       const external = cached ? [] : store.recordExternal('mutation');

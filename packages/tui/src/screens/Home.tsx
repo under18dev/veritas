@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { Box, Text, useInput } from 'ink';
 import { useState } from 'react';
@@ -21,7 +22,13 @@ export function Home({ api, active, onBack, onChange, version }: ScreenProps) {
   return (
     <Box flexDirection="column">
       <Title>Home</Title>
-      <Text>Project: {api.root}</Text>
+      <Box>
+        <Box flexShrink={0} marginRight={1}>
+          <Text>Project:</Text>
+        </Box>
+        {/* A long path keeps its end, the part that names the project, instead of wrapping. */}
+        <Text wrap="truncate-start">{abbreviateHome(api.root)}</Text>
+      </Box>
       {config.error ? <ErrorView error={config.error} /> : null}
       {config.data?.kind === 'json' || config.data?.kind === 'code' ? (
         <Text>Configuration: {path.relative(api.root, config.data.file) || config.data.file}</Text>
@@ -69,4 +76,15 @@ export function Home({ api, active, onBack, onChange, version }: ScreenProps) {
       </Box>
     </Box>
   );
+}
+
+/** The path with the home directory written as `~`, as a shell prompt shows it. */
+export function abbreviateHome(file: string, home = homedir()): string {
+  if (!home || home === path.sep) return file;
+  if (file === home) return '~';
+
+  const rest = file.slice(home.length);
+
+  // Either separator follows the home directory: `/` everywhere, `\` on Windows too.
+  return file.startsWith(home) && (rest.startsWith('/') || rest.startsWith(path.sep)) ? `~${rest}` : file;
 }

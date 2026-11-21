@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Veritas
   text: そのテストは、本当に何を保証していますか？
-  tagline: TypeScript と Vitest のための、仕様を踏まえたテスト検証ツール。スコアではなく、mutant・反例・証明という根拠で答えます。
+  tagline: TypeScript と Vitest のための、仕様を踏まえたテスト検証ツール。スコアは出さず、mutant・反例・証明を根拠に答えます。
   actions:
     - theme: brand
       text: はじめる
@@ -21,12 +21,12 @@ features:
     details: README、docs、CHANGELOG、コードを読み、「1000 以上」のような規則を、出典の行つきの Property にします。レビューなしに accepted になることはありません。
   - title: 意味のある mutant
     details: 実際に mutation testing を実行し、生き残った mutant を、それが破る仕様に結び付けます。「誰も total = 1000 を確かめていない」という形で、穴が見えます。
-  - title: 勘ではなく反例
+  - title: 再生できる反例
     details: Z3 と fast-check で Property を検査し、反例はすべて JavaScript で再生します。モデルと言語の意味のずれは、隠さずに報告します。
   - title: 範囲を明示した証明
     details: Z3 の有界な整数モデルと、カーネルで検査する Lean 4 の証明。主張には必ず範囲と前提が付き、sorry・admit・独自の公理は検証済みになりません。
-  - title: スコアではなく証拠
-    details: テストごとに、仕様との関係、assertion、kill、境界、形式的な主張、不明な点からなる証拠を示し、5 種類のどれかで正直に判定します。
+  - title: テストごとの証拠
+    details: テストごとに、仕様との関係、assertion、kill、境界、形式的な主張、不明な点からなる証拠を示し、5 種類のどれかで判定します。スコアは付けません。
   - title: CI とエージェントのために
     details: CLI、Node API、MCP サーバー、Agent Skill、GitHub Action が同じエンジンで動き、JSON・SARIF・終了コードは安定しています。既定でオフラインです。
 ---
