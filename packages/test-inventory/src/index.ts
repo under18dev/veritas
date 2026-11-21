@@ -1141,8 +1141,8 @@ function assertionReach(
 }
 
 /**
- * Whether evaluating `root` in an assertion runs `node`: every function between them is run (called where written,
- * given to `waitFor`/`act`/`then`, or the subject of a throw matcher).
+ * Whether evaluating `root` in an assertion runs `node`: every function between them is run (see `runsFunction`):
+ * `expect([1, 2].map((n) => compute(n)))` runs `compute`, `expect(() => onSave.mock.calls)` runs nothing.
  */
 function runsWithin(node: ts.Node, root: ts.Node, assertion: ts.CallExpression): boolean {
   for (let current: ts.Node | undefined = node; current; current = current.parent) {
@@ -1162,12 +1162,11 @@ function enclosingFunction(node: ts.Node, root: ts.Node): ts.Node | undefined {
   return isFunctionLike(root) ? root : undefined;
 }
 
-/** Functions that run the callback they are given before they return (or settle). */
-const CALLBACK_RUNNERS = new Set(['waitFor', 'act', 'waitForElementToBeRemoved', 'then']);
-
 /**
- * Whether an assertion runs a function holding a read of the page: it is called where it is written or by a compared
- * value (`executed`), given to a function that runs it (`waitFor`, `act`), or the subject of a throw matcher.
+ * Whether an assertion runs a function: it is called where it is written or by a compared value (`executed`), or
+ * given to a call that may run it (`waitFor`, `act`, `then`, `map`, `filter`, any other callback). A function that is
+ * itself a compared value, the subject of `expect` or an argument of a matcher, is only compared and does not run,
+ * except as the subject of a throw matcher.
  */
 function runsFunction(fn: ts.Node, assertion: ts.CallExpression, executed: Set<ts.Node>): boolean {
   if (executed.has(fn)) return true;
@@ -1178,16 +1177,14 @@ function runsFunction(fn: ts.Node, assertion: ts.CallExpression, executed: Set<t
 
   if (ts.isCallExpression(parent) && parent.expression === current) return true;
 
-  if (ts.isCallExpression(parent) && parent.arguments.includes(current as ts.Expression)) {
+  if (
+    (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
+    parent.arguments?.includes(current as ts.Expression)
+  ) {
     if (parent === assertion) return matcherNames(assertion).some((name) => name.startsWith('toThrow'));
-    const callee = skipParens(parent.expression);
-    const name = ts.isIdentifier(callee)
-      ? callee.text
-      : ts.isPropertyAccessExpression(callee)
-        ? callee.name.text
-        : undefined;
 
-    return name !== undefined && CALLBACK_RUNNERS.has(name);
+    // `expect(x).toEqual(() => …)`: a matcher argument is compared, not run.
+    return !(ts.isCallExpression(parent) && isAssertionChainCall(parent));
   }
 
   return false;

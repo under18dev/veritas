@@ -1002,6 +1002,33 @@ describe('reads that run, containers and renderer names', () => {
   });
 });
 
+describe('callbacks in plain unit tests', () => {
+  it('counts calls in callbacks given to array and Promise methods as run', () => {
+    const root = tempProject({
+      'src/plain.ts': `export const compute = (n: number) => n * 2;
+export const isValid = (s: string) => s.length > 0;
+export const load = async (n: number) => n;
+`,
+      'test/plain.test.ts': `import { expect, it } from 'vitest';
+import { compute, isValid, load } from '../src/plain';
+it('map', () => { expect([1, 2].map((n) => compute(n))).toEqual([2, 4]); });
+it('filter', () => { expect(['', 'a'].filter((s) => isValid(s))).toEqual(['a']); });
+it('every', () => { expect(['a', 'b'].every((s) => isValid(s))).toBe(true); });
+it('promise all', async () => { expect(await Promise.all([1, 2].map((n) => load(n)))).toEqual([1, 2]); });
+it('function compared', () => { expect(() => compute(1)).toBeTruthy(); });
+it('function thrown', () => { expect(() => compute(1)).not.toThrow(); });
+`,
+    });
+    const tests = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests;
+    const asserted = (name: string) =>
+      tests.find((test) => test.name === name)?.targetCalls.some((call) => call.asserted);
+
+    for (const name of ['map', 'filter', 'every', 'promise all', 'function thrown'])
+      expect(asserted(name), name).toBe(true);
+    expect(asserted('function compared')).toBe(false);
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}
