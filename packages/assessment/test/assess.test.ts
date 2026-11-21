@@ -109,13 +109,12 @@ describe('assessTest', () => {
     expect(assessTest(notCalled, unlinked).rationale[0]).toMatch(/\(target_not_called\), but it killed 1/);
   });
 
-  it('follows the evidence for a killing test static analysis could not link, without calling it meaningful on a missed boundary', () => {
+  it('keeps a killing test static analysis could not link inconclusive, even with relevant kills', () => {
     const t = testCase({ id: 'T-a', targetCalls: [call(['1'], false)] });
     const a = assessTest(t, input({ mutants: [mutant('M-1', 'killed', ['T-a'], ['T-a'])] }));
-    // No asserted input sits on the linked threshold, so the boundary is not exercised.
-    expect(a.outcome).toBe('weak_or_incomplete');
-    expect(a.rationale.join(' ')).toMatch(/killed 1 mutant\(s\)/);
-    expect(a.rationale.join(' ')).toMatch(/boundary not exercised/);
+    // The kill is spec-relevant and a property is linked, but no assertion is: which property it checks is not known.
+    expect(a.outcome).toBe('inconclusive');
+    expect(a.rationale[0]).toMatch(/killed 1 mutant\(s\).*not judged meaningful or weak/);
   });
 
   it('counts as run only the mutants a disconnected test is known to have run', () => {

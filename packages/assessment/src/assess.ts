@@ -274,8 +274,9 @@ export function assessTest(
       rationale.push(
         "registered inside a shared or parameterized suite: what it calls comes from the suite's caller, which static analysis does not follow",
       );
-  } else if (killEvidence && properties.length === 0) {
-    // Which specification the kills bear on is not known without a linked property.
+  } else if (killEvidence) {
+    // A kill shows the test observes project behaviour, not which property it checks: without an assertion linked
+    // to project code, the properties of the functions it calls may not be what it checks.
     outcome = 'inconclusive';
   } else if (properties.some((p) => p.status === 'conflicted')) {
     outcome = 'spec_conflict';
@@ -347,7 +348,7 @@ export function assessTest(
 
   if (killEvidence)
     rationale.unshift(
-      `static analysis could not link an assertion to project code${test.suspicions.length ? ` (${test.suspicions.join(', ')})` : ''}, but it killed ${killed.length} mutant(s), so it does observe project behaviour${properties.length === 0 ? '; which specification it checks is not known, since no property is linked to it' : ''}`,
+      `static analysis could not link an assertion to project code${test.suspicions.length ? ` (${test.suspicions.join(', ')})` : ''}, but it killed ${killed.length} mutant(s), so it does observe project behaviour; which specification it checks is not known without an assertion linked to project code, so it is not judged meaningful or weak`,
     );
 
   const limitations = [...unknowns];
