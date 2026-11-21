@@ -5,7 +5,8 @@ import type { TestCase } from './schema/tests.js';
 /**
  * What Veritas needs to know about a test runner, kept behind one interface so the rest of the pipeline stays
  * runner-neutral. Each runner has its own provider package under `packages/test-runners/<runner>`; `core` only
- * holds the interface, and whoever depends on the providers (the engine) selects one with `selectTestRunner`.
+ * holds the interface, and whoever depends on the providers (the engine) selects one with `selectTestRunner`, or
+ * finds the one a project uses with `chooseTestRunner`.
  *
  * The parts static analysis uses are plain data (module and API names), not callbacks into a syntax tree, so the
  * analysers stay generic and a provider has no dependency on the TypeScript compiler.
@@ -15,30 +16,48 @@ export interface TestRunnerProvider {
   readonly name: TestFramework;
   /** The runner's name as people write it, for messages ("Vitest"). */
   readonly displayName: string;
+  /**
+   * What the runner puts between the titles of the enclosing suites and the test's own title in a test's full name,
+   * as its reports and mutator's test ids give it (` > ` for Vitest, a space for Jest).
+   */
+  readonly fullNameSeparator: string;
   readonly detection: TestRunnerDetection;
   readonly recognition: TestRunnerRecognition;
   readonly execution: TestRunnerExecution;
   readonly mutation: TestRunnerMutation;
-  readonly templates: TestRunnerTemplates;
+  /** Syntax of generated test files for the project at `root`, whose installed packages can change the imports. */
+  templates(root: string): TestRunnerTemplates;
 }
+
+/** A parsed package.json; detection reads only some of its fields. */
+export type PackageJson = Record<string, unknown>;
 
 /** How `detect`, `doctor` and `init` find the runner in a project, without running any of its code. */
 export interface TestRunnerDetection {
   /** The npm package of the runner, looked up in package.json (declared) and in `node_modules` (installed). */
   readonly packageName: string;
-  /** Config files relative to the project root, in the order they are looked for; the first one present counts. */
-  readonly configFiles: readonly string[];
+  /** How the project at `root` has the runner; `packageJson` is its parsed package.json, or null without one. */
+  detect(root: string, packageJson: PackageJson | null): TestRunnerInstallation;
 }
 
-/** What a project's runner reports about one project, as `detectProject` finds it. */
+/** What detection finds about one runner in one project, as `detectProject` reports it. */
 export interface TestRunnerInstallation {
   readonly name: TestFramework;
   /** Declared in the dependencies or devDependencies of package.json. */
   readonly declared: boolean;
   /** Version installed for the project root, or null. */
   readonly installedVersion: string | null;
-  /** The first of `detection.configFiles` present at the root, or null. */
+  /** The runner's config file at the root (relative to it), or null. */
   readonly configFile: string | null;
+  /** The `test` script of package.json runs the runner. */
+  readonly testScript: boolean;
+  /**
+   * What shows that the project uses the runner, strongest first (`jest.config.mjs`, `the test script runs jest`);
+   * empty when nothing does. Being installed is not listed: another dependency may have brought the package in.
+   */
+  readonly evidence: readonly string[];
+  /** One sentence saying what was found, or that nothing was, for people. */
+  readonly reason: string;
 }
 
 export type TestModifier = TestCase['modifiers'][number];
@@ -67,14 +86,21 @@ export type MockCallRole =
  * `modules` (under any local alias) or used as a global the project's type declarations provide.
  */
 export interface TestRunnerRecognition {
-  /** Modules exporting the test API (`vitest`). A file importing one of them by name is a test file candidate. */
+  /**
+   * Modules exporting the test API (`vitest`, `@jest/globals`). A file importing one of them by name is a test file
+   * candidate. Runners that also provide the API as globals (Jest) need no import; the names below count either way.
+   */
   readonly modules: readonly string[];
-  /** Functions registering one test (`it`, `test`). */
+  /** The runner provides its test API as globals by default (Jest does; Vitest only with its `globals` option). */
+  readonly globals: boolean;
+  /** Functions registering one test (`it`, `test`), including those of `shorthands`. */
   readonly tests: readonly string[];
-  /** Functions registering a suite (`describe`). */
+  /** Functions registering a suite (`describe`), including those of `shorthands`. */
   readonly suites: readonly string[];
   /** Members chained on a registration function that are recorded as modifiers (`it.skip`, `describe.only`). */
   readonly modifiers: readonly TestModifier[];
+  /** Registration functions that carry a modifier in their name (Jest's `xit` skips, `fdescribe` focuses). */
+  readonly shorthands: Readonly<Record<string, TestModifier>>;
   /** Members returning a registration function instead of registering (`it.each(table)`, `test.skipIf(cond)`). */
   readonly registrationFactories: readonly string[];
   /** Those of `registrationFactories` that register one test per row of a table, recorded as `each`. */
@@ -96,6 +122,13 @@ export interface TestRunnerRecognition {
     readonly expect: readonly string[];
     /** Assertions on TypeScript types, which do nothing when the test runs (`expectTypeOf`, `assertType`). */
     readonly typeLevel: readonly string[];
+    /**
+     * Objects whose methods assert (`assert.equal(a, b)`), by the name they are used under: chai's `assert` that
+     * Vitest exports, and `node:assert` imported as `assert`.
+     */
+    readonly objects: readonly string[];
+    /** Methods, on any object, that check how many assertions ran (`expect.assertions(1)`). */
+    readonly counts: readonly string[];
   };
   readonly mocks: {
     /** Objects holding the mock API (`vi`), imported from `modules` or provided as an ambient global. */
@@ -147,12 +180,24 @@ export interface TestRunnerMutation {
   /** The runner major version mutator declares; older ones that are not below `minMajor` work with a warning. */
   readonly declaredMajor: number | null;
   /**
+   * Why mutator's support for this runner is experimental, said as a warning wherever mutation is checked or run;
+   * null when it is not.
+   */
+  readonly experimental: string | null;
+  /** The mutator option that passes the config `writeConfig` writes (`--config`, `--jest-config`). */
+  readonly configFlag: string;
+  /**
+   * Why mutator cannot run the tests of the project at `root` with this runner, found without running anything
+   * (a project kind its integration does not handle); null when nothing stands in the way.
+   */
+  unsupportedReason(root: string): string | null;
+  /**
    * Directories outside the project that the runner has to load files from when mutator is the copy bundled with
    * Veritas (at `mutatorBin`) rather than the project's own; empty when none have to be allowed.
    */
   bundledMutatorDirs(mutatorBin: string): string[];
   /**
-   * Write a runner config for one mutation run into `dir` and return its path (passed as mutator's `--config`): the
+   * Write a runner config for one mutation run into `dir` and return its path (passed with `configFlag`): the
    * project's own config, limited to `testFiles` (POSIX, relative to the root) when given, and allowed to load files
    * from `allowDirs`.
    */
@@ -187,6 +232,15 @@ export function selectTestRunner(
   }
 
   return provider;
+}
+
+/** A test's full name as the runner writes it in reports: the suite titles and the test title, joined. */
+export function testFullName(
+  runner: Pick<TestRunnerProvider, 'fullNameSeparator'>,
+  suitePath: readonly string[],
+  name: string,
+): string {
+  return [...suitePath, name].join(runner.fullNameSeparator);
 }
 
 /** The major version of a version string (`5.1.1` is 5), or null. */

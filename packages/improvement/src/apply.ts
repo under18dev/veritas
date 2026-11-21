@@ -133,7 +133,7 @@ function planProblems(
     if (
       !propertyId ||
       tests.length === 0 ||
-      renderTestFile(f.path, propertyId, tests, testRunner.templates) !== f.content
+      renderTestFile(f.path, propertyId, tests, testRunner.templates(root)) !== f.content
     ) {
       problems.push(`${f.path}: content differs from the rendering of the planned tests`);
     }

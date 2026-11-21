@@ -10,7 +10,7 @@ import {
   type Profile,
   runDoctor,
   runVeritas,
-  testRunnerFor,
+  testRunnerForProject,
 } from '@under18dev/veritas-engine';
 import { planFromEvent, type RunPlan } from './event.js';
 
@@ -105,7 +105,7 @@ export async function main(): Promise<number> {
   // An explicit input wins; an empty one (the default) uses the configured policy, then 'warn'.
   const configured = await loadConfig(root).catch(() => null);
   const project = detectProject(root, configured?.config ?? null);
-  const runner = testRunnerFor(configured?.config);
+  const runner = testRunnerForProject(root, configured?.config ?? null);
   const behaviorInput =
     process.env.INPUT_INCONCLUSIVE || (configured?.config.policy.inconclusiveBehavior ?? 'warn');
 

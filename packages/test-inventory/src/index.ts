@@ -43,6 +43,7 @@ interface RunnerApi {
   tests: Set<string>;
   suites: Set<string>;
   modifiers: Set<string>;
+  shorthands: Map<string, TestCaseType['modifiers'][number]>;
   registrationFactories: Set<string>;
   tableFactories: Set<string>;
   beforeEach: Set<string>;
@@ -52,6 +53,8 @@ interface RunnerApi {
   runtimeExports: Set<string>;
   expect: Set<string>;
   typeLevel: Set<string>;
+  assertObjects: Set<string>;
+  assertionCounts: Set<string>;
   mockObjects: Set<string>;
   mockCalls: Map<string, MockCallRole>;
   configureMethod: RegExp;
@@ -65,6 +68,7 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
     tests: new Set(recognition.tests),
     suites: new Set(recognition.suites),
     modifiers: new Set(recognition.modifiers),
+    shorthands: new Map(Object.entries(recognition.shorthands)),
     registrationFactories: new Set(recognition.registrationFactories),
     tableFactories: new Set(recognition.tableFactories),
     beforeEach: new Set(hooks.beforeEach),
@@ -73,6 +77,8 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
     runtimeExports: new Set(recognition.runtimeExports),
     expect: new Set(recognition.assertions.expect),
     typeLevel: new Set(recognition.assertions.typeLevel),
+    assertObjects: new Set(recognition.assertions.objects),
+    assertionCounts: new Set(recognition.assertions.counts),
     mockObjects: new Set(recognition.mocks.objects),
     mockCalls: new Map(Object.entries(recognition.mocks.calls)),
     configureMethod: new RegExp(recognition.mocks.configureMethod),
@@ -85,14 +91,16 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
  */
 let runner: RunnerApi = runnerApi({
   modules: [],
+  globals: false,
   tests: [],
   suites: [],
   modifiers: [],
+  shorthands: {},
   registrationFactories: [],
   tableFactories: [],
   hooks: { beforeEach: [], beforeAll: [], afterEach: [], afterAll: [] },
   runtimeExports: [],
-  assertions: { expect: [], typeLevel: [] },
+  assertions: { expect: [], typeLevel: [], objects: [], counts: [] },
   mocks: { objects: [], calls: {}, configureMethod: '(?!)' },
 });
 
@@ -4221,6 +4229,9 @@ function testRegistration(node: ts.CallExpression): Registration | undefined {
 
       if (chain.some((name) => runner.tableFactories.has(name)) && !eachModifiers.includes('each'))
         eachModifiers.push('each');
+      const implied = runner.shorthands.get(root);
+
+      if (implied !== undefined && !eachModifiers.includes(implied)) eachModifiers.unshift(implied);
 
       return {
         name: literalString(node.arguments[0]),
@@ -4252,6 +4263,9 @@ function describeRegistration(node: ts.CallExpression): Registration | undefined
 
   if (chain.some((name) => runner.tableFactories.has(name)) && !eachModifiers.includes('each'))
     eachModifiers.push('each');
+  const implied = runner.shorthands.get(root);
+
+  if (implied !== undefined && !eachModifiers.includes(implied)) eachModifiers.unshift(implied);
 
   return {
     name: literalString(node.arguments[0]),
@@ -4303,10 +4317,17 @@ function registration(node: ts.CallExpression, names: Set<string>): TestCaseType
     expression = expression.expression;
   }
 
-  if (!ts.isIdentifier(expression) || !names.has(runnerName(expression))) return undefined;
-  const found = chain.filter((name): name is TestCaseType['modifiers'][number] => runner.modifiers.has(name));
+  if (!ts.isIdentifier(expression)) return undefined;
+  const name = runnerName(expression);
 
-  return found;
+  if (!names.has(name)) return undefined;
+  const found = chain.filter((member): member is TestCaseType['modifiers'][number] =>
+    runner.modifiers.has(member),
+  );
+  // `xit(...)` is `it.skip(...)`.
+  const implied = runner.shorthands.get(name);
+
+  return implied !== undefined && !found.includes(implied) ? [implied, ...found] : found;
 }
 
 function analyzeTest(
@@ -5847,10 +5868,12 @@ function isExpectCall(node: ts.CallExpression): boolean {
   return root !== undefined && (runner.expect.has(root) || runner.typeLevel.has(root));
 }
 
+/** `assert.equal(a, b)` on one of the runner's assertion objects, or `expect.assertions(n)` on anything. */
 function isAssertCall(node: ts.CallExpression): boolean {
   return (
     ts.isPropertyAccessExpression(node.expression) &&
-    (node.expression.expression.getText() === 'assert' || node.expression.name.text === 'assertions')
+    (runner.assertObjects.has(node.expression.expression.getText()) ||
+      runner.assertionCounts.has(node.expression.name.text))
   );
 }
 

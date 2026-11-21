@@ -18,6 +18,8 @@ export const OPTIONAL_CAPABILITIES = [
   '--kill-matrix',
   '--only',
   '--config',
+  '--runner',
+  '--jest-config',
   '--[no-]typecheck',
   '--time-budget',
   'agent',

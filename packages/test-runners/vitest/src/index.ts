@@ -1,4 +1,4 @@
-import type { TemplateApi, TestRunnerProvider } from '@under18dev/veritas-core';
+import { detectInstallation, type TemplateApi, type TestRunnerProvider } from '@under18dev/veritas-core';
 import { mutatorVitestDir, projectViteUrl, writeMutationVitestConfig } from './mutation-config.js';
 import { runVitest } from './run.js';
 
@@ -21,22 +21,27 @@ export const MUTATOR_DECLARED_VITEST_MAJOR = 5;
 export const vitestTestRunner: TestRunnerProvider = {
   name: 'vitest',
   displayName: 'Vitest',
+  fullNameSeparator: ' > ',
   detection: {
     packageName: 'vitest',
-    configFiles: [
-      'vitest.config.ts',
-      'vitest.config.mts',
-      'vitest.config.js',
-      'vitest.config.mjs',
-      'vite.config.ts',
-      'vite.config.js',
-    ],
+    detect: (root, packageJson) =>
+      detectInstallation(root, packageJson, {
+        name: 'vitest',
+        displayName: 'Vitest',
+        packageName: 'vitest',
+        configFiles: ['vitest.config.ts', 'vitest.config.mts', 'vitest.config.js', 'vitest.config.mjs'],
+        // A Vite config may hold Vitest's settings, but a Vite app tested with another runner has one too.
+        sharedConfigFiles: ['vite.config.ts', 'vite.config.js'],
+        commands: ['vitest'],
+      }),
   },
   recognition: {
     modules: ['vitest'],
+    globals: false,
     tests: ['it', 'test'],
     suites: ['describe'],
     modifiers: ['skip', 'only', 'todo', 'concurrent', 'each'],
+    shorthands: {},
     registrationFactories: ['each', 'for', 'skipIf', 'runIf'],
     tableFactories: ['each', 'for'],
     hooks: {
@@ -47,7 +52,12 @@ export const vitestTestRunner: TestRunnerProvider = {
     },
     // `vitest/config` and type imports do not count.
     runtimeExports: ['expect', 'assert', 'expectTypeOf', 'assertType', 'vi', 'vitest'],
-    assertions: { expect: ['expect'], typeLevel: ['expectTypeOf', 'assertType'] },
+    assertions: {
+      expect: ['expect'],
+      typeLevel: ['expectTypeOf', 'assertType'],
+      objects: ['assert'],
+      counts: ['assertions'],
+    },
     mocks: {
       objects: ['vi'],
       calls: {
@@ -74,6 +84,9 @@ export const vitestTestRunner: TestRunnerProvider = {
     mutatorRunner: 'vitest',
     minMajor: MUTATOR_MIN_VITEST_MAJOR,
     declaredMajor: MUTATOR_DECLARED_VITEST_MAJOR,
+    experimental: null,
+    configFlag: '--config',
+    unsupportedReason: () => null,
     bundledMutatorDirs(mutatorBin) {
       const dir = mutatorVitestDir(mutatorBin);
 
@@ -88,12 +101,12 @@ export const vitestTestRunner: TestRunnerProvider = {
       });
     },
   },
-  templates: {
+  templates: () => ({
     imports(names: readonly TemplateApi[]) {
       return names.length === 0 ? [] : [`import { ${[...new Set(names)].sort().join(', ')} } from 'vitest';`];
     },
     expectToBe(actual, expected) {
       return `expect(${actual}).toBe(${expected});`;
     },
-  },
+  }),
 };

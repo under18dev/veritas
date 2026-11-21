@@ -8,6 +8,7 @@ export const CapabilityName = z.enum([
   'package_manager',
   'typescript',
   'vitest',
+  'jest',
   'mutator',
   'fast_check',
   'z3',

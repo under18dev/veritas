@@ -52,7 +52,8 @@ describe('configSections', () => {
       options: expect.arrayContaining(['sarif']),
     });
     expect(find('analysis.include').minItems).toBe(1);
-    expect(find('analysis.testFramework')).toMatchObject({ type: 'fixed', fixed: 'vitest' });
+    expect(find('analysis.testFramework')).toMatchObject({ type: 'enum', default: 'vitest' });
+    expect(find('analysis.testFramework').options).toEqual(['vitest', 'jest']);
     expect(find('project.tsconfig')).toMatchObject({ type: 'string', nullable: true, default: null });
     expect(find('pbt.seed').default).toBeUndefined();
     // Descriptions say what the code does with the value.

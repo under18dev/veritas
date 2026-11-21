@@ -167,18 +167,26 @@ export async function runDoctor(
   );
 
   const mutator = packageVersion(root, '@mizchi/mutator', bundled);
-  const { minMajor, mutatorRunner } = runner.mutation;
+  const { minMajor, mutatorRunner, experimental } = runner.mutation;
   const tooOld = minMajor !== null && (majorVersion(runnerVersion) ?? minMajor) < minMajor;
+  const unsupported =
+    mutator.version && mutatorRunner !== null && !tooOld ? runner.mutation.unsupportedReason(root) : null;
   add(
     'mutator',
-    mutator.version && mutatorRunner !== null && !tooOld ? 'available' : 'unavailable',
+    !mutator.version || mutatorRunner === null || tooOld || unsupported !== null
+      ? 'unavailable'
+      : experimental !== null
+        ? 'degraded'
+        : 'available',
     !mutator.version
       ? '@mizchi/mutator not installed'
       : mutatorRunner === null
         ? `@mizchi/mutator cannot run ${runner.displayName} tests`
         : tooOld
           ? `@mizchi/mutator needs ${runner.displayName} ${minMajor} or later; the project has ${runner.displayName} ${runnerVersion}`
-          : `@mizchi/mutator resolved from ${mutator.from}`,
+          : unsupported !== null
+            ? unsupported
+            : `@mizchi/mutator resolved from ${mutator.from}${experimental !== null ? `; experimental: ${experimental}` : ''}`,
     mutator.version,
   );
 
@@ -250,10 +258,16 @@ export async function runDoctor(
   const statuses: FeatureStatus[] = Object.entries(features).map(([feature, deps]) => {
     const missingRequired = deps.required.filter((n) => !usable(n));
     const missingOptional = deps.optional.filter((n) => stateOf.get(n) !== 'available');
+    // A required capability that works only in part (experimental mutation with Jest) degrades the feature.
+    const degradedRequired = deps.required.some((n) => stateOf.get(n) === 'degraded');
 
     return {
       feature,
-      state: missingRequired.length ? 'disabled' : missingOptional.length ? 'degraded' : 'enabled',
+      state: missingRequired.length
+        ? 'disabled'
+        : missingOptional.length || degradedRequired
+          ? 'degraded'
+          : 'enabled',
       missing: [...missingRequired, ...missingOptional],
     };
   });
