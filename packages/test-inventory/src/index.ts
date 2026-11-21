@@ -841,6 +841,24 @@ function analyzeBody(
       documentWrites.push(
         inNestedFunction(node, body) ? { ...write, end: invokedAt(node, body, checker) } : write,
       );
+
+    // A helper of the file written outside the body (`function writePage() { document.body.innerHTML = … }`) writes
+    // where the body calls it.
+    if (ts.isCallExpression(node) && ts.isIdentifier(skipParens(node.expression))) {
+      const fn = localFunction(skipParens(node.expression), checker);
+
+      if (fn && isFunctionLike(fn) && fn.body && !contains(body, fn)) {
+        const at = inNestedFunction(node, body) ? invokedAt(node, body, checker) : node.getStart();
+
+        for (const inner of descendants(fn.body)) {
+          const helperWrite = !inNestedFunction(inner, fn.body)
+            ? documentWriteOf(inner, fn.body, checker)
+            : undefined;
+
+          if (helperWrite) documentWrites.push({ ...helperWrite, end: at });
+        }
+      }
+    }
   }
 
   const reaches = new Map(
@@ -1148,10 +1166,12 @@ function assertionReach(
     for (const item of [node, ...descendants(node)]) {
       const caller =
         ts.isIdentifier(item) && ts.isCallExpression(item.parent) && item.parent.expression === item;
-      const callerOwner = caller && item !== node ? enclosingFunction(item, node) : undefined;
+      // Every function between it and the compared value must run (`expect(() => [1].map(() => query()))` runs
+      // nothing, though `map` would run its callback).
+      const runs = item === node || runsWithin(item, node, assertion, executed);
 
       // A call in a function the assertion never runs (`expect(() => query())`) runs nothing.
-      if (caller && !(callerOwner && !runsFunction(callerOwner, assertion, executed))) {
+      if (caller && runs) {
         const fn = localFunction(item as ts.Identifier, checker);
 
         if (fn) executed.add(fn);
@@ -1173,7 +1193,7 @@ function assertionReach(
 
         // A query in a function reads the page only when that function runs (`expect(() => screen.getByText('x'))`
         // compares a function and runs nothing).
-        if (fn && !runsFunction(fn, assertion, executed)) continue;
+        if (!runs) continue;
         const at = fn ? assertion.getEnd() : position;
         const chain = documentChain(item as ts.Expression, checker, true);
         const written = documentWrites.some(
@@ -1190,14 +1210,12 @@ function assertionReach(
         const fn = item === node ? undefined : enclosingFunction(item, node);
 
         // Like a page query, a mock read in a function counts only when that function runs.
-        if (!fn || runsFunction(fn, assertion, executed)) addRoot(item.expression, [], 0);
+        if (!fn || runs) addRoot(item.expression, [], 0);
       }
 
       if (!ts.isIdentifier(item)) continue;
-      const evaluatedIn = item === node ? undefined : enclosingFunction(item, node);
-
       // A name in a function the assertion never runs (`expect(() => value)`) is not read.
-      if (evaluatedIn && !runsFunction(evaluatedIn, assertion, executed)) continue;
+      if (!runs) continue;
       const symbol = valueSymbol(item, checker);
 
       if (!symbol || seen.has(symbol)) continue;
@@ -1227,9 +1245,14 @@ function assertionReach(
  * Whether evaluating `root` in an assertion runs `node`: every function between them is run (see `runsFunction`):
  * `expect([1, 2].map((n) => compute(n)))` runs `compute`, `expect(() => onSave.mock.calls)` runs nothing.
  */
-function runsWithin(node: ts.Node, root: ts.Node, assertion: ts.CallExpression): boolean {
+function runsWithin(
+  node: ts.Node,
+  root: ts.Node,
+  assertion: ts.CallExpression,
+  executed: Set<ts.Node> = new Set(),
+): boolean {
   for (let current: ts.Node | undefined = node; current; current = current.parent) {
-    if (isFunctionLike(current) && !runsFunction(current, assertion, new Set())) return false;
+    if (isFunctionLike(current) && !runsFunction(current, assertion, executed)) return false;
 
     if (current === root) return true;
   }
@@ -1245,13 +1268,28 @@ const RENDER_API = new Set(['unmount', 'rerender', 'debug']);
  * member not known as API), and queries (`getByText`, `asFragment`) only when called.
  */
 function renderOutputRead(identifier: ts.Identifier, checker: ts.TypeChecker): boolean {
-  const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
-  const destructured =
-    declaration && ts.isBindingElement(declaration) && ts.isObjectBindingPattern(declaration.parent)
-      ? (declaration.propertyName ?? declaration.name)
-      : undefined;
-  const member =
-    destructured && ts.isIdentifier(destructured) ? destructured.text : memberPath(identifier)[0];
+  // The member a local stands for: destructured (`const { unmount } = render(…)`), or through an alias of one
+  // (`const saved = unmount`, `const saved = view.unmount`).
+  const memberOf = (name: ts.Identifier, depth: number): string | undefined => {
+    const declaration = checker.getSymbolAtLocation(name)?.valueDeclaration;
+
+    if (declaration && ts.isBindingElement(declaration) && ts.isObjectBindingPattern(declaration.parent)) {
+      const property = declaration.propertyName ?? declaration.name;
+
+      return ts.isIdentifier(property) ? property.text : undefined;
+    }
+    const initializer =
+      declaration && ts.isVariableDeclaration(declaration) ? declaration.initializer : undefined;
+    const value = initializer && skipParens(initializer);
+
+    if (!value || depth > 5) return undefined;
+
+    if (ts.isIdentifier(value)) return memberOf(value, depth + 1);
+
+    return ts.isPropertyAccessExpression(value) ? value.name.text : undefined;
+  };
+  const destructured = memberOf(identifier, 0);
+  const member = destructured ?? memberPath(identifier)[0];
 
   if (member === undefined) return true;
 
@@ -1485,23 +1523,35 @@ function documentWriteOf(node: ts.Node, scope: ts.Node, checker: ts.TypeChecker)
   return { chain, end: node.getEnd(), content, empty };
 }
 
-const setupWritesCache = new WeakMap<ts.SourceFile, ts.Node[]>();
+const setupWritesCache = new WeakMap<ts.SourceFile, { node: ts.Node; scope: ts.Node }[]>();
 
 /**
  * The writes to the page made by a file's shared setup (module or describe level, `beforeEach`/`beforeAll`) whose
  * code runs, worked out once per file; which tests they run before is decided per test.
  */
-function setupWriteNodes(source: ts.SourceFile, checker: ts.TypeChecker): ts.Node[] {
+function setupWriteNodes(
+  source: ts.SourceFile,
+  checker: ts.TypeChecker,
+): { node: ts.Node; scope: ts.Node }[] {
   let found = setupWritesCache.get(source);
 
   if (!found) {
-    found = descendants(source).filter(
-      (node) =>
-        (ts.isBinaryExpression(node) || ts.isCallExpression(node)) &&
-        runsBefore(node, undefined) &&
-        writeRuns(node, source, checker) &&
-        documentWriteOf(node, source, checker) !== undefined,
-    );
+    found = descendants(source)
+      .filter(
+        (node) =>
+          (ts.isBinaryExpression(node) || ts.isCallExpression(node)) &&
+          runsBefore(node, undefined) &&
+          writeRuns(node, source, checker) &&
+          documentWriteOf(node, source, checker) !== undefined,
+      )
+      .map((node) => ({ node, scope: node }));
+
+    // Writes of a named function registered as a hook (`beforeEach(reset)`), scoped to the registration.
+    for (const hook of descendants(source))
+      for (const fn of namedHook(hook, ['beforeEach', 'beforeAll'], checker))
+        for (const node of descendants(fn))
+          if (!inNestedFunction(node, fn) && documentWriteOf(node, fn, checker) !== undefined)
+            found.push({ node, scope: hook });
     setupWritesCache.set(source, found);
   }
 
@@ -2238,27 +2288,62 @@ function setupRenders(source: ts.SourceFile, ctx: Ctx): { node: Invocation; call
         found.push({ node: call, call });
         continue;
       }
-
-      for (const argument of call.arguments) {
-        // Elements given to this call, inline or through a local holding them.
-        const initializer = ts.isIdentifier(skipParens(argument))
-          ? variableInitializer(ctx.checker.getSymbolAtLocation(skipParens(argument))?.valueDeclaration)
-          : undefined;
-
-        for (const root of initializer ? [argument, initializer] : [argument])
-          for (const node of [root, ...descendants(root)])
-            if (
-              isJsxInvocation(node) &&
-              jsxTop(ts.isJsxOpeningElement(node) ? node.parent : node, ctx.checker) === root &&
-              rendered(node)
-            )
-              found.push({ node, call });
-      }
+      collect(call, call);
     }
+
+    // `beforeEach(mount)` with `function mount() { render(<Dialog />); }`: the renders of the named function, scoped
+    // to the registration.
+    for (const hook of descendants(source))
+      for (const fn of namedHook(hook, 'beforeEach', ctx.checker))
+        for (const call of descendants(fn))
+          if (ts.isCallExpression(call) && !inNestedFunction(call, fn)) {
+            if (rendered(call)) found.push({ node: call, call: hook as ts.CallExpression });
+            else collect(call, hook as ts.CallExpression);
+          }
     setupRendersCache.set(source, found);
   }
 
   return found;
+
+  function collect(call: ts.CallExpression, scope: ts.CallExpression): void {
+    const rendered = (node: Invocation) => callInfo(node, ctx).targets.some((target) => target.rendered);
+
+    for (const argument of call.arguments) {
+      // Elements given to this call, inline or through a local holding them.
+      const initializer = ts.isIdentifier(skipParens(argument))
+        ? variableInitializer(ctx.checker.getSymbolAtLocation(skipParens(argument))?.valueDeclaration)
+        : undefined;
+
+      for (const root of initializer ? [argument, initializer] : [argument])
+        for (const node of [root, ...descendants(root)])
+          if (
+            isJsxInvocation(node) &&
+            jsxTop(ts.isJsxOpeningElement(node) ? node.parent : node, ctx.checker) === root &&
+            rendered(node)
+          )
+            (found as { node: Invocation; call: ts.CallExpression }[]).push({ node, call: scope });
+    }
+  }
+}
+
+/**
+ * The body of a local function registered by name with a hook (`beforeEach(mount)`), when the registration is shared
+ * setup (see `runsBefore`).
+ */
+function namedHook(node: ts.Node, hooks: string | string[], checker: ts.TypeChecker): ts.Node[] {
+  const names = Array.isArray(hooks) ? hooks : [hooks];
+
+  if (
+    !ts.isCallExpression(node) ||
+    !ts.isIdentifier(node.expression) ||
+    !names.includes(node.expression.text) ||
+    !runsBefore(node, undefined)
+  )
+    return [];
+  const argument = node.arguments[0] && skipParens(node.arguments[0]);
+  const fn = argument && ts.isIdentifier(argument) ? localFunction(argument, checker) : undefined;
+
+  return fn && isFunctionLike(fn) && fn.body ? [fn.body] : [];
 }
 
 /** Whether code runs as shared setup inside a `beforeEach` hook (see `runsBefore`). */
@@ -3876,8 +3961,8 @@ function analyzeTest(
           )
           .map(({ node }) => node),
         setupWriteNodes(source, checker)
-          .filter((node) => !contains(body, node) && runsBefore(node, body))
-          .map((node) => documentWriteOf(node, source, checker))
+          .filter(({ node, scope }) => !contains(body, node) && runsBefore(scope, body))
+          .map(({ node }) => documentWriteOf(node, source, checker))
           .filter((write): write is DocumentWrite => write !== undefined)
           .map((write) => ({ ...write, end: Number.NEGATIVE_INFINITY })),
         false,

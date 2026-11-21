@@ -1713,6 +1713,84 @@ describe('evaluated names, helper write positions and per-call factories', () =>
   });
 });
 
+describe('nested runs, API aliases, named hooks and helper writes', () => {
+  it('requires every function up to the compared value to run', () => {
+    const byName = inventory(`${header}
+      it('callback in a compared function', () => {
+        render(<Dialog open title="Hi" />);
+        expect(() => [1].map(() => screen.getByText('Hi'))).toBeTruthy();
+      });
+      it('callback in a compared value', () => {
+        render(<Dialog open title="Hi" />);
+        expect([1].map(() => screen.getByText('Hi'))).toHaveLength(1);
+      });
+    `);
+
+    expect(byName('callback in a compared function').asserted).toBe(false);
+    expect(byName('callback in a compared value').asserted).toBe(true);
+  });
+
+  it('keeps an alias of a render-result API member as API', () => {
+    const byName = inventory(`${header}
+      it('alias of unmount', () => {
+        const { unmount } = render(<Dialog open title="Hi" />);
+        const saved = unmount;
+        expect(saved).toBeTypeOf('function');
+      });
+      it('alias of a query, called', () => {
+        const { getByText } = render(<Dialog open title="Hi" />);
+        const find = getByText;
+        expect(find('Hi')).toBeTruthy();
+      });
+    `);
+
+    expect(byName('alias of unmount').asserted).toBe(false);
+    expect(byName('alias of a query, called').asserted).toBe(true);
+  });
+
+  it('follows renders and writes of a named function registered with a hook', () => {
+    const byName = inventory(`${header}
+      function mount() { render(<Dialog open title="Hi" />); }
+      function fill() { document.body.innerHTML = '<p>fixture</p>'; }
+      describe('named mount', () => {
+        beforeEach(mount);
+        it('shown', () => { expect(screen.getByText('Hi')).toBeInTheDocument(); });
+      });
+      describe('named mount and fixture write', () => {
+        beforeEach(fill);
+        beforeEach(mount);
+        it('fixture read', () => { expect(screen.getByText('fixture')).toBeInTheDocument(); });
+      });
+      describe('elsewhere', () => {
+        it('not mounted here', () => { expect(screen.queryByText('Hi')).toBeNull(); });
+      });
+    `);
+
+    expect(byName('shown')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
+    expect(byName('fixture read')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: false });
+    expect(byName('not mounted here')).toMatchObject({ symbols: [], asserted: false });
+  });
+
+  it('places writes of a module-level helper where the test calls it', () => {
+    const byName = inventory(`${header}
+      function writePage() { document.body.innerHTML = '<p>Hi</p>'; }
+      it('helper write before the render', () => {
+        writePage();
+        render(<Dialog open />);
+        expect(screen.getByText('Hi')).toBeTruthy();
+      });
+      it('helper write after the read', () => {
+        render(<Dialog open title="Hi" />);
+        expect(screen.getByText('Hi')).toBeTruthy();
+        writePage();
+      });
+    `);
+
+    expect(byName('helper write before the render').asserted).toBe(false);
+    expect(byName('helper write after the read').asserted).toBe(true);
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}
