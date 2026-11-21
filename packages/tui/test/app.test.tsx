@@ -15,6 +15,7 @@ import {
   fieldLabel,
   getAt,
   humanize,
+  listDiff,
   parseText,
   resetField,
   SECTIONS,
@@ -853,14 +854,14 @@ describe('the TUI', { timeout: 20_000 }, () => {
     await press(app, 's');
     await until(app, 'Review 6 changes to .veritas/config.json');
     expect(app.lastFrame()).toMatch(/↑↓\s+scroll\s+y\s+yes/);
-    expect(app.lastFrame()).toContain('+2 more (↓)');
+    expect(app.lastFrame()).toMatch(/\d+ more rows? below \(↓\)/);
     expect(app.lastFrame()).toContain('turns on network');
     await press(app, 'y');
     await until(app, 'Scroll to the last change');
     expect(api.writeConfig).not.toHaveBeenCalled();
-    await press(app, KEY.down, KEY.down);
-    await until(app, 'cache.enabled');
-    expect(app.lastFrame()).not.toContain('more (↓)');
+    await scrollUntil(app, 'Save these 6 changes? [y/N]');
+    expect(app.lastFrame()).toContain('cache.enabled');
+    expect(app.lastFrame()).not.toContain('below (↓)');
     await press(app, 'y');
     expect(api.writeConfig).toHaveBeenCalledWith({
       sources: { local: false, github: { enabled: true }, web: { enabled: true }, sendFullTextToLlm: true },
@@ -954,6 +955,73 @@ describe('the TUI', { timeout: 20_000 }, () => {
     await until(app, 'New entry:');
     expect(app.lastFrame()).toContain('Enter to confirm, Esc to cancel');
     intact(app.lastFrame() ?? '', 'ex14/**');
+  });
+
+  // The longest interaction test: give it room on a slow runner.
+  it('shows a change deep in a long list and a long text in full before saving', {
+    timeout: 40_000,
+  }, async () => {
+    const include = Array.from(
+      { length: 10 },
+      (_, i) => `packages/some-long-package-name-${i}/src/**/*.{ts,tsx}`,
+    );
+    const api = fakeApi({
+      readConfig: () => ({
+        kind: 'json',
+        file: '/projects/shop/.veritas/config.json',
+        raw: { analysis: { include } },
+      }),
+    });
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    // Analysis > Include: change the 8th entry.
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.enter);
+    await until(app, 'entries 1-7 of 10');
+    await press(app, ...Array(7).fill(KEY.down), KEY.enter);
+    await until(app, 'Change the entry:');
+    const edited = `${include[7]?.slice(0, -10)}X*.ts`;
+    await press(app, ...Array(10).fill(KEY.backspace), 'X*.ts', KEY.enter);
+    await until(app, '1 unsaved');
+    await press(app, KEY.escape);
+    // LLM > Model: a long text.
+    const model = `claude-${'very-long-model-name-'.repeat(14)}end`;
+    await press(app, ...Array(9).fill(KEY.down), KEY.enter, KEY.down, KEY.down);
+    await until(app, 'Model name for the provider');
+    await press(app, KEY.enter);
+    await until(app, 'New value:');
+    // Typed text arrives as one chunk, as a paste does.
+    await press(app, model, KEY.enter);
+    await until(app, '2 unsaved');
+    await press(app, 's');
+    await until(app, 'Review 2 changes');
+    // Only the 8th entry differs: it shows as removed and added, the others are left out.
+    expect(app.lastFrame()).toContain('- packages/some-long-package-name-7/src/**/*.{ts,tsx}');
+    expect(app.lastFrame()).toContain(`+ ${edited}`);
+    expect(app.lastFrame()).toContain('(6 unchanged entries)');
+    // The long text wraps; the end of it must be scrolled to before y is accepted.
+    expect(app.lastFrame()).toMatch(/\d+ more rows? below \(↓\)/);
+    await press(app, 'y');
+    await until(app, 'Scroll to the last change');
+    expect(api.writeConfig).not.toHaveBeenCalled();
+    await scrollUntil(app, 'Save these 2 changes? [y/N]');
+    expect(app.lastFrame()).toContain('end"');
+    await press(app, 'y');
+    expect(api.writeConfig).toHaveBeenCalledWith({
+      analysis: { include: include.map((e, i) => (i === 7 ? edited : e)) },
+      llm: { model },
+    });
+  });
+
+  it('diffs lists entry by entry', () => {
+    expect(listDiff(['a', 'b', 'c', 'd', 'e', 'f'], ['a', 'b', 'c', 'X', 'e', 'f'])).toEqual([
+      { kind: 'elided', count: 2 },
+      { kind: 'same', entry: 'c' },
+      { kind: 'removed', entry: 'd' },
+      { kind: 'added', entry: 'X' },
+      { kind: 'same', entry: 'e' },
+      { kind: 'elided', count: 1 },
+    ]);
+    expect(listDiff([], ['a'])).toEqual([{ kind: 'added', entry: 'a' }]);
   });
 
   it('fixes a file with problems one setting at a time and saves only once it is valid', async () => {

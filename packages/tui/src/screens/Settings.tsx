@@ -5,7 +5,7 @@ import {
   VeritasConfig,
 } from '@under18dev/veritas-core';
 import { Box, type DOMElement, Text, useBoxMetrics, useInput } from 'ink';
-import { useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import {
   Badge,
   Card,
@@ -1074,14 +1074,127 @@ function Problems({
   );
 }
 
-/** Rows the review keeps for its title, the line under the list and the question. */
-const REVIEW_CHROME = 5;
-/** Rows of one change in the review: its path, the value before and the value after. */
-const CHANGE_ROWS = 3;
+/** One line of an item-level list diff: an entry kept, added or removed, or a run of kept entries left out. */
+export type ListDiffLine =
+  | { kind: 'same' | 'added' | 'removed'; entry: string }
+  | { kind: 'elided'; count: number };
 
 /**
- * Every change before it is saved, scrolled with ↑/↓ when they do not all fit. `y` saves only once the last change
- * has been on the screen, so nothing is written unseen.
+ * The entries added to and removed from a list, in order, with kept entries around each change and longer runs of
+ * kept entries left out, so a change deep in a long list is never hidden.
+ */
+export function listDiff(before: string[], after: string[], context = 1): ListDiffLine[] {
+  // Longest common subsequence: lists here are short.
+  const lcs = Array.from({ length: before.length + 1 }, () => new Array<number>(after.length + 1).fill(0));
+
+  for (let i = before.length - 1; i >= 0; i--)
+    for (let j = after.length - 1; j >= 0; j--)
+      (lcs[i] as number[])[j] =
+        before[i] === after[j]
+          ? ((lcs[i + 1] as number[])[j + 1] ?? 0) + 1
+          : Math.max((lcs[i + 1] as number[])[j] ?? 0, (lcs[i] as number[])[j + 1] ?? 0);
+  const lines: Exclude<ListDiffLine, { kind: 'elided' }>[] = [];
+  let i = 0;
+  let j = 0;
+
+  while (i < before.length || j < after.length) {
+    if (i < before.length && j < after.length && before[i] === after[j]) {
+      lines.push({ kind: 'same', entry: before[i] as string });
+      i++;
+      j++;
+    } else if (
+      i < before.length &&
+      (j >= after.length || ((lcs[i + 1] as number[])[j] ?? 0) >= ((lcs[i] as number[])[j + 1] ?? 0))
+    ) {
+      // A removal before an addition, as diffs read.
+      lines.push({ kind: 'removed', entry: before[i] as string });
+      i++;
+    } else {
+      lines.push({ kind: 'added', entry: after[j] as string });
+      j++;
+    }
+  }
+  const near = (n: number) => lines.some((l, k) => l.kind !== 'same' && Math.abs(k - n) <= context);
+  const out: ListDiffLine[] = [];
+
+  lines.forEach((line, n) => {
+    if (line.kind !== 'same' || near(n)) out.push(line);
+    else {
+      const last = out.at(-1);
+
+      if (last?.kind === 'elided') last.count++;
+      else out.push({ kind: 'elided', count: 1 });
+    }
+  });
+
+  return out;
+}
+
+/** The value before or after a change, in full: lists entry by entry, anything else wrapped. */
+/** A diff line whose text wraps under itself, after its `-`, `+` or blank marker. */
+function DiffLine({ mark, children }: { mark: '-' | '+' | ' '; children: ReactNode }) {
+  const color = mark === '-' ? { color: 'red' } : mark === '+' ? { color: 'green' } : { dimColor: true };
+
+  return (
+    <Box>
+      <Box width={2} flexShrink={0}>
+        <Text {...color}>{mark}</Text>
+      </Box>
+      <Box flexGrow={1} flexBasis={0}>
+        <Text wrap="wrap" {...color}>
+          {children}
+        </Text>
+      </Box>
+    </Box>
+  );
+}
+
+function ChangeBody({ change: c }: { change: Change }) {
+  const side = (value: unknown) =>
+    value === undefined ? `(unset, default ${json(c.field.default)})` : json(value);
+
+  if (c.field.type === 'array') {
+    const list = (value: unknown) => {
+      const v = value === undefined ? c.field.default : value;
+
+      return Array.isArray(v) ? v.map(String) : [];
+    };
+    const lines = listDiff(list(c.before), list(c.after));
+
+    return (
+      <Box flexDirection="column" paddingLeft={2}>
+        {c.before === undefined ? <Text dimColor>was unset, so the default list applied</Text> : null}
+        {c.after === undefined ? <Text dimColor>now unset, so the default list applies</Text> : null}
+        {/* Entries can repeat, so a line is known by its position. */}
+        {numbered(lines.map((l) => l.kind)).map((line) => {
+          const l = lines[line.n] as ListDiffLine;
+
+          return l.kind === 'elided' ? (
+            <DiffLine key={line.key} mark=" ">
+              ({l.count} unchanged entr{l.count === 1 ? 'y' : 'ies'})
+            </DiffLine>
+          ) : (
+            <DiffLine key={line.key} mark={l.kind === 'added' ? '+' : l.kind === 'removed' ? '-' : ' '}>
+              {l.entry}
+            </DiffLine>
+          );
+        })}
+      </Box>
+    );
+  }
+
+  return (
+    <Box flexDirection="column" paddingLeft={2}>
+      <DiffLine mark="-">{side(c.before)}</DiffLine>
+      <DiffLine mark="+">{side(c.after)}</DiffLine>
+    </Box>
+  );
+}
+
+/**
+ * Every change before it is saved, in full: long values wrap and lists show the entries added and removed. The
+ * changes scroll row by row with ↑/↓ when they do not fit, and `y` saves only once the last row has been on the
+ * screen, so nothing is written unseen.
  */
 function Review({
   file,
@@ -1098,25 +1211,30 @@ function Review({
   onYes: () => void;
   onNo: () => void;
 }) {
-  const fit = Math.max(1, Math.floor((height - REVIEW_CHROME) / CHANGE_ROWS));
+  const viewport = useRef<DOMElement>(null);
+  const content = useRef<DOMElement>(null);
+  const view = useBoxMetrics(viewport);
+  const body = useBoxMetrics(content);
   const [top, setTop] = useState(0);
-  const [seenAll, setSeenAll] = useState(changes.length <= fit);
+  const [seenAll, setSeenAll] = useState(false);
   const [notice, setNotice] = useState(false);
-  const max = Math.max(0, changes.length - fit);
-  const shown = changes.slice(top, top + fit);
-  const below = changes.length - top - shown.length;
-  const side = (value: unknown, field: ConfigField) =>
-    value === undefined ? `(unset, default ${json(field.default)})` : json(value);
+  const measured = view.hasMeasured && body.hasMeasured;
+  const max = Math.max(0, body.height - view.height);
+  const offset = Math.min(top, max);
+  const below = Math.max(0, body.height - offset - view.height);
+
+  // The end has been seen once every row has been inside the viewport.
+  useEffect(() => {
+    if (measured && below === 0) setSeenAll(true);
+  }, [measured, below]);
 
   useInput(
     (input, k) => {
-      if (k.upArrow || input === 'k') setTop(Math.max(0, top - 1));
-      else if (k.downArrow || input === 'j' || k.pageDown || input === ' ') {
-        const next = Math.min(max, top + (k.pageDown || input === ' ' ? fit : 1));
-
-        setTop(next);
-        if (next >= max) setSeenAll(true);
-      } else if (input === 'y' || input === 'Y') {
+      if (k.upArrow || input === 'k') setTop(Math.max(0, offset - 1));
+      else if (k.pageUp) setTop(Math.max(0, offset - view.height));
+      else if (k.downArrow || input === 'j') setTop(Math.min(max, offset + 1));
+      else if (k.pageDown || input === ' ') setTop(Math.min(max, offset + Math.max(1, view.height)));
+      else if (input === 'y' || input === 'Y') {
         if (seenAll) onYes();
         else setNotice(true);
       } else if (input === 'n' || input === 'N' || k.escape) onNo();
@@ -1129,38 +1247,43 @@ function Review({
       <Text bold wrap="truncate-end">
         Review {changes.length} change{changes.length === 1 ? '' : 's'} to {file}
       </Text>
-      <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden" marginTop={1}>
-        {shown.map((c) => {
-          const effect = EFFECTS[c.path];
+      <Box
+        ref={viewport}
+        flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        overflow="hidden"
+        marginTop={1}
+        contentOffsetY={offset}
+      >
+        <Box ref={content} flexDirection="column" flexShrink={0}>
+          {changes.map((c) => {
+            const effect = EFFECTS[c.path];
 
-          return (
-            <Box key={c.path} flexDirection="column" flexShrink={0}>
-              <Box>
-                <Text wrap="truncate-end">
-                  {c.path}
-                  <Text dimColor> {fieldLabel(c.field)}</Text>
-                </Text>
-                {effect?.on(c.after === undefined ? c.field.default : c.after) ? (
-                  <Box flexShrink={0} marginLeft={1}>
-                    <Badge color="yellow">{`turns on ${effect.tag}`}</Badge>
-                  </Box>
-                ) : null}
+            return (
+              <Box key={c.path} flexDirection="column" flexShrink={0}>
+                <Box>
+                  <Text wrap="truncate-end">
+                    {c.path}
+                    <Text dimColor> {fieldLabel(c.field)}</Text>
+                  </Text>
+                  {effect?.on(c.after === undefined ? c.field.default : c.after) ? (
+                    <Box flexShrink={0} marginLeft={1}>
+                      <Badge color="yellow">{`turns on ${effect.tag}`}</Badge>
+                    </Box>
+                  ) : null}
+                </Box>
+                <ChangeBody change={c} />
               </Box>
-              <Text color="red" wrap="truncate-end">
-                {'  - '}
-                {side(c.before, c.field)}
-              </Text>
-              <Text color="green" wrap="truncate-end">
-                {'  + '}
-                {side(c.after, c.field)}
-              </Text>
-            </Box>
-          );
-        })}
+            );
+          })}
+        </Box>
       </Box>
       <Box flexShrink={0} flexDirection="column">
         {below > 0 ? (
-          <Text color="cyan">+{below} more (↓)</Text>
+          <Text color="cyan">
+            {below} more row{below === 1 ? '' : 's'} below (↓)
+          </Text>
         ) : (
           <Text dimColor wrap="truncate-end">
             Only {file} is written, after it is checked against the schema again.
