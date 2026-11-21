@@ -54,6 +54,21 @@ export function mutationUnsupportedReason(root: string): string | null {
   if (config && typeof config === 'object' && 'projects' in config)
     return '@mizchi/mutator does not support Jest configs with `projects`, so mutation testing is not run';
 
+  // A JavaScript or TypeScript config is not run here: a `projects:` key written in it is enough to stop, and one
+  // built some other way surfaces as mutator's own error.
+  if (configFile && !configFile.endsWith('.json')) {
+    let text = '';
+
+    try {
+      text = readFileSync(configFile, 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
+    } catch {
+      // Unreadable: mutator reports it.
+    }
+
+    if (/(?:^|[\s{,])['"]?projects['"]?\s*:/.test(text))
+      return `@mizchi/mutator does not support Jest configs with \`projects\`, and ${path.basename(configFile)} sets them, so mutation testing is not run`;
+  }
+
   return null;
 }
 

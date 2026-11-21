@@ -265,6 +265,25 @@ describe('jestTestRunner', () => {
     ).toBe(null);
   });
 
+  it('stops before running mutator when a JavaScript Jest config sets projects', () => {
+    expect(
+      jestTestRunner.mutation.unsupportedReason(
+        project({
+          'package.json': manifest({ type: 'module' }),
+          'jest.config.mjs': "export default { projects: ['<rootDir>/a'] };",
+        }),
+      ),
+    ).toMatch(/jest\.config\.mjs sets them/);
+    expect(
+      jestTestRunner.mutation.unsupportedReason(
+        project({
+          'package.json': manifest({ type: 'module' }),
+          'jest.config.mjs': '// projects: are not used\nexport default { testEnvironment: "node" };',
+        }),
+      ),
+    ).toBe(null);
+  });
+
   it('refuses test file filters that read as options or leave the directory', async () => {
     const root = project({ 'package.json': manifest({}), 'node_modules/jest/bin/jest.js': '' });
 
