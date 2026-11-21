@@ -96,9 +96,11 @@ const label = (t: Target) => `${t.fn.name}(${t.param})`;
  * "distinct", "day"; "5 failed login attempts" -> "failed", "login", "attempt"). They outweigh other words of the
  * sentence, which may describe a different number.
  */
-const UNIT_STOP = new Set(
-  'a an the of to for in within per after before and or with than on at by from is are was be'.split(' '),
-);
+const UNIT_STOP = new Set([
+  ...'a an the of to for in within per after before and or with than on at by from is are was be'.split(' '),
+  // Verbs of the consequence ("1000 or more get discount 100"): what follows is the result, not what is counted.
+  ...'get gets receive receives earn earns pay pays cost costs give gives unlock unlocks'.split(' '),
+]);
 
 function unitWords(quote: string, value: string): string[] {
   const digits = value.replace(/^-/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -293,6 +295,9 @@ function mapStatement(
       };
     };
 
+    // A quantity the statement names explicitly ("total") outweighs the words after the value.
+    const quantityNamed = numeric.some((p) => hits(p.words).quantityHit);
+
     for (const p of numeric) {
       // An array's length only when the statement talks about a count ("3 or more items", "the item count"),
       // never about one element ("the second value") and never on the function name alone.
@@ -308,7 +313,9 @@ function mapStatement(
       // pull a threshold onto the discount it pays out.
       const score =
         (paramHit ? 2 : 0) +
-        (unitHit && compared ? 2 : 0) +
+        // Being the quantity the statement names breaks a tie with a field only mentioned elsewhere in it.
+        (quantityHit ? 1 : 0) +
+        (unitHit && compared && (quantityHit || !quantityNamed) ? 2 : 0) +
         nameHits * 2 +
         (compared ? 1 : 0) +
         (numeric.length === 1 && inputs <= 1 && nameHits > 0 ? 1 : 0);
@@ -394,7 +401,7 @@ export function implementationAgreement(
 
   for (const c of fn.comparisons) {
     if (c.param !== param || c.literal === null) continue;
-    const paramOnLeft = c.left.trim() === param;
+    const paramOnLeft = c.paramSide ? c.paramSide === 'left' : c.left.trim() === param;
     const codeOp = normalizeComparison(c.operator, paramOnLeft);
 
     if (!codeOp) continue;

@@ -552,6 +552,11 @@ export function canPrompt(state: State): boolean { return (state.daysUsed ?? 0) 
       registry.properties.find((p) => p.statementIds.includes(id))?.predicate?.param;
     expect(param('ST-a')).toBe('state.daysUsed');
     expect(param('ST-b')).toBe('state.level');
+    // `(state.daysUsed ?? 0) >= 5` keeps the field on the left: the documented `>= 5` agrees with it.
+    const agreement = (id: string) =>
+      registry.properties.find((p) => p.statementIds.includes(id))?.implementationAgreement;
+    expect(agreement('ST-a')).toBe('agree');
+    expect(agreement('ST-b')).toBe('agree');
     expect(registry.conflicts).toEqual([]);
   });
 
@@ -617,7 +622,14 @@ export function freeShipping(account: Account): boolean { return account.items >
       'export interface Order { total: number; discount: number }\nexport function discountAmount(order: Order): number { return order.total >= 1000 ? order.discount : 0; }',
       'Orders with a total of 1000 or more get discount 100.',
       'order.total',
-      true,
+      false,
+    ],
+    [
+      'a compared record field named in the consequence',
+      'export interface Order { total: number; discount: number }\nexport function discountAmount(order: Order): number { return order.total >= 1000 && order.discount > 0 ? order.discount : 0; }',
+      'Orders with a total of 1000 or more get discount 100.',
+      'order.total',
+      false,
     ],
   ])('binds the compared threshold rather than %s', (_, code, quote, param, ambiguous) => {
     const registry = promptRegistry(
@@ -626,7 +638,6 @@ export function freeShipping(account: Account): boolean { return account.items >
     );
     const property = registry.properties.find((p) => p.statementIds.includes('ST-a'));
     expect(property?.predicate).toMatchObject({ param, operator: '>=', value: '1000' });
-    // Only a field named right after the value ("get discount 100") is worth mentioning as another reading.
     expect(property?.assumptions.some((a) => a.startsWith(AMBIGUOUS_BINDING))).toBe(ambiguous);
   });
 
