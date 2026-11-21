@@ -2108,6 +2108,7 @@ function argumentMount(
   index: number,
   ctx: Ctx,
   depth: number,
+  returns: ResultMounts = new Map(),
 ): Mount {
   if (index < 0 || depth > 5) return undefined;
   let symbol = aliasTarget(call.expression, ctx.checker);
@@ -2126,7 +2127,7 @@ function argumentMount(
   const target = ctx.checker.getSymbolAtLocation(parameter.name);
   const mounts = descendants(fn.body)
     .filter((item) => ts.isIdentifier(item) && ctx.checker.getSymbolAtLocation(item) === target)
-    .map((item) => mountedExpression(item, ctx, depth + 1));
+    .map((item) => mountedExpression(item, ctx, depth + 1, returns));
 
   return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
 }
@@ -2159,6 +2160,7 @@ function propMount(
   name: string,
   ctx: Ctx,
   depth: number,
+  returns: ResultMounts = new Map(),
 ): Mount {
   const fn = componentFunction(element, ctx.checker);
 
@@ -2194,7 +2196,13 @@ function propMount(
       for (const item of descendants(fn.body))
         if (ts.isIdentifier(item) && ctx.checker.getSymbolAtLocation(item) === local) reads.push(item);
   }
-  const mounts = reads.map((read) => mountedExpression(read, ctx, depth + 1));
+  // What the component returns is mounted exactly as this element is, so a prop it puts into its returned JSX is too.
+  const elementMount =
+    reads.length > 0
+      ? mountedExpression(ts.isJsxOpeningElement(element) ? element.parent : element, ctx, depth + 1, returns)
+      : undefined;
+  const inner = new Map(returns).set(fn, elementMount);
+  const mounts = reads.map((read) => mountedExpression(read, ctx, depth + 1, inner));
 
   return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
 }
@@ -2246,7 +2254,18 @@ function jsxTop(expression: ts.Node, checker: ts.TypeChecker): ts.Node {
   return current;
 }
 
-function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount {
+/**
+ * Components whose returned JSX is known to be mounted a given way while judging one element: inside
+ * `<Providers><Dialog /></Providers>` in a test, what `Providers` returns is mounted as that element is.
+ */
+type ResultMounts = ReadonlyMap<ts.Node, Mount>;
+
+function mountedExpression(
+  expression: ts.Node,
+  ctx: Ctx,
+  depth: number,
+  returns: ResultMounts = new Map(),
+): Mount {
   const current = jsxTop(expression, ctx.checker);
   const parent = current.parent;
 
@@ -2256,7 +2275,9 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount 
 
     while (fn && !isFunctionLike(fn)) fn = fn.parent;
 
-    return fn ? resultMount(fn, ctx, depth) : undefined;
+    if (!fn) return undefined;
+
+    return returns.has(fn) ? returns.get(fn) : resultMount(fn, ctx, depth);
   }
 
   if (
@@ -2268,21 +2289,21 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount 
     // A helper or project function with a body (even one named `mount`): mounted only where it hands the element to
     // a renderer. Otherwise a renderer recognized by name and, for ambiguous names, by the package it comes from.
     return hasFunctionBody(parent, ctx.checker)
-      ? argumentMount(parent, index, ctx, depth)
+      ? argumentMount(parent, index, ctx, depth, returns)
       : rendererKind(parent.expression, ctx.checker);
   }
 
   // `<Wrapper><Dialog /></Wrapper>`: mounted where the component renders its children.
   if (ts.isJsxElement(parent) && parent.children.includes(current as ts.JsxChild))
-    return depth < 5 ? propMount(parent.openingElement, 'children', ctx, depth) : undefined;
+    return depth < 8 ? propMount(parent.openingElement, 'children', ctx, depth, returns) : undefined;
 
   // `<Layout header={<Dialog />} />`: mounted where the component renders that prop.
   if (ts.isJsxExpression(parent) && ts.isJsxAttribute(parent.parent)) {
     const attribute = parent.parent;
     const element = attribute.parent.parent;
 
-    return ts.isIdentifier(attribute.name) && depth < 5
-      ? propMount(element, attribute.name.text, ctx, depth)
+    return ts.isIdentifier(attribute.name) && depth < 8
+      ? propMount(element, attribute.name.text, ctx, depth, returns)
       : undefined;
   }
 
@@ -2297,7 +2318,7 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount 
 
     const mounts = (symbol ? referencesOf(symbol, parent.getSourceFile(), ctx.checker) : [])
       .filter((item) => item !== parent.name)
-      .map((item) => mountedExpression(item, ctx, depth + 1));
+      .map((item) => mountedExpression(item, ctx, depth + 1, returns));
 
     return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
   }

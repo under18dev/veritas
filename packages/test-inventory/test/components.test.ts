@@ -1274,6 +1274,69 @@ describe('children, scopes, descriptors and setup writes', () => {
   });
 });
 
+describe('wrappers from project files', () => {
+  it('mounts what a project wrapper renders exactly when the wrapper element in the test is mounted', () => {
+    const byName = inventory(
+      `${header}
+      import { Section } from '../src/Section';
+      import { Layout } from '../src/Layout';
+      const Wrapper = ({ children }: { children?: unknown }) => <Section>{children}</Section>;
+      function Ignore({ children }: { children?: unknown }) { return <p>Hi</p>; }
+      it('project provider around the component', () => {
+        render(<Section><Dialog open title="Hi" /></Section>);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('local wrapper around a project provider', () => {
+        render(<Wrapper><Dialog open title="Hi" /></Wrapper>);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('project component inside the component children', () => {
+        render(<Dialog open><Section>x</Section></Dialog>);
+        expect(screen.getByText('x')).toBeInTheDocument();
+      });
+      it('project layout header', () => {
+        render(<Layout header={<Dialog open title="Hi" />} />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('wrapper that ignores its children', () => {
+        render(<Ignore><Dialog open title="Hi" /></Ignore>);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('project provider only created', () => {
+        const element = <Section><Dialog open title="Hi" /></Section>;
+        expect(element).toBeTruthy();
+      });
+    `,
+      {
+        'src/Section.tsx':
+          'export const Section = ({ children }: { children?: unknown }) => <section>{children}</section>;\n',
+        'src/Layout.tsx':
+          'export function Layout({ header }: { header: unknown }) { return <main>{header}</main>; }\n',
+        'src/Dialog.tsx': `export function Dialog(props: { open?: boolean; title?: string; children?: unknown; onSave?: () => void }) {
+  return props.open ? <div role="dialog">{props.title}{props.children}</div> : null;
+}
+export default Dialog;
+`,
+      },
+    );
+
+    expect(byName('project provider around the component')).toMatchObject({
+      symbols: ['src/Section.tsx#Section', 'src/Dialog.tsx#Dialog'],
+      asserted: true,
+    });
+    expect(byName('local wrapper around a project provider').symbols).toContain('src/Dialog.tsx#Dialog');
+    expect(byName('local wrapper around a project provider').asserted).toBe(true);
+    expect(byName('project component inside the component children').symbols).toEqual([
+      'src/Dialog.tsx#Dialog',
+      'src/Section.tsx#Section',
+    ]);
+    expect(byName('project layout header').symbols).toContain('src/Dialog.tsx#Dialog');
+    expect(byName('project layout header').asserted).toBe(true);
+    expect(byName('wrapper that ignores its children')).toMatchObject({ symbols: [], asserted: false });
+    expect(byName('project provider only created')).toMatchObject({ symbols: [], asserted: false });
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}
