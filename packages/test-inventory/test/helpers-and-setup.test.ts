@@ -144,6 +144,21 @@ export const config = defineConfig;
     expect(get('unrelated').asserted).toBe(false);
   });
 
+  it('follows a test helper that a built-in runs, but not one an assertion only names', () => {
+    const get = inventory(`${header}
+      const viaFn = (...args: number[]) => fn(args[0] ?? 0);
+      const ignores = (value: number) => { fn(value); return 0; };
+      it('mapped', () => { expect([1, 2].map(viaFn)).toEqual([2, 3]); });
+      it('result ignored', () => { expect([1].map(ignores)).toEqual([0]); });
+      it('named only', () => { expect(viaFn).toBeTypeOf('function'); });
+    `);
+    expect(get('mapped').symbols).toEqual(['src/math.ts#fn']);
+    expect(get('mapped').asserted).toBe(true);
+    expect(get('result ignored').symbols).toEqual(['src/math.ts#fn']);
+    expect(get('result ignored').asserted).toBe(false);
+    expect(get('named only').symbols).toEqual([]);
+  });
+
   it('does not count a helper whose return value is unrelated to the project call', () => {
     const test = inventory(`${header}
       function setup() { fn(1); return 5; }

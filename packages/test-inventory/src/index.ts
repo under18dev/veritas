@@ -737,6 +737,24 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
     info.targets.some((t) => t.ownArgs) || (!direct && projectReceiver(node, ctx) !== undefined);
   const passed = passedProjectFunctions(node, ctx, projectReceives).filter((symbol) => !known.has(symbol));
 
+  // `[13, 37].map(helper)`: a built-in runs a test helper it is given and hands back what the helper returns.
+  if (info.targets.length === 0 && !(ts.isCallExpression(node) && isAssertionChainCall(node))) {
+    const helpers = argumentsOf(node)
+      .map((argument) => skipParens(argument))
+      .filter(ts.isIdentifier)
+      .map((argument) => helperBodyOf(argument, ctx))
+      .filter((body): body is ts.Node => body !== undefined);
+
+    if (helpers.length > 0) {
+      const followed = helpers.map((body) => helperInfo(body, ctx));
+      info = {
+        targets: followed.flatMap((helper) => helper.targets),
+        helperAsserts: info.helperAsserts || followed.some((helper) => helper.helperAsserts),
+        opaque: info.opaque || followed.some((helper) => helper.opaque),
+      };
+    }
+  }
+
   if (passed.length > 0)
     info = {
       ...info,
@@ -931,7 +949,12 @@ const VITEST_ASSERTIONS = new Set(['expect', 'assert', 'expectTypeOf', 'assertTy
 
 /** The body of the function a call invokes, when that function is test code inside the root. */
 function helperBody(node: Invocation, ctx: Ctx): ts.Node | undefined {
-  let symbol = ctx.checker.getSymbolAtLocation(calleeOf(node));
+  return helperBodyOf(calleeOf(node), ctx);
+}
+
+/** The body of the function an expression names, when that function is test code inside the root. */
+function helperBodyOf(expression: ts.Expression, ctx: Ctx): ts.Node | undefined {
+  let symbol = ctx.checker.getSymbolAtLocation(expression);
 
   if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = ctx.checker.getAliasedSymbol(symbol);
 
