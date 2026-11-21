@@ -36,7 +36,7 @@ quote   line 7: "Orders with a total of 1000 or more receive a flat discount of 
 property P-ee03e6e8b749 [proposed, normative] discountAmount: total >= 1000 -> Orders with a total of 1000 or more receive a flat discount of 100.
 ```
 
-数値のしきい値は、number と宣言された引数やレコードのフィールドにだけ対応付けます。`lastUsedDay: string | null` のようなフィールドは、名前が記述と合っていても対象にしません。数値の enum、`number & { __brand: "cents" }` のようなブランド付きの数値、`1 | 2 | 3` のようなリテラルの union は数値として扱い、型を解決できないフィールドは候補に残します。比較しているフィールドと同じくらい記述に合う number のフィールドが同じレコードにあり、関数がそれを比較していない場合は、対応付けません。ほかの引数も記述に合う場合は、その候補を Property の前提（assumptions）に書きます。accept する前に、対応付けが正しいか確かめてください。
+数値のしきい値は、number と宣言された引数やレコードのフィールドにだけ対応付けます。`lastUsedDay: string | null` のようなフィールドは、名前が記述と合っていても対象にしません。数値の enum、`number & { __brand: "cents" }` のようなブランド付きの数値、`1 | 2 | 3` のようなリテラルの union は数値として扱い、型を解決できないフィールドは候補に残します。関数が比較しているフィールドは、比較していないフィールドより優先します。記述が数えている量が同じレコードの比較していない number のフィールドを指し、比較しているフィールドがその量にも数値の直後の語にも合わない場合だけ、対応付けません。ほかの引数も記述に合う場合は、その候補を Property の前提（assumptions）に書きます。accept する前に、対応付けが正しいか確かめてください。
 
 どの関数にも対応しない記述は、対応なしとして報告します。候補が同点で決められなかった場合は、その候補も示します。言い回しの規則で読めない記述は、任意の [LLM プロバイダー](/ja/guide/llm-providers)に読ませることもできます。
 
