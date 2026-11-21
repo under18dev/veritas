@@ -83,6 +83,36 @@ veritas explain <finding-id>
 
 The outcome summarizes the evidence vector below; it is not a grade.
 
+### What counts as checking project code
+
+A test checks project code when an assertion looks at what project code produced. For a plain function that is its return value, an object it changed, or how it called a callback or a `vi.fn()` mock the test handed to it.
+
+Component and hook tests are read the same way. A project component counts as called once its JSX element is mounted: given to `render` (or `rerender`, `hydrate`), to a helper of the test code or the project that passes it on to one, returned by a component or factory whose result is, or kept in a local that is. An element given to a helper that only inspects it does not count, and an element given as a prop, or as children of a component whose code Veritas can read, counts only when that component's own code renders it. A project provider that wraps the component, such as `render(<Providers><Dialog /></Providers>)` with `Providers` returning `<section>{children}</section>`, therefore still counts: its children are mounted exactly when the `Providers` element is. Reading the element's own description (`ui.props.title`) is not reading what the component rendered. Testing Library imported as a namespace (`import * as rtl from '@testing-library/react'`) is read the same way as named imports. This holds whether the test writes `render(<Dialog />)` itself, renders in a `beforeEach` of an enclosing `describe` (not `beforeAll` or directly at module or `describe` level: Testing Library cleans the page up after each test, so `beforeEach` is the reliable form), calls a local helper such as `renderDialog()` that does, or renders a local wrapper component. For a local wrapper component, only what reaches the JSX it returns counts as rendered. Renderers that do not draw into the page run the component, but only their own output counts, not later reads of the page: server rendering (`renderToString`), react-test-renderer's `create`, Enzyme's `shallow` and `mount`, and `render` given a `container` that is not in the page. Enzyme's `shallow` runs only the root component; components nested in it are not run. An element that is only created, as in `expect(<Dialog />).toBeTruthy()`, does not count. A project hook called inside `renderHook` counts too. After that, these assertions count as checking the component or hook:
+
+- a Testing Library query of the page (`screen.getByText`, `within(...)`, the queries returned by `render`), or a read of the global `document`, made after a project component rendered
+- `result.current` from `renderHook`, and the output in what `render` returns (`container`, `baseElement`, or a query such as `getByText(...)` that is called); its API (`unmount`, `rerender`, `debug`, a query that is not called) does not count. Output methods of other renderers, such as Enzyme's `debug()`, `html()` and `text()`, count
+- a component rendered through `createPortal` into the page, such as `document.body`, once the portal is mounted
+- `toHaveBeenCalled*` or `.mock.calls` on a mock that was handed to the component or hook: directly as a prop or argument, inside a props object (`render(<Dialog {...props} />)` with `props.onSave` checked), or through a local helper or factory that passes or returns it
+
+Some assertions still do not count:
+
+- a mock that was never handed to project code, or a different member of a mock object than the one handed over (`onSave={mocks.onSave}` does not cover `mocks.track`)
+- a value of a props object that the test set itself
+- a prop that a later attribute or spread replaces (`<Dialog {...props} onSave={undefined} />` does not hand over `props.onSave`)
+- a mock read before it was handed over, such as a call count saved or checked before the render
+- the calls of a mock the test also calls itself, whether through a matcher such as `toHaveBeenCalled` or through `.mock.calls`
+- a page read made before the component rendered (`const before = screen.queryByText('x')` before `render`), or a read of something the test wrote to the page itself (`document.body.className = 'dark'`), counting writes made by `beforeEach` setup that runs before the test, and only writes whose code runs: a write in a helper nothing calls, or in an event listener when the test fires no event, does not count. Once the test puts content into the page itself (`innerHTML`, `appendChild` and the like, also through a local such as `const body = document.body`), no later read of the page counts, because it may find that content. An element the test creates with `document.createElement` and appends without filling it only stops queries by role or by page structure, since a text query cannot find an empty element
+- a `within(...)` query on a container that does not come from the rendered page, such as `document.createElement('div')`
+- an element returned by a function that nothing runs, or rendered by a call inside such a function (a render helper the test calls runs, including one exported from a shared `test-utils` file)
+- a project function given as an event handler to a DOM or third-party element (`<button onClick={handleClick}>`), or code in an inline handler there, when the test fires no event
+- a page query when nothing from the project rendered, so a test that renders only third-party components is still reported
+
+A page query also does not credit a project component whose children in the test hold no project component, such as `<Providers><Button>Go</Button></Providers>` or a provider helper that wraps whatever it is given: the query may find only what the test supplied. This also leaves out a component like `<Card>Body</Card>` when the query looks for something the card renders itself; such a test is reported unless another assertion links it.
+
+Veritas does not yet link a module mocked with `vi.mock` that project code calls internally, or a spy on a global object, to the code under test. Tests that check only those are still reported as `tautological_or_disconnected`, so read them before acting on the finding.
+
+A file inside the analysis scope that imports Vitest's runtime (`expect`, `assert`, `vi`, or `import * as vitest from 'vitest'`) is treated as test code wherever it lives, because it only runs inside a test run. A mock utility such as `src/test-utils.ts` is therefore not counted as project code. The flip side is that a real function kept in such a file is not counted either, so a test that calls only that function is reported as not checking project behaviour. Move the function out of that file if it is project code.
+
 ## Evidence vector
 
 Each assessment in `assessments.json` has these fields and no combined score:
