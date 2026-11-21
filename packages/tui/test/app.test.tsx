@@ -19,6 +19,7 @@ import {
   SECTIONS,
   setAt,
   setField,
+  tidy,
   unsetAt,
   validate,
 } from '../src/screens/Settings.js';
@@ -604,14 +605,14 @@ describe('the TUI', () => {
     expect(app.lastFrame()).toMatch(/\* Timeout \(ms\)\s+5000/);
     expect(api.writeConfig).not.toHaveBeenCalled();
     await press(app, 's');
-    await until(app, 'Review changes to .veritas/config.json');
+    await until(app, 'Review 1 change to .veritas/config.json');
     expect(app.lastFrame()).toContain('- 1000');
     expect(app.lastFrame()).toContain('+ 5000');
     await press(app, 'n');
     await until(app, '1 unsaved');
     expect(api.writeConfig).not.toHaveBeenCalled();
     await press(app, 's');
-    await until(app, 'Save these changes?');
+    await until(app, 'Save this change?');
     await press(app, 'y');
     expect(api.writeConfig).toHaveBeenCalledWith({ mutation: { timeoutMs: 5000 } });
     await until(app, 'Saved 1 change to .veritas/config.json.');
@@ -647,7 +648,7 @@ describe('the TUI', () => {
     await until(app, '2 unsaved');
     expect(app.lastFrame()).toMatch(/now 120000 \(default\)/);
     await press(app, 's');
-    await until(app, 'Review changes');
+    await until(app, 'Review 2 changes');
     expect(app.lastFrame()).toContain('+ (unset, default 120000)');
     await press(app, 'y');
     expect(api.writeConfig).toHaveBeenCalledWith({ mutation: { mode: 'full' } });
@@ -671,7 +672,7 @@ describe('the TUI', () => {
     await press(app, KEY.up, 'd');
     await until(app, '› shop.example.com');
     await press(app, KEY.escape, 's');
-    await until(app, 'Review changes');
+    await until(app, 'Review 1 change');
     await press(app, 'y');
     expect(api.writeConfig).toHaveBeenCalledWith({
       mutation: { timeoutMs: 1000 },
@@ -704,8 +705,92 @@ describe('the TUI', () => {
     const app = await open(api, 5);
     await until(app, 'is a code configuration');
     expect(app.lastFrame()).toContain('read-only');
+    // Only the way back is offered.
+    expect(app.lastFrame()).toContain('Esc  back');
+    expect(app.lastFrame()).not.toContain('review & save');
     await press(app, KEY.enter, ' ', 's', 'y');
     expect(api.writeConfig).not.toHaveBeenCalled();
+    await press(app, KEY.escape);
+    await until(app, 'jump');
+  });
+
+  it('explains a configuration it cannot read and still lets you leave', async () => {
+    const api = fakeApi({
+      readConfig: () => {
+        throw new VeritasError('user', 'CONFIG_PARSE', 'cannot parse .veritas/config.json: Unexpected token');
+      },
+    });
+    const app = await open(api, 5);
+    await until(app, 'CONFIG_PARSE: cannot parse .veritas/config.json');
+    expect(app.lastFrame()).toContain('cannot read');
+    expect(app.lastFrame()).toContain('Esc  back');
+    await press(app, KEY.escape);
+    await until(app, 'jump');
+    expect(api.writeConfig).not.toHaveBeenCalled();
+  });
+
+  it('shows every change before saving when they do not all fit, and saves only after the last is seen', async () => {
+    const api = fakeApi({
+      readConfig: () => ({ kind: 'json', file: '/projects/shop/.veritas/config.json', raw: {} }),
+    });
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    const down = (n: number) => Array(n).fill(KEY.down);
+    // Sources: local, GitHub, web and full text to the LLM.
+    await press(app, ...down(2), KEY.enter, KEY.down, ' ', KEY.down, ' ', ...down(2), ' ', ...down(7), ' ');
+    await until(app, '4 unsaved');
+    // Sandbox and cache.
+    await press(app, ...down(9), KEY.enter, KEY.down, ' ', ...down(2), KEY.enter, KEY.down, ' ');
+    await until(app, '6 unsaved');
+    await press(app, 's');
+    await until(app, 'Review 6 changes to .veritas/config.json');
+    expect(app.lastFrame()).toContain('+2 more (↓)');
+    expect(app.lastFrame()).toContain('turns on network');
+    await press(app, 'y');
+    await until(app, 'Scroll to the last change');
+    expect(api.writeConfig).not.toHaveBeenCalled();
+    await press(app, KEY.down, KEY.down);
+    await until(app, 'cache.enabled');
+    expect(app.lastFrame()).not.toContain('more (↓)');
+    await press(app, 'y');
+    expect(api.writeConfig).toHaveBeenCalledWith({
+      sources: { local: false, github: { enabled: true }, web: { enabled: true }, sendFullTextToLlm: true },
+      sandbox: { allowNetworkWithoutIsolation: true },
+      cache: { enabled: false },
+    });
+  });
+
+  it('fixes a file with problems one setting at a time and saves only once it is valid', async () => {
+    const api = fakeApi({
+      readConfig: () => ({
+        kind: 'json',
+        file: '/projects/shop/.veritas/config.json',
+        raw: { mutation: { timeoutMs: -1 }, pbt: { numRuns: 0 } },
+      }),
+    });
+    const app = await open(api, 5);
+    await until(app, '2 problems to fix before saving');
+    await press(app, ...Array(4).fill(KEY.down), KEY.enter, ...Array(3).fill(KEY.down), KEY.enter);
+    await until(app, 'New value:');
+    await press(app, KEY.backspace, KEY.backspace, '5', '0', '0', '0', KEY.enter);
+    await until(app, '1 problem to fix before saving: pbt.numRuns');
+    await press(app, 's');
+    await until(app, 'Fix 1 problem before saving');
+    expect(api.writeConfig).not.toHaveBeenCalled();
+    // A change that adds a problem is still refused.
+    await press(app, KEY.enter);
+    await until(app, 'New value:');
+    await press(app, ...Array(4).fill(KEY.backspace), '0', KEY.enter);
+    await until(app, 'mutation.timeoutMs: Too small');
+    await press(app, KEY.escape, KEY.down, KEY.enter, KEY.down, KEY.enter);
+    await until(app, 'New value:');
+    await press(app, KEY.backspace, '9', KEY.enter);
+    await until(app, '2 unsaved');
+    expect(app.lastFrame()).not.toContain('problem');
+    await press(app, 's');
+    await until(app, 'Review 2 changes');
+    await press(app, 'y');
+    expect(api.writeConfig).toHaveBeenCalledWith({ mutation: { timeoutMs: 5000 }, pbt: { numRuns: 9 } });
   });
 
   it('shows the code and hint of an error', async () => {
@@ -817,6 +902,24 @@ describe('helpers', () => {
         (x) => `${x.severity}/${x.certainty}`,
       ),
     ).toEqual(['high/confirmed', 'high/suspected', 'low/confirmed']);
+  });
+
+  it('removes defaults the user did not write', () => {
+    const field = (k: string) =>
+      SECTIONS.flatMap((s) => s.fields).find((f) => f.path.join('.') === k) ?? expect.fail(k);
+    const min = field('formal.integerDomain.min');
+    // A required field edited and reset leaves no integerDomain behind when the file had none.
+    expect(tidy({}, resetField(setField({}, min, '-5'), min), min)).toEqual({});
+    expect(tidy({}, setField({}, min, '-5'), min)).toEqual({
+      formal: { integerDomain: { min: '-5', max: '10000' } },
+    });
+    // A file that had the object keeps it.
+    const saved = { formal: { integerDomain: { min: '-5', max: '10000' } } };
+    expect(tidy(saved, resetField(saved, min), min)).toEqual({
+      formal: { integerDomain: { min: '-10000', max: '10000' } },
+    });
+    const timeout = field('mutation.timeoutMs');
+    expect(tidy({}, setField({}, timeout, 120_000), timeout)).toEqual({});
   });
 
   it('says what to do next, and formats durations and times', () => {

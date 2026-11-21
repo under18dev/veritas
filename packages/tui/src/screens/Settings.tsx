@@ -7,7 +7,7 @@ import {
 } from '@under18dev/veritas-core';
 import { Box, type DOMElement, Text, useBoxMetrics, useInput } from 'ink';
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Card, Confirm, ErrorView, type Hints, TextInput, useLoad } from '../components.js';
+import { Badge, Card, Confirm, ErrorView, type Hints, numbered, TextInput, useLoad } from '../components.js';
 import type { ScreenProps } from '../screen.js';
 
 type Path = (string | number)[];
@@ -98,6 +98,40 @@ export function resetField(raw: unknown, field: ConfigField): unknown {
   return field.required ? setAt(raw, field.path, field.default) : unsetAt(raw, field.path);
 }
 
+/**
+ * Keep the file as close as possible to what was saved: a value set back to its default that the saved file did not
+ * have is removed, and so is an object (such as `formal.integerDomain`) that holds only defaults the saved file did
+ * not have.
+ */
+export function tidy(saved: unknown, edited: unknown, field: ConfigField): unknown {
+  let next = edited;
+
+  if (
+    !field.required &&
+    getAt(saved, field.path) === undefined &&
+    same(getAt(next, field.path), field.default)
+  )
+    next = unsetAt(next, field.path);
+  const parent = field.path.slice(0, -1);
+  const object = getAt(next, parent);
+
+  if (
+    parent.length > 1 &&
+    getAt(saved, parent) === undefined &&
+    object !== null &&
+    typeof object === 'object' &&
+    !Array.isArray(object) &&
+    Object.entries(object).every(([name, value]) => {
+      const sibling = FIELDS.find((f) => same(f.path, [...parent, name]));
+
+      return sibling !== undefined && same(value, sibling.default);
+    })
+  )
+    next = unsetAt(next, parent);
+
+  return next;
+}
+
 export interface Change {
   path: string;
   before: unknown;
@@ -130,7 +164,7 @@ export function parseText(text: string, field: ConfigField): { value: unknown } 
       ? { value: Number(t) }
       : { error: 'Enter a number, such as 0.5.' };
 
-  return { value: text };
+  return { value: t };
 }
 
 const WORDS: Record<string, string> = {
@@ -241,7 +275,9 @@ function allowed(field: ConfigField): string {
     field.exclusiveMinimum !== undefined ? `> ${field.exclusiveMinimum}` : '',
     field.minimum !== undefined ? `>= ${field.minimum}` : '',
     field.maximum !== undefined ? `<= ${field.maximum}` : '',
-    field.type === 'array' ? `list of text${field.minItems ? `, at least ${field.minItems}` : ''}` : '',
+    field.type === 'array'
+      ? `list of text${field.items?.pattern ? ` matching ${field.items.pattern}` : ''}${field.minItems ? `, at least ${field.minItems}` : ''}`
+      : '',
     field.nullable ? 'empty for none' : '',
     field.default === undefined && field.type !== 'array' ? 'empty to unset' : '',
   ];
@@ -287,8 +323,10 @@ export function Settings({ api, active, onBack, onChange, height, width, version
   const row = rows[at];
   const changes = data?.kind === 'json' ? diff(saved, draft) : [];
 
-  const hints: Hints =
-    mode.kind === 'text'
+  const editable = !config.error && data?.kind === 'json';
+  const hints: Hints = !editable
+    ? [['Esc', 'back']]
+    : mode.kind === 'text'
       ? [
           ['Enter', 'apply'],
           ['Esc', 'cancel'],
@@ -339,22 +377,17 @@ export function Settings({ api, active, onBack, onChange, height, width, version
     if (active) setHints(hints);
   }, [active, hintKey, setHints]);
 
-  /** Apply an edit to the draft when the whole configuration stays valid; otherwise show why at the field. */
+  /**
+   * Apply an edit to the draft unless it adds a problem the configuration did not have; otherwise show why at the
+   * field. A file that already has problems can so be fixed one setting at a time; saving waits until it is valid.
+   */
   const apply = (field: ConfigField, edited: unknown): boolean => {
-    // Changing a value back to what the file had leaves the file as it was, instead of writing the default out.
-    const next =
-      !field.required &&
-      getAt(saved, field.path) === undefined &&
-      same(getAt(edited, field.path), field.default)
-        ? unsetAt(edited, field.path)
-        : edited;
-    const issues = validate(next);
+    const next = tidy(saved, edited, field);
+    const before = new Set(validate(draft));
+    const added = validate(next).filter((i) => !before.has(i));
 
-    if (issues.length) {
-      // The problems of this field first; others only when it has none (the file had them already).
-      const own = issues.filter((i) => i.startsWith(`${key(field)}`));
-
-      setErrors({ path: key(field), messages: own.length ? own : issues });
+    if (added.length) {
+      setErrors({ path: key(field), messages: added });
 
       return false;
     }
@@ -393,7 +426,13 @@ export function Settings({ api, active, onBack, onChange, height, width, version
       else if (k.downArrow || input === 'j') setCursor(Math.min(rows.length - 1, at + 1));
       else if (k.escape) leave();
       else if (input === 's') {
-        if (changes.length) setMode({ kind: 'review' });
+        const problems = validate(draft);
+
+        if (problems.length)
+          setMessage(
+            `Fix ${problems.length} problem${problems.length === 1 ? '' : 's'} before saving: ${problems[0]}`,
+          );
+        else if (changes.length) setMode({ kind: 'review' });
         else setMessage('No unsaved changes.');
       } else if (row.kind === 'section') {
         const isOpen = open.has(row.section.key);
@@ -429,17 +468,27 @@ export function Settings({ api, active, onBack, onChange, height, width, version
         }
       }
     },
-    { isActive: active && mode.kind === 'browse' && data?.kind === 'json' },
+    { isActive: active && mode.kind === 'browse' && editable },
   );
 
   useInput(
     (_input, k) => {
       if (k.escape) onBack();
     },
-    { isActive: active && data !== undefined && data.kind !== 'json' },
+    // Also when the file cannot be read: the way back must never depend on the file being valid.
+    { isActive: active && (Boolean(config.error) || (data !== undefined && data.kind !== 'json')) },
   );
 
-  if (config.error) return <ErrorView error={config.error} />;
+  if (config.error)
+    return (
+      <Card title="Settings" right={<Badge color="red">cannot read</Badge>} color="red">
+        <ErrorView error={config.error} />
+        <Text wrap="wrap">
+          Fix .veritas/config.json in your editor (or remove it and create it again from Home), then open
+          Settings again.
+        </Text>
+      </Card>
+    );
   if (!data) return <Text dimColor>loading…</Text>;
   if (data.kind === 'none')
     return (
@@ -465,7 +514,7 @@ export function Settings({ api, active, onBack, onChange, height, width, version
   }
 
   const file = path.relative(api.root, data.file) || data.file;
-  const fileProblems = validate(saved);
+  const problems = validate(draft);
 
   if (mode.kind === 'review')
     return (
@@ -505,9 +554,9 @@ export function Settings({ api, active, onBack, onChange, height, width, version
           </Box>
         ) : null}
       </Box>
-      {fileProblems.length ? (
+      {problems.length ? (
         <Text color="yellow" wrap="truncate-end">
-          The file does not pass the schema: {fileProblems[0]}
+          {problems.length} problem{problems.length === 1 ? '' : 's'} to fix before saving: {problems[0]}
         </Text>
       ) : null}
       <Box ref={listBox} flexDirection="column" flexGrow={1} flexShrink={1} minHeight={1} overflow="hidden">
@@ -631,7 +680,10 @@ function RowView({
           {differs ? <Text color="yellow"> {differs} changed</Text> : null}
           {unsaved ? <Text color="magenta"> {unsaved} unsaved</Text> : null}
           {effects.length ? (
-            <Text color="yellow"> {effects.map((f) => EFFECTS[key(f)]?.tag).join(', ')} on</Text>
+            <Text color="yellow">
+              {' '}
+              {[...new Set(effects.map((f) => EFFECTS[key(f)]?.tag))].join(', ')} on
+            </Text>
           ) : null}
         </Text>
       </Box>
@@ -883,8 +935,9 @@ function ListEditor({
   return (
     <Box flexDirection="column" marginTop={1}>
       {rows.length === 0 ? <Text dimColor>(empty: press a to add an entry)</Text> : null}
-      {rows.map((r, i) => (
-        <Text key={r} wrap="truncate-end" {...(i === index ? { color: 'cyan' } : {})}>
+      {/* Entries can repeat while a list is edited; the position tells them apart. */}
+      {numbered(rows).map(({ key: rowKey, n: i, text: r }) => (
+        <Text key={rowKey} wrap="truncate-end" {...(i === index ? { color: 'cyan' } : {})}>
           {i === index ? '› ' : '  '}
           {choices ? (items.includes(r) ? '[x] ' : '[ ] ') : ''}
           {r}
@@ -911,6 +964,15 @@ function ListEditor({
   );
 }
 
+/** Rows the review keeps for its title, the line under the list and the question. */
+const REVIEW_CHROME = 5;
+/** Rows of one change in the review: its path, the value before and the value after. */
+const CHANGE_ROWS = 3;
+
+/**
+ * Every change before it is saved, scrolled with ↑/↓ when they do not all fit. `y` saves only once the last change
+ * has been on the screen, so nothing is written unseen.
+ */
 function Review({
   file,
   changes,
@@ -926,33 +988,82 @@ function Review({
   onYes: () => void;
   onNo: () => void;
 }) {
+  const fit = Math.max(1, Math.floor((height - REVIEW_CHROME) / CHANGE_ROWS));
+  const [top, setTop] = useState(0);
+  const [seenAll, setSeenAll] = useState(changes.length <= fit);
+  const [notice, setNotice] = useState(false);
+  const max = Math.max(0, changes.length - fit);
+  const shown = changes.slice(top, top + fit);
+  const below = changes.length - top - shown.length;
   const side = (value: unknown, field: ConfigField) =>
     value === undefined ? `(unset, default ${json(field.default)})` : json(value);
 
+  useInput(
+    (input, k) => {
+      if (k.upArrow || input === 'k') setTop(Math.max(0, top - 1));
+      else if (k.downArrow || input === 'j' || k.pageDown || input === ' ') {
+        const next = Math.min(max, top + (k.pageDown || input === ' ' ? fit : 1));
+
+        setTop(next);
+        if (next >= max) setSeenAll(true);
+      } else if (input === 'y' || input === 'Y') {
+        if (seenAll) onYes();
+        else setNotice(true);
+      } else if (input === 'n' || input === 'N' || k.escape) onNo();
+    },
+    { isActive: active },
+  );
+
   return (
-    <Box flexDirection="column" height={height}>
-      <Text bold>Review changes to {file}</Text>
+    <Box flexDirection="column" height={height} overflow="hidden">
+      <Text bold wrap="truncate-end">
+        Review {changes.length} change{changes.length === 1 ? '' : 's'} to {file}
+      </Text>
       <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden" marginTop={1}>
-        {changes.map((c) => (
-          <Box key={c.path} flexDirection="column" flexShrink={0}>
-            <Text>
-              {c.path}
-              <Text dimColor> {fieldLabel(c.field)}</Text>
-            </Text>
-            <Text color="red" wrap="truncate-end">
-              {'  - '}
-              {side(c.before, c.field)}
-            </Text>
-            <Text color="green" wrap="truncate-end">
-              {'  + '}
-              {side(c.after, c.field)}
-            </Text>
-          </Box>
-        ))}
+        {shown.map((c) => {
+          const effect = EFFECTS[c.path];
+
+          return (
+            <Box key={c.path} flexDirection="column" flexShrink={0}>
+              <Box>
+                <Text wrap="truncate-end">
+                  {c.path}
+                  <Text dimColor> {fieldLabel(c.field)}</Text>
+                </Text>
+                {effect?.on(c.after === undefined ? c.field.default : c.after) ? (
+                  <Box flexShrink={0} marginLeft={1}>
+                    <Badge color="yellow">{`turns on ${effect.tag}`}</Badge>
+                  </Box>
+                ) : null}
+              </Box>
+              <Text color="red" wrap="truncate-end">
+                {'  - '}
+                {side(c.before, c.field)}
+              </Text>
+              <Text color="green" wrap="truncate-end">
+                {'  + '}
+                {side(c.after, c.field)}
+              </Text>
+            </Box>
+          );
+        })}
       </Box>
       <Box flexShrink={0} flexDirection="column">
-        <Text dimColor>Only {file} is written. It is checked against the schema again before writing.</Text>
-        <Confirm active={active} question="Save these changes?" onYes={onYes} onNo={onNo} />
+        {below > 0 ? (
+          <Text color="cyan">+{below} more (↓)</Text>
+        ) : (
+          <Text dimColor wrap="truncate-end">
+            Only {file} is written, after it is checked against the schema again.
+          </Text>
+        )}
+        {notice && !seenAll ? (
+          <Text color="yellow">Scroll to the last change (↓) before saving.</Text>
+        ) : (
+          <Text>
+            Save {changes.length === 1 ? 'this change' : `these ${changes.length} changes`}?{' '}
+            <Text color="cyan">{seenAll ? '[y/N]' : '[↓ to see all, then y/N]'}</Text>
+          </Text>
+        )}
       </Box>
     </Box>
   );
