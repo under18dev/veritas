@@ -913,6 +913,24 @@ function analyzeBody(
         .flatMap((root) => trackedCalls(root.identifier)),
     );
 
+  // Whether a call's render result is Testing Library's (`render`, a render helper), whose `debug`, `unmount` and
+  // uncalled queries are API. Other renderers' results (Enzyme's `debug()`, `html()`, `find()`) are output.
+  const testingLibraryResult = (call: Invocation): boolean => {
+    if (!isJsxInvocation(call)) return true;
+    const top = jsxTop(ts.isJsxOpeningElement(call) ? call.parent : call, checker);
+    const mount = top.parent;
+
+    if (!ts.isCallExpression(mount) || !mount.arguments.includes(top as ts.Expression)) return true;
+    const callee = skipParens(mount.expression);
+    const name = ts.isIdentifier(callee)
+      ? importedName(callee, checker)
+      : ts.isPropertyAccessExpression(callee)
+        ? callee.name.text
+        : undefined;
+
+    return name === undefined || !(STRING_RENDERING_FUNCTIONS.has(name) || name in AMBIGUOUS_RENDERERS);
+  };
+
   // Whether a query read at `position` may find content the test itself put into the page before it.
   const queryAfterWrite = (member: string | undefined, position: number) =>
     member !== undefined &&
@@ -924,7 +942,7 @@ function analyzeBody(
   // Either side of a comparison counts: `expect(['a', 'b']).toContain(result.status)` checks the result.
   for (const assertion of assertions) {
     const excluded = selfCalledEvidence(assertion);
-    const runsSubject = matcherNames(assertion).some((name) => name.startsWith('toThrow'));
+    const runsSubject = runsCallback(assertion);
 
     for (const value of comparedValues(assertion)) {
       // A call whose result is a render result: an element mounted into the page, or a helper call that renders.
@@ -943,7 +961,8 @@ function analyzeBody(
           if (executedAt(call) > observationAt(assertion)) continue;
 
           // Of what a render returns, only output counts: the container, or a query that runs.
-          if (rendersOutput(call) && !renderOutputRead(identifier, checker)) continue;
+          if (rendersOutput(call) && testingLibraryResult(call) && !renderOutputRead(identifier, checker))
+            continue;
 
           // A query of a render result searches the whole page, which may hold what the test wrote there itself.
           if (
@@ -969,7 +988,7 @@ function analyzeBody(
           evaluated(node) &&
           !excluded.has(node) &&
           // `expect(render(<Dialog />).unmount)` reads the render's API, not its output.
-          !(rendersOutput(node) && !inlineOutputRead(node, checker))
+          !(rendersOutput(node) && testingLibraryResult(node) && !inlineOutputRead(node, checker))
         ) {
           asserted.add(node);
           mergeKeys(assertedKeys, node, keysRead(value, node));
@@ -1258,8 +1277,15 @@ function assertionReach(
       seen.add(symbol);
       const initializer = variableInitializer(symbol.valueDeclaration);
 
-      if (initializer && depth < 20 && initializer.getSourceFile() === node.getSourceFile())
-        visit(initializer, depth + 1, initializer.getEnd());
+      if (initializer && depth < 20 && initializer.getSourceFile() === node.getSourceFile()) {
+        // `const body = document.body` holds the live element: it is read where the name is used. A value captured
+        // from the page (`const before = screen.queryByText('x')`, `document.body.textContent`) is read where set.
+        const chain = documentChain(initializer, checker);
+        const live = chain === 'document.body' || chain === 'document.documentElement';
+        const usedAt = item === node || !enclosingFunction(item, node) ? position : assertionAt;
+
+        visit(initializer, depth + 1, live ? usedAt : initializer.getEnd());
+      }
     }
   };
 
@@ -1449,13 +1475,40 @@ function runsFunction(fn: ts.Node, assertion: ts.CallExpression, executed: Set<t
     (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
     parent.arguments?.includes(current as ts.Expression)
   ) {
-    if (parent === assertion) return matcherNames(assertion).some((name) => name.startsWith('toThrow'));
+    if (parent === assertion) return runsCallback(assertion);
 
     // `expect(x).toEqual(() => …)`: a matcher argument is compared, not run.
     return !(ts.isCallExpression(parent) && isAssertionChainCall(parent));
   }
 
   return false;
+}
+
+/** Assertion methods that run the function they are given: `assert.throws(fn)`, AVA's `t.throws(fn)` and the like. */
+const RUNNING_ASSERTIONS = new Set([
+  'throws',
+  'rejects',
+  'doesNotThrow',
+  'doesNotReject',
+  'throwsAsync',
+  'notThrows',
+  'notThrowsAsync',
+]);
+
+/**
+ * Whether an assertion runs the function it is given: a throw matcher (`expect(fn).toThrow()`, chai's
+ * `expect(fn).to.throw()`), or an assert method that calls it (`assert.throws(fn, /bad/)`).
+ */
+function runsCallback(assertion: ts.CallExpression): boolean {
+  if (
+    matcherNames(assertion).some(
+      (name) => name.startsWith('toThrow') || name === 'throw' || name === 'throws',
+    )
+  )
+    return true;
+  const callee = skipParens(assertion.expression);
+
+  return ts.isPropertyAccessExpression(callee) && RUNNING_ASSERTIONS.has(callee.name.text);
 }
 
 /** The name of a member access: `a.b` and `a['b']` name `b`; a computed `a[key]` names none. */
@@ -1924,6 +1977,9 @@ const DOCUMENT_QUERY = /^(?:get|query|find)(?:All)?By[A-Z]/;
 function isDocumentQuery(call: ts.CallExpression, checker: ts.TypeChecker): boolean {
   const callee = skipParens(call.expression);
 
+  // `const { getByText } = screen; getByText('x')`, `const find = screen.getByText; find('x')`.
+  if (ts.isIdentifier(callee) && screenQueryFunction(callee, checker, 0)) return true;
+
   if (!ts.isPropertyAccessExpression(callee) || !DOCUMENT_QUERY.test(callee.name.text)) return false;
   const receiver = skipParens(callee.expression);
 
@@ -1940,6 +1996,38 @@ function isDocumentQuery(call: ts.CallExpression, checker: ts.TypeChecker): bool
     testingLibraryMember(within.expression, checker) === 'within' &&
     within.arguments[0] !== undefined &&
     fromRenderedPage(within.arguments[0], checker, 0)
+  );
+}
+
+/** Whether a local holds a query of `screen`: destructured from it, taken off it, or an alias of either. */
+function screenQueryFunction(identifier: ts.Identifier, checker: ts.TypeChecker, depth: number): boolean {
+  const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
+
+  if (!declaration || depth > 5) return false;
+
+  if (ts.isBindingElement(declaration) && ts.isObjectBindingPattern(declaration.parent)) {
+    const property = declaration.propertyName ?? declaration.name;
+    const holder = declaration.parent.parent;
+
+    return (
+      ts.isIdentifier(property) &&
+      DOCUMENT_QUERY.test(property.text) &&
+      ts.isVariableDeclaration(holder) &&
+      holder.initializer !== undefined &&
+      testingLibraryMember(holder.initializer, checker) === 'screen'
+    );
+  }
+  const initializer =
+    ts.isVariableDeclaration(declaration) && declaration.initializer && skipParens(declaration.initializer);
+
+  if (!initializer) return false;
+
+  if (ts.isIdentifier(initializer)) return screenQueryFunction(initializer, checker, depth + 1);
+
+  return (
+    ts.isPropertyAccessExpression(initializer) &&
+    DOCUMENT_QUERY.test(initializer.name.text) &&
+    testingLibraryMember(initializer.expression, checker) === 'screen'
   );
 }
 
@@ -2289,7 +2377,24 @@ function detachedContainer(call: ts.CallExpression, checker: ts.TypeChecker): bo
       ? property.name
       : undefined;
 
-  if (!value) return true;
+  return !value || detachedNode(value, checker);
+}
+
+/** React's `createPortal`, by the name it is imported under (`createPortal`, `ReactDOM.createPortal`). */
+function isCreatePortal(expression: ts.Expression, checker: ts.TypeChecker): boolean {
+  const callee = skipParens(expression);
+
+  return ts.isIdentifier(callee)
+    ? importedName(callee, checker) === 'createPortal'
+    : ts.isPropertyAccessExpression(callee) && callee.name.text === 'createPortal';
+}
+
+/**
+ * Whether a DOM node is not shown to be part of the page: an element the test creates and does not append to the
+ * document, or any value not shown to come from it.
+ */
+function detachedNode(node: ts.Expression, checker: ts.TypeChecker): boolean {
+  const value = skipParens(node);
 
   if (documentChain(value, checker) !== undefined) return false;
 
@@ -2765,6 +2870,16 @@ function mountedExpression(
     // a renderer. Otherwise a renderer recognized by name and, for ambiguous names, by the package it comes from.
     if (hasFunctionBody(parent, ctx.checker))
       return argumentMount(parent, index, ctx, depth, returns, running);
+
+    // `createPortal(<Dialog />, document.body)`: rendered where the portal is mounted, into its destination.
+    if (ts.isCallExpression(parent) && index === 0 && isCreatePortal(parent.expression, ctx.checker)) {
+      const portal = mountedExpression(parent, ctx, depth + 1, returns, running);
+      const destination = parent.arguments[1];
+
+      return portal === 'document' && destination && detachedNode(destination, ctx.checker)
+        ? 'string'
+        : portal;
+    }
     const kind = rendererKind(parent.expression, ctx.checker);
 
     // `render(ui, { container: document.createElement('div') })`: a container that is not in the page keeps the

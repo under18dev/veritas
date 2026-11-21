@@ -931,8 +931,8 @@ describe('reaching a renderer and the page', () => {
 
     expect(byName('alias of the body').asserted).toBe(false);
     expect(byName('destructured body').asserted).toBe(false);
-    // The local is read where it is set, before the render: not counted (conservative).
-    expect(byName('alias only read').asserted).toBe(false);
+    // The local holds the live body, read where it is used: after the render.
+    expect(byName('alias only read').asserted).toBe(true);
   });
 });
 
@@ -1911,6 +1911,124 @@ describe('observation timing, caller chains, inline members, containers, shallow
 
     expect(byName('query after a fixture write').asserted).toBe(false);
     expect(byName('query without writes').asserted).toBe(true);
+  });
+});
+
+describe('assert callbacks, live references, screen aliases, Enzyme output and portals', () => {
+  it('runs callbacks given to assert.throws and chai throw matchers', () => {
+    const root = tempProject({
+      'src/plain.ts':
+        "export function fail(): never { throw new Error('bad'); }\nexport const ok = () => 1;\n",
+      'test/plain.test.ts': `import { assert, expect, it } from 'vitest';
+import { fail, ok } from '../src/plain';
+it('assert throws', () => { assert.throws(() => fail(), /bad/); });
+it('assert does not throw', () => { assert.doesNotThrow(() => ok()); });
+it('chai throw', () => { expect(() => fail()).to.throw(/bad/); });
+it('compared only', () => { assert.ok(() => fail()); });
+`,
+    });
+    const tests = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests;
+    const asserted = (name: string) =>
+      tests.find((test) => test.name === name)?.targetCalls.some((call) => call.asserted);
+
+    for (const name of ['assert throws', 'assert does not throw', 'chai throw'])
+      expect(asserted(name), name).toBe(true);
+    expect(asserted('compared only')).toBe(false);
+  });
+
+  it('reads a live element held in a local where it is used', () => {
+    const byName = inventory(`${header}
+      it('live body read after the render', () => {
+        const body = document.body;
+        render(<Dialog open title="Hi" />);
+        expect(body.textContent).toBe('Hi');
+      });
+      it('text captured before the render', () => {
+        const text = document.body.textContent;
+        render(<Dialog open title="Hi" />);
+        expect(text).toBe('');
+      });
+      it('query captured before the render', () => {
+        const before = screen.queryByText('Hi');
+        render(<Dialog open title="Hi" />);
+        expect(before).toBeNull();
+      });
+    `);
+
+    expect(byName('live body read after the render').asserted).toBe(true);
+    expect(byName('text captured before the render').asserted).toBe(false);
+    expect(byName('query captured before the render').asserted).toBe(false);
+  });
+
+  it('resolves screen queries taken off screen into locals', () => {
+    const byName = inventory(`${header}
+      it('destructured from screen', () => {
+        render(<Dialog open title="Hi" />);
+        const { getByText } = screen;
+        expect(getByText('Hi')).toBeTruthy();
+      });
+      it('alias of a screen query', () => {
+        render(<Dialog open title="Hi" />);
+        const find = screen.getByText;
+        expect(find('Hi')).toBeTruthy();
+      });
+      it('destructured, nothing rendered', () => {
+        label('a');
+        const { getByText } = screen;
+        expect(getByText('A')).toBeTruthy();
+      });
+    `);
+
+    expect(byName('destructured from screen').asserted).toBe(true);
+    expect(byName('alias of a screen query').asserted).toBe(true);
+    expect(byName('destructured, nothing rendered').asserted).toBe(false);
+  });
+
+  it('keeps Enzyme output methods as output', () => {
+    const byName = inventory(`${header}
+      import { shallow } from 'enzyme';
+      it('inline enzyme debug', () => { expect(shallow(<Dialog open title="Hi" />).debug()).toContain('Hi'); });
+      it('stored enzyme text', () => {
+        const tree = shallow(<Dialog open title="Hi" />);
+        expect(tree.text()).toContain('Hi');
+      });
+      it('testing library debug compared', () => {
+        const { debug } = render(<Dialog open title="Hi" />);
+        expect(debug).toBeTypeOf('function');
+      });
+    `);
+
+    expect(byName('inline enzyme debug').asserted).toBe(true);
+    expect(byName('stored enzyme text').asserted).toBe(true);
+    expect(byName('testing library debug compared').asserted).toBe(false);
+  });
+
+  it('follows the child of a mounted portal into its destination', () => {
+    const byName = inventory(`${header}
+      import { createPortal } from 'react-dom';
+      it('portal into the body', () => {
+        render(<>{createPortal(<Dialog open title="Hi" />, document.body)}</>);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('portal into a detached node', () => {
+        render(<>{createPortal(<Dialog open title="Hi" />, document.createElement('div'))}</>);
+        expect(screen.queryByText('Hi')).toBeNull();
+      });
+      it('portal never mounted', () => {
+        const portal = createPortal(<Dialog open title="Hi" />, document.body);
+        expect(portal).toBeTruthy();
+      });
+    `);
+
+    expect(byName('portal into the body')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: true,
+    });
+    expect(byName('portal into a detached node')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: false,
+    });
+    expect(byName('portal never mounted')).toMatchObject({ symbols: [], asserted: false });
   });
 });
 
