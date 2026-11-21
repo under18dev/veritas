@@ -57,7 +57,11 @@ Lean の証明が扱うのは整数と真偽値の引数だけで、レコード
 | Vitest   | `vitest.config.*`、package.json の `vitest`、`vitest` を実行する test スクリプト                                  | JSON レポーターを付けた `vitest run`                      | Vitest 4 以降が必要です。`@mizchi/mutator` が対応を宣言しているのは Vitest 5 で、Vitest 4 のプロジェクトも警告付きで実行します。Vitest 3 以前では `mutate` を `unsupported` として報告し、ほかのステージはそのまま実行します                                                                                                                         |
 | Jest     | `jest.config.{js,ts,mjs,cjs,cts,json}`、package.json の `"jest"` キーや `jest`、`jest` を実行する test スクリプト | `node --experimental-vm-modules` で起動した `jest --json` | 実験的です。`@mizchi/mutator` 自身が Jest への対応を実験的としているためです。Jest 30 で、ネイティブ ESM のプロジェクト（`"type": "module"`）だけが対象で、Jest の `projects` には対応しません。それ以外のプロジェクトでは理由を付けて `unsupported` と報告します。`doctor` は mutator を `degraded` と表示し、mutation の実行には毎回警告が付きます |
 
-両方を使っているプロジェクトでは、`init` は `test` スクリプトが実行するほうを選びます。スクリプトから判断できないときは Vitest を選んでそのことを伝え、ターミナルではどちらを使うか尋ねます。`analysis.testFramework` のない設定は Vitest として扱います。
+複数のランナーが見つかったとき、`init` は実行できるものを優先します。インストール済みのランナーは宣言だけのものより、どちらも設定ファイルや package.json のキーだけで示されるものより優先するので、移行の名残の Jest の設定が、インストール済みの Vitest に勝つことはありません。同じ順位のものの中では、`test` スクリプトが（引数の中の単語ではなく）コマンドとして実行するものを選び、次に設定ファイルや依存の宣言があるのが 1 つだけならそれを選びます。それでも判断できないときは Vitest を選んでそのことを伝え、ターミナルではどちらを使うか尋ねます。`analysis.testFramework` のない設定は Vitest として扱います。
+
+Jest では、`jest.mock` の効果がテストの実行方法で変わります。Babel や ts-jest はテストを CommonJS にコンパイルし、`jest.mock` を import より前に移すので、モジュールが置き換わり、Veritas はモックとして記録します。ネイティブ ESM（`"type": "module"` で、Babel の設定もコンパイルする transformer もない）では、`jest.mock` が実行される前に静的な import が結び付けられ、テストは本物のコードを実行するので、Veritas はそれらのモックとして数えません。ESM でのモックは `jest.unstable_mockModule` と動的な `import()` の組み合わせで、そうした import が読み込むものは不明として報告します。
+
+失敗したときだけ通るテスト（Vitest の `it.fails`、Jest の `it.failing`）には `expected_failure` の修飾子を付け、評価は常に `inconclusive` にします。kill や生き残りが、assertion の見た目と逆の意味になるからです。
 
 ## 外部ツールとライセンス
 
