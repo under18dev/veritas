@@ -824,13 +824,20 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
 
       if (comparison) {
         const literal = integerLiteral(n.right) ?? integerLiteral(n.left);
+        const onLeft = paramPath(n.left);
+        const onRight = onLeft === null ? paramPath(n.right) : null;
         const record: Comparison = {
           location: loc(sf, file, n),
           operator: comparison,
           left: text(n.left),
           right: text(n.right),
           literal,
-          param: paramPath(n.left) ?? paramPath(n.right),
+          param: onLeft ?? onRight,
+          ...(onLeft !== null
+            ? { paramSide: 'left' as const }
+            : onRight !== null
+              ? { paramSide: 'right' as const }
+              : {}),
         };
 
         if (!nestedFunction) info.comparisons.push(record);

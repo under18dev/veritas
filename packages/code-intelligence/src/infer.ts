@@ -65,7 +65,7 @@ export function inferBehaviorCandidates(index: CodeIndex): BehaviorCandidate[] {
 
     for (const c of fn.comparisons) {
       if (c.param === null) continue;
-      const paramOnLeft = stripParens(c.left) === c.param;
+      const paramOnLeft = c.paramSide ? c.paramSide === 'left' : stripParens(c.left) === c.param;
       const operator = paramOnLeft ? c.operator : FLIPPED[c.operator];
       const other = paramOnLeft ? c.right : c.left;
       const at = `line ${c.location.range?.start}`;

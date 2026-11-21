@@ -45,6 +45,11 @@ export const Comparison = z.object({
   literal: z.string().nullable(),
   /** The parameter compared (`total`), or a field of one (`order.total`, `xs.length`); null otherwise. */
   param: z.string().nullable(),
+  /**
+   * Which operand holds `param` (`(state.daysUsed ?? 0) >= 5` has it on the left even though the left text is not just
+   * the parameter). Absent when `param` is null and in code indexes written before it was recorded.
+   */
+  paramSide: z.enum(['left', 'right']).optional(),
 });
 export type Comparison = z.infer<typeof Comparison>;
 

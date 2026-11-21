@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseConfig, symbolId } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
-import { analyzeCode, CodeIndex, type FunctionInfo } from '../src/index.js';
+import { analyzeCode, CodeIndex, type FunctionInfo, inferBehaviorCandidates } from '../src/index.js';
 
 function project(files: Record<string, string>): string {
   const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-ci-review-')));
@@ -271,5 +271,27 @@ export function canPrompt(state: State): boolean {
   it('records the field compared, not null', () => {
     const params = fn(index, symbolId('src/state.ts', 'canPrompt')).comparisons.map((c) => c.param);
     expect(params).toEqual(['state.daysUsed', 'state.level', 'state.daysUsed']);
+  });
+
+  it('records which side the field is on, so the boundary keeps its direction', () => {
+    const sides = analyze({
+      'src/side.ts': `export interface State { daysUsed?: number }
+export function canPrompt(state: State): boolean { return (state.daysUsed ?? 0) >= 5; }
+export function within(state: State): boolean { return 10 > (state.daysUsed ?? 0); }
+`,
+    });
+    const at = (name: string) => fn(sides, symbolId('src/side.ts', name)).comparisons[0];
+    expect(at('canPrompt')).toMatchObject({ param: 'state.daysUsed', paramSide: 'left' });
+    expect(at('within')).toMatchObject({ param: 'state.daysUsed', paramSide: 'right' });
+    const boundaries = inferBehaviorCandidates(sides)
+      .map((c) => c.boundary)
+      .filter((b) => b !== undefined);
+    expect(boundaries).toEqual(
+      expect.arrayContaining([
+        { param: 'state.daysUsed', operator: '>=', value: '5' },
+        { param: 'state.daysUsed', operator: '<', value: '10' },
+      ]),
+    );
+    expect(boundaries).not.toContainEqual({ param: 'state.daysUsed', operator: '<=', value: '5' });
   });
 });
