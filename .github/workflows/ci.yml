@@ -19,13 +19,25 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         node: [26]
+        # Run in parallel: static checks, unit tests and the performance budget; and the acceptance tests in two
+        # shards (Vitest --shard splits them by file).
+        part: [static, acceptance 1/2, acceptance 2/2]
         include:
           # Node 24 cannot block network access from project code; like the GitHub Action (node24 runtime), it runs
           # sandboxed code with a newer Node.js named by VERITAS_SANDBOX_NODE.
           - os: ubuntu-latest
             node: 24
             sandbox-node: 26
-    name: check (${{ matrix.os }}, node ${{ matrix.node }})
+            part: static
+          - os: ubuntu-latest
+            node: 24
+            sandbox-node: 26
+            part: acceptance 1/2
+          - os: ubuntu-latest
+            node: 24
+            sandbox-node: 26
+            part: acceptance 2/2
+    name: check (${{ matrix.os }}, node ${{ matrix.node }}, ${{ matrix.part }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -62,17 +74,27 @@ jobs:
       - name: Download the Lean toolchain
         run: lean --version && lake --version
       - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm licenses:check
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm test:acceptance
+      - if: matrix.part == 'static'
+        run: pnpm lint
+      - if: matrix.part == 'static'
+        run: pnpm licenses:check
+      - if: matrix.part == 'static'
+        run: pnpm typecheck
+      - if: matrix.part == 'static'
+        run: pnpm test
+      - name: Acceptance tests (shard)
+        if: startsWith(matrix.part, 'acceptance')
+        shell: bash
+        run: pnpm build && pnpm exec vitest run --project acceptance --shard="${PART#acceptance }"
+        env:
+          PART: ${{ matrix.part }}
       - name: Performance budget
-        run: node benchmarks/run.mjs --check --keep-runs veritas-runs
+        if: matrix.part == 'static'
+        run: pnpm build && node benchmarks/run.mjs --check --keep-runs veritas-runs
       # The run artifacts (reports, claims, solver input and output, artifact index) are kept for reproduction.
       # Every artifact is redacted when written; fixtures contain no secrets.
       - name: Upload Veritas run artifacts
-        if: always()
+        if: always() && matrix.part == 'static'
         uses: actions/upload-artifact@v4
         with:
           name: veritas-runs-${{ matrix.os }}-node${{ matrix.node }}
@@ -82,10 +104,11 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
       - name: clean install from packed tarballs
+        if: matrix.part == 'static'
         run: node scripts/clean-install-check.mjs
       - name: schemas are up to date
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && matrix.part == 'static'
         run: pnpm schemas && git diff --exit-code schemas
       - name: documentation site builds (no dead links)
-        if: matrix.os == 'ubuntu-latest' && matrix.node == 26
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 26 && matrix.part == 'static'
         run: pnpm docs:build
