@@ -30,11 +30,6 @@ export function featureRequirements(
   };
 }
 
-/** Kept for the mutation adapter until it reads the range from the test runner provider. */
-export const MUTATOR_MIN_VITEST_MAJOR = 4;
-export const MUTATOR_DECLARED_VITEST_MAJOR = 5;
-export const vitestMajor = majorVersion;
-
 export interface FeatureStatus {
   feature: string;
   state: 'enabled' | 'degraded' | 'disabled';

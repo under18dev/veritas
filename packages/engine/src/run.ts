@@ -350,8 +350,6 @@ async function runInContext(
   };
   const testRunner = testRunnerFor(config);
   const mutationTestFiles = (mapped: TestInventory | undefined): string[] | undefined => {
-    if (config.analysis.testFramework !== 'vitest') return undefined;
-
     // With --since, mutator only mutates what changed, so only tests that reach a changed file can kill a mutant.
     const changed = changedSinceFiles();
     const scope = options.scope?.length ? options.scope : changed?.length ? changed : undefined;
@@ -588,6 +586,7 @@ async function runInContext(
         (await runMutation({
           root,
           config,
+          testRunner,
           reportDir: store.pathFor('mutation'),
           signal,
           ...(options.since ? { since: options.since } : {}),

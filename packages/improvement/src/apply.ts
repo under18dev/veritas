@@ -16,7 +16,7 @@ import {
   type VeritasConfig,
   VeritasError,
 } from '@under18dev/veritas-core';
-import { readArtifact, recordedRunOptions, runVeritas } from '@under18dev/veritas-engine';
+import { readArtifact, recordedRunOptions, runVeritas, testRunnerFor } from '@under18dev/veritas-engine';
 import { type MutationRunResult, runMutation } from '@under18dev/veritas-mutation-adapter';
 import { applyApprovals, loadApprovals } from '@under18dev/veritas-property-engine';
 import { expectedFromSpec } from './oracle.js';
@@ -459,6 +459,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
   const deadline = Date.now() + doc.budget.timeBudgetMs;
   const remaining = () => Math.max(1, deadline - Date.now());
   const workspace = createWorkspace(root);
+  const testRunner = testRunnerFor(config);
   let written: WriteRecord | null = null;
 
   try {
@@ -480,6 +481,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
     const measureMutation = (label: string) =>
       runMutation({
         root: workspace,
+        testRunner,
         config: {
           ...config,
           mutation: { ...config.mutation, timeoutMs: Math.min(config.mutation.timeoutMs, remaining()) },

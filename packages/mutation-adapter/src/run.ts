@@ -1,17 +1,16 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import {
-  MUTATOR_DECLARED_VITEST_MAJOR,
-  MUTATOR_MIN_VITEST_MAJOR,
   type Mutant,
+  majorVersion,
   redact,
   redactDeep,
   resolveInsideRoot,
   resolvePackageVersion,
   runProjectTests,
+  type TestRunnerProvider,
   type VeritasConfig,
   VeritasError,
-  vitestMajor,
 } from '@under18dev/veritas-core';
 import { detectMutator, PINNED_MUTATOR_VERSION, summarize } from './detect.js';
 import {
@@ -27,11 +26,12 @@ import {
 } from './diagnose.js';
 import { importMutationReport } from './import.js';
 import { countMutants, emptyCounts, type MutationRunResult, type MutationRunStatus } from './schema.js';
-import { mutatorVitestDir, projectViteUrl, writeMutationVitestConfig } from './vitest-config.js';
 
 export interface RunMutationOptions {
   root: string;
   config: VeritasConfig;
+  /** The provider of the project's test runner, which mutator runs the tests with. */
+  testRunner: TestRunnerProvider;
   /** Git ref: only mutants in `git diff <since>`. */
   since?: string;
   /** Source globs relative to the root, passed as `--include`. */
@@ -48,10 +48,10 @@ export interface RunMutationOptions {
   projectMutatorOnly?: boolean;
   /**
    * Test files (POSIX, relative to the root) that can kill these mutants. When given, mutator runs only
-   * them, through a generated Vitest config; an empty list means no test reaches the code in scope.
+   * them, through a generated test runner config; an empty list means no test reaches the code in scope.
    */
   testFiles?: string[];
-  /** Vitest config passed as `--config`. */
+  /** Test runner config passed as `--config`. */
   configPath?: string;
   /**
    * Pass `--no-typecheck` (true) or not (false), whatever `mutation.typecheck` says. By default `--no-typecheck` is
@@ -63,6 +63,8 @@ export interface RunMutationOptions {
 }
 
 const MUTANT_KEY = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
+/** The test runner mutator uses without `--runner`. */
+const DEFAULT_MUTATOR_RUNNER = 'vitest';
 
 /** Exit code mutator uses when the tests fail without any mutant. */
 const EXIT_BASELINE_FAILED = 4;
@@ -80,8 +82,14 @@ export function timeBudgetSeconds(timeoutMs: number): number {
 }
 
 /** Build the mutator argv (without the Node executable and script). Throws on unsafe input. */
-export function buildMutatorArgs(options: RunMutationOptions): string[] {
+export function buildMutatorArgs(
+  options: Omit<RunMutationOptions, 'testRunner'> & { runner?: string },
+): string[] {
   const args = ['--root', path.resolve(options.root), '--reporter', 'json', '--reporter', 'agent'];
+
+  // mutator runs Vitest unless told otherwise; the flag is passed only for another runner.
+  if (options.runner !== undefined && options.runner !== DEFAULT_MUTATOR_RUNNER)
+    args.push('--runner', options.runner);
   args.push('--report-dir', options.reportDir);
 
   if (options.since !== undefined) {
@@ -241,17 +249,22 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       'tsconfig.json at the root only references other projects, and mutator type-checks against that file alone: mutants were not type-checked, so some survivors may be type errors',
     );
 
-  const vitest = resolvePackageVersion(options.root, 'vitest');
-  const major = vitestMajor(vitest);
+  const runner = options.testRunner;
+  const { minMajor, declaredMajor, mutatorRunner } = runner.mutation;
 
-  if (major !== null && major < MUTATOR_MIN_VITEST_MAJOR)
+  if (mutatorRunner === null)
+    return result('unsupported', { detail: `@mizchi/mutator cannot run ${runner.displayName} tests` });
+  const runnerVersion = resolvePackageVersion(options.root, runner.detection.packageName);
+  const major = majorVersion(runnerVersion);
+
+  if (major !== null && minMajor !== null && major < minMajor)
     return result('unsupported', {
-      detail: `mutation testing needs Vitest ${MUTATOR_MIN_VITEST_MAJOR} or later; the project has Vitest ${vitest}`,
+      detail: `mutation testing needs ${runner.displayName} ${minMajor} or later; the project has ${runner.displayName} ${runnerVersion}`,
     });
 
-  if (major !== null && major < MUTATOR_DECLARED_VITEST_MAJOR)
+  if (major !== null && declaredMajor !== null && major < declaredMajor)
     warnings.push(
-      `@mizchi/mutator declares Vitest ${MUTATOR_DECLARED_VITEST_MAJOR}; the project has Vitest ${vitest}, which has worked but is outside that range`,
+      `@mizchi/mutator declares ${runner.displayName} ${declaredMajor}; the project has ${runner.displayName} ${runnerVersion}, which has worked but is outside that range`,
     );
 
   if (options.testFiles?.length === 0) {
@@ -262,7 +275,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   let args: string[];
 
   try {
-    args = buildMutatorArgs({ ...options, reportDir, noTypecheck });
+    args = buildMutatorArgs({ ...options, reportDir, noTypecheck, runner: mutatorRunner });
   } catch (error) {
     return result('error', { detail: (error as Error).message });
   }
@@ -279,12 +292,12 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     return result('unsupported', { backend, detail: detection.detail });
   }
 
-  // The adapter's copy runs the project's Vitest, but Vitest loads mutator's setup file from where Veritas is
-  // installed, outside the project; that is allowed below, and anything else loaded from there may still fail.
-  const ownCopyHint =
-    "the project has no @mizchi/mutator, so the copy bundled with Veritas ran the project's Vitest with files from outside the project; if the first error names such a file, add @mizchi/mutator to the project's devDependencies";
-  const fsAllowDir = detection.origin === 'adapter' ? mutatorVitestDir(detection.binPath) : null;
-  const writesConfig = options.testFiles !== undefined || fsAllowDir !== null;
+  // The adapter's copy runs the project's test runner, but the runner loads mutator's setup file from where Veritas
+  // is installed, outside the project; that is allowed below, and anything else loaded from there may still fail.
+  const ownCopyHint = `the project has no @mizchi/mutator, so the copy bundled with Veritas ran the project's ${runner.displayName} with files from outside the project; if the first error names such a file, add @mizchi/mutator to the project's devDependencies`;
+  const allowDirs =
+    detection.origin === 'adapter' ? runner.mutation.bundledMutatorDirs(detection.binPath) : [];
+  const writesConfig = options.testFiles !== undefined || allowDirs.length > 0;
 
   if (detection.origin === 'adapter') {
     warnings.push(`the project has no @mizchi/mutator; using the adapter's own copy at ${detection.binPath}`);
@@ -302,6 +315,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     options.killMatrix && '--kill-matrix',
     (options.only?.length ?? 0) > 0 && '--only',
     writesConfig && '--config',
+    mutatorRunner !== DEFAULT_MUTATOR_RUNNER && '--runner',
     noTypecheck && '--[no-]typecheck',
     '--time-budget',
     'agent',
@@ -326,13 +340,11 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   let configPath: string | undefined;
 
   if (writesConfig) {
-    configPath = writeMutationVitestConfig({
+    configPath = runner.mutation.writeConfig({
       root: options.root,
       dir: reportDir,
       ...(options.testFiles === undefined ? {} : { testFiles: options.testFiles }),
-      ...(fsAllowDir === null
-        ? {}
-        : { fsAllow: { dirs: [fsAllowDir], viteUrl: projectViteUrl(options.root) } }),
+      allowDirs,
     });
   }
   const binPath = detection.binPath;
@@ -343,6 +355,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       config: { ...options.config, mutation: { ...options.config.mutation, timeoutMs } },
       reportDir,
       noTypecheck,
+      runner: mutatorRunner,
       ...(configPath === undefined ? {} : { configPath }),
       // The caller's own exclusions stay, and the files diagnosed here are added to them.
       ...(exclude.length > 0 ? { exclude: [...new Set([...(options.exclude ?? []), ...exclude])] } : {}),

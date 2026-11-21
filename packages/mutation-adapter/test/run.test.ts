@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { stableId, VeritasConfig } from '@under18dev/veritas-core';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import {
   buildMutatorArgs,
@@ -139,6 +140,7 @@ describe('runMutation failures', () => {
   it('is unsupported when the binary is missing', async () => {
     const root = tempDir('missing');
     const r = await runMutation({
+      testRunner: vitest,
       root,
       config: config(),
       reportDir: path.join(root, 'out'),
@@ -154,6 +156,7 @@ describe('runMutation failures', () => {
   it('is unsupported when the project has no mutator and fallback is disabled', async () => {
     const root = tempDir('missing');
     const r = await runMutation({
+      testRunner: vitest,
       root,
       config: config(),
       reportDir: path.join(root, 'out'),
@@ -167,12 +170,18 @@ describe('runMutation failures', () => {
     const root = tempDir('oldvitest');
     mkdirSync(path.join(root, 'node_modules/vitest'), { recursive: true });
     writeFileSync(path.join(root, 'node_modules/vitest/package.json'), '{"name":"vitest","version":"3.2.4"}');
-    const r = await runMutation({ root, config: config(), reportDir: path.join(root, 'out') });
+    const r = await runMutation({
+      testRunner: vitest,
+      root,
+      config: config(),
+      reportDir: path.join(root, 'out'),
+    });
     expect(r.status).toBe('unsupported');
     expect(r.detail).toBe('mutation testing needs Vitest 4 or later; the project has Vitest 3.2.4');
     expect(r.command).toEqual([]);
     // Also when no test imports the code in scope.
     const none = await runMutation({
+      testRunner: vitest,
       root,
       config: config(),
       reportDir: path.join(root, 'out'),
@@ -183,14 +192,23 @@ describe('runMutation failures', () => {
 
   it('rejects a relative report dir and unsafe arguments before running anything', async () => {
     const root = tempDir('args');
-    expect((await runMutation({ root, config: config(), reportDir: 'out' })).status).toBe('error');
-    const r = await runMutation({ root, config: config(), reportDir: path.join(root, 'o'), since: '-x' });
+    expect((await runMutation({ testRunner: vitest, root, config: config(), reportDir: 'out' })).status).toBe(
+      'error',
+    );
+    const r = await runMutation({
+      testRunner: vitest,
+      root,
+      config: config(),
+      reportDir: path.join(root, 'o'),
+      since: '-x',
+    });
     expect(r).toMatchObject({ status: 'error', command: [] });
   });
 
   it('is cancelled when the signal is already aborted', async () => {
     const root = tempDir('abort');
     const r = await runMutation({
+      testRunner: vitest,
       root,
       config: config(),
       reportDir: path.join(root, 'out'),
@@ -223,7 +241,7 @@ describe('runMutation failures', () => {
       "fs.writeFileSync(dir + '/mutation.json', '{not json'); console.log('{}');",
     );
     const reportDir = path.join(root, 'out');
-    const r = await runMutation({ root, config: config(), reportDir, mutatorBin: bin });
+    const r = await runMutation({ testRunner: vitest, root, config: config(), reportDir, mutatorBin: bin });
     expect(r.status).toBe('error');
     expect(r.rawReportPath).toBe(path.join(reportDir, 'mutation.json'));
     expect(r.detail).toMatch(/could not parse/);
@@ -236,6 +254,7 @@ describe('runMutation failures', () => {
     );
     const reportDir = path.join(root, 'out');
     await runMutation({
+      testRunner: vitest,
       root,
       config: VeritasConfig.parse({ limits: { memoryMb: 768 } }),
       reportDir,
@@ -249,6 +268,7 @@ describe('runMutation failures', () => {
   it('is an error when mutator exits 0 without writing a report', async () => {
     const { root, bin } = stubCli("console.log('{}');");
     const r = await runMutation({
+      testRunner: vitest,
       root,
       config: config(),
       reportDir: path.join(root, 'out'),
@@ -263,6 +283,7 @@ describe('runMutation failures', () => {
       "console.error('invalid option; token ghp_abcdefghijklmnopqrstuvwxyz0123456789'); process.exit(1);",
     );
     const r = await runMutation({
+      testRunner: vitest,
       root,
       config: config(),
       reportDir: path.join(root, 'out'),
@@ -280,7 +301,7 @@ describe('runMutation on the discount fixture (real mutator)', () => {
     async () => {
       const root = copyDiscountFixture();
       const reportDir = path.join(root, '.veritas', 'runs', 'r1', 'mutation');
-      const r = await runMutation({ root, config: config({ mode: 'full' }), reportDir });
+      const r = await runMutation({ testRunner: vitest, root, config: config({ mode: 'full' }), reportDir });
       expect(r.detail).toBeNull();
       expect(r.status).toBe('succeeded');
       expect(MutationRunResult.parse(r)).toEqual(r);
@@ -353,10 +374,16 @@ describe('runMutation on the discount fixture (real mutator)', () => {
     'replays a single mutant with --only and returns the kill matrix when asked',
     async () => {
       const root = copyDiscountFixture();
-      const first = await runMutation({ root, config: config(), reportDir: path.join(root, 'out1') });
+      const first = await runMutation({
+        testRunner: vitest,
+        root,
+        config: config(),
+        reportDir: path.join(root, 'out1'),
+      });
       const key = first.mutants.find((m) => m.status === 'survived')?.backendKey;
       expect(key).toBeDefined();
       const only = await runMutation({
+        testRunner: vitest,
         root,
         config: config(),
         reportDir: path.join(root, 'out2'),
@@ -377,6 +404,7 @@ describe('runMutation on the discount fixture (real mutator)', () => {
     async () => {
       const root = copyDiscountFixture();
       const r = await runMutation({
+        testRunner: vitest,
         root,
         config: config({ timeoutMs: 1 }),
         reportDir: path.join(root, 'out'),
@@ -396,6 +424,7 @@ describe('runMutation on the discount fixture (real mutator)', () => {
       const controller = new AbortController();
       setTimeout(() => controller.abort(), 50);
       const r = await runMutation({
+        testRunner: vitest,
         root,
         config: config(),
         reportDir: path.join(root, 'out'),
@@ -416,7 +445,12 @@ describe('runMutation on the discount fixture (real mutator)', () => {
         path.join(root, 'test', 'broken.test.ts'),
         "import { expect, it } from 'vitest';\nit('is broken', () => { expect(1).toBe(2); });\n",
       );
-      const r = await runMutation({ root, config: config(), reportDir: path.join(root, 'out') });
+      const r = await runMutation({
+        testRunner: vitest,
+        root,
+        config: config(),
+        reportDir: path.join(root, 'out'),
+      });
       expect(r).toMatchObject({ status: 'failed', exitCode: 4 });
       expect(r.detail).toMatch(/baseline/);
       // With the bundled copy, the detail says files from outside the project ran and how to avoid that.
@@ -432,6 +466,7 @@ describe('runMutation on the discount fixture (real mutator)', () => {
     async () => {
       const root = copyDiscountFixture();
       const r = await runMutation({
+        testRunner: vitest,
         root,
         config: config({ mode: 'diff' }),
         reportDir: path.join(root, 'out'),

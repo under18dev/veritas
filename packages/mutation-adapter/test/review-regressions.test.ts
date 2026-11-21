@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { VeritasError } from '@under18dev/veritas-core';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { importMutationReport, mutatorTestRef, runMutation, shellQuote } from '../src/index.js';
 import { config, tempDir } from './helpers.js';
@@ -33,7 +34,13 @@ describe('runMutation confines reportDir to the project root', () => {
   it('rejects a reportDir outside the root before creating it or spawning the mutator', async () => {
     const { root, bin, marker } = stubCli("console.log('{}');");
     const outside = path.join(tempDir('review-outside'), 'veritas-outside');
-    const run = runMutation({ root, config: config(), reportDir: outside, mutatorBin: bin });
+    const run = runMutation({
+      testRunner: vitest,
+      root,
+      config: config(),
+      reportDir: outside,
+      mutatorBin: bin,
+    });
     await expect(run).rejects.toBeInstanceOf(VeritasError);
     await expect(run).rejects.toMatchObject({ code: 'REPORT_DIR_OUTSIDE_ROOT' });
     expect(existsSync(outside)).toBe(false);
@@ -44,11 +51,11 @@ describe('runMutation confines reportDir to the project root', () => {
     const { root, bin, marker } = stubCli("console.log('{}');");
 
     for (const reportDir of [path.join(root, '..', 'escape'), root]) {
-      await expect(runMutation({ root, config: config(), reportDir, mutatorBin: bin })).rejects.toMatchObject(
-        {
-          code: 'REPORT_DIR_OUTSIDE_ROOT',
-        },
-      );
+      await expect(
+        runMutation({ testRunner: vitest, root, config: config(), reportDir, mutatorBin: bin }),
+      ).rejects.toMatchObject({
+        code: 'REPORT_DIR_OUTSIDE_ROOT',
+      });
     }
     expect(existsSync(marker)).toBe(false);
   });
@@ -58,7 +65,9 @@ describe('runMutation confines reportDir to the project root', () => {
     const target = tempDir('review-link-target');
     symlinkSync(target, path.join(root, 'link'), 'dir');
     const reportDir = path.join(root, 'link', 'mutation');
-    await expect(runMutation({ root, config: config(), reportDir, mutatorBin: bin })).rejects.toMatchObject({
+    await expect(
+      runMutation({ testRunner: vitest, root, config: config(), reportDir, mutatorBin: bin }),
+    ).rejects.toMatchObject({
       code: 'REPORT_DIR_OUTSIDE_ROOT',
     });
     expect(existsSync(path.join(target, 'mutation'))).toBe(false);
@@ -68,7 +77,7 @@ describe('runMutation confines reportDir to the project root', () => {
   it('accepts a reportDir inside the root', async () => {
     const { root, bin, marker } = stubCli("console.log('{}');");
     const reportDir = path.join(root, '.veritas', 'runs', 'r1', 'mutation');
-    const r = await runMutation({ root, config: config(), reportDir, mutatorBin: bin });
+    const r = await runMutation({ testRunner: vitest, root, config: config(), reportDir, mutatorBin: bin });
     expect(r.status).toBe('error'); // the stub writes no report
     expect(existsSync(reportDir)).toBe(true);
     expect(existsSync(marker)).toBe(true);
@@ -138,6 +147,7 @@ describe('report-derived strings are redacted', () => {
       ].join('\n'),
     );
     const r = await runMutation({
+      testRunner: vitest,
       root,
       config: config(),
       reportDir: path.join(root, 'out'),
@@ -154,6 +164,7 @@ describe('report-derived strings are redacted', () => {
     const { root, bin } = stubCli("console.error('db password=supersecret refused'); process.exit(4);");
     mkdirSync(path.join(root, 'out'));
     const r = await runMutation({
+      testRunner: vitest,
       root,
       config: config(),
       reportDir: path.join(root, 'out'),

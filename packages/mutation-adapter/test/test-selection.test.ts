@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { baselineFailure } from '../src/diagnose.js';
 import { buildMutatorArgs, rootTsconfigHasNoFiles, runMutation } from '../src/index.js';
@@ -53,6 +54,7 @@ describe('test selection for mutator', () => {
     const root = tempDir('no-tests');
     const bin = recordingCli(root);
     const result = await runMutation({
+      testRunner: vitest,
       root,
       config: config(),
       reportDir: path.join(root, 'out'),
@@ -69,6 +71,7 @@ describe('test selection for mutator', () => {
     const bin = recordingCli(root);
     const reportDir = path.join(root, 'out');
     const result = await runMutation({
+      testRunner: vitest,
       root,
       config: config(),
       reportDir,

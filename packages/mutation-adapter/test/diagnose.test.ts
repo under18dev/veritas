@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { baselineFailure, errorExcerpt, instrumentationFailures, runMutation } from '../src/index.js';
 import { config, tempDir } from './helpers.js';
@@ -172,7 +173,7 @@ const runs = (reportDir: string) => readFileSync(path.join(reportDir, 'runs.txt'
 describe('runMutation when instrumented code does not parse', () => {
   it('runs once more without the file the bundler could not parse, and says so', async () => {
     const { root, bin, reportDir } = parseErrorCli('fixed');
-    const r = await runMutation({ root, config: config(), reportDir, mutatorBin: bin });
+    const r = await runMutation({ testRunner: vitest, root, config: config(), reportDir, mutatorBin: bin });
     expect(r.status).toBe('succeeded');
     expect(r.excludedFiles).toEqual(['src/a.ts']);
     expect(r.command).toEqual(expect.arrayContaining(['--exclude', 'src/a.ts']));
@@ -189,6 +190,7 @@ describe('runMutation when instrumented code does not parse', () => {
   it("keeps the caller's exclusions when it runs again", async () => {
     const { root, bin, reportDir } = parseErrorCli('fixed');
     const r = await runMutation({
+      testRunner: vitest,
       root,
       config: config(),
       reportDir,
@@ -204,7 +206,7 @@ describe('runMutation when instrumented code does not parse', () => {
 
   it('says the source does not parse when the same error remains without instrumentation', async () => {
     const { root, bin, reportDir } = parseErrorCli('same');
-    const r = await runMutation({ root, config: config(), reportDir, mutatorBin: bin });
+    const r = await runMutation({ testRunner: vitest, root, config: config(), reportDir, mutatorBin: bin });
     expect(r.status).toBe('failed');
     expect(r.detail).toMatch(/src\/a\.ts does not parse even without instrumentation/);
     expect(r.detail).toMatch(/source or the project's toolchain is at fault/);
@@ -218,7 +220,7 @@ describe('runMutation when instrumented code does not parse', () => {
 
   it("reports the second run's own test failure first when it fails differently", async () => {
     const { root, bin, reportDir } = parseErrorCli('test');
-    const r = await runMutation({ root, config: config(), reportDir, mutatorBin: bin });
+    const r = await runMutation({ testRunner: vitest, root, config: config(), reportDir, mutatorBin: bin });
     expect(r.status).toBe('failed');
     expect(r.detail).toMatch(/^tests fail without mutants \(baseline, exit 4\): AssertionError/);
     expect(r.detail).toMatch(
@@ -229,7 +231,13 @@ describe('runMutation when instrumented code does not parse', () => {
 
   it('does not run again when too little of the timeout is left', async () => {
     const { root, bin, reportDir } = parseErrorCli('fixed');
-    const r = await runMutation({ root, config: config({ timeoutMs: 20_000 }), reportDir, mutatorBin: bin });
+    const r = await runMutation({
+      testRunner: vitest,
+      root,
+      config: config({ timeoutMs: 20_000 }),
+      reportDir,
+      mutatorBin: bin,
+    });
     expect(r.status).toBe('error');
     expect(r.detail).toMatch(/^instrumentation failed: /);
     expect(r.detail).toMatch(/raise mutation\.timeoutMs or narrow the run with --since/);
@@ -239,7 +247,7 @@ describe('runMutation when instrumented code does not parse', () => {
   it('does not run again when more than five files are named, and caps the list', async () => {
     const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((n) => `src/${n}.ts`);
     const { root, bin, reportDir } = parseErrorCli('fixed', files);
-    const r = await runMutation({ root, config: config(), reportDir, mutatorBin: bin });
+    const r = await runMutation({ testRunner: vitest, root, config: config(), reportDir, mutatorBin: bin });
     expect(r.status).toBe('error');
     expect(r.detail).toContain('src/a.ts, src/b.ts, src/c.ts, src/d.ts, src/e.ts and 2 more');
     expect(r.detail).toMatch(/7 files are named/);
