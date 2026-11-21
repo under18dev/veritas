@@ -59,7 +59,7 @@ Lean の証明が扱うのは整数と真偽値の引数だけで、レコード
 
 複数のランナーが見つかったとき、`init` は実行できるものを優先します。インストール済みのランナーは宣言だけのものより、どちらも設定ファイルや package.json のキーだけで示されるものより優先するので、移行の名残の Jest の設定が、インストール済みの Vitest に勝つことはありません。同じ順位のものの中では、`test` スクリプトが（引数の中の単語ではなく）コマンドとして実行するものを選び、次に設定ファイルや依存の宣言があるのが 1 つだけならそれを選びます。それでも判断できないときは Vitest を選んでそのことを伝え、ターミナルではどちらを使うか尋ねます。`analysis.testFramework` のない設定は Vitest として扱います。
 
-Jest では、`jest.mock` の効果がテストの実行方法で変わります。Babel や ts-jest はテストを CommonJS にコンパイルし、`jest.mock` を import より前に移すので、モジュールが置き換わり、Veritas はモックとして記録します。ネイティブ ESM（`"type": "module"` で、Babel の設定もコンパイルする transformer もない）では、`jest.mock` が実行される前に静的な import が結び付けられ、テストは本物のコードを実行するので、Veritas はそれらのモックとして数えません。ESM でのモックは `jest.unstable_mockModule` と動的な `import()` の組み合わせで、そうした import が読み込むものは不明として報告します。
+Jest では、`jest.mock` の効果がテストの実行方法で変わります。Babel や ts-jest はテストを CommonJS にコンパイルし、`jest.mock` を import より前に移すので、モジュールが置き換わり、Veritas はモックとして記録します。ネイティブ ESM（`"type": "module"` で、Babel の設定もコンパイルする transformer もなく、Jest の設定の `transform` がないか空で `preset` もない。判断できないときは `jest.mock` をモックとして数え続けます）では、`jest.mock` が実行される前に静的な import が結び付けられ、テストは本物のコードを実行するので、Veritas はそれらのモックとして数えません。ESM でのモックは `jest.unstable_mockModule` と動的な `import()` の組み合わせで、そうした import が読み込むものは不明として報告します。
 
 失敗したときだけ通るテスト（Vitest の `it.fails`、Jest の `it.failing`）には `expected_failure` の修飾子を付け、評価は常に `inconclusive` にします。kill や生き残りが、assertion の見た目と逆の意味になるからです。
 

@@ -10,7 +10,7 @@ import {
 } from '@under18dev/veritas-core';
 import { vitestTestRunner } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
-import { jestTestRunner } from '../src/index.js';
+import { jestTestRunner, runsNativeEsm } from '../src/index.js';
 
 function project(files: Record<string, string>): string {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-jest-runner-')));
@@ -282,6 +282,30 @@ describe('jestTestRunner', () => {
         }),
       ),
     ).toBe(null);
+  });
+
+  it('takes tests for native ES modules only when nothing may compile them to CommonJS', () => {
+    const esm = (files: Record<string, string>, fields: Record<string, unknown> = {}) =>
+      runsNativeEsm(project({ 'package.json': manifest({ type: 'module', ...fields }), ...files }));
+
+    expect(esm({})).toBe(true);
+    expect(esm({ 'jest.config.mjs': "export default { transform: {}, testEnvironment: 'node' };" })).toBe(
+      true,
+    );
+    expect(esm({ 'jest.config.json': '{"transform":{}}' })).toBe(true);
+    // babel-jest with inline presets may emit CommonJS, where jest.mock is hoisted.
+    expect(
+      esm({
+        'jest.config.mjs':
+          "export default { transform: { '^.+\\\\.js$': ['babel-jest', { presets: [['@babel/preset-env', { modules: 'commonjs' }]] }] } };",
+      }),
+    ).toBe(false);
+    expect(esm({ 'jest.config.ts': "export default { preset: 'ts-jest' };" })).toBe(false);
+    expect(esm({ 'jest.config.json': '{"transform":{"^.+\\\\.ts$":"ts-jest"}}' })).toBe(false);
+    expect(esm({}, { jest: { transform: { x: 'babel-jest' } } })).toBe(false);
+    expect(esm({}, { jest: { transform: {} } })).toBe(true);
+    expect(esm({ '.babelrc': '{}' })).toBe(false);
+    expect(runsNativeEsm(project({ 'package.json': manifest({}) }))).toBe(false);
   });
 
   it('refuses test file filters that read as options or leave the directory', async () => {
