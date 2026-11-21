@@ -20,13 +20,15 @@ export const VeritasConfig = z
         packageManager: z
           .enum(['pnpm', 'npm', 'yarn', 'bun', 'unknown'])
           .default('unknown')
-          .describe("Package manager used to run the project's tools."),
+          .describe(
+            'Package manager detected by `veritas init`, recorded for information; Veritas does not read it.',
+          ),
         tsconfig: z
           .string()
           .nullable()
           .default(null)
           .describe(
-            'tsconfig file used for code analysis, relative to the project root; null uses tsconfig.json.',
+            'tsconfig file, relative to the project root, whose compiler options code analysis and test discovery use. With null, code analysis uses built-in options and test discovery reads tsconfig.json if there is one.',
           ),
       })
       .strict()
@@ -93,7 +95,7 @@ export const VeritasConfig = z
               .int()
               .positive()
               .default(30_000)
-              .describe('Time allowed for one page request, in milliseconds.'),
+              .describe('Time allowed for one web page or GitHub request, in milliseconds.'),
             /** Total time for the whole crawl; pages not fetched by then are reported as skipped. */
             maxDurationMs: z
               .number()
@@ -162,7 +164,9 @@ export const VeritasConfig = z
         mode: z
           .enum(['diff', 'full'])
           .default('diff')
-          .describe('diff mutates only the code changed since --since; full mutates everything in scope.'),
+          .describe(
+            'diff mutates only the code changed since the --since ref, or everything in scope without one; full mutates everything in scope.',
+          ),
         timeoutMs: z
           .number()
           .int()

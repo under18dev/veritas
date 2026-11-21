@@ -55,6 +55,10 @@ describe('configSections', () => {
     expect(find('analysis.testFramework')).toMatchObject({ type: 'fixed', fixed: 'vitest' });
     expect(find('project.tsconfig')).toMatchObject({ type: 'string', nullable: true, default: null });
     expect(find('pbt.seed').default).toBeUndefined();
+    // Descriptions say what the code does with the value.
+    expect(find('project.tsconfig').description).toContain('code analysis uses built-in options');
+    expect(find('project.packageManager').description).toContain('Veritas does not read it');
+    expect(find('sources.web.timeoutMs').description).toContain('GitHub request');
     // A field without a default of its own takes its parent's.
     expect(find('formal.integerDomain.min')).toMatchObject({ default: '-10000', required: true });
   });

@@ -13,10 +13,10 @@ Unknown keys are rejected.
 
 ### `project`
 
-| Setting                  | Type           | Default     | Allowed values                          | Description                                                                                  |
-| ------------------------ | -------------- | ----------- | --------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `project.packageManager` | string         | `"unknown"` | `pnpm`, `npm`, `yarn`, `bun`, `unknown` | Package manager used to run the project's tools.                                             |
-| `project.tsconfig`       | string or null | `null`      |                                         | tsconfig file used for code analysis, relative to the project root; null uses tsconfig.json. |
+| Setting                  | Type           | Default     | Allowed values                          | Description                                                                                                                                                                                                      |
+| ------------------------ | -------------- | ----------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `project.packageManager` | string         | `"unknown"` | `pnpm`, `npm`, `yarn`, `bun`, `unknown` | Package manager detected by `veritas init`, recorded for information; Veritas does not read it.                                                                                                                  |
+| `project.tsconfig`       | string or null | `null`      |                                         | tsconfig file, relative to the project root, whose compiler options code analysis and test discovery use. With null, code analysis uses built-in options and test discovery reads tsconfig.json if there is one. |
 
 ### `sources`
 
@@ -30,7 +30,7 @@ Unknown keys are rejected.
 | `sources.web.maxPages`      | integer         | `30`     | > 0, <= 1000                                                                   | Most web pages fetched in one run.                                                                       |
 | `sources.web.maxDepth`      | integer         | `1`      | >= 0, <= 5                                                                     | How many links deep the crawl follows from a starting page.                                              |
 | `sources.web.maxChars`      | integer         | `200000` | > 0                                                                            | Characters of page text read in total; the crawl stops beyond it.                                        |
-| `sources.web.timeoutMs`     | integer         | `30000`  | > 0                                                                            | Time allowed for one page request, in milliseconds.                                                      |
+| `sources.web.timeoutMs`     | integer         | `30000`  | > 0                                                                            | Time allowed for one web page or GitHub request, in milliseconds.                                        |
 | `sources.web.maxDurationMs` | integer         | `120000` | > 0                                                                            | Time allowed for the whole crawl, in milliseconds.                                                       |
 | `sources.sendFullTextToLlm` | boolean         | `false`  |                                                                                | Send whole source documents to the LLM instead of the relevant excerpts.                                 |
 
@@ -47,11 +47,11 @@ Unknown keys are rejected.
 
 ### `mutation`
 
-| Setting              | Type    | Default    | Allowed values          | Description                                                                         |
-| -------------------- | ------- | ---------- | ----------------------- | ----------------------------------------------------------------------------------- |
-| `mutation.backend`   | string  | `"mizchi"` | only `"mizchi"` (fixed) | Mutation testing tool; only mutator (@mizchi/mutator) is supported.                 |
-| `mutation.mode`      | string  | `"diff"`   | `diff`, `full`          | diff mutates only the code changed since --since; full mutates everything in scope. |
-| `mutation.timeoutMs` | integer | `120000`   | > 0                     | Time allowed for mutation testing, in milliseconds.                                 |
+| Setting              | Type    | Default    | Allowed values          | Description                                                                                                                     |
+| -------------------- | ------- | ---------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `mutation.backend`   | string  | `"mizchi"` | only `"mizchi"` (fixed) | Mutation testing tool; only mutator (@mizchi/mutator) is supported.                                                             |
+| `mutation.mode`      | string  | `"diff"`   | `diff`, `full`          | diff mutates only the code changed since the --since ref, or everything in scope without one; full mutates everything in scope. |
+| `mutation.timeoutMs` | integer | `120000`   | > 0                     | Time allowed for mutation testing, in milliseconds.                                                                             |
 
 ### `pbt`
 

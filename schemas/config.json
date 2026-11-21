@@ -23,7 +23,7 @@
       "properties": {
         "packageManager": {
           "default": "unknown",
-          "description": "Package manager used to run the project's tools.",
+          "description": "Package manager detected by `veritas init`, recorded for information; Veritas does not read it.",
           "type": "string",
           "enum": [
             "pnpm",
@@ -35,7 +35,7 @@
         },
         "tsconfig": {
           "default": null,
-          "description": "tsconfig file used for code analysis, relative to the project root; null uses tsconfig.json.",
+          "description": "tsconfig file, relative to the project root, whose compiler options code analysis and test discovery use. With null, code analysis uses built-in options and test discovery reads tsconfig.json if there is one.",
           "type": [
             "string",
             "null"
@@ -124,7 +124,7 @@
             },
             "timeoutMs": {
               "default": 30000,
-              "description": "Time allowed for one page request, in milliseconds.",
+              "description": "Time allowed for one web page or GitHub request, in milliseconds.",
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
@@ -218,7 +218,7 @@
         },
         "mode": {
           "default": "diff",
-          "description": "diff mutates only the code changed since --since; full mutates everything in scope.",
+          "description": "diff mutates only the code changed since the --since ref, or everything in scope without one; full mutates everything in scope.",
           "type": "string",
           "enum": [
             "diff",
