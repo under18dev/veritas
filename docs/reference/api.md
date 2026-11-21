@@ -57,7 +57,7 @@ Defaults that differ from the CLI:
 | `mutationReport`   | `string`                                         | Import this mutation-testing-elements report (path inside the project) instead of running mutator   |
 | `killMatrix`       | `boolean`                                        | Run every covering test for every mutant (slower)                                                   |
 | `includeProposed`  | `boolean`                                        | Also check properties that are not accepted; findings from them are at most `suspected`             |
-| `formalEngine`     | `'z3' \| 'lean'`                                 | Backend for conformance claims (mutant equivalence always uses Z3). Default: `formal.backend`       |
+| `formalEngine`     | `'z3' \| 'lean' \| 'both'`                       | Backend for conformance claims (mutant equivalence always uses Z3). Default: `formal.backend`       |
 | `propertyIds`      | `string[]`                                       | Limit verification to these properties                                                              |
 | `allowCodeConfig`  | `boolean`                                        | Allow loading `veritas.config.{ts,mjs,js}`, which executes project code                             |
 | `gitRoot`          | `string`                                         | Repository whose git revision and log describe `root` when `root` is a copy without `.git`          |

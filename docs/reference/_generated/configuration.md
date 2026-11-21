@@ -62,14 +62,14 @@ Unknown keys are rejected.
 
 ### `formal`
 
-| Setting                             | Type    | Default    | Allowed values      |
-| ----------------------------------- | ------- | ---------- | ------------------- |
-| `formal.backend`                    | string  | `"z3"`     | `z3`, `lean`        |
-| `formal.integerDomain.min`          | string  | `"-10000"` | matches `^-?\d+$`   |
-| `formal.integerDomain.max`          | string  | `"10000"`  | matches `^-?\d+$`   |
-| `formal.maxSolverMs`                | integer | `30000`    | > 0                 |
-| `formal.maxArrayLength`             | integer | `3`        | >= 1, <= 8          |
-| `formal.rejectUnsupportedSemantics` | boolean | `true`     | only `true` (fixed) |
+| Setting                             | Type    | Default    | Allowed values       |
+| ----------------------------------- | ------- | ---------- | -------------------- |
+| `formal.backend`                    | string  | `"z3"`     | `z3`, `lean`, `both` |
+| `formal.integerDomain.min`          | string  | `"-10000"` | matches `^-?\d+$`    |
+| `formal.integerDomain.max`          | string  | `"10000"`  | matches `^-?\d+$`    |
+| `formal.maxSolverMs`                | integer | `30000`    | > 0                  |
+| `formal.maxArrayLength`             | integer | `3`        | >= 1, <= 8           |
+| `formal.rejectUnsupportedSemantics` | boolean | `true`     | only `true` (fixed)  |
 
 ### `llm`
 

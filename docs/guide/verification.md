@@ -7,8 +7,9 @@ Veritas checks properties against your code in three ways: Z3, fast-check and Le
 | Z3         | `veritas prove`, `veritas run --profile deep` | Claim with `smt_bounded` assurance       | Every input in the bounded domain, in an integer model      |
 | fast-check | `veritas run --profile deep`                  | Property-based test with a recorded seed | The sampled inputs, run as JavaScript                       |
 | Lean 4     | `veritas prove --engine lean`                 | Claim with `kernel_checked` assurance    | A kernel-checked proof about the Lean model of the function |
+| Z3 + Lean  | `veritas prove --engine both`                 | Both claims, Lean only where Z3 proved   | Both of the above                                           |
 
-All three check accepted properties. Add `--include-proposed` to check proposed ones too; their results stay `suspected`.
+All of them check accepted properties. Add `--include-proposed` to check proposed ones too; their results stay `suspected`.
 
 ## Check properties with Z3
 
@@ -130,6 +131,15 @@ A claim is `kernel_checked` only when the build succeeds and the theorem depends
 - Lean covers integer and boolean parameters; properties over records or arrays are `unsupported`.
 - The Lean model is generated from the property's formal model. Its correspondence to your TypeScript code is not proven; every Lean claim lists this under its semantic gaps.
 - Lean builds have a timeout and no memory limit.
+
+To get both kinds of evidence, use `--engine both` or set `formal.backend` to `both`. Every property is checked with Z3 against your code. Lean then tries to prove the properties that Z3 proved and that it can translate, and a kernel-checked proof is added as a second claim. `both` never makes a result worse than Z3 alone:
+
+- Lean is skipped when Z3 did not prove the property (a counterexample, a semantic mismatch, `unknown` or a timeout), since Lean would prove the same model with mathematical integers.
+- Lean is skipped for properties outside its subset.
+- When Lean is not installed, one message says so and only Z3 claims are recorded. A configuration with `both` can therefore be committed and used on machines and CI runners without Lean.
+- When Lean cannot prove a property that Z3 proved, the stage message says so and no Lean claim is recorded; the Z3 claim stands.
+
+Without `--engine`, `prove` uses `formal.backend`. With `formal.backend: lean`, which older versions of `veritas init` could write, `prove` now uses Lean; pass `--engine z3` for Z3 alone. Versions of Veritas before `both` was added reject a configuration that uses it.
 
 ## What `proven_within_model` means
 

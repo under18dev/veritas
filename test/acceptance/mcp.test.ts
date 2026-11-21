@@ -212,7 +212,12 @@ describe('MCP server', () => {
 
     const readOnly = await connect(dir);
     expect((await readOnly.listTools()).tools.map((t) => t.name)).not.toContain('apply_approved_improvement');
-    const plan = data(await readOnly.callTool({ name: 'plan_improvement', arguments: {} })) as {
+    // Planning and applying run the tests (applying also mutation testing) in an isolated copy, which takes longer
+    // than the client's default 60 s request timeout on slow runners.
+    const slow = { timeout: 300_000 };
+    const plan = data(
+      await readOnly.callTool({ name: 'plan_improvement', arguments: {} }, undefined, slow),
+    ) as {
       planId: string;
       approvalToken: string;
     };
@@ -238,10 +243,14 @@ describe('MCP server', () => {
     expect(status()).toEqual(before);
 
     const applied = data(
-      await writer.callTool({
-        name: 'apply_approved_improvement',
-        arguments: { planId: plan.planId, approvalToken: plan.approvalToken },
-      }),
+      await writer.callTool(
+        {
+          name: 'apply_approved_improvement',
+          arguments: { planId: plan.planId, approvalToken: plan.approvalToken },
+        },
+        undefined,
+        slow,
+      ),
     ) as {
       attempt: { outcome: string; before: { mutantsKilled: number }; after: { mutantsKilled: number } };
     };

@@ -181,9 +181,10 @@ export function buildProgram(
       .option('--property <id>', 'verify this property only (repeatable)', collect)
       .option('--include-proposed', 'also check properties that are not accepted (experimental)')
       .addOption(
-        new Option('--engine <engine>', 'z3 (bounded checks) or lean (kernel-checked proofs)')
-          .choices(['z3', 'lean'])
-          .default('z3'),
+        new Option(
+          '--engine <engine>',
+          'z3 (bounded checks), lean (kernel-checked proofs) or both (default: formal.backend in the configuration)',
+        ).choices(['z3', 'lean', 'both']),
       ),
     (o) => proveCommand(o),
   );

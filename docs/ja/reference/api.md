@@ -57,7 +57,7 @@ CLI と既定値が違うのは次の点です。
 | `mutationReport`   | `string`                                         | mutator を実行する代わりに取り込む mutation-testing-elements のレポート（プロジェクト内のパス） |
 | `killMatrix`       | `boolean`                                        | すべての mutant に対して、それを通るテストをすべて実行する（遅い）                              |
 | `includeProposed`  | `boolean`                                        | accepted でない Property も検査する。そこから出た finding は `suspected` 以下                   |
-| `formalEngine`     | `'z3' \| 'lean'`                                 | 適合性の主張に使うバックエンド（mutant の等価性は常に Z3）。既定は `formal.backend`             |
+| `formalEngine`     | `'z3' \| 'lean' \| 'both'`                       | 適合性の主張に使うバックエンド（mutant の等価性は常に Z3）。既定は `formal.backend`             |
 | `propertyIds`      | `string[]`                                       | 検証する Property を絞る                                                                        |
 | `allowCodeConfig`  | `boolean`                                        | プロジェクトのコードを実行する `veritas.config.{ts,mjs,js}` の読み込みを許可する                |
 | `gitRoot`          | `string`                                         | `root` が `.git` のないコピーのとき、その git のリビジョンと履歴を持つリポジトリ                |

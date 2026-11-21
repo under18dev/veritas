@@ -89,7 +89,8 @@ export const VeritasConfig = z
       .prefault({}),
     formal: z
       .object({
-        backend: z.enum(['z3', 'lean']).default('z3'),
+        /** `both` checks every property with Z3 and also proves with Lean those it can translate. */
+        backend: z.enum(['z3', 'lean', 'both']).default('z3'),
         integerDomain: z
           .object({ min: IntLiteral, max: IntLiteral })
           .strict()

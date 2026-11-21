@@ -153,7 +153,9 @@ export function proveCommand(opts: Opts): Promise<ExitCode> {
   return stagesCommand(opts, 'prove', [...COMMAND_STAGES.prove], {
     offline: true,
     includeProposed: Boolean(opts.includeProposed),
-    formalEngine: opts.engine === 'lean' ? 'lean' : 'z3',
+    ...(opts.engine === 'z3' || opts.engine === 'lean' || opts.engine === 'both'
+      ? { formalEngine: opts.engine }
+      : {}),
     ...(values(opts.property).length > 0 ? { propertyIds: values(opts.property) } : {}),
   });
 }

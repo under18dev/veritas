@@ -63,6 +63,19 @@ const CLAIM_STATUS: Record<LeanCheckStatus, VerificationStatus> = {
   error: 'error',
 };
 
+/** Whether the IR is in the subset Lean proofs cover (integers and booleans, no records or arrays). */
+export function leanTranslatable(ir: PropertyIR): boolean {
+  try {
+    leanProofStrategies(ir);
+    irToLean(ir, { theoremName: 'translatable' });
+
+    return true;
+  } catch (error) {
+    if (error instanceof VeritasError) return false;
+    throw error;
+  }
+}
+
 /** When no attempt is kernel checked, the most severe outcome describes the claim. */
 const SEVERITY: LeanCheckStatus[] = ['rejected', 'error', 'timeout', 'failed', 'unavailable'];
 

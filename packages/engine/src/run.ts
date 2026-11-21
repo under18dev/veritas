@@ -44,6 +44,7 @@ import {
   stableId,
   toPosixRelative,
   traceCollector,
+  type VerificationStatus,
   type VeritasConfig,
   VeritasError,
   withRunContext,
@@ -73,7 +74,7 @@ import {
   loadApprovals,
 } from '@under18dev/veritas-property-engine';
 import { type PbtResult, runPropertyTest } from '@under18dev/veritas-property-testing';
-import { proveWithLean } from '@under18dev/veritas-solver-lean';
+import { detectLean, leanTranslatable, proveWithLean } from '@under18dev/veritas-solver-lean';
 import { type DiscoveryResult, discoverEvidence } from '@under18dev/veritas-spec-discovery';
 import { inventoryTests, isTestSupportPath, type TestInventory } from '@under18dev/veritas-test-inventory';
 import { ARTIFACTS } from './artifacts.js';
@@ -109,7 +110,7 @@ export interface RunOptions {
   /** Verify proposed (not yet accepted) properties as experimental. Accepted ones are always verified. */
   includeProposed?: boolean;
   /** Formal backend for conformance claims (mutant equivalence always uses Z3). */
-  formalEngine?: 'z3' | 'lean';
+  formalEngine?: 'z3' | 'lean' | 'both';
   propertyIds?: string[];
   allowCodeConfig?: boolean;
   /**
@@ -152,6 +153,18 @@ export function recordedRunOptions(run: Run): Omit<RunOptions, 'root' | 'command
     ...(run.scope.paths.length ? { scope: run.scope.paths } : {}),
     ...(run.scope.since ? { since: run.scope.since } : {}),
   };
+}
+
+/**
+ * With the `both` backend, whether Lean is tried after Z3 for a property: only when Z3 proved it, since Lean proves
+ * the same model with mathematical integers and would otherwise add a proof next to a refuted or mismatched model.
+ * Returns why Lean is skipped, or null to try it.
+ */
+export function leanSkipReason(z3Status: VerificationStatus, translatable: boolean): string | null {
+  if (z3Status !== 'proven_within_model') return `skipped, Z3 result is ${z3Status}`;
+  if (!translatable) return 'skipped, outside the Lean subset';
+
+  return null;
 }
 
 export const PROFILE_STAGES: Record<Profile, StageName[]> = {
@@ -711,21 +724,30 @@ async function runInContext(
         messages.push(`${p.id}: unsupported (${reason})`);
       }
 
+      let leanInstalled: boolean | undefined;
+
       for (const p of toProve) {
         const f = spec.formalized.get(p.id);
 
         if (!f) continue;
 
-        if ((options.formalEngine ?? config.formal.backend) === 'lean') {
-          const { claim } = await proveWithLean({
+        const engine = options.formalEngine ?? config.formal.backend;
+        const lean = () =>
+          proveWithLean({
             propertyId: p.id,
             ir: f.ir,
             timeoutMs: Math.max(60_000, config.formal.maxSolverMs),
             store,
             signal,
+          }).then(({ claim }) => {
+            solverMs += claim.durationMs;
+
+            return claim;
           });
+
+        if (engine === 'lean') {
+          const claim = await lean();
           claims.push(claim);
-          solverMs += claim.durationMs;
           messages.push(`${p.id} (lean): ${claim.status} [${claim.assurance}]`);
           continue;
         }
@@ -752,6 +774,31 @@ async function runInContext(
         messages.push(
           `${p.id}: ${claim.status}${claim.counterexample ? ` ${JSON.stringify(claim.counterexample)}` : ''}`,
         );
+
+        // With `both`, Lean adds a kernel-checked proof to what Z3 proved, where it can translate the property. Z3
+        // still checks the implementation, which the Lean model does not cover. Only a kernel-checked proof is
+        // recorded as a claim: Lean failing to prove what Z3 proved, or not being installed, decides nothing.
+        if (engine !== 'both') continue;
+        const skip = leanSkipReason(claim.status, leanTranslatable(f.ir));
+
+        if (skip) {
+          messages.push(`${p.id} (lean): ${skip}`);
+          continue;
+        }
+        leanInstalled ??= await detectLean().then((lean) => {
+          if (!lean.available)
+            messages.push(`Lean is not available (${lean.detail}); only Z3 claims are recorded`);
+
+          return lean.available;
+        });
+
+        if (!leanInstalled) continue;
+        const proof = await lean();
+
+        if (proof.status === 'proven_within_model') {
+          claims.push(proof);
+          messages.push(`${p.id} (lean): ${proof.status} [${proof.assurance}]`);
+        } else messages.push(`${p.id} (lean): ${proof.status}, no kernel-checked proof; the Z3 claim stands`);
       }
       const skipped = spec.properties.filter((p) => spec.formalized.has(p.id) && !toProve.includes(p));
 
