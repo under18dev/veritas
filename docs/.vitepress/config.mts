@@ -119,6 +119,7 @@ export default defineConfig({
     'What does your test actually guarantee? Evidence-backed test verification for TypeScript and Vitest.',
   base: '/',
   cleanUrls: true,
+  sitemap: { hostname: 'https://veritas.under18.dev' },
   // The ADR index keeps its GitHub-friendly README.md name; the generated reference fragments are only included.
   rewrites: { 'adr/README.md': 'adr/index.md' },
   srcExclude: [
