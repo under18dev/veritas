@@ -25,7 +25,7 @@ const DEFAULT_FRAMEWORK = VeritasConfig.parse({}).analysis.testFramework;
 export function testRunnerFor(
   config: Pick<VeritasConfig, 'analysis'> | null | undefined,
 ): TestRunnerProvider {
-  return selectTestRunner(TEST_RUNNERS, config?.analysis.testFramework ?? DEFAULT_FRAMEWORK);
+  return selectTestRunner(TEST_RUNNERS, config?.analysis?.testFramework ?? DEFAULT_FRAMEWORK);
 }
 
 /** Inspect a project without running any of its code, for the test runner `config` names (the default without). */

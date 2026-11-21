@@ -110,7 +110,7 @@ export async function main(): Promise<number> {
     process.env.INPUT_INCONCLUSIVE || (configured?.config.policy.inconclusiveBehavior ?? 'warn');
 
   if (!project.hasPackageJson) return degraded('no package.json found', behaviorInput, event.fromFork);
-  const doctor = await runDoctor(root, null, process.env, bundledTools());
+  const doctor = await runDoctor(root, configured?.config ?? null, process.env, bundledTools());
 
   if (!doctor.capabilities.some((cap) => cap.name === runner.name && cap.state !== 'unavailable'))
     return degraded(`${runner.displayName} is unavailable`, behaviorInput, event.fromFork);
