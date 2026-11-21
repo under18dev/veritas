@@ -5,11 +5,19 @@ import { render } from 'ink-testing-library';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App.js';
 import type { TuiApi } from '../src/api.js';
-import { abbreviateHome } from '../src/screens/Home.js';
+import { ago, duration } from '../src/components.js';
+import { abbreviateHome, nextSteps } from '../src/screens/Home.js';
 import { appendLog, applyStageEvent, clock } from '../src/screens/Run.js';
 import { leaves, parseValue, setAt, validate } from '../src/screens/Settings.js';
 
-const KEY = { up: '\u001B[A', down: '\u001B[B', enter: '\r', escape: '\u001B' };
+const KEY = {
+  up: '\u001B[A',
+  down: '\u001B[B',
+  left: '\u001B[D',
+  enter: '\r',
+  escape: '\u001B',
+  backspace: '\u007F',
+};
 const tick = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const RUN = {
@@ -19,11 +27,16 @@ const RUN = {
   profile: 'quick',
   scope: { root: '/p', paths: [] },
   startedAt: '2026-11-20T00:00:00.000Z',
+  finishedAt: '2026-11-20T00:00:12.300Z',
   status: 'succeeded',
   exitCode: 4,
   verdict: 'inconclusive',
   policyReasons: ['1 test is weak'],
-  stages: [{ stage: 'index', status: 'succeeded' }],
+  stages: [
+    { stage: 'index', status: 'succeeded', durationMs: 4 },
+    { stage: 'mutate', status: 'partial', durationMs: 1600 },
+  ],
+  partial: false,
 } as unknown as Run;
 
 const FINDING = {
@@ -31,7 +44,7 @@ const FINDING = {
   kind: 'weak_test',
   title: 'boundary is not checked',
   severity: 'medium',
-  certainty: 'likely',
+  certainty: 'suspected',
   locations: [{ file: 'test/a.test.ts' }],
   propertyIds: [],
   sourceIds: [],
@@ -40,6 +53,15 @@ const FINDING = {
   claimIds: [],
   explanation: ['the test never uses 1000'],
   nextActions: ['add a test at 1000'],
+} as unknown as Finding;
+
+const HIGH = {
+  ...FINDING,
+  id: 'F-2',
+  kind: 'counterexample',
+  title: 'returns 0 for 1000',
+  severity: 'high',
+  certainty: 'confirmed',
 } as unknown as Finding;
 
 const PROPERTY = {
@@ -89,7 +111,19 @@ function fakeApi(overrides: Partial<TuiApi> = {}): TuiApi {
     root: '/projects/shop',
     runs: () => ['R-1'],
     readRun: () => RUN,
-    readFindings: () => [FINDING],
+    readFindings: () => [FINDING, HIGH],
+    readEvidence: () => ({
+      tests: [
+        ['meaningful_with_evidence', 2],
+        ['weak_or_incomplete', 1],
+      ],
+      mutants: [
+        ['killed', 5],
+        ['survived', 2],
+      ],
+      pbt: null,
+      claims: [['proven_within_model', 1]],
+    }),
     explain: () =>
       ({
         runId: 'R-1',
@@ -106,7 +140,10 @@ function fakeApi(overrides: Partial<TuiApi> = {}): TuiApi {
       root: '/p',
       os: { platform: 'darwin', arch: 'arm64', release: '1' },
       capabilities: [],
-      features: [{ feature: 'mutate', state: 'enabled', missing: [] }],
+      features: [
+        { feature: 'mutate', state: 'enabled', missing: [] },
+        { feature: 'improve', state: 'degraded', missing: ['llm'] },
+      ],
     }),
     init: vi.fn(() => ({ nextSteps: ['veritas run'] }) as never),
     properties: () => [PROPERTY],
@@ -131,7 +168,7 @@ function fakeApi(overrides: Partial<TuiApi> = {}): TuiApi {
     ),
     readConfig: () => ({
       kind: 'json',
-      file: '/p/.veritas/config.json',
+      file: '/projects/shop/.veritas/config.json',
       raw: { mutation: { timeoutMs: 1000 } },
     }),
     writeConfig: vi.fn(),
@@ -249,17 +286,56 @@ describe('the TUI', () => {
   it('keeps a long project path on one line, cut at the start, with the home directory as ~', async () => {
     const root = `/home/someone/${'very-long-directory-name/'.repeat(8)}shop`;
     const app = await open(fakeApi({ root }), 0);
-    await until(app, 'Project: …');
+    await until(app, '/shop');
     const line =
       app
         .lastFrame()
         ?.split('\n')
-        .find((l) => l.includes('Project: ')) ?? '';
-    expect(line).toMatch(/Project: …\S*\/shop /);
+        .find((l) => l.includes('path ')) ?? '';
+    expect(line).toMatch(/path\s+…\S*\/shop /);
     expect(app.lastFrame()).not.toMatch(/^\s*very-long-directory-name/m);
     expect(abbreviateHome('/home/someone/work/shop', '/home/someone')).toBe('~/work/shop');
     expect(abbreviateHome('/home/someone', '/home/someone')).toBe('~');
     expect(abbreviateHome('/home/someone2/shop', '/home/someone')).toBe('/home/someone2/shop');
+  });
+
+  it('shows the project, the latest run, the tools and the next steps as cards on Home', async () => {
+    const app = await open(fakeApi(), 0);
+    await until(app, 'Latest run');
+    const frame = app.lastFrame() ?? '';
+    expect(frame).toContain('Project');
+    expect(frame).toMatch(/Latest run\s+inconclusive/);
+    expect(frame).toContain('quick');
+    expect(frame).toContain('took 12.3 s');
+    expect(frame).toContain('exit 4');
+    // The stage strip marks a partial stage, never as a success.
+    expect(frame).toMatch(/✔ index/);
+    expect(frame).toMatch(/! mutate partial/);
+    expect(frame).toMatch(/2 findings:\s+1 high\s+1 medium/);
+    // The evidence vector, not a single score.
+    expect(frame).toContain('2 meaningful_with_evidence');
+    expect(frame).toContain('1 weak_or_incomplete');
+    expect(frame).toContain('2 survived');
+    // The cards scroll; the next steps and the tools are further down.
+    for (let i = 0; i < 8; i++) await press(app, KEY.down);
+    await until(app, 'Next steps');
+    expect(app.lastFrame()).toContain('Read 2 findings of the latest run');
+    expect(app.lastFrame()).toContain('Review 1 proposed specification');
+    for (let i = 0; i < 12; i++) await press(app, KEY.down);
+    await until(app, 'Tools');
+    expect(app.lastFrame()).toContain('✔ mutate');
+    expect(app.lastFrame()).toContain('! improve');
+    expect(app.lastFrame()).toContain('no llm limits improve');
+    // A next step's key opens its screen.
+    await press(app, '3');
+    await until(app, 'discount above 1000');
+  });
+
+  it('points to the Run screen when there is no run yet', async () => {
+    const app = await open(fakeApi({ runs: () => [], properties: () => [] }), 0);
+    await until(app, 'No run yet: start one on Run');
+    await press(app, '4');
+    await until(app, 'Profile: quick');
   });
 
   it('follows a run to a finding and its evidence', async () => {
@@ -420,6 +496,18 @@ describe('the TUI', () => {
 });
 
 describe('helpers', () => {
+  it('edits nested configuration values', () => {
+    const raw = { a: { b: 1, c: [1, 2] }, d: 'x' };
+    expect(leaves(raw).map((l) => l.path.join('.'))).toEqual(['a.b', 'a.c', 'd']);
+    expect(setAt(raw, ['a', 'b'], 2)).toEqual({ a: { b: 2, c: [1, 2] }, d: 'x' });
+    expect(raw.a.b).toBe(1);
+    expect(parseValue('true', false)).toBe(true);
+    expect(parseValue('hello', 'x')).toBe('hello');
+    expect(typeof parseValue('hello', 3)).toBe('symbol');
+    expect(validate({ mutation: { timeoutMs: -5 } })[0]).toMatch(/^mutation\.timeoutMs:/);
+    expect(validate({})).toEqual([]);
+  });
+
   it('tracks stage progress from run events', () => {
     let lines = applyStageEvent([], {
       time: '',
@@ -471,15 +559,22 @@ describe('helpers', () => {
     expect(clock(65_400)).toBe('1:05');
   });
 
-  it('edits nested configuration values', () => {
-    const raw = { a: { b: 1, c: [1, 2] }, d: 'x' };
-    expect(leaves(raw).map((l) => l.path.join('.'))).toEqual(['a.b', 'a.c', 'd']);
-    expect(setAt(raw, ['a', 'b'], 2)).toEqual({ a: { b: 2, c: [1, 2] }, d: 'x' });
-    expect(raw.a.b).toBe(1);
-    expect(parseValue('true', false)).toBe(true);
-    expect(parseValue('hello', 'x')).toBe('hello');
-    expect(typeof parseValue('hello', 3)).toBe('symbol');
-    expect(validate({ mutation: { timeoutMs: -5 } })[0]).toMatch(/^mutation\.timeoutMs:/);
-    expect(validate({})).toEqual([]);
+  it('says what to do next, and formats durations and times', () => {
+    expect(nextSteps({ config: 'json', latest: null, proposed: 0, doctor: undefined })).toEqual([
+      { key: '4', text: 'No run yet: start one on Run' },
+    ]);
+    const evidence = { tests: null, mutants: null, pbt: null, claims: null };
+    expect(
+      nextSteps({
+        config: 'json',
+        latest: { run: RUN, findings: [], evidence },
+        proposed: 0,
+        doctor: undefined,
+      }),
+    ).toEqual([{ key: '2', text: 'See why the latest run did not pass' }]);
+    expect(duration(850)).toBe('850 ms');
+    expect(duration(12_345)).toBe('12.3 s');
+    expect(duration(245_000)).toBe('4m 05s');
+    expect(ago('2026-11-21T10:00:00Z', Date.parse('2026-11-21T12:30:00Z'))).toBe('2h ago');
   });
 });

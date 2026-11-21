@@ -50,6 +50,17 @@ export type ConfigFile =
   | { kind: 'code'; file: string }
   | { kind: 'none' };
 
+/**
+ * What a run's evidence says, as counts per status of each kind: test assessments, mutants, property-based tests and
+ * solver claims. A kind is null when the run did not record it. This is the evidence vector; there is no single score.
+ */
+export interface EvidenceVector {
+  tests: [string, number][] | null;
+  mutants: [string, number][] | null;
+  pbt: [string, number][] | null;
+  claims: [string, number][] | null;
+}
+
 export interface RunRequest {
   profile: Profile;
   offline: boolean;
@@ -66,6 +77,7 @@ export interface TuiApi {
   runs(): string[];
   readRun(runId: string): Run;
   readFindings(runId: string): Finding[];
+  readEvidence(runId: string): EvidenceVector;
   explain(findingId: string): Explanation;
   doctor(): Promise<DoctorReport>;
   init(): InitResult;
@@ -84,6 +96,24 @@ const NO_RUN = new Set(['NO_RUN', 'ARTIFACT_MISSING']);
 
 function noRun(error: unknown): boolean {
   return error instanceof VeritasError && NO_RUN.has(error.code);
+}
+
+function counts(statuses: string[]): [string, number][] {
+  const out = new Map<string, number>();
+
+  for (const s of statuses) out.set(s, (out.get(s) ?? 0) + 1);
+
+  return [...out];
+}
+
+/** Counts per status of an artifact the run may not have; null when it is missing. */
+function tally(read: () => string[]): [string, number][] | null {
+  try {
+    return counts(read());
+  } catch (error) {
+    if (noRun(error)) return null;
+    throw error;
+  }
 }
 
 /**
@@ -128,6 +158,12 @@ export function createApi(root: string): TuiApi {
         throw error;
       }
     },
+    readEvidence: (runId) => ({
+      tests: tally(() => readArtifact(root, runId, 'assessments').data.map((a) => a.outcome)),
+      mutants: tally(() => readArtifact(root, runId, 'mutation').data.mutants.map((m) => m.status)),
+      pbt: tally(() => readArtifact(root, runId, 'pbt').data.map((r) => r.status)),
+      claims: tally(() => readArtifact(root, runId, 'claims').data.map((c) => c.status)),
+    }),
     explain: (findingId) => explainFinding(root, findingId),
     doctor: async () => {
       const config = await loadConfig(root).then(

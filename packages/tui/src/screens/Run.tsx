@@ -9,6 +9,7 @@ import {
   ProgressBar,
   SelectList,
   SPINNER,
+  stageMark,
   TextInput,
   Title,
   verdictColor,
@@ -73,16 +74,6 @@ export function clock(ms: number): string {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
-const STAGE_MARK: Record<string, { mark: string; color: string }> = {
-  succeeded: { mark: '✔', color: 'green' },
-  partial: { mark: '!', color: 'yellow' },
-  skipped: { mark: '-', color: 'gray' },
-  cancelled: { mark: '✖', color: 'yellow' },
-  timeout: { mark: '✖', color: 'yellow' },
-  error: { mark: '✖', color: 'red' },
-  failed: { mark: '✖', color: 'red' },
-};
-
 function StageList({
   stages,
   frame,
@@ -103,7 +94,7 @@ function StageList({
           ? { mark: SPINNER[frame % SPINNER.length] ?? '*', color: 'cyan' }
           : pending
             ? { mark: ' ', color: 'gray' }
-            : (STAGE_MARK[s.status] ?? { mark: '?', color: 'yellow' });
+            : stageMark(s.status);
         const started = startedAt.get(s.stage);
 
         return (
