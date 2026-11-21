@@ -1214,8 +1214,22 @@ function callbackArgument(node: ts.CallExpression): ts.Expression | undefined {
   return node.arguments.slice(1).findLast(isFunction) ?? node.arguments.at(-1);
 }
 
+/**
+ * Whether a call makes a registration function instead of registering (`test.skipIf(cond)` in
+ * `test.skipIf(cond)('name', fn)`): the call that uses its result registers.
+ */
+function makesRegistration(node: ts.CallExpression): boolean {
+  return ts.isCallExpression(node.parent) && node.parent.expression === node;
+}
+
+/** `.each(table)`, `.for(table)`, `.skipIf(cond)` and `.runIf(cond)` return the function that registers. */
+const REGISTRATION_FACTORIES = new Set(['each', 'for', 'skipIf', 'runIf']);
+const TABLE_FACTORIES = new Set(['each', 'for']);
+
 function testRegistration(node: ts.CallExpression): Registration | undefined {
-  const direct = registration(node, 'it') ?? registration(node, 'test');
+  const direct = makesRegistration(node)
+    ? undefined
+    : (registration(node, 'it') ?? registration(node, 'test'));
 
   if (direct && Array.isArray(direct))
     return { name: literalString(node.arguments[0]), callback: callbackArgument(node), modifiers: direct };
@@ -1224,12 +1238,13 @@ function testRegistration(node: ts.CallExpression): Registration | undefined {
     const chain = propertyChain(node.expression.expression);
     const root = rootIdentifier(node.expression.expression);
 
-    if (root && testNames.has(root) && chain.includes('each')) {
+    if (root && testNames.has(root) && chain.some((name) => REGISTRATION_FACTORIES.has(name))) {
       const eachModifiers = chain.filter((name): name is TestCaseType['modifiers'][number] =>
         modifiers.has(name),
       );
 
-      if (!eachModifiers.includes('each')) eachModifiers.push('each');
+      if (chain.some((name) => TABLE_FACTORIES.has(name)) && !eachModifiers.includes('each'))
+        eachModifiers.push('each');
 
       return {
         name: literalString(node.arguments[0]),
@@ -1243,7 +1258,7 @@ function testRegistration(node: ts.CallExpression): Registration | undefined {
 }
 
 function describeRegistration(node: ts.CallExpression): Registration | undefined {
-  const direct = registration(node, 'describe');
+  const direct = makesRegistration(node) ? undefined : registration(node, 'describe');
 
   if (direct && Array.isArray(direct)) {
     return { name: literalString(node.arguments[0]), callback: callbackArgument(node), modifiers: direct };
@@ -1253,12 +1268,14 @@ function describeRegistration(node: ts.CallExpression): Registration | undefined
   const chain = propertyChain(node.expression.expression);
   const root = rootIdentifier(node.expression.expression);
 
-  if (!root || root !== 'describe' || !chain.includes('each')) return undefined;
+  if (!root || root !== 'describe' || !chain.some((name) => REGISTRATION_FACTORIES.has(name)))
+    return undefined;
   const eachModifiers = chain.filter((name): name is TestCaseType['modifiers'][number] =>
     modifiers.has(name),
   );
 
-  if (!eachModifiers.includes('each')) eachModifiers.push('each');
+  if (chain.some((name) => TABLE_FACTORIES.has(name)) && !eachModifiers.includes('each'))
+    eachModifiers.push('each');
 
   return {
     name: literalString(node.arguments[0]),
