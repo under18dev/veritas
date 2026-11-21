@@ -117,6 +117,35 @@ export const config = defineConfig;
     expect(get('plugin stays project code').symbols).toEqual(['src/plugin.ts#plugin']);
   });
 
+  it('treats a mock utility under src/ that imports vi from Vitest as test code', () => {
+    const test = inventory(
+      `${header}
+      import { vi } from 'vitest';
+      import { asMock } from '../src/test-utils.js';
+      it('cast only', () => { const mock = vi.fn(); asMock<() => void>(mock)(); expect(mock).toHaveBeenCalled(); });
+    `,
+      {
+        'src/test-utils.ts': `import { vi } from 'vitest';
+export function asMock<T>(fn: ReturnType<typeof vi.fn>): T { return fn as unknown as T; }
+`,
+      },
+    )('cast only');
+    // Calling the cast is not a call into the project, so asserting on the mock does not check project code.
+    expect(test.symbols).toEqual([]);
+    expect(test.asserted).toBe(false);
+  });
+
+  it('treats a project file that imports all of Vitest as a namespace as test code too', () => {
+    const test = inventory(
+      `${header}
+      import { stub } from '../src/stubs.js';
+      it('stub', () => { expect(stub()).toBe(1); });
+    `,
+      { 'src/stubs.ts': "import * as vitest from 'vitest';\nexport const stub = () => (vitest ? 1 : 0);\n" },
+    )('stub');
+    expect(test.symbols).toEqual([]);
+  });
+
   it('keeps the call a describe-level value comes from when a helper that calls project code receives it', () => {
     const get = inventory(
       `import { describe, it } from 'vitest';
