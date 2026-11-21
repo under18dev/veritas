@@ -401,6 +401,42 @@ describe('test and property discriminating power', () => {
 });
 
 describe('changes since a git ref', () => {
+  it('runs mutation only with the tests that reach a file changed since the ref', () => {
+    const dir = setup('discount-boundary');
+    const git = (...args: string[]) =>
+      spawnSync(
+        'git',
+        ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args],
+        {
+          cwd: dir,
+          stdio: 'ignore',
+        },
+      );
+    writeFileSync(
+      path.join(dir, 'src/other.ts'),
+      'export function twice(n: number): number {\n  return n * 2;\n}\n',
+    );
+    writeFileSync(
+      path.join(dir, 'test/other.test.ts'),
+      "import { expect, it } from 'vitest';\nimport { twice } from '../src/other';\nit('doubles', () => { expect(twice(2)).toBe(4); });\n",
+    );
+    git('add', '-A');
+    git('commit', '-q', '-m', 'other');
+    writeFileSync(
+      path.join(dir, 'src/other.ts'),
+      'export function twice(n: number): number {\n  return n + n;\n}\n',
+    );
+    const result = runCli(['mutate', '--since', 'HEAD', '--json'], dir);
+    expect([0, 1, 4], result.stderr).toContain(result.status);
+    const runId = json<RunJson>(result).runId;
+    const config = readFileSync(
+      path.join(dir, '.veritas/runs', runId, 'mutation/vitest.mutation.config.mjs'),
+      'utf8',
+    );
+    const files = JSON.parse(/const files = (\[.*\]);/.exec(config)?.[1] ?? '[]') as string[];
+    expect(files.map((f) => path.basename(f))).toEqual(['other.test.ts']);
+  });
+
   it('marks properties of changed code with the change and refuses refs that look like options', () => {
     const dir = setup('discount-boundary');
     const file = path.join(dir, 'src/pricing.ts');

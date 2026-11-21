@@ -305,8 +305,26 @@ async function runInContext(
   const mutationTestFiles = (mapped: TestInventory | undefined): string[] | undefined => {
     if (config.analysis.testFramework !== 'vitest') return undefined;
 
+    // With --since, mutator only mutates what changed, so only tests that reach a changed file can kill a mutant.
+    const changed =
+      !options.scope?.length && options.since
+        ? gitOutput(root, [
+            'diff',
+            '--name-only',
+            '--relative',
+            '--no-color',
+            '--no-ext-diff',
+            options.since,
+            '--',
+          ])
+            ?.split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean)
+        : undefined;
+    const scope = options.scope?.length ? options.scope : changed?.length ? changed : undefined;
+
     try {
-      return selectMutationTestFiles(mapped ?? inventoryTests({ root, config }), config, options.scope);
+      return selectMutationTestFiles(mapped ?? inventoryTests({ root, config }), config, scope);
     } catch {
       return undefined;
     }
