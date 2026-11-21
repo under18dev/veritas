@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { discoverEvidence, withoutCodeBlocks } from '../src/index.js';
+import { discoverEvidence, splitSentences, withoutCodeBlocks } from '../src/index.js';
 import { config, tempProject, writeProjectFile } from './helpers.js';
 
 describe('statement extraction', () => {
@@ -135,5 +135,167 @@ describe('age and ordering phrases', () => {
     writeProjectFile(root, 'README.md', `# x\n\n${text}\n`);
     const result = await discoverEvidence({ root, config: config(), offline: true });
     expect(result.statements[0]?.relation).toMatchObject({ kind: 'threshold', operator, value });
+  });
+});
+
+describe('sentence splitting', () => {
+  const quotes = (text: string) => splitSentences(text).map((s) => s.text.trim());
+
+  it('does not cut at a dot between digits, in a name or in a URL', () => {
+    expect(
+      quotes(
+        'Requires dompurify 3.2.4 or later. Install libwebkit2gtk-4.1 first. Pi is 3.14, see https://keepachangelog.com/en/1.1.0/ and Node.js docs.',
+      ),
+    ).toEqual([
+      'Requires dompurify 3.2.4 or later.',
+      'Install libwebkit2gtk-4.1 first.',
+      'Pi is 3.14, see https://keepachangelog.com/en/1.1.0/ and Node.js docs.',
+    ]);
+    expect(quotes('Compare v1.2.0...v1.2.1 for the diff. Done!')).toEqual([
+      'Compare v1.2.0...v1.2.1 for the diff.',
+      'Done!',
+    ]);
+  });
+
+  it('ends a sentence at a dot before a space, but not after an abbreviation or a list number', () => {
+    expect(quotes('The limit is 10. Users must log in, e.g. with a token.')).toEqual([
+      'The limit is 10.',
+      'Users must log in, e.g. with a token.',
+    ]);
+    expect(quotes('1. Install the app.\n2. The count must be at most 5.\n- 3. item')).toEqual([
+      '1. Install the app.',
+      '2. The count must be at most 5.',
+      '- 3. item',
+    ]);
+    expect(quotes('if (a !== b) it fails? Then x?.y is read.')).toEqual([
+      'if (a !== b) it fails?',
+      'Then x?.y is read.',
+    ]);
+  });
+
+  it('splits Japanese at 。 and keeps a closing bracket with its sentence', () => {
+    expect(quotes('バージョン 2.1.0 以降が必要です。「設定は必須です。」次に進みます！本当？はい')).toEqual([
+      'バージョン 2.1.0 以降が必要です。',
+      '「設定は必須です。」',
+      '次に進みます！',
+      '本当？',
+      'はい',
+    ]);
+  });
+
+  it('drops pieces without a letter', () => {
+    expect(quotes('2.\n---\n55. 4.\n| 1 | 2 |\nreal text')).toEqual(['real text']);
+    // Nor is text that runs to a line break without ending a sentence, as before.
+    expect(quotes('## 5. Search\nmain: "#1976d2",\nThe limit is 3. Then\nend')).toEqual([
+      'The limit is 3.',
+      'end',
+    ]);
+  });
+
+  it('reads CHANGELOG and RELEASE documents, not files that only start with those names', async () => {
+    const root = tempProject('release-files');
+    writeProjectFile(root, 'CHANGELOG.md', 'Uploads must be at most 5 MB.\n');
+    writeProjectFile(root, 'RELEASE_NOTES', 'Retries must be at most 3.\n');
+    writeProjectFile(root, 'RELEASE-1.2.3.md', 'Exports must be at most 10 MB.\n');
+    writeProjectFile(root, 'CHANGELOG.en.md', 'Tabs must be at most 50.\n');
+    writeProjectFile(root, '.github/workflows/release-linux.yml', 'name: must run on ubuntu-22.04\n');
+    writeProjectFile(root, 'release.config.js', 'module.exports = {}; // must be at most 3.\n');
+    const result = await discoverEvidence({ root, config: config(), offline: true });
+    expect(result.sources.map((s) => s.locator).sort()).toEqual([
+      'CHANGELOG.en.md',
+      'CHANGELOG.md',
+      'RELEASE-1.2.3.md',
+      'RELEASE_NOTES',
+    ]);
+  });
+
+  it('keeps a sentence closed by emphasis, code or a footnote, and a unit before the dot', () => {
+    expect(
+      quotes(
+        [
+          '**The port must be below 65536.**',
+          '*Uploads must be at most 5 MB.*',
+          '_Retries must be at most 3._',
+          'The batch must be at most 50.[^1]',
+          'Use `npm ci.` Then build.',
+          'The timeout must be at most 500 ms.',
+          'Retries must be at most 3.',
+        ].join('\n'),
+      ),
+    ).toEqual([
+      '**The port must be below 65536.**',
+      '*Uploads must be at most 5 MB.*',
+      '_Retries must be at most 3._',
+      'The batch must be at most 50.[^1]',
+      'Use `npm ci.`',
+      'Then build.',
+      'The timeout must be at most 500 ms.',
+      'Retries must be at most 3.',
+    ]);
+    expect(quotes('The timeout must be at least 10 ms. Retries must be at least 1.')).toEqual([
+      'The timeout must be at least 10 ms.',
+      'Retries must be at least 1.',
+    ]);
+    // An abbreviation at the end of a line still ends the sentence there.
+    expect(quotes('Use any token, e.g.\nThe limit is 3.')).toEqual([
+      'Use any token, e.g.',
+      'The limit is 3.',
+    ]);
+  });
+
+  it('does not split where no space follows the dot', () => {
+    // Accepted: without a space after it, a dot is read as part of a word or a number.
+    expect(quotes('The value must be > 0.Next must be < 5.')).toEqual([
+      'The value must be > 0.Next must be < 5.',
+    ]);
+  });
+
+  it('extracts a requirement wrapped in emphasis at the end of a line', async () => {
+    const root = tempProject('emphasis-requirement');
+    writeProjectFile(root, 'docs/auth.md', '**Users must log in.**\n');
+    const result = await discoverEvidence({ root, config: config(), offline: true });
+    expect(result.statements.map((s) => [s.quote, s.modality])).toEqual([['**Users must log in.**', 'must']]);
+  });
+
+  it('extracts every threshold of a document with emphasis, units and footnotes', async () => {
+    const root = tempProject('emphasis');
+    writeProjectFile(
+      root,
+      'docs/limits.md',
+      [
+        '**Uploads must be at most 5 MB.**',
+        '_Retries must be at most 3._',
+        'The timeout must be at most 500 ms.',
+        'The queue must hold at most 100 items.',
+        'The timeout must be at least 10 ms. Retries must be at least 1.',
+        'The batch must be at most 50.[^1]',
+        '',
+      ].join('\n'),
+    );
+    const result = await discoverEvidence({ root, config: config(), offline: true });
+    expect(
+      result.statements.flatMap((s) => (s.relation.kind === 'threshold' ? [s.relation.value] : [])),
+    ).toEqual(['5', '3', '500', '100', '10', '1', '50']);
+  });
+
+  it('extracts no fragment statements from version-heavy documents', async () => {
+    const root = tempProject('versions');
+    writeProjectFile(
+      root,
+      'docs/ja/SECURITY.md',
+      [
+        '# セキュリティ',
+        '',
+        '- dompurify 3.2.4 以上を使います。',
+        '- 依存関係: 4.0.0 → 11.2.1、55.0.1 に更新しました。',
+        '1. Upgrade to 2.0.0 or later.',
+      ].join('\n'),
+    );
+    const result = await discoverEvidence({ root, config: config(), offline: true });
+    expect(result.statements.map((s) => s.quote)).toEqual([
+      '- dompurify 3.2.4 以上を使います。',
+      '- 依存関係: 4.0.0 → 11.2.1、55.0.1 に更新しました。',
+      '1. Upgrade to 2.0.0 or later.',
+    ]);
   });
 });

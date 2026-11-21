@@ -199,4 +199,116 @@ describe('web crawl limits', () => {
       reason: 'DNS lookup timed out',
     });
   });
+
+  it('says why a URL was refused and how to allow a domain, without allowing the repository on GitHub', async () => {
+    const root = tempProject('web-refusal-reasons');
+    seed(
+      root,
+      'https://github.com/acme/widgets/compare/v1.0.0...v1.1.0 https://semver.org/ ftp://docs.example.test/f https://127.0.0.1/a',
+    );
+    const requested: string[] = [];
+    const result = await discoverEvidence({
+      root,
+      lookup: publicLookup,
+      sources: ['local', 'web'],
+      config: config({
+        web: { enabled: true, allowDomains: ['docs.example.test'] },
+        github: { enabled: true, repo: 'acme/widgets' },
+      }),
+      fetch: async (input) => {
+        requested.push(String(input));
+
+        return new Response('');
+      },
+    });
+    expect(requested).toEqual([]);
+    expect(result.skipped.filter((s) => s.source !== 'git')).toEqual([
+      {
+        source: 'https://github.com/acme/widgets/compare/v1.0.0...v1.1.0',
+        reason:
+          'URL refused: github.com is not in sources.web.allowDomains; add it there, or pass --allow-domain github.com for one run, to fetch it (issues and pull requests of sources.github.repo are read through the GitHub source)',
+      },
+      {
+        source: 'https://semver.org/',
+        reason:
+          'URL refused: semver.org is not in sources.web.allowDomains; add it there, or pass --allow-domain semver.org for one run, to fetch it',
+      },
+      { source: 'ftp://docs.example.test/f', reason: 'URL refused: only http and https URLs are fetched' },
+      { source: 'https://127.0.0.1/a', reason: 'URL refused: private, loopback, or reserved address' },
+    ]);
+  });
+
+  it('reads only text documents and follows no links to stylesheets, scripts, images or fonts', async () => {
+    const root = tempProject('web-content-type');
+    seed(
+      root,
+      [
+        'https://docs.example.test/guide',
+        'https://docs.example.test/notes.md',
+        'https://docs.example.test/served-as-css',
+        'https://docs.example.test/served-as-js',
+        'https://docs.example.test/logo',
+        'https://docs.example.test/theme.css',
+      ].join(' '),
+    );
+    const requested: string[] = [];
+    const types: Record<string, string> = {
+      '/guide': 'text/html; charset=utf-8',
+      '/notes.md': 'text/markdown',
+      '/served-as-css': 'text/css',
+      '/served-as-js': 'application/javascript',
+      '/logo': 'image/png',
+      '/child': 'text/html',
+    };
+    const result = await discoverEvidence({
+      root,
+      lookup: publicLookup,
+      config: webConfig({ maxDepth: 1 }),
+      fetch: async (input) => {
+        const url = new URL(String(input));
+        requested.push(url.pathname);
+        const body =
+          url.pathname === '/guide'
+            ? [
+                '<link rel="stylesheet" href="/_astro/Code.abc123.css">',
+                '<script src="/_astro/page.js"></script>',
+                '<p>The total must be at least 10.</p>',
+                '<a href="/_astro/font.woff2">font</a>',
+                '<a href="/img/shot.PNG?v=2">shot</a>',
+                '<a href="/child">child</a>',
+              ].join('')
+            : url.pathname === '/served-as-css'
+              ? '.a{color:red}.b{margin:0 auto}'
+              : '<p>Retries must be at most 3.</p>';
+
+        return new Response(body, { headers: { 'content-type': types[url.pathname] ?? 'text/css' } });
+      },
+    });
+    // A URL the project names itself is fetched even when it looks like an asset, then judged by its type.
+    expect(requested).toEqual([
+      '/guide',
+      '/notes.md',
+      '/served-as-css',
+      '/served-as-js',
+      '/logo',
+      '/theme.css',
+      '/child',
+    ]);
+    expect(result.sources.filter((s) => s.kind === 'web').map((s) => new URL(s.locator).pathname)).toEqual([
+      '/guide',
+      '/notes.md',
+      '/child',
+    ]);
+    expect(result.skipped).toEqual(
+      expect.arrayContaining([
+        { source: 'https://docs.example.test/served-as-css', reason: 'not a text document (text/css)' },
+        {
+          source: 'https://docs.example.test/served-as-js',
+          reason: 'not a text document (application/javascript)',
+        },
+        { source: 'https://docs.example.test/logo', reason: 'not a text document (image/png)' },
+        { source: 'https://docs.example.test/theme.css', reason: 'not a text document (text/css)' },
+      ]),
+    );
+  });
 });

@@ -182,12 +182,88 @@ export function withoutCodeBlocks(text: string): string {
     .join('\n');
 }
 
+/** Words whose dot is part of the word, not the end of a sentence (`e.g. with a token`). Units such as `ms` are not. */
+const ABBREVIATIONS = new Set(['e.g', 'i.e', 'eg', 'ie', 'vs', 'cf', 'approx', 'incl']);
+const TERMINATORS = '。！？.!?';
+/**
+ * What may follow the end of a sentence and still belong to it: closing brackets and quotes (`「設定は必須です。」`),
+ * the end of Markdown emphasis or code (`**Must be below 10.**`), and a footnote reference (`at most 50.[^1]`).
+ */
+const CLOSERS = '」』）】)]"\'”’*_`';
+const FOOTNOTE = /^\[\^[^\]\s]+\]/;
+/** A line that ends a sentence, perhaps followed by closing punctuation or a footnote, though a cut was skipped. */
+const ENDS_SENTENCE = /[。！？.!?](?:[^\p{L}\p{N}\s]|\[\^[^\]\s]+\])*$/u;
+
+/**
+ * Splits text into sentences: after `。`, `！` or `？`, and after `.`, `!` or `?` that a space or the end of the text
+ * follows. A dot inside a word or a number (`3.2.4`, `libwebkit2gtk-4.1`, `Node.js`, a URL) does not end a sentence,
+ * nor does the dot of an abbreviation (`e.g.`); so `must be > 0.Next` stays one piece. A sentence never spans a line
+ * break. Text left at the end of a line is a sentence only when it ends like one (`500 ms.`, `**at most 5.**`,
+ * `at most 50.[^1]`); otherwise (a heading, a line of code, one line of a wrapped paragraph) it is dropped, the last
+ * line of the text excepted. A piece without a letter (`1.` of a numbered list, a `---` rule) is joined to the text
+ * after it on the same line, or dropped.
+ */
+export function splitSentences(text: string): Array<{ text: string; start: number }> {
+  const output: Array<{ text: string; start: number }> = [];
+  let start = 0;
+  /** Ends the current piece at `end`; `force` drops a piece without a letter instead of keeping it for the next one. */
+  const cut = (end: number, force: boolean) => {
+    const piece = text.slice(start, end);
+
+    if (/\p{L}/u.test(piece)) output.push({ text: piece, start });
+    else if (!force) return;
+    start = end;
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charAt(i);
+
+    if (ch === '\n') {
+      // A skipped cut (an abbreviation-like word, a dot before emphasis) must not lose a sentence that ends the line.
+      if (ENDS_SENTENCE.test(text.slice(Math.max(start, i - 80), i).trimEnd())) cut(i, true);
+      start = i + 1;
+      continue;
+    }
+
+    if (!TERMINATORS.includes(ch)) continue;
+    let end = i + 1;
+
+    while (end < text.length && TERMINATORS.includes(text.charAt(end))) end++;
+
+    for (;;) {
+      while (end < text.length && CLOSERS.includes(text.charAt(end))) end++;
+      const footnote = FOOTNOTE.exec(text.slice(end, end + 40))?.[0];
+
+      if (!footnote) break;
+      end += footnote.length;
+    }
+    const run = text.slice(i, end);
+    const next = text.charAt(end);
+
+    if (!/[。！？]/.test(run)) {
+      if (next !== '' && !/\s/.test(next)) {
+        i = end - 1;
+        continue;
+      }
+      // The last few characters are enough for the longest abbreviation, and keep long pieces linear.
+      const word = /([A-Za-z.]+)$/.exec(text.slice(Math.max(start, i - 8), i))?.[1]?.toLowerCase();
+
+      if (run === '.' && word && ABBREVIATIONS.has(word)) continue;
+    }
+    cut(end, false);
+    i = end - 1;
+  }
+  cut(text.length, true);
+
+  return output;
+}
+
 function extract(text: string, sourceId: string, stale: boolean, redactText: Redact): NormativeStatement[] {
   const output: NormativeStatement[] = [];
   const releaseOf = versionAt(text);
 
-  for (const match of text.matchAll(/[^。.!?\n]+(?:[。.!?]+|$)/g)) {
-    const raw = match[0].trim();
+  for (const sentence of splitSentences(text)) {
+    const raw = sentence.text.trim();
 
     if (!raw) continue;
     const quote = cleanQuote(raw, redactText);
@@ -230,8 +306,8 @@ function extract(text: string, sourceId: string, stale: boolean, redactText: Red
       !/\d/.test(raw)
     )
       continue;
-    const start = match.index ?? 0;
-    const range = lineRange(text, start, start + match[0].length);
+    const start = sentence.start;
+    const range = lineRange(text, start, start + sentence.text.length);
     const version = releaseOf(start);
     output.push({
       id: stableId('stmt', { sourceId, range, quote, relation }),
@@ -341,7 +417,11 @@ async function collectLocal(
     const rel = path.relative(root, file).split(path.sep).join('/');
     const base = path.basename(file);
     const readme = /^README(?:\.|$)/i.test(base);
-    const docs = (rel.startsWith('docs/') && /\.md$/i.test(base)) || /^CHANGELOG|^RELEASE/i.test(base);
+    // CHANGELOG and RELEASE documents in Markdown or text, dots allowed (`RELEASE-1.2.3.md`, `CHANGELOG.en.md`), or
+    // without an extension; not other files whose name starts so (`release-linux.yml`, `release.config.js`).
+    const docs =
+      (rel.startsWith('docs/') && /\.md$/i.test(base)) ||
+      /^(?:CHANGELOG|RELEASE)(?:.*\.(?:md|markdown|mdx|txt|rst)|[^.]*)$/i.test(base);
     const schema =
       /(?:\.openapi|\.schema)\.(?:json|ya?ml)$/i.test(base) || /^openapi\.(?:json|ya?ml)$/i.test(base);
     const code =
@@ -593,9 +673,33 @@ export function isUnsafeHost(host: string): boolean {
   return false;
 }
 
+const UNSAFE_HOST = 'URL refused: private, loopback, or reserved address';
+
+/**
+ * Why a URL is not fetched, or null when its scheme, host and domain are allowed. Only the domains in
+ * `sources.web.allowDomains` (or `--allow-domain`) are fetched. GitHub URLs of `sources.github.repo` are not allowed
+ * implicitly: enabling the GitHub source consents to its API, not to crawling github.com pages (diffs, file views),
+ * so the reason says how to allow the domain instead.
+ */
+function refuseUrl(url: URL, config: VeritasConfig): string | null {
+  if (!['http:', 'https:'].includes(url.protocol)) return 'URL refused: only http and https URLs are fetched';
+
+  if (isUnsafeHost(url.hostname)) return UNSAFE_HOST;
+
+  if (hostAllowed(url.hostname, config.sources.web.allowDomains)) return null;
+  const host = url.hostname.toLowerCase();
+  const repo = config.sources.github.enabled ? config.sources.github.repo?.toLowerCase() : undefined;
+  const ofRepo =
+    repo !== undefined && host === 'github.com' && `${url.pathname.toLowerCase()}/`.startsWith(`/${repo}/`);
+
+  return `URL refused: ${host} is not in sources.web.allowDomains; add it there, or pass --allow-domain ${host} for one run, to fetch it${
+    ofRepo ? ' (issues and pull requests of sources.github.repo are read through the GitHub source)' : ''
+  }`;
+}
+
 /** Resolves `host` and returns a refusal reason, or null when every address is public. */
 async function refuseByDns(host: string, lookup: HostLookup): Promise<string | null> {
-  if (isUnsafeHost(host)) return 'URL refused by protocol, SSRF, or allowlist policy';
+  if (isUnsafeHost(host)) return UNSAFE_HOST;
   const bare = host.replace(/^\[(.*)\]$/, '$1');
 
   if (isIP(bare)) return null;
@@ -613,6 +717,32 @@ async function refuseByDns(host: string, lookup: HostLookup): Promise<string | n
     return 'URL refused: host resolves to a private, loopback, or reserved address';
 
   return null;
+}
+
+/** Media types of documents people write rules in; stylesheets, scripts, images and fonts are not evidence. */
+const TEXT_DOCUMENT_TYPES = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'text/plain',
+  'text/markdown',
+  'text/x-markdown',
+]);
+
+/** The media type of a response that is not a text document, or null when it is one (or does not say). */
+function nonDocumentType(response: Response): string | null {
+  const type = response.headers?.get('content-type')?.split(';')[0]?.trim().toLowerCase();
+
+  return !type || TEXT_DOCUMENT_TYPES.has(type) ? null : type;
+}
+
+/**
+ * A link to a stylesheet, script (or its source map), image or font, by the extension of its path. Only links found
+ * while crawling are left out this way; a URL the project names itself is fetched and judged by its Content-Type.
+ */
+function looksLikeAsset(url: URL): boolean {
+  return /\.(?:css|js|mjs|cjs|map|png|jpe?g|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot)$/i.test(
+    url.pathname,
+  );
 }
 
 async function collectWeb(
@@ -663,14 +793,13 @@ async function collectWeb(
       continue;
     }
 
-    if (
-      !['http:', 'https:'].includes(url.protocol) ||
-      isUnsafeHost(url.hostname) ||
-      !hostAllowed(url.hostname, config.sources.web.allowDomains)
-    ) {
-      skipped.push({ source: next.url, reason: 'URL refused by protocol, SSRF, or allowlist policy' });
+    const refusal = refuseUrl(url, config);
+
+    if (refusal) {
+      skipped.push({ source: next.url, reason: refusal });
       continue;
     }
+
     // DNS counts against the crawl deadline too: a resolver that never answers must not stall discovery.
     const dnsRefusal = await withDeadline(
       refuseByDns(url.hostname, lookup),
@@ -708,6 +837,14 @@ async function collectWeb(
         skipped.push({ source: next.url, reason: 'redirect refused by allowlist or SSRF policy' });
         continue;
       }
+      const type = nonDocumentType(response);
+
+      if (type) {
+        // Minified CSS or a script read as text would be quoted as evidence; its body is not read at all.
+        await response.body?.cancel().catch(() => {});
+        skipped.push({ source: next.url, reason: `not a text document (${type})` });
+        continue;
+      }
       // Read at most what the character budget can still use (4 bytes per character covers UTF-8).
       const html = await readLimited(response, Math.max(4096, (config.sources.web.maxChars - chars) * 4));
       const text = redact(
@@ -723,14 +860,16 @@ async function collectWeb(
       if (clipped) inputs.push({ kind: 'web', locator: url.href, text: clipped });
 
       if (next.depth < config.sources.web.maxDepth && chars < config.sources.web.maxChars)
-        for (const link of html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)) {
+        // Only links people follow (`<a href>`), not `<link href>` stylesheets and icons, and no links to assets.
+        for (const link of html.matchAll(/<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/gi)) {
           try {
             const href = link[1];
 
             if (!href) continue;
-            const child = new URL(href, url).href;
+            const child = new URL(href, url);
 
-            if (!seen.has(child)) queue.push({ url: child, depth: next.depth + 1 });
+            if (!looksLikeAsset(child) && !seen.has(child.href))
+              queue.push({ url: child.href, depth: next.depth + 1 });
           } catch {
             /* untrusted link */
           }

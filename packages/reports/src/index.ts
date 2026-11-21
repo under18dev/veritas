@@ -191,10 +191,84 @@ function propertyEvidence(i: ReportInput, p: Property): string {
   return `${p.id} [${p.status}, ${p.origin}]: static comparison with the code ${p.implementationAgreement}; observed ${observed.join(', ') || 'not run'}; tests ${tests.map((e) => `${e.testId} (${e.evidence.map((x) => x.kind).join('+') || 'none'})`).join(', ') || 'none'}; mutants ${killed} killed, ${survived} survived of ${mutants.length}${detectionText}`;
 }
 
-function sections(input: ReportInput): string[] {
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+/** Where a summarized Markdown report sends the reader for the complete lists. */
+const FULL_LISTS =
+  'The JSON and HTML reports list them all (report.json and report.html of the run, or `veritas report --format json`).';
+/** Sources shown per kind, and quotes per source, in the Markdown summary of the evidence. */
+const EXAMPLE_SOURCES = 3;
+const EXAMPLE_QUOTES = 2;
+/** Inferred properties whose evidence the Markdown report shows; the others are counted. */
+const EXAMPLE_INFERRED = 5;
+
+/**
+ * The evidence as counts per source kind, with the sources that have the most statements as examples. A run that
+ * reads the web and many documents collects thousands of statements, which made the Markdown report megabytes long.
+ */
+function evidenceSummary(i: ReportInput): string {
+  if (i.sources.length === 0) return 'none';
+  const statementsOf = new Map<string, ReportInput['statements']>();
+
+  for (const st of i.statements) {
+    const list = statementsOf.get(st.sourceId);
+
+    if (list) list.push(st);
+    else statementsOf.set(st.sourceId, [st]);
+  }
+  const count = (id: string) => statementsOf.get(id)?.length ?? 0;
+  const kinds = [...new Set(i.sources.map((s) => s.kind))].sort();
+  const lines = [
+    `${plural(i.sources.length, 'source', 'sources')}, ${plural(i.statements.length, 'statement', 'statements')}. By kind, with the sources that have the most statements:`,
+  ];
+
+  for (const kind of kinds) {
+    const members = i.sources.filter((s) => s.kind === kind);
+    const statements = members.reduce((sum, s) => sum + count(s.id), 0);
+    lines.push(
+      `- ${kind}: ${plural(members.length, 'source', 'sources')}, ${plural(statements, 'statement', 'statements')}`,
+    );
+
+    for (const s of [...members]
+      // A plain comparison, so the examples do not depend on the locale of the machine.
+      .sort(
+        (a, b) => count(b.id) - count(a.id) || (a.locator < b.locator ? -1 : a.locator > b.locator ? 1 : 0),
+      )
+      .slice(0, EXAMPLE_SOURCES))
+      lines.push(
+        `  - ${s.id}: ${s.kind} ${s.locator}${s.range ? `:${s.range.start}` : ''}, ${plural(count(s.id), 'statement', 'statements')}${(
+          statementsOf.get(s.id) ?? []
+        )
+          .slice(0, EXAMPLE_QUOTES)
+          .map((st) => `; quote ${st.quote}`)
+          .join('')}`,
+      );
+  }
+  lines.push(FULL_LISTS);
+
+  return lines.join('\n');
+}
+
+/**
+ * Sections of the text, Markdown and HTML reports. `brief` (the Markdown report) summarizes the collected evidence
+ * and the inferred properties, which can run to thousands of lines; the other formats keep every entry.
+ */
+function sections(input: ReportInput, brief = false): string[] {
   const i = safe(input);
   const run = i.run;
   const props = (status: string[]) => i.properties.filter((p) => status.includes(p.status));
+  const ledger = (members: Property[], label: (p: Property) => string) => {
+    const shown = brief ? members.filter((p) => p.origin !== 'inferred') : members;
+    const inferred = members.length - shown.length;
+
+    return [...shown.map(label), ...(inferred ? [`${inferred} inferred`] : [])].join(', ') || 'none';
+  };
+  const ledgerEntries = i.properties.filter((p) => p.status !== 'rejected' && p.status !== 'superseded');
+  const inferredEntries = ledgerEntries.filter((p) => p.origin === 'inferred');
+  const detailed = brief
+    ? [...ledgerEntries.filter((p) => p.origin !== 'inferred'), ...inferredEntries.slice(0, EXAMPLE_INFERRED)]
+    : ledgerEntries;
+  const hiddenInferred = ledgerEntries.length - detailed.length;
+  const inferredCount = i.properties.filter((p) => p.origin === 'inferred').length;
   // Every status by name: undecided outcomes (timeout, pending, unknown ...) are never folded into the others.
   const alwaysShown = new Set(['killed', 'survived', 'unknown', 'equivalent_proven']);
   const mutationGroups = MutantStatus.options
@@ -208,36 +282,29 @@ function sections(input: ReportInput): string[] {
   return [
     `1. Run metadata/environment/scope\nrun ${run.id}; command ${run.command} ${run.args.join(' ')}; profile ${run.profile ?? 'none'}; git commit ${i.meta.gitCommit ?? 'none (not a git repository)'}${run.scope.since ? `; changes since ${run.scope.since}` : ''}; Veritas ${i.meta.toolVersion}; schema ${i.meta.schemaVersion}; config hash ${i.meta.configHash}; source hash ${i.meta.sourceHash}; OS ${run.environment.os}; Node ${run.environment.node}; verdict ${run.verdict ?? 'none'}; exit code ${run.exitCode ?? 'none'}; scope ${run.scope.root} (${run.scope.paths.join(', ') || 'all'}); policy reasons ${run.policyReasons.join('; ') || 'none'}; replay with \`${run.replay}\``,
     `2. Collected evidence with provenance\n${
-      i.sources
-        .map(
-          (s) =>
-            `${s.id}: ${s.kind} ${s.locator}${s.range ? `:${s.range.start}` : ''} — ${s.summary}${i.statements
-              .filter((statement) => statement.sourceId === s.id)
-              .map((statement) => `; quote ${statement.quote}`)
-              .join('')}`,
-        )
-        .join('\n') || 'none'
+      brief
+        ? evidenceSummary(i)
+        : i.sources
+            .map(
+              (s) =>
+                `${s.id}: ${s.kind} ${s.locator}${s.range ? `:${s.range.start}` : ''} — ${s.summary}${i.statements
+                  .filter((statement) => statement.sourceId === s.id)
+                  .map((statement) => `; quote ${statement.quote}`)
+                  .join('')}`,
+            )
+            .join('\n') || 'none'
     }`,
-    `3. Property ledger\naccepted: ${
-      props(['accepted'])
-        .map((p) => `${p.id} (${p.origin})`)
-        .join(', ') || 'none'
-    }\nproposed: ${
-      props(['proposed'])
-        .map((p) => `${p.id} (${p.origin})`)
-        .join(', ') || 'none'
-    }\nconflicted: ${
-      props(['conflicted'])
-        .map((p) => `${p.id} (${p.origin})`)
-        .join(', ') || 'none'
-    }\nother: ${
-      props(['reviewed', 'rejected', 'superseded'])
-        .map((p) => `${p.id} (${p.status}, ${p.origin})`)
-        .join(', ') || 'none'
-    }${i.properties
-      .filter((p) => p.status !== 'rejected' && p.status !== 'superseded')
-      .map((p) => `\n${propertyEvidence(i, p)}`)
-      .join('')}`,
+    `3. Property ledger\naccepted: ${ledger(props(['accepted']), (p) => `${p.id} (${p.origin})`)}\nproposed: ${ledger(
+      props(['proposed']),
+      (p) => `${p.id} (${p.origin})`,
+    )}\nconflicted: ${ledger(props(['conflicted']), (p) => `${p.id} (${p.origin})`)}\nother: ${ledger(
+      props(['reviewed', 'rejected', 'superseded']),
+      (p) => `${p.id} (${p.status}, ${p.origin})`,
+    )}${detailed.map((p) => `\n${propertyEvidence(i, p)}`).join('')}${
+      hiddenInferred
+        ? `\n... and ${plural(hiddenInferred, 'more inferred property', 'more inferred properties')} (not specifications). ${FULL_LISTS}`
+        : ''
+    }`,
     `4. Specification vs implementation mismatches\n${
       i.findings
         .filter((f) => f.kind === 'spec_implementation_mismatch')
@@ -276,7 +343,7 @@ function sections(input: ReportInput): string[] {
         .join('\n') || 'none'
     }`,
     `9. Improvement proposals\n${i.improvements.map(improvementText).join('\n') || 'none for this run (see `veritas improve --dry-run`)'}`,
-    `10. Limitations\n${[...run.stages.filter((s) => s.status !== 'succeeded').map((s) => `stage ${s.stage} was ${s.status}`), ...i.claims.filter((c) => ['unsupported', 'semantic_mismatch', 'timeout', 'unknown'].includes(c.status)).map((c) => `claim ${c.id} is ${c.status}`), ...i.properties.filter((p) => p.origin === 'inferred').map((p) => `property ${p.id} is inferred (not a specification)`)].join('; ') || 'none'}`,
+    `10. Limitations\n${[...run.stages.filter((s) => s.status !== 'succeeded').map((s) => `stage ${s.stage} was ${s.status}`), ...i.claims.filter((c) => ['unsupported', 'semantic_mismatch', 'timeout', 'unknown'].includes(c.status)).map((c) => `claim ${c.id} is ${c.status}`), ...(inferredCount ? [`${plural(inferredCount, 'property is', 'properties are')} inferred (not a specification)`] : [])].join('; ') || 'none'}`,
   ];
 }
 
@@ -299,7 +366,7 @@ export function reportJsonSchema(): object {
 
 export function renderMarkdown(input: ReportInput): string {
   const i = safe(input);
-  const body = sections(i)
+  const body = sections(i, true)
     .map((s) => {
       const [title, ...rest] = s.split('\n');
 

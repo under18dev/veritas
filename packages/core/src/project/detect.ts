@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { gitOutput } from '../artifacts/store.js';
 
 export type PackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun' | 'unknown';
 
@@ -63,6 +64,71 @@ export function resolvePackageVersion(root: string, name: string): string | null
     if (parent === dir) return null;
     dir = parent;
   }
+}
+
+/** The manager named by the `packageManager` field of a package.json (`pnpm@9.0.0` is pnpm), if any. */
+function declaredManager(pkg: Record<string, unknown> | null): PackageManager | undefined {
+  return typeof pkg?.packageManager === 'string'
+    ? (pkg.packageManager.split('@')[0] as PackageManager)
+    : undefined;
+}
+
+/**
+ * The package manager the project uses, looking from `root` up to the root of its git repository (without git, up to
+ * the filesystem root). The nearest lockfile committed to git wins. Without one, the `packageManager` field of the
+ * nearest package.json that has it (up to the git root, or without git up to the nearest lockfile) decides, and only
+ * then the nearest lockfile that is on disk but not committed. Running another package manager once leaves its
+ * lockfile behind (a `pnpm-lock.yaml` next to the committed `package-lock.json`, an untracked `package-lock.json` in
+ * one workspace package), and that does not change what the project uses.
+ */
+function detectPackageManager(root: string, pkg: Record<string, unknown> | null): PackageManager {
+  let start = path.resolve(root);
+
+  try {
+    start = realpathSync(start);
+  } catch {
+    /* keep the resolved path */
+  }
+  // Read-only git commands; null outside a repository.
+  const top = gitOutput(start, ['rev-parse', '--show-toplevel'])?.trim() || null;
+  const levels: string[] = [];
+
+  for (let dir = start; ; ) {
+    levels.push(dir);
+    const parent = path.dirname(dir);
+
+    if ((top !== null && path.relative(top, dir) === '') || parent === dir) break;
+    dir = parent;
+  }
+  let onDisk: { dir: string; manager: PackageManager } | undefined;
+
+  for (const dir of levels) {
+    const present = LOCKFILES.filter(([file]) => existsSync(path.join(dir, file)));
+
+    if (present.length === 0) continue;
+    onDisk ??= { dir, manager: present[0]?.[1] ?? 'unknown' };
+
+    if (top === null) continue;
+    const committed = new Set(
+      (gitOutput(dir, ['ls-files', '--', ...present.map(([file]) => file)]) ?? '')
+        .split('\n')
+        .map((line) => line.trim()),
+    );
+    const found = present.find(([file]) => committed.has(file));
+
+    if (found) return found[1];
+  }
+  // Without git the nearest lockfile marks the project root, so no package.json above it is read.
+  const fieldLevels =
+    top !== null ? levels : onDisk ? levels.slice(0, levels.indexOf(onDisk.dir) + 1) : [start];
+
+  for (const dir of fieldLevels) {
+    const declared = declaredManager(dir === start ? pkg : readPackageJson(dir));
+
+    if (declared) return declared;
+  }
+
+  return onDisk?.manager ?? 'unknown';
 }
 
 function findUp(start: string, name: string): boolean {
@@ -172,11 +238,7 @@ function hasFileNamed(dir: string, test: (name: string, parent: string) => boole
 export function detectProject(root: string): ProjectInfo {
   const pkg = readPackageJson(root);
   const deps = { ...((pkg?.dependencies as object) ?? {}), ...((pkg?.devDependencies as object) ?? {}) };
-  const packageManager =
-    LOCKFILES.find(([file]) => findUp(root, file))?.[1] ??
-    (typeof pkg?.packageManager === 'string'
-      ? (pkg.packageManager.split('@')[0] as PackageManager)
-      : 'unknown');
+  const packageManager = detectPackageManager(root, pkg);
   const sourceDir = ['src', 'lib'].find((d) => isDir(path.join(root, d)));
   // Source of the workspace packages too, so a test that calls a package of the same repository reaches analysed code.
   const packageSources = workspacePackages(root, pkg).flatMap((dir) => {

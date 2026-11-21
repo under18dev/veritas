@@ -38,6 +38,8 @@ JSON、Markdown、HTML のレポートには、同じ 10 の節があります�
 | 9. Improvement proposals                      | その実行から作った改善計画と、その適用の記録                                                                          |
 | 10. Limitations                               | その実行で確かめられなかったことと、その理由                                                                          |
 
+Markdown のレポートでは、プロジェクトが大きいほど長くなる二つの節を要約します。「2. Collected evidence with provenance」には、出典の種類ごとに出典と文の数を示し、文の多い出典を種類ごとに三つ、それぞれの引用を二つ添えます。「3. Property ledger」には、推定（inferred）でない Property をすべて載せ、推定の Property は最初の五つだけを詳しく示して、残りは数だけを示します。JSON と HTML のレポート、実行の `evidence.json` と `properties.json` には、すべての項目が残ります。どの形式でも「10. Limitations」では、推定の Property を一つずつ挙げず、その数を一行で示します。Property ledger では、そのそれぞれに推定であることを示しています。
+
 ステージを実行しなかった節は空になります。一方、ファイルがあるのに読めない成果物は、空の節ではなくエラーとして扱います。壊れたファイルのせいで finding が隠れないようにするためです。
 
 `report.json` のトップレベルには、`schemaVersion` と `meta`（後述のエンベロープのメタデータ）があり、続いて `run`、`sources`、`statements`、`properties`、`conflicts`、`tests`、`edges`、`assessments`、`mutants`、`claims`、`findings`、`improvements`、`artifactBase` が並びます。

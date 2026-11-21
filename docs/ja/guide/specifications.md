@@ -9,7 +9,7 @@
 | 出典                   | 読むもの                                                                                    | 既定 |
 | ---------------------- | ------------------------------------------------------------------------------------------- | ---- |
 | README                 | `README*` のファイル                                                                        | オン |
-| ドキュメント           | `docs/**/*.md`、`CHANGELOG*`、`RELEASE*`                                                    | オン |
+| ドキュメント           | `docs/**/*.md` と、Markdown かテキストの `CHANGELOG*`・`RELEASE*`                           | オン |
 | コードのコメント       | `analysis.include` に当てはまるファイルで、export された宣言の JSDoc                        | オン |
 | スキーマ               | OpenAPI と JSON Schema の範囲指定（`openapi.{json,yaml}`、`*.openapi.*`、`*.schema.*`）     | オン |
 | git の履歴             | コミットメッセージ                                                                          | オン |
@@ -24,6 +24,10 @@ veritas discover --sources local,web --allow-domain docs.example.com --max-pages
 ```
 
 `--allow-domain` と `--max-pages` はその実行にだけ効き、これだけでは Web の収集は有効になりません。GitHub の出典は、`GITHUB_TOKEN` が設定されていればそれを送ります。
+
+許可していないドメインの URL はスキップし、その理由として、ドメイン名と許可する方法を示します。`sources.github.repo` のリポジトリを指す `github.com` のリンクも同じ扱いです。GitHub の出典を有効にすると、そのリポジトリの Issue とプルリクエストを GitHub API で読みますが、github.com のページをたどるわけではありません。そうしたページの大半は差分やファイルの表示です。これらのページも取得したいときは、`sources.web.allowDomains` に `github.com` を加えてください。
+
+Web の収集で読むのは、HTML、プレーンテキスト、Markdown のテキスト文書だけです。スタイルシート、スクリプト、画像、フォントなど、ほかの種類の応答は `not a text document (<type>)` という理由でスキップし、本文も読みません。Content-Type を示さない応答は、テキストとして読みます。リンクをたどるときは `<a href>` のリンクだけを使い、スタイルシート、スクリプトとそのソースマップ、画像、フォントへのリンクは、拡張子で見分けてたどりません。プロジェクトの中に書かれた URL は、ドメインが許可されていれば拡張子にかかわらず取得し、Content-Type で判断します。
 
 読んだテキストは、信頼しないデータとして保存します。README や Issue や Web ページの中に指示が書かれていても、引用するだけで従いません。
 
