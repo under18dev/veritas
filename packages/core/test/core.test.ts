@@ -19,6 +19,7 @@ import {
   ArtifactIndex,
   ContentCache,
   canonicalJson,
+  detectProject,
   ExitCode,
   evaluatePolicy,
   type Finding,
@@ -46,6 +47,7 @@ import {
   stableId,
   VeritasConfig,
   VeritasError,
+  workspacePackages,
 } from '../src/index.js';
 
 const tmp = () => mkdtempSync(path.join(tmpdir(), 'veritas-core-'));
@@ -622,6 +624,29 @@ describe('doctor', { timeout: 30_000 }, () => {
     expect(cap('fast_check')).toMatchObject({ state: 'available', version: '4.5.6' });
     expect(cap('z3')).toMatchObject({ state: 'available', version: '7.8.9' });
     expect(cap('z3')?.detail).toMatch(/resolved from veritas/);
+  });
+
+  it('includes the sources of workspace packages and other test file conventions', () => {
+    const root = tmp();
+    writeFileSync(path.join(root, 'package.json'), '{"name":"p","devDependencies":{"vitest":"^4.0.0"}}');
+    writeFileSync(path.join(root, 'pnpm-workspace.yaml'), "packages:\n  - '.'\n  - 'adapters/*'\n");
+    for (const dir of ['src', 'adapters/one/src', 'adapters/two', 'lib/__tests__'])
+      mkdirSync(path.join(root, dir), { recursive: true });
+    writeFileSync(path.join(root, 'adapters/one/package.json'), '{}');
+    writeFileSync(path.join(root, 'adapters/two/package.json'), '{}');
+    writeFileSync(path.join(root, 'src/add/test.ts'.replace('/add', '')), '');
+    writeFileSync(path.join(root, 'lib/__tests__/a.ts'), '');
+    const project = detectProject(root);
+    expect(project.sourceGlobs).toEqual([
+      'src/**/*.{ts,tsx,js,mjs}',
+      'adapters/one/src/**/*.{ts,tsx,js,mjs}',
+    ]);
+    expect(project.testGlobs).toEqual([
+      '**/*.{test,spec}.{ts,tsx,js,mjs}',
+      '**/test.{ts,tsx,js,mjs}',
+      '**/__tests__/**/*.{ts,tsx,js,mjs}',
+    ]);
+    expect(workspacePackages(root, { workspaces: ['adapters/*'] })).toEqual(['adapters/one', 'adapters/two']);
   });
 
   it("explains that Yarn Plug'n'Play is not supported instead of asking to install again", async () => {

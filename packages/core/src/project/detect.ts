@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 export type PackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun' | 'unknown';
@@ -85,6 +85,81 @@ function isDir(p: string): boolean {
   }
 }
 
+const EXTENSIONS = '{ts,tsx,js,mjs}';
+
+/**
+ * Directories of the workspace packages a root declares (`pnpm-workspace.yaml` `packages:`, or `workspaces` in
+ * package.json), relative to the root. Literal paths and a trailing `*` are expanded; other patterns are skipped.
+ */
+export function workspacePackages(root: string, pkg: Record<string, unknown> | null): string[] {
+  const patterns: string[] = [];
+  const yaml = path.join(root, 'pnpm-workspace.yaml');
+
+  if (existsSync(yaml)) {
+    const text = readFileSync(yaml, 'utf8');
+    const block = /^packages:\s*\n((?:[ \t]+-.*\n?|[ \t]*#.*\n?|[ \t]*\n)*)/m.exec(text)?.[1] ?? '';
+
+    for (const line of block.split('\n')) {
+      const value = /^[ \t]+-[ \t]*['"]?([^'"#\s]+)['"]?/.exec(line)?.[1];
+
+      if (value) patterns.push(value);
+    }
+  }
+  const workspaces = pkg?.workspaces;
+  const list = Array.isArray(workspaces)
+    ? workspaces
+    : workspaces &&
+        typeof workspaces === 'object' &&
+        Array.isArray((workspaces as { packages?: unknown }).packages)
+      ? (workspaces as { packages: unknown[] }).packages
+      : [];
+
+  for (const value of list) if (typeof value === 'string') patterns.push(value);
+  const dirs = new Set<string>();
+
+  for (const pattern of patterns) {
+    const clean = pattern.replace(/^\.\//, '').replace(/\/$/, '');
+
+    if (clean.startsWith('!') || clean.includes('**') || clean === '.' || clean === '') continue;
+
+    if (clean.endsWith('/*') && !clean.slice(0, -2).includes('*')) {
+      const parent = path.join(root, clean.slice(0, -2));
+
+      if (!isDir(parent)) continue;
+
+      for (const entry of readdirSync(parent).sort())
+        if (existsSync(path.join(parent, entry, 'package.json'))) dirs.add(`${clean.slice(0, -2)}/${entry}`);
+    } else if (!clean.includes('*') && existsSync(path.join(root, clean, 'package.json'))) dirs.add(clean);
+  }
+
+  return [...dirs];
+}
+
+/** Whether any file below `dir` matches `name`, looking at no more than `limit` directories. */
+function hasFileNamed(dir: string, test: (name: string, parent: string) => boolean, limit = 2000): boolean {
+  const queue = [dir];
+
+  for (let seen = 0; queue.length > 0 && seen < limit; seen++) {
+    const current = queue.shift() as string;
+    let entries: import('node:fs').Dirent[];
+
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!['node_modules', '.git', 'dist', '.veritas'].includes(entry.name))
+          queue.push(path.join(current, entry.name));
+      } else if (test(entry.name, current)) return true;
+    }
+  }
+
+  return false;
+}
+
 /** Inspect a project without running any of its code. */
 export function detectProject(root: string): ProjectInfo {
   const pkg = readPackageJson(root);
@@ -95,6 +170,29 @@ export function detectProject(root: string): ProjectInfo {
       ? (pkg.packageManager.split('@')[0] as PackageManager)
       : 'unknown');
   const sourceDir = ['src', 'lib'].find((d) => isDir(path.join(root, d)));
+  // Source of the workspace packages too, so a test that calls a package of the same repository reaches analysed code.
+  const packageSources = workspacePackages(root, pkg).flatMap((dir) => {
+    const sub = ['src', 'lib'].find((d) => isDir(path.join(root, dir, d)));
+
+    return sub ? [`${dir}/${sub}/**/*.${EXTENSIONS}`] : [];
+  });
+  const sourceGlobs =
+    sourceDir || packageSources.length > 0
+      ? [...(sourceDir ? [`${sourceDir}/**/*.${EXTENSIONS}`] : []), ...packageSources]
+      : [`**/*.${EXTENSIONS}`];
+  // Test files named `test.ts` or kept under `__tests__/`, when the project has them, besides `*.test.ts`.
+  const testGlobs = [`**/*.{test,spec}.${EXTENSIONS}`];
+
+  if (hasFileNamed(root, (name) => /^test\.(?:ts|tsx|js|mjs)$/.test(name)))
+    testGlobs.push(`**/test.${EXTENSIONS}`);
+
+  if (
+    hasFileNamed(
+      root,
+      (name, parent) => path.basename(parent) === '__tests__' && /\.(?:ts|tsx|js|mjs)$/.test(name),
+    )
+  )
+    testGlobs.push(`**/__tests__/**/*.${EXTENSIONS}`);
 
   return {
     root,
@@ -108,7 +206,7 @@ export function detectProject(root: string): ProjectInfo {
     },
     git: findUp(root, '.git'),
     plugAndPlay: ['.pnp.cjs', '.pnp.js'].some((f) => findUp(root, f)),
-    sourceGlobs: sourceDir ? [`${sourceDir}/**/*.{ts,tsx,js,mjs}`] : ['**/*.{ts,tsx,js,mjs}'],
-    testGlobs: ['**/*.{test,spec}.{ts,tsx,js,mjs}'],
+    sourceGlobs,
+    testGlobs,
   };
 }
