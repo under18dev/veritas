@@ -315,6 +315,67 @@ export function register(handler: (x: number) => void): void { handlers.push(han
     expect(get('stored, never called').asserted).toBe(false);
   });
 
+  it('links mocks passed in options, wrapped by other calls, or handed over in shared setup', () => {
+    const get = inventory(
+      `import { beforeEach, describe, expect, it, vi } from 'vitest';
+      import { clone, debounce } from '../src/mocks.js';
+      const wrap = (f: () => void) => f;
+      it('options object', () => {
+        const cloneObject = vi.fn((o: object) => o);
+        clone({ a: 1 }, { cloneObject });
+        expect(cloneObject).toHaveBeenCalledTimes(1);
+      });
+      it('wrapped', () => {
+        const onDone = vi.fn().mockReturnValue(1);
+        debounce({}, wrap(onDone))();
+        expect(onDone).toHaveBeenCalled();
+      });
+      it('not given to project code', () => {
+        const unused = vi.fn();
+        wrap(unused)();
+        clone({}, {});
+        expect(unused).toHaveBeenCalled();
+      });
+      describe('debounced', () => {
+        let func: () => void;
+        const mockFunc = vi.fn();
+        beforeEach(() => { func = debounce({ delay: 1 }, mockFunc); });
+        it('hook', () => { func(); expect(mockFunc).toHaveBeenCalledTimes(1); });
+      });
+      const other = vi.fn();
+      describe('elsewhere', () => {
+        it('mock handed over only in another describe', () => {
+          clone({}, {});
+          expect(other).toHaveBeenCalled();
+        });
+        it('mock handed over only in another test', () => {
+          clone({}, {});
+          expect(other).toHaveBeenCalled();
+        });
+      });
+      describe('sibling', () => {
+        beforeEach(() => { debounce({}, other); });
+      });
+      it('other test passes it', () => { debounce({}, other); });
+    `,
+      {
+        'src/mocks.ts': `
+export function clone<T>(value: T, options: { cloneObject?: (o: object) => unknown }): T {
+  options.cloneObject?.(value as object);
+  return value;
+}
+export function debounce(options: { delay?: number }, f: () => void): () => void { return () => f(); }
+`,
+      },
+    );
+    expect(get('options object').asserted).toBe(true);
+    expect(get('wrapped').asserted).toBe(true);
+    expect(get('hook').asserted).toBe(true);
+    expect(get('not given to project code').asserted).toBe(false);
+    expect(get('mock handed over only in another describe').asserted).toBe(false);
+    expect(get('mock handed over only in another test').asserted).toBe(false);
+  });
+
   it('links counters a callback increments and locals that store project results', () => {
     const extra = {
       'src/fns.ts': `export function each(items: number[], cb: () => void) { for (const _ of items) cb(); }

@@ -280,7 +280,27 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
       if (declaration.initializer) expressions.push(declaration.initializer);
       else expressions.push(...assignmentsTo(symbol, source, checker));
     }
-    const sources = sourcesOf(expressions);
+    let sources = sourcesOf(expressions);
+    const declaration = symbol.valueDeclaration;
+
+    // A mock made outside the body (`const onChange = vi.fn()`) and handed to project code in shared setup
+    // (`beforeEach(() => { func = debounce(opts, onChange); })`) records what that call does with it.
+    if (
+      sources.length === 0 &&
+      declaration &&
+      ts.isVariableDeclaration(declaration) &&
+      declaration.getSourceFile() === source &&
+      declaration.initializer &&
+      isMockCreation(declaration.initializer, checker)
+    )
+      sources = descendants(source).filter(
+        (node): node is Invocation =>
+          isInvocation(node) &&
+          !contains(body, node) &&
+          runsBefore(node, body) &&
+          mocksPassed(node, checker).includes(declaration) &&
+          record(node),
+      );
 
     if (sources.length > 0) localCalls.set(symbol, sources);
   };
@@ -373,6 +393,11 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
     }
 
     for (const callback of callbacks) bind(writtenOuterIdentifiers(callback, checker), [call], true);
+
+    // A mock records how it is called wherever it sits in the arguments: in an options object
+    // (`cloneDeep(src, { cloneObject })`) or wrapped by another call (`run(wrap(onDone))`).
+    for (const declaration of mocksPassed(call, checker))
+      if (declaration.getSourceFile() === source) bind(bindingIdentifiers(declaration.name), [call], true);
 
     // `mapKeys(obj, (key) => { expect(key).toBe('a'); })` checks what mapKeys passes to the callback.
     for (const callback of called)
@@ -762,6 +787,76 @@ function handedOver(fn: ts.Node, value: ts.Node): boolean {
 
     // Not inside another function's body either: only the outermost functions are handed over.
     if (isFunctionLike(parent) && parent !== fn) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Whether an expression creates a Vitest mock: `vi.fn(...)` or `vi.spyOn(...)`, possibly configured further
+ * (`vi.fn().mockReturnValue(1)`).
+ */
+function isMockCreation(expression: ts.Expression, checker: ts.TypeChecker): boolean {
+  let current = skipParens(expression);
+
+  while (ts.isCallExpression(current)) {
+    const api = viCall(current, checker);
+
+    if (api === 'fn' || api === 'spyOn') return true;
+
+    if (!ts.isPropertyAccessExpression(current.expression)) return false;
+    current = skipParens(current.expression.expression);
+  }
+
+  return false;
+}
+
+/** The local variables holding a Vitest mock that are named anywhere in an invocation's arguments. */
+function mocksPassed(call: Invocation, checker: ts.TypeChecker): ts.VariableDeclaration[] {
+  const found = new Set<ts.VariableDeclaration>();
+
+  for (const argument of argumentsOf(call))
+    for (const item of [argument, ...descendants(argument)]) {
+      if (!ts.isIdentifier(item)) continue;
+      // In `{ cloneObject }` the name is the property; the variable is its value.
+      const symbol =
+        ts.isShorthandPropertyAssignment(item.parent) && item.parent.name === item
+          ? checker.getShorthandAssignmentValueSymbol(item.parent)
+          : checker.getSymbolAtLocation(item);
+      const declaration = symbol?.valueDeclaration;
+
+      if (
+        declaration &&
+        ts.isVariableDeclaration(declaration) &&
+        declaration.initializer &&
+        isMockCreation(declaration.initializer, checker)
+      )
+        found.add(declaration);
+    }
+
+  return [...found];
+}
+
+/**
+ * Whether code outside a test body runs before it as shared setup: at module or describe level, or in a
+ * `beforeEach`/`beforeAll` hook, of describes that enclose the body. Code in another test, in an unrelated
+ * describe or in a function that is only defined there does not.
+ */
+function runsBefore(node: ts.Node, body: ts.Node): boolean {
+  for (let current = node.parent; current; current = current.parent) {
+    if (!isFunctionLike(current)) continue;
+    const call = current.parent;
+
+    if (!call || !ts.isCallExpression(call)) return false;
+    const suite = describeRegistration(call);
+
+    if (suite?.callback === current) {
+      if (!contains(current, body)) return false;
+      continue;
+    }
+    const hook = ts.isIdentifier(call.expression) ? call.expression.text : undefined;
+
+    if (hook !== 'beforeEach' && hook !== 'beforeAll') return false;
   }
 
   return true;
