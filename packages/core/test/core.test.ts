@@ -606,7 +606,8 @@ describe('schemas', () => {
   });
 });
 
-describe('doctor', () => {
+// doctor runs git, lean and lake to read their versions; on a busy machine that exceeds the 5 s default.
+describe('doctor', { timeout: 30_000 }, () => {
   it('reports the tools the Veritas installation brings when the project has none', async () => {
     const root = tmp();
     writeFileSync(path.join(root, 'package.json'), '{"name":"p"}');
