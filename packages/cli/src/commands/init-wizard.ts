@@ -56,6 +56,11 @@ export interface WizardEnvironment {
    * script runs neither or both); the wizard then asks. Absent or empty when detection decided.
    */
   ambiguousTestRunners?: { name: TestFramework; label: string }[];
+  /**
+   * The test globs detection proposes for a runner (`__tests__/` files count only when they use it), so a runner
+   * picked here gets its own instead of those proposed for the default.
+   */
+  testGlobsFor?(framework: TestFramework): string[];
 }
 
 /** Work the user agreed to, done only after they confirm writing the configuration. */
@@ -117,7 +122,11 @@ export async function runInitWizard(
       runners.map((runner) => runner.label),
       initial,
     );
-    config.analysis.testFramework = runners[picked]?.name ?? config.analysis.testFramework;
+    const chosen = runners[picked]?.name ?? config.analysis.testFramework;
+
+    if (chosen !== config.analysis.testFramework && env.testGlobsFor)
+      config.analysis.testInclude = env.testGlobsFor(chosen);
+    config.analysis.testFramework = chosen;
   }
 
   // LLM provider.

@@ -8,7 +8,7 @@ import {
   llmAvailability,
   resolveCommand,
   resolvePackageVersion,
-  type VeritasConfig,
+  VeritasConfig,
   VeritasError,
 } from '@under18dev/veritas-core';
 import {
@@ -200,6 +200,9 @@ export async function initCommand(
           projectHasMutator: resolvePackageVersion(opts.root, '@mizchi/mutator') !== null,
           mutatorVersion: bundledTools()['@mizchi/mutator'] ?? null,
           ambiguousTestRunners: preview.testRunner.ambiguous ? ambiguousRunners(opts.root) : [],
+          testGlobsFor: (framework) =>
+            detectProject(opts.root, VeritasConfig.parse({ analysis: { testFramework: framework } }))
+              .testGlobs,
         };
         ({ config, actions } = await runInitWizard(preview.config, env, prompter));
         asked.testRunner = (env.ambiguousTestRunners?.length ?? 0) > 1;
