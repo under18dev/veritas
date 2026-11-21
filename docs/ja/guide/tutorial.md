@@ -161,7 +161,7 @@ succeeded   map
 succeeded   mutate
             mutator 0.4.5: succeeded
             counts: {"killed":16,"survived":1}
-            mutation.mode is "diff" but no --since ref was given: all mutants in scope were run
+            mutation.mode is "diff", but this run had no --since ref, so every mutant in scope was run; pass --since <ref> (for example --since origin/main) to mutate only the code changed since that ref
 succeeded   assess
             assessments: {"weak_or_incomplete":2,"meaningful_with_evidence":2,"tautological_or_disconnected":1}; 3 finding(s)
 succeeded   report

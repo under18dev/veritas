@@ -268,7 +268,9 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   }
 
   if (options.config.mutation.mode === 'diff' && options.since === undefined) {
-    warnings.push('mutation.mode is "diff" but no --since ref was given: all mutants in scope were run');
+    warnings.push(
+      'mutation.mode is "diff", but this run had no --since ref, so every mutant in scope was run; pass --since <ref> (for example --since origin/main) to mutate only the code changed since that ref',
+    );
   }
 
   mkdirSync(reportDir, { recursive: true });
