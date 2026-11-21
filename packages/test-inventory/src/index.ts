@@ -5803,7 +5803,24 @@ function projectReach(symbol: string, ctx: Ctx): Reach {
     : undefined;
 
   if (exported && exported.flags & ts.SymbolFlags.Alias) exported = ctx.checker.getAliasedSymbol(exported);
-  const reach = codeReach(exported?.declarations ?? [], ctx, true);
+  const name = symbol.slice(index + 1);
+  // A symbol id names an export, a default export by its local name, or a member (`storeApi.saveLanguage` is
+  // `storeApi.ts#saveLanguage`): find the declarations of that name in the file.
+  const declarations =
+    exported?.declarations ??
+    (sourceFile ? descendants(sourceFile) : []).filter(
+      (node) =>
+        (ts.isFunctionDeclaration(node) ||
+          ts.isClassDeclaration(node) ||
+          ts.isVariableDeclaration(node) ||
+          ts.isMethodDeclaration(node) ||
+          ts.isPropertyAssignment(node) ||
+          ts.isPropertyDeclaration(node)) &&
+        node.name !== undefined &&
+        ts.isIdentifier(node.name) &&
+        node.name.text === name,
+    );
+  const reach = codeReach(declarations, ctx, true);
   projectReachCache.set(symbol, reach);
 
   return reach;

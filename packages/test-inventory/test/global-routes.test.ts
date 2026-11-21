@@ -246,6 +246,32 @@ describe('links through globals and mocked modules', () => {
     expect(byName('factory, member not handed over')).toBe('none');
   });
 
+  it('follows a method of an exported object and a default export', () => {
+    const byName = asserted(
+      {
+        'src/api.ts': 'export function send(x: string): void { void x; }\n',
+        'src/client.ts':
+          "import { send } from './api.js';\nexport const client = { log(m: string): void { send(m); }, idle(): number { return 1; } };\n",
+        'src/panel.ts':
+          "import { send } from './api.js';\nexport default function panel(): void { send('open'); }\n",
+      },
+      `
+        import { expect, it, vi } from 'vitest';
+        import { send } from '../src/api.js';
+        import { client } from '../src/client.js';
+        import panel from '../src/panel.js';
+        vi.mock('../src/api.js');
+        it('method', () => { client.log('m'); expect(send).toHaveBeenCalledWith('m'); });
+        it('other method', () => { client.idle(); expect(send).not.toHaveBeenCalled(); });
+        it('default export', () => { panel(); expect(send).toHaveBeenCalledWith('open'); });
+      `,
+    );
+
+    expect(byName('method')).toBe('reachable');
+    expect(byName('other method')).toBe('none');
+    expect(byName('default export')).toBe('reachable');
+  });
+
   it('records no route where project code reachable from the call does not use the global, API or module', () => {
     const byName = asserted(
       {
