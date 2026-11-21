@@ -360,3 +360,30 @@ describe('rendered components', () => {
     expect(byName('unresolved').suspicions).not.toContain('target_not_called');
   });
 });
+
+describe('large component test files', () => {
+  it('analyses many tests sharing a mock of the file without slowing down per test', () => {
+    let source = `${header}
+      const shared = { onSave: vi.fn(), onClose: vi.fn() };
+      let onSave: ReturnType<typeof vi.fn>;
+      beforeEach(() => { onSave = vi.fn(); });
+    `;
+
+    for (let index = 0; index < 400; index++)
+      source += `
+      it('t${index}', () => {
+        const props = { onSave: vi.fn(), title: 'x${index}' };
+        render(<Dialog {...props} onClose={shared.onClose} onSave={asMock<() => void>(onSave)} />);
+        expect(screen.getByText('x${index}')).toBeTruthy();
+        expect(props.onSave).toHaveBeenCalled();
+        expect(onSave).not.toHaveBeenCalled();
+      });
+    `;
+    const started = Date.now();
+    const byName = inventory(source);
+
+    expect(byName('t399').asserted).toBe(true);
+    // Work per test that grew with the size of the file made this take minutes; it takes seconds.
+    expect(Date.now() - started).toBeLessThan(45_000);
+  }, 120_000);
+});

@@ -380,13 +380,8 @@ function analyzeBody(
       declaration.getSourceFile() === source &&
       holdsMock(declaration, checker)
     )
-      sources = descendants(source).filter(
-        (node): node is Invocation =>
-          isInvocation(node) &&
-          !contains(body, node) &&
-          runsBefore(node, body) &&
-          mocksPassed(node, checker).includes(declaration) &&
-          record(node),
+      sources = invocationsGiven(declaration, checker).filter(
+        (node) => !contains(body, node) && runsBefore(node, body) && record(node),
       );
 
     if (sources.length > 0) localCalls.set(symbol, sources);
@@ -1372,21 +1367,54 @@ function isMockCreation(expression: ts.Expression, checker: ts.TypeChecker): boo
   return false;
 }
 
-/** The local variables holding a Vitest mock that are named anywhere in an invocation's arguments. */
-function mocksPassed(call: Invocation, checker: ts.TypeChecker): ts.VariableDeclaration[] {
-  return mockHoldersPassed(call, checker).mocks;
-}
-
 /**
  * The local variables an invocation is given that hold Vitest mocks: mocks themselves, named anywhere in its
  * arguments, and objects holding mocks (`const props = { onSave: vi.fn() }; render(<Dialog {...props} />)`). What a
  * local function called there returns (`render(<Tabs {...defaultProps()} />)`, `useShortcuts(params())`) and what an
  * object it is given holds (`editorRef = { current: mockEditor }`) are followed.
  */
-function mockHoldersPassed(
-  call: Invocation,
-  checker: ts.TypeChecker,
-): { mocks: ts.VariableDeclaration[]; containers: ts.VariableDeclaration[] } {
+function mockHoldersPassed(call: Invocation, checker: ts.TypeChecker): MockHolders {
+  const cached = mockHoldersCache.get(call);
+
+  if (cached) return cached;
+  const result = findMockHolders(call, checker);
+  mockHoldersCache.set(call, result);
+
+  return result;
+}
+
+/** What `mockHoldersPassed` finds; a member path names the property of a container that was passed. */
+interface MockHolders {
+  mocks: ts.VariableDeclaration[];
+  containers: ts.VariableDeclaration[];
+}
+
+const mockHoldersCache = new WeakMap<Invocation, MockHolders>();
+const invocationsGivenCache = new WeakMap<ts.SourceFile, Map<ts.VariableDeclaration, Invocation[]>>();
+
+/**
+ * The invocations of a file's shared setup (module or describe level, `beforeEach`/`beforeAll`) that are given a mock
+ * variable (see `mockHoldersPassed`), worked out once per file.
+ */
+function invocationsGiven(declaration: ts.VariableDeclaration, checker: ts.TypeChecker): Invocation[] {
+  const source = declaration.getSourceFile();
+  let given = invocationsGivenCache.get(source);
+
+  if (!given) {
+    given = new Map();
+
+    // Only shared setup can run before a test body (see `runsBefore`); calls inside tests are left out here.
+    for (const node of descendants(source))
+      if (isInvocation(node) && runsBefore(node, undefined))
+        for (const mock of mockHoldersPassed(node, checker).mocks)
+          given.set(mock, [...(given.get(mock) ?? []), node]);
+    invocationsGivenCache.set(source, given);
+  }
+
+  return given.get(declaration) ?? [];
+}
+
+function findMockHolders(call: Invocation, checker: ts.TypeChecker): MockHolders {
   const mocks = new Set<ts.VariableDeclaration>();
   const containers = new Set<ts.VariableDeclaration>();
   const followed = new Set<ts.Node>();
@@ -1642,7 +1670,7 @@ function spiesOn(source: ts.SourceFile, checker: ts.TypeChecker): Map<ts.Symbol,
  * `beforeEach`/`beforeAll` hook, of describes that enclose the body. Code in another test, in an unrelated
  * describe or in a function that is only defined there does not.
  */
-function runsBefore(node: ts.Node, body: ts.Node): boolean {
+function runsBefore(node: ts.Node, body: ts.Node | undefined): boolean {
   for (let current = node.parent; current; current = current.parent) {
     if (!isFunctionLike(current)) continue;
     const call = current.parent;
@@ -1651,7 +1679,8 @@ function runsBefore(node: ts.Node, body: ts.Node): boolean {
     const suite = describeRegistration(call);
 
     if (suite?.callback === current) {
-      if (!contains(current, body)) return false;
+      // Without a body: whether the code is shared setup of some describe at all.
+      if (body && !contains(current, body)) return false;
       continue;
     }
     const hook = ts.isIdentifier(call.expression) ? call.expression.text : undefined;
@@ -1735,16 +1764,31 @@ function returnedExpressions(body: ts.Block): ts.Expression[] {
 
 /** Right-hand sides of `name = value` anywhere in the file, for a `let` set in a hook. */
 function assignmentsTo(symbol: ts.Symbol, source: ts.SourceFile, checker: ts.TypeChecker): ts.Expression[] {
-  return descendants(source)
-    .filter(
-      (node): node is ts.BinaryExpression =>
-        ts.isBinaryExpression(node) &&
-        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-        ts.isIdentifier(node.left) &&
-        checker.getSymbolAtLocation(node.left) === symbol,
-    )
-    .map((node) => node.right);
+  let assignments = assignmentsCache.get(source);
+
+  if (!assignments) {
+    // Every `name = value` of the file at once: looking them up per variable would walk the file each time.
+    const found = new Map<ts.Symbol, ts.Expression[]>();
+
+    for (const node of descendants(source)) {
+      if (
+        !ts.isBinaryExpression(node) ||
+        node.operatorToken.kind !== ts.SyntaxKind.EqualsToken ||
+        !ts.isIdentifier(node.left)
+      )
+        continue;
+      const target = checker.getSymbolAtLocation(node.left);
+
+      if (target) found.set(target, [...(found.get(target) ?? []), node.right]);
+    }
+    assignments = found;
+    assignmentsCache.set(source, assignments);
+  }
+
+  return assignments.get(symbol) ?? [];
 }
+
+const assignmentsCache = new WeakMap<ts.SourceFile, Map<ts.Symbol, ts.Expression[]>>();
 
 function visitTests(
   source: ts.SourceFile,
