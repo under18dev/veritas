@@ -434,7 +434,12 @@ describe('changes since a git ref', () => {
       'utf8',
     );
     const files = JSON.parse(/const files = (\[.*\]);/.exec(config)?.[1] ?? '[]') as string[];
-    expect(files.map((f) => path.basename(f))).toEqual(['other.test.ts']);
+    const names = files.map((f) => path.basename(f));
+    expect(names).toContain('other.test.ts');
+    // The tests of the unchanged src/pricing.ts are left out. (A test that imports no project file is kept, since
+    // what it runs is not known.)
+    expect(names).not.toContain('discount-weak.test.ts');
+    expect(names).not.toContain('shipping-boundary.test.ts');
   });
 
   it('marks properties of changed code with the change and refuses refs that look like options', () => {
