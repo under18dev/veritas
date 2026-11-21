@@ -199,6 +199,11 @@ export interface TestRunnerMutation {
    * null when it is not.
    */
   readonly experimental: string | null;
+  /**
+   * mutator may prefix a test name with a `[project] ` label for this runner (Vitest with several projects), which
+   * is dropped when its names are matched to inventoried tests; false when it never does (Jest).
+   */
+  readonly projectPrefix: boolean;
   /** The mutator option that passes the config `writeConfig` writes (`--config`, `--jest-config`). */
   readonly configFlag: string;
   /**

@@ -345,6 +345,29 @@ describe('mutator test names of a runner that joins titles with a space (Jest)',
     });
   });
 
+  it('keeps a leading bracketed label as part of a Jest title, and tries a Vitest name as written first', () => {
+    const labelled = entry([], '[slow] behavior');
+    const plain = entry([], 'behavior');
+    const both = testIdsByFullName([labelled, plain], ' ');
+
+    expect(mutatorTestId('test/s.test.ts#[slow] behavior', ' ', both, false)).toBe(labelled.id);
+    expect(
+      mutatorTestId('test/s.test.ts#[slow] behavior', ' ', testIdsByFullName([plain], ' '), false),
+    ).not.toBe(plain.id);
+    // Vitest: the literal title wins; a project prefix is dropped only when nothing has the name as written.
+    expect(
+      mutatorTestId('test/s.test.ts#[slow] behavior', ' > ', testIdsByFullName([labelled, plain], ' > ')),
+    ).toBe(labelled.id);
+    expect(mutatorTestId('test/s.test.ts#[unit] behavior', ' > ', testIdsByFullName([plain], ' > '))).toBe(
+      plain.id,
+    );
+    expect(mutatorTestRef('test/s.test.ts#[slow] behavior', ' ', false)).toEqual({
+      file: 'test/s.test.ts',
+      suitePath: ['[slow]'],
+      name: 'behavior',
+    });
+  });
+
   it('imports killedBy with the runner separator and the inventoried ids', () => {
     const [m] = importMutationReport(
       report([

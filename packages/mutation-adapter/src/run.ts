@@ -531,6 +531,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       source: 'mutator',
       childProcessKeys,
       fullNameSeparator: runner.fullNameSeparator,
+      projectPrefix: runner.mutation.projectPrefix,
       ...(options.tests === undefined
         ? {}
         : { testIds: testIdsByFullName(options.tests, runner.fullNameSeparator) }),

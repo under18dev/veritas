@@ -86,6 +86,7 @@ export const vitestTestRunner: TestRunnerProvider = {
     minMajor: MUTATOR_MIN_VITEST_MAJOR,
     declaredMajor: MUTATOR_DECLARED_VITEST_MAJOR,
     experimental: null,
+    projectPrefix: true,
     configFlag: '--config',
     unsupportedReason: () => null,
     bundledMutatorDirs(mutatorBin) {

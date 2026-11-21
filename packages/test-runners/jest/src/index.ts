@@ -131,6 +131,8 @@ export const jestTestRunner: TestRunnerProvider = {
     minMajor: MUTATOR_MIN_JEST_MAJOR,
     declaredMajor: MUTATOR_DECLARED_JEST_MAJOR,
     experimental: JEST_MUTATION_EXPERIMENTAL,
+    // mutator does not support Jest projects, so a leading `[label]` is part of the title.
+    projectPrefix: false,
     configFlag: '--jest-config',
     unsupportedReason: mutationUnsupportedReason,
     // Jest loads mutator's setup files and transformer by absolute path; nothing has to be allowed.
