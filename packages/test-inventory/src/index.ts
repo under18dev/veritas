@@ -1097,6 +1097,8 @@ function assertionReach(
   };
   // Local functions the compared values call (`const read = () => screen.getByText('x'); expect(read())`).
   const executed = new Set<ts.Node>();
+  // Local functions whose body is followed from a call in the compared values.
+  const positioned = new Set<ts.Node>();
   const visit = (node: ts.Node, depth: number, position: number) => {
     for (const item of [node, ...descendants(node)]) {
       if (ts.isIdentifier(item) && ts.isCallExpression(item.parent) && item.parent.expression === item) {
@@ -1104,15 +1106,20 @@ function assertionReach(
 
         if (fn) executed.add(fn);
 
-        // A function declaration is not a variable whose initializer is followed: its body runs at the assertion.
-        if (fn && ts.isFunctionDeclaration(fn) && fn.body && !executed.has(fn.body) && depth < 20) {
-          executed.add(fn.body);
-          visit(fn.body, depth + 1, assertion.getEnd());
+        // A called local function reads the page where it is called (`const before = query(); render(…)`): its body
+        // is followed from that call, not from where it is written.
+        if (fn && isFunctionLike(fn) && fn.body && !positioned.has(fn) && depth < 20) {
+          positioned.add(fn);
+          const owner = item === node ? undefined : enclosingFunction(item, node);
+          visit(fn.body, depth + 1, owner ? assertion.getEnd() : position);
         }
       }
 
       if ((ts.isCallExpression(item) && isDocumentQuery(item, checker)) || isDocumentRead(item, checker)) {
         const fn = item === node ? undefined : enclosingFunction(item, node);
+
+        // Followed from the call that runs it, with that call's position.
+        if (fn && positioned.has(fn)) continue;
 
         // A query in a function reads the page only when that function runs (`expect(() => screen.getByText('x'))`
         // compares a function and runs nothing).
@@ -1429,6 +1436,19 @@ function writeRuns(node: ts.Node, body: ts.Node, checker: ts.TypeChecker): boole
   }
 
   return true;
+}
+
+/** The test callback (or other function given to a call) a node sits in, where events for it would be fired. */
+function eventScope(node: ts.Node): ts.Node {
+  for (let current = node.parent; current; current = current.parent)
+    if (
+      isFunctionLike(current) &&
+      ts.isCallExpression(current.parent) &&
+      current.parent.arguments.includes(current as ts.Expression)
+    )
+      return current;
+
+  return node.getSourceFile();
 }
 
 /** Whether a test body makes events fire on the page. */
@@ -2286,6 +2306,9 @@ function mountedExpression(
   ) {
     const index = parent.arguments?.indexOf(current as ts.Expression) ?? -1;
 
+    // The mounting call must run: not in a function nothing calls (`function unused() { render(<Dialog />); }`).
+    if (!writeRuns(parent, parent.getSourceFile(), ctx.checker)) return undefined;
+
     // A helper or project function with a body (even one named `mount`): mounted only where it hands the element to
     // a renderer. Otherwise a renderer recognized by name and, for ambiguous names, by the package it comes from.
     return hasFunctionBody(parent, ctx.checker)
@@ -2873,7 +2896,18 @@ function handedValues(
 
     if (ts.isJsxSpreadAttribute(attribute)) {
       const replaced = new Set(later.map(nameOf).filter((name): name is string => name !== undefined));
-      values.push({ expression: attribute.expression, except: replaced });
+      let unknown = false;
+
+      // A later spread replaces the members it supplies; one whose keys are not known may replace any.
+      for (const other of later)
+        if (ts.isJsxSpreadAttribute(other)) {
+          const keys = spreadKeys(other.expression, checker);
+
+          if (keys) for (const key of keys) replaced.add(key);
+          else unknown = true;
+        }
+
+      if (!unknown) values.push({ expression: attribute.expression, except: replaced });
       continue;
     }
     const name = nameOf(attribute);
@@ -2958,6 +2992,11 @@ function objectKeys(value: ts.Expression): Set<string> | undefined {
 
   for (const property of value.properties) {
     if (ts.isSpreadAssignment(property)) return undefined;
+
+    if (ts.isShorthandPropertyAssignment(property)) {
+      keys.add(property.name.text);
+      continue;
+    }
 
     if (property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)))
       keys.add(property.name.text);
@@ -3789,8 +3828,26 @@ function passedProjectFunctions(node: Invocation, ctx: Ctx, projectReceives: boo
     return [value];
   };
 
+  // `<button onClick={handleClick}>` registers the handler; it runs only when an event fires.
+  const registered = new Set<ts.Node>();
+
+  if (isJsxInvocation(node) && !projectReceives && helperBody(node, ctx) === undefined)
+    for (const attribute of node.attributes.properties)
+      if (
+        ts.isJsxAttribute(attribute) &&
+        ts.isIdentifier(attribute.name) &&
+        /^on[A-Z]/.test(attribute.name.text) &&
+        attribute.initializer &&
+        ts.isJsxExpression(attribute.initializer) &&
+        attribute.initializer.expression &&
+        !firesEvents(eventScope(node))
+      )
+        registered.add(skipParens(attribute.initializer.expression));
+
   for (const [index, argument] of argumentsOf(node).entries())
     for (const value of given(argument)) {
+      if (registered.has(value)) continue;
+
       if (!ts.isIdentifier(value) && !ts.isPropertyAccessExpression(value)) continue;
 
       if (ctx.checker.getTypeAtLocation(value).getCallSignatures().length === 0) continue;

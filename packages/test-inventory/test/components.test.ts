@@ -1337,6 +1337,99 @@ export default Dialog;
   });
 });
 
+describe('mounts that run, helper positions, spread overrides and event handlers', () => {
+  it('counts a render only when the function holding it runs', () => {
+    const byName = inventory(`${header}
+      it('render in an uncalled function', () => {
+        function unused() { render(<Dialog open title="Hi" />); }
+        expect(document.body.textContent).toBe('');
+      });
+      it('render in a called function', () => {
+        function show() { render(<Dialog open title="Hi" />); }
+        show();
+        expect(document.body.textContent).toContain('Hi');
+      });
+    `);
+
+    expect(byName('render in an uncalled function')).toMatchObject({ symbols: [], asserted: false });
+    expect(byName('render in a called function')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: true,
+    });
+  });
+
+  it('places a query helper read where the helper is called', () => {
+    const byName = inventory(`${header}
+      function query() { return screen.queryByText('Hi'); }
+      const read = () => screen.queryByText('Hi');
+      it('declared helper called before the render', () => {
+        const before = query();
+        render(<Dialog open title="Hi" />);
+        expect(before).toBeNull();
+      });
+      it('arrow helper called before the render', () => {
+        const before = read();
+        render(<Dialog open title="Hi" />);
+        expect(before).toBeNull();
+      });
+      it('helper called after the render', () => {
+        render(<Dialog open title="Hi" />);
+        const after = query();
+        expect(after).not.toBeNull();
+      });
+    `);
+
+    expect(byName('declared helper called before the render').asserted).toBe(false);
+    expect(byName('arrow helper called before the render').asserted).toBe(false);
+    expect(byName('helper called after the render').asserted).toBe(true);
+  });
+
+  it('lets a later spread replace members of an earlier one', () => {
+    const byName = inventory(`${header}
+      it('later literal spread', () => {
+        const props = { onSave: vi.fn() };
+        render(<Dialog {...props} {...{ onSave: undefined }} />);
+        expect(props.onSave).not.toHaveBeenCalled();
+      });
+      it('later spread of an unknown value', () => {
+        const props = { onSave: vi.fn() };
+        render(<Dialog {...props} {...Object.create(null)} />);
+        expect(props.onSave).not.toHaveBeenCalled();
+      });
+      it('later spread without the member', () => {
+        const props = { onSave: vi.fn() };
+        render(<Dialog {...props} {...{ title: 'Hi' }} />);
+        expect(props.onSave).not.toHaveBeenCalled();
+      });
+    `);
+
+    expect(byName('later literal spread').asserted).toBe(false);
+    expect(byName('later spread of an unknown value').asserted).toBe(false);
+    expect(byName('later spread without the member').asserted).toBe(true);
+  });
+
+  it('counts an event handler on a DOM element as run only when the test fires events', () => {
+    const byName = inventory(
+      `${header}
+      import { handleClick } from '../src/handlers';
+      it('handler registered', () => {
+        const { getByText } = render(<button onClick={handleClick}>Hi</button>);
+        expect(getByText('Hi')).toBeTruthy();
+      });
+      it('handler fired', () => {
+        const { getByText } = render(<button onClick={handleClick}>Hi</button>);
+        fireEvent.click(getByText('Hi'));
+        expect(getByText('Hi')).toBeTruthy();
+      });
+    `,
+      { 'src/handlers.ts': 'export function handleClick() { return 1; }\n' },
+    );
+
+    expect(byName('handler registered')).toMatchObject({ symbols: [], asserted: false });
+    expect(byName('handler fired').symbols).toEqual(['src/handlers.ts#handleClick']);
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}
