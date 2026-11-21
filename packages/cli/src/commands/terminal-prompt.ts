@@ -15,8 +15,38 @@ interface Key {
   ctrl?: boolean;
 }
 
-const color = !process.env.NO_COLOR;
-const paint = (code: string, text: string) => (color ? `\x1b[${code}m${text}\x1b[0m` : text);
+/** Columns a character takes: two for wide East Asian characters and emoji, and for the marks drawn here. */
+function charWidth(code: number): number {
+  return (code >= 0x1100 && code <= 0x115f) ||
+    (code >= 0x2e80 && code <= 0xa4cf) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe30 && code <= 0xfe4f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1faff) ||
+    (code >= 0x20000 && code <= 0x3fffd) ||
+    // Ambiguous width: two columns in some East Asian terminals, so counted as two to stay on one line.
+    code === 0x276f
+    ? 2
+    : 1;
+}
+
+/** `text` cut to fit in `columns`, so a redrawn line never wraps and the cursor math stays exact. */
+export function fitColumns(text: string, columns: number): string {
+  let width = 0;
+  let out = '';
+
+  for (const char of text) {
+    const w = charWidth(char.codePointAt(0) ?? 0);
+
+    if (width + w > columns) return `${out.slice(0, -1)}…`;
+    width += w;
+    out += char;
+  }
+
+  return out;
+}
 
 /**
  * Questions on the terminal: choices and yes/no questions are picked with the arrow keys (or j/k, a number, y/n)
@@ -43,14 +73,10 @@ export function terminalPrompter(
   const typed = withTypedChoices({ ask, say: log });
 
   if (!input.isTTY || !output.isTTY) return typed;
+  const color = !process.env.NO_COLOR && (output.hasColors?.() ?? true);
+  const paint = (code: string, text: string) => (color ? `\x1b[${code}m${text}\x1b[0m` : text);
 
-  /** Terminal rows `text` takes, counting lines the terminal wraps. */
-  const rowsOf = (text: string) => {
-    const columns = output.columns || 80;
-
-    return text.split('\n').reduce((rows, line) => rows + Math.max(1, Math.ceil(line.length / columns)), 0);
-  };
-
+  // The question is written once and may wrap; only the choice lines below it are redrawn, each cut to the width.
   const pick = (
     question: string,
     choices: string[],
@@ -61,33 +87,31 @@ export function terminalPrompter(
       const wasRaw = input.isRaw;
       let index = initial;
       let drawn = 0;
-      const hint = paint('2', '(↑/↓ to move, Enter to choose)');
 
       const draw = () => {
-        const plain = [`? ${question} (↑/↓ to move, Enter to choose)`, ...choices.map((c) => `  ${c}`)];
-        const lines = [
-          `${paint('36', '?')} ${paint('1', question)} ${hint}`,
-          ...choices.map((c, i) => (i === index ? paint('36', `❯ ${c}`) : `  ${c}`)),
-        ];
+        const width = Math.max(10, (output.columns || 80) - 1);
+        const lines = choices.map((c, i) =>
+          i === index ? paint('36', fitColumns(`❯ ${c}`, width)) : fitColumns(`  ${c}`, width),
+        );
         output.write(`${drawn ? `\x1b[${drawn}A\r\x1b[0J` : ''}${lines.join('\n')}\n`);
-        drawn = rowsOf(plain.join('\n'));
+        drawn = lines.length;
       };
 
-      const finish = () => {
+      const finish = (result: string) => {
         input.off('keypress', onKey);
+        input.off('end', onEnd);
         input.setRawMode(wasRaw);
         input.pause();
-        output.write(`\x1b[${drawn}A\r\x1b[0J\x1b[?25h`);
+        output.write(`\x1b[${drawn}A\r\x1b[0J\x1b[?25h${result}\n`);
       };
+      const abort = () => {
+        finish(`  ${paint('31', '✖')} stopped`);
+        reject(new PromptAborted());
+      };
+      const onEnd = () => abort();
 
       const onKey = (text: string | undefined, key: Key | undefined) => {
-        if (key?.ctrl && key.name === 'c') {
-          finish();
-          output.write(`${paint('31', '✖')} ${question}\n`);
-          reject(new PromptAborted());
-
-          return;
-        }
+        if (key?.ctrl && (key.name === 'c' || key.name === 'd')) return abort();
         const shortcut = text ? shortcuts[text.toLowerCase()] : undefined;
         const digit = text && /^[1-9]$/.test(text) ? Number(text) - 1 : -1;
 
@@ -98,10 +122,8 @@ export function terminalPrompter(
         // A shortcut only moves the highlight, so the Enter that follows it does not answer the next question.
         else if (shortcut !== undefined) index = shortcut;
         else if (key?.name === 'return' || key?.name === 'enter') {
-          const chosen = index;
-          finish();
-          output.write(`${paint('32', '✔')} ${question} ${paint('36', choices[chosen] ?? '')}\n`);
-          resolve(chosen);
+          finish(`  ${paint('32', '✔')} ${paint('36', choices[index] ?? '')}`);
+          resolve(index);
 
           return;
         } else return;
@@ -112,7 +134,11 @@ export function terminalPrompter(
       input.setRawMode(true);
       input.resume();
       input.on('keypress', onKey);
-      output.write('\x1b[?25l');
+      // stdin closing (Ctrl+D at the shell level, a closed pipe) stops instead of waiting forever.
+      input.once('end', onEnd);
+      output.write(
+        `${paint('36', '?')} ${paint('1', question)} ${paint('2', '(↑/↓ to move, Enter to choose)')}\n\x1b[?25l`,
+      );
       draw();
     });
 
