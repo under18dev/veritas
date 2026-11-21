@@ -39,13 +39,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
           number=$(jq -r '.number' out/pr.json)
           [[ "$number" =~ ^[0-9]+$ ]] || { echo "invalid pull request number"; exit 1; }
-          # The artifact names the pull request; trust it only when that pull request's head is the measured commit.
-          read -r head_sha base_ref base_sha < <(gh api "repos/$REPO/pulls/$number" --jq '"\(.head.sha) \(.base.ref) \(.base.sha)"')
+          # The artifact names the pull request; trust it only when that pull request's head is the measured commit, on
+          # the repository and branch the run came from (two pull requests can share a commit, not a head branch).
+          read -r head_sha head_repo head_branch base_ref base_sha < <(gh api "repos/$REPO/pulls/$number" \
+            --jq '"\(.head.sha) \(.head.repo.full_name) \(.head.ref) \(.base.ref) \(.base.sha)"')
           [ "$head_sha" = "$RUN_SHA" ] || { echo "the pull request is not at the measured commit; not commenting"; exit 0; }
+          [ "$head_repo" = "$RUN_REPO" ] && [ "$head_branch" = "$RUN_BRANCH" ] \
+            || { echo "the pull request's head is not the branch that was measured; not commenting"; exit 1; }
           node benchmarks/compare.mjs \
             --base out/fixtures-base.json --head out/fixtures-head.json \
             --real-base out/real-base.json --real-head out/real-head.json \
