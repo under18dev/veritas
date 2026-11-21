@@ -3,8 +3,9 @@ import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { PropertyIR } from '@under18dev/veritas-core';
 import { thresholdProperty, translateFunction } from '@under18dev/veritas-formal-core';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
-import { generateVitestFile, runPropertyTest } from '../src/index.js';
+import { generateTestFile, runPropertyTest } from '../src/index.js';
 import { DOMAIN, fixture, REPO } from './helpers.js';
 
 const SOURCE = `export function discount(order: { total: number; vip: boolean }): number {
@@ -128,13 +129,14 @@ describe('property-based tests over records and arrays', () => {
     ];
 
     for (const [file, ir, exportName] of files) {
-      const source = generateVitestFile({
+      const source = generateTestFile({
         propertyId: `P-${exportName}`,
         ir,
         bindings: [{ modelName: exportName, importPath: '../src/order.ts', exportName }],
         seed: 7,
         numRuns: 300,
         experimental: false,
+        templates: vitest.templates,
       });
 
       if (exportName === 'discount')

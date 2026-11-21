@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { vitestTestRunner } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
-import { generateVitestFile } from '../src/index.js';
+import { generateTestFile } from '../src/index.js';
 import { DOMAIN, discountProperty, fixture, REPO } from './helpers.js';
 
 const SEED = 20251119;
@@ -10,13 +11,14 @@ const SEED = 20251119;
 function generated(root: string, file: string, experimental: boolean, importPath: string): string {
   const { ir } = discountProperty(root, file);
 
-  return generateVitestFile({
+  return generateTestFile({
     propertyId: 'P-discount-threshold',
     ir,
     bindings: [{ modelName: 'discountAmount', importPath, exportName: 'discountAmount' }],
     seed: SEED,
     numRuns: 200,
     experimental,
+    templates: vitestTestRunner.templates,
   });
 }
 
@@ -48,7 +50,7 @@ function vitest(root: string, file: string) {
   });
 }
 
-describe('generateVitestFile', () => {
+describe('generateTestFile', () => {
   it('encodes seed, numRuns, domains, fast-check and the non-proof disclaimer', () => {
     const root = fixture();
     const source = generated(root, 'src/pricing.ts', false, '../src/pricing.ts');
@@ -80,7 +82,7 @@ describe('generateVitestFile', () => {
     const root = fixture();
     const { ir } = discountProperty(root, 'src/pricing.ts');
     expect(() =>
-      generateVitestFile({
+      generateTestFile({
         propertyId: 'P',
         ir,
         bindings: [
@@ -89,9 +91,10 @@ describe('generateVitestFile', () => {
         seed: 1,
         numRuns: 1,
         experimental: false,
+        templates: vitestTestRunner.templates,
       }),
     ).toThrow(/not a valid identifier/);
-    const source = generateVitestFile({
+    const source = generateTestFile({
       propertyId: 'P\nprocess.exit(1)',
       ir,
       bindings: [
@@ -100,6 +103,7 @@ describe('generateVitestFile', () => {
       seed: 1,
       numRuns: 1,
       experimental: false,
+      templates: vitestTestRunner.templates,
     });
     expect(source.split('\n').some((l) => l.startsWith('process.exit'))).toBe(false);
   });

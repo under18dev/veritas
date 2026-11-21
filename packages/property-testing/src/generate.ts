@@ -1,7 +1,12 @@
-import { type Expr, type FunctionModel, PropertyIR } from '@under18dev/veritas-core';
+import {
+  type Expr,
+  type FunctionModel,
+  PropertyIR,
+  type TestRunnerTemplates,
+} from '@under18dev/veritas-core';
 import { boundaryValues } from './run.js';
 
-export interface GenerateVitestOptions {
+export interface GenerateTestFileOptions {
   propertyId: string;
   ir: PropertyIR;
   /** `importPath` is written verbatim into the import statement, relative to the generated file. */
@@ -9,6 +14,8 @@ export interface GenerateVitestOptions {
   seed: number;
   numRuns: number;
   experimental: boolean;
+  /** Syntax of the project's test runner. */
+  templates: TestRunnerTemplates;
 }
 
 const IDENT = /^[A-Za-z_$][\w$]*$/;
@@ -69,10 +76,10 @@ const OPS: Record<string, string> = {
 };
 
 /**
- * Self-contained Vitest + fast-check test file (returned as a string, never written) encoding the same
- * property, domains, boundary values, seed and run count as `runPropertyTest`.
+ * Self-contained fast-check test file for the project's test runner (returned as a string, never written) encoding
+ * the same property, domains, boundary values, seed and run count as `runPropertyTest`.
  */
-export function generateVitestFile(options: GenerateVitestOptions): string {
+export function generateTestFile(options: GenerateTestFileOptions): string {
   const ir = PropertyIR.parse(options.ir);
 
   if (!Number.isInteger(options.seed)) throw new Error('seed must be an integer');
@@ -213,7 +220,7 @@ export function generateVitestFile(options: GenerateVitestOptions): string {
       ? ['// EXPERIMENTAL: derived from an inferred specification that has not been accepted.']
       : []),
     "import * as fc from 'fast-check';",
-    "import { describe, it } from 'vitest';",
+    ...options.templates.imports(['describe', 'it']),
     ...imports,
     '',
     HELPERS,
