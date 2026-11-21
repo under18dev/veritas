@@ -468,6 +468,19 @@ describe('existing mutation reports', () => {
     expect(mutation.mutants.map((m) => [m.status, m.relevance])).toEqual([['survived', 'spec_relevant']]);
   });
 
+  it('keeps every --scope given to mutate, not only the last one', () => {
+    const dir = setup('discount-boundary');
+    writeFileSync(path.join(dir, 'reports-mutation.json'), JSON.stringify(strykerReport));
+    const args = ['--import', 'reports-mutation.json', '--scope', 'src/pricing.ts', '--scope', 'test'];
+    const result = runCli(['mutate', ...args, '--json'], dir);
+    expect([0, 4], result.stderr).toContain(result.status);
+    const { runId } = json<RunJson>(result);
+    const run = JSON.parse(readFileSync(path.join(dir, '.veritas/runs', runId, 'run.json'), 'utf8')).data as {
+      scope: { paths: string[] };
+    };
+    expect(run.scope.paths).toEqual(['src/pricing.ts', 'test']);
+  });
+
   it('never treats an empty report, or pending mutants with --since, as complete mutation evidence', () => {
     const dir = setup('discount-boundary');
     writeFileSync(path.join(dir, 'empty.json'), JSON.stringify({ schemaVersion: '2.0', files: {} }));

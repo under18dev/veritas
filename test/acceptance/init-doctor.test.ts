@@ -143,6 +143,7 @@ describe('exit codes and output contract', () => {
       [['discover', '--allow-domain', 'not a domain'], 'CONFIG_INVALID'],
       [['analyze', 'src/no-such-file.ts'], 'PATH_NOT_FOUND'],
       [['mutate', '--scope', 'src/no-such-dir'], 'PATH_NOT_FOUND'],
+      [['mutate', '--scope', 'src', '--scope', 'src/no-such-dir'], 'PATH_NOT_FOUND'],
     ];
 
     for (const [args, code] of cases) {

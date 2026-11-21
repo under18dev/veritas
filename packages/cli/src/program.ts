@@ -23,6 +23,9 @@ import { shouldLaunchTui } from './tui.js';
 
 type Handler = (opts: GlobalOptions & Record<string, unknown>, args: string[]) => Promise<ExitCode>;
 
+// A repeated option adds a value instead of replacing the previous one (Commander keeps only the last).
+const collect = (value: string, previous: string[] = []): string[] => [...previous, value];
+
 /**
  * `writeOut` receives what Commander prints on stdout (help and the version); by default it goes to stdout.
  */
@@ -139,7 +142,7 @@ export function buildProgram(
       .command('mutate')
       .description('run mutation testing and relate mutants to properties')
       .option('--since <ref>', 'mutate only code changed since this git ref')
-      .option('--scope <glob>', 'mutate only files matching this glob')
+      .option('--scope <glob>', 'mutate only files matching this glob (repeatable)', collect)
       .option(
         '--import <file>',
         'normalize an existing mutation-testing-elements report instead of running mutator',
@@ -175,7 +178,7 @@ export function buildProgram(
     program
       .command('prove')
       .description('verify formalized properties with an SMT solver (bounded)')
-      .option('--property <id>', 'verify this property only')
+      .option('--property <id>', 'verify this property only (repeatable)', collect)
       .option('--include-proposed', 'also check properties that are not accepted (experimental)')
       .addOption(
         new Option('--engine <engine>', 'z3 (bounded checks) or lean (kernel-checked proofs)')

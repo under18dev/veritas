@@ -134,15 +134,16 @@ export function mutateCommand(opts: Opts): Promise<ExitCode> {
       'OPTION_CONFLICT',
       '--import reads an existing report; --kill-matrix needs a run',
     );
-  const scope = opts.scope === undefined ? undefined : String(opts.scope);
+  const scope = values(opts.scope);
 
-  if (scope && !/[*?[\]{}]/.test(scope) && !existsSync(path.resolve(opts.root, scope)))
-    throw new VeritasError('user', 'PATH_NOT_FOUND', `no such file or directory in the project: ${scope}`);
+  for (const glob of scope)
+    if (!/[*?[\]{}]/.test(glob) && !existsSync(path.resolve(opts.root, glob)))
+      throw new VeritasError('user', 'PATH_NOT_FOUND', `no such file or directory in the project: ${glob}`);
 
   return stagesCommand(opts, 'mutate', [...COMMAND_STAGES.mutate], {
     offline: true,
     ...(opts.since ? { since: String(opts.since) } : {}),
-    ...(opts.scope ? { scope: [String(opts.scope)] } : {}),
+    ...(scope.length > 0 ? { scope } : {}),
     ...(typeof opts.import === 'string' ? { mutationReport: opts.import } : {}),
     ...(opts.killMatrix ? { killMatrix: true } : {}),
   });
@@ -153,8 +154,15 @@ export function proveCommand(opts: Opts): Promise<ExitCode> {
     offline: true,
     includeProposed: Boolean(opts.includeProposed),
     formalEngine: opts.engine === 'lean' ? 'lean' : 'z3',
-    ...(opts.property ? { propertyIds: [String(opts.property)] } : {}),
+    ...(values(opts.property).length > 0 ? { propertyIds: values(opts.property) } : {}),
   });
+}
+
+/** The values of an option that may be given more than once (one string or a list of them). */
+function values(option: unknown): string[] {
+  if (option === undefined || option === null || option === false) return [];
+
+  return (Array.isArray(option) ? option : [option]).map(String);
 }
 
 export function runCommandCli(opts: Opts): Promise<ExitCode> {
