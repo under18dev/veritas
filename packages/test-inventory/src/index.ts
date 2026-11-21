@@ -845,6 +845,9 @@ function analyzeBody(
     const runsSubject = matcherNames(assertion).some((name) => name.startsWith('toThrow'));
 
     for (const value of comparedValues(assertion)) {
+      // A call whose result is a render result: an element mounted into the page, or a helper call that renders.
+      const rendersOutput = (call: Invocation) =>
+        isJsxInvocation(call) || calls.some((entry) => entry.node === call && entry.target.rendered === true);
       // Only what the assertion evaluates: code in a function it never runs (`expect(() => onSave.mock.calls)`)
       // reads nothing.
       const evaluated = (node: ts.Node) => runsWithin(node, value, assertion);
@@ -852,6 +855,9 @@ function analyzeBody(
       for (const identifier of [value, ...descendants(value)].filter(ts.isIdentifier).filter(evaluated))
         for (const call of trackedCalls(identifier)) {
           if (excluded.has(call)) continue;
+
+          // Of what a render returns, only output counts: the container, or a query that runs.
+          if (rendersOutput(call) && !renderOutputRead(identifier, checker)) continue;
           asserted.add(call);
           mergeKeys(assertedKeys, call, keysRead(value, call));
         }
@@ -957,6 +963,12 @@ function analyzeBody(
     const outside = mountedAt.get(node);
 
     if (outside !== undefined) return outside;
+
+    // A render in a local function of the body (`function mount() { render(<Dialog />); }`) happens where the
+    // function is called.
+    const invoked = invokedAt(node, body, checker);
+
+    if (invoked !== node.getStart()) return invoked;
 
     if (!isJsxInvocation(node)) return node.getStart();
     const top = jsxTop(ts.isJsxOpeningElement(node) ? node.parent : node, checker);
@@ -1183,6 +1195,79 @@ function runsWithin(node: ts.Node, root: ts.Node, assertion: ts.CallExpression):
   }
 
   return true;
+}
+
+/** Members of a render result that are its API, not its output: comparing them checks nothing rendered. */
+const RENDER_API = new Set(['unmount', 'rerender', 'debug']);
+
+/**
+ * Whether reading `identifier` reads a render result's output: `container`, `baseElement`, the result itself (or a
+ * member not known as API), and queries (`getByText`, `asFragment`) only when called.
+ */
+function renderOutputRead(identifier: ts.Identifier, checker: ts.TypeChecker): boolean {
+  const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
+  const destructured =
+    declaration && ts.isBindingElement(declaration) && ts.isObjectBindingPattern(declaration.parent)
+      ? (declaration.propertyName ?? declaration.name)
+      : undefined;
+  const member =
+    destructured && ts.isIdentifier(destructured) ? destructured.text : memberPath(identifier)[0];
+
+  if (member === undefined) return true;
+
+  if (RENDER_API.has(member)) return false;
+
+  if (DOCUMENT_QUERY.test(member) || member === 'asFragment') {
+    // The value read: the identifier itself when destructured, `result.getByText` otherwise.
+    const read: ts.Node = destructured ? identifier : identifier.parent;
+
+    return ts.isCallExpression(read.parent) && read.parent.expression === read;
+  }
+
+  return true;
+}
+
+/**
+ * Where code in a body runs: where it is written, or, inside functions nested in the body, where the outermost of
+ * them is called (by name, as a callback, or where written). A local function nothing in the body calls never runs.
+ */
+function invokedAt(node: ts.Node, body: ts.Node, checker: ts.TypeChecker): number {
+  let position = node.getStart();
+
+  for (let current = node.parent; current && current !== body; current = current.parent) {
+    if (!isFunctionLike(current)) continue;
+    let fn: ts.Node = current;
+
+    while (ts.isParenthesizedExpression(fn.parent)) fn = fn.parent;
+    const parent = fn.parent;
+
+    if (
+      (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
+      (parent.expression === fn || parent.arguments?.includes(fn as ts.Expression))
+    ) {
+      position = parent.getStart();
+      continue;
+    }
+    const name = ts.isFunctionDeclaration(current)
+      ? current.name
+      : ts.isVariableDeclaration(parent) && parent.initializer === fn && ts.isIdentifier(parent.name)
+        ? parent.name
+        : undefined;
+    const symbol = name && checker.getSymbolAtLocation(name);
+    const calls = (symbol ? referencesOf(symbol, body.getSourceFile(), checker) : [])
+      .filter(
+        (item) =>
+          item !== name &&
+          contains(body, item) &&
+          ts.isCallExpression(item.parent) &&
+          item.parent.expression === item,
+      )
+      .map((item) => item.getStart());
+
+    position = calls.length > 0 ? Math.min(...calls) : Number.POSITIVE_INFINITY;
+  }
+
+  return position;
 }
 
 /** The innermost function between `node` and `root` that encloses `node`, if any. */
@@ -2467,10 +2552,32 @@ function suppliesOnlyForeignChildren(
   node: ts.JsxSelfClosingElement | ts.JsxOpeningElement,
   ctx: Ctx,
 ): boolean {
-  if (!ts.isJsxOpeningElement(node)) return false;
-  const children = node.parent.children.filter(
-    (child) => !(ts.isJsxText(child) && child.containsOnlyTriviaWhiteSpaces),
-  );
+  // The effective children: child nodes, a `children` attribute, or `children` in a spread object literal.
+  const children: ts.Node[] = ts.isJsxOpeningElement(node)
+    ? node.parent.children.filter((child) => !(ts.isJsxText(child) && child.containsOnlyTriviaWhiteSpaces))
+    : [];
+
+  for (const attribute of node.attributes.properties) {
+    if (
+      ts.isJsxAttribute(attribute) &&
+      ts.isIdentifier(attribute.name) &&
+      attribute.name.text === 'children' &&
+      attribute.initializer
+    )
+      children.push(attribute.initializer);
+
+    if (ts.isJsxSpreadAttribute(attribute)) {
+      let value = skipParens(attribute.expression);
+
+      if (ts.isIdentifier(value))
+        value = variableInitializer(ctx.checker.getSymbolAtLocation(value)?.valueDeclaration) ?? value;
+
+      if (ts.isObjectLiteralExpression(value))
+        for (const property of value.properties)
+          if (property.name && ts.isIdentifier(property.name) && property.name.text === 'children')
+            children.push(property);
+    }
+  }
 
   if (children.length === 0) return false;
 
@@ -2909,8 +3016,12 @@ function findMockHolders(call: Invocation, checker: ts.TypeChecker): MockHolders
       const declaration = symbol?.valueDeclaration;
       // `const { onSave } = props`: the member `onSave` of the object `props` holds.
       const member = declaration && destructuredMember(declaration, checker);
+      // Reading a mock's state (`String(onSave.mock.calls.length)`) hands over a number, not the mock.
+      const readsMockState = memberPath(item).includes('mock');
 
-      if (member) {
+      if (readsMockState) continue;
+
+      if (member && memberPath(item).length === 0) {
         containers.set(`${member.declaration.pos}:${member.name}`, {
           declaration: member.declaration,
           path: [member.name],
@@ -2924,7 +3035,9 @@ function findMockHolders(call: Invocation, checker: ts.TypeChecker): MockHolders
       const holding =
         declaration && ts.isVariableDeclaration(declaration) ? mockHolding(declaration, checker) : undefined;
 
-      if (holding === 'mock') mocks.add(declaration as ts.VariableDeclaration);
+      // Only the mock function itself is handed over, not one of its members (`onSave.name`).
+      if (holding === 'mock' && memberPath(item).length === 0)
+        mocks.add(declaration as ts.VariableDeclaration);
 
       if (holding === 'container' && declaration && ts.isVariableDeclaration(declaration)) {
         // `title={props.title}` hands over only `title`; `{...props}` or `props` hands over all of it, but the

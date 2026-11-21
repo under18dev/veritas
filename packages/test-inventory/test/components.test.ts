@@ -1507,6 +1507,102 @@ export function renderWithFrame(ui: JSX.Element) { return render(<Frame>{ui}</Fr
   });
 });
 
+describe('helper mount positions, render results, explicit children and mock reads', () => {
+  it('places a render in a local helper where the helper is called', () => {
+    const byName = inventory(`${header}
+      it('read before the helper call', () => {
+        function mount() { render(<Dialog open title="Hi" />); }
+        const before = screen.queryByText('Hi');
+        mount();
+        expect(before).toBeNull();
+      });
+      it('read after the helper call', () => {
+        function mount() { render(<Dialog open title="Hi" />); }
+        mount();
+        const after = screen.queryByText('Hi');
+        expect(after).not.toBeNull();
+      });
+    `);
+
+    expect(byName('read before the helper call').asserted).toBe(false);
+    expect(byName('read after the helper call').asserted).toBe(true);
+  });
+
+  it('counts only output of a render result', () => {
+    const byName = inventory(`${header}
+      it('unmount compared', () => {
+        const { unmount } = render(<Dialog open title="Hi" />);
+        expect(unmount).toBeTypeOf('function');
+      });
+      it('query not called', () => {
+        const { getByText } = render(<Dialog open title="Hi" />);
+        expect(getByText).toBeDefined();
+      });
+      it('query through the result not called', () => {
+        const view = render(<Dialog open title="Hi" />);
+        expect(view.getByText).toBeDefined();
+      });
+      it('container read', () => {
+        const { container } = render(<Dialog open title="Hi" />);
+        expect(container.textContent).toContain('Hi');
+      });
+      it('query through the result called', () => {
+        const view = render(<Dialog open title="Hi" />);
+        expect(view.getByText('Hi')).toBeTruthy();
+      });
+    `);
+
+    for (const name of ['unmount compared', 'query not called', 'query through the result not called'])
+      expect(byName(name).asserted, name).toBe(false);
+    expect(byName('container read').asserted).toBe(true);
+    expect(byName('query through the result called').asserted).toBe(true);
+  });
+
+  it('treats an explicit children prop like child nodes in the pass-through check', () => {
+    const byName = inventory(
+      `${header}
+      import { Section } from '../src/Section';
+      it('children prop with a DOM element', () => {
+        render(<Section children={<button>Hi</button>} />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('children prop with the component', () => {
+        render(<Section children={<Dialog open title="Hi" />} />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+    `,
+      {
+        'src/Section.tsx':
+          'export const Section = ({ children }: { children?: unknown }) => <section>{children}</section>;\n',
+      },
+    );
+
+    expect(byName('children prop with a DOM element')).toMatchObject({
+      symbols: ['src/Section.tsx#Section'],
+      asserted: false,
+    });
+    expect(byName('children prop with the component').asserted).toBe(true);
+  });
+
+  it('does not count a mock that is only read in a prop as handed over', () => {
+    const byName = inventory(`${header}
+      it('mock state read in a prop', () => {
+        const onSave = vi.fn();
+        render(<Dialog title={String(onSave.mock.calls.length)} />);
+        expect(onSave).not.toHaveBeenCalled();
+      });
+      it('mock handed over', () => {
+        const onSave = vi.fn();
+        render(<Dialog onSave={onSave} />);
+        expect(onSave).not.toHaveBeenCalled();
+      });
+    `);
+
+    expect(byName('mock state read in a prop').asserted).toBe(false);
+    expect(byName('mock handed over').asserted).toBe(true);
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}
