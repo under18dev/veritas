@@ -47,12 +47,45 @@ export interface AssessInput {
  *   and exercises the boundary of every linked threshold property;
  * - inconclusive: anything that cannot be decided (e.g. no mutation data, no linked property).
  */
+interface InputIndex {
+  edges: Map<string, AssessInput['edges']>;
+  killed: Map<string, AssessInput['mutants']>;
+  covered: Map<string, AssessInput['mutants']>;
+}
+
+const indexes = new WeakMap<AssessInput, InputIndex>();
+
+/** Edges and mutants by test id, built once per input (in input order), instead of scanning them for every test. */
+function indexOf(input: AssessInput): InputIndex {
+  const cached = indexes.get(input);
+
+  if (cached) return cached;
+  const push = <T>(map: Map<string, T[]>, key: string, value: T) => {
+    const list = map.get(key);
+    if (list) list.push(value);
+    else map.set(key, [value]);
+  };
+  const index: InputIndex = { edges: new Map(), killed: new Map(), covered: new Map() };
+
+  for (const edge of input.edges) push(index.edges, edge.testId, edge);
+
+  for (const mutant of input.mutants) {
+    for (const id of new Set(mutant.killedBy)) push(index.killed, id, mutant);
+    for (const id of new Set(mutant.coveredBy)) push(index.covered, id, mutant);
+  }
+  indexes.set(input, index);
+
+  return index;
+}
+
 export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
-  const edges = input.edges.filter((e) => e.testId === test.id);
+  const index = indexOf(input);
+  const edges = index.edges.get(test.id) ?? [];
   const propertyIds = [...new Set(edges.map((e) => e.propertyId).filter((id): id is string => id !== null))];
-  const properties = input.properties.filter((p) => propertyIds.includes(p.id));
-  const killed = input.mutants.filter((m) => m.killedBy.includes(test.id));
-  const covered = input.mutants.filter((m) => m.coveredBy.includes(test.id));
+  const wanted = new Set(propertyIds);
+  const properties = input.properties.filter((p) => wanted.has(p.id));
+  const killed = index.killed.get(test.id) ?? [];
+  const covered = index.covered.get(test.id) ?? [];
   const survived = covered.filter((m) => m.status === 'survived');
   const relevantKilled = killed.filter((m) => m.relevance === 'spec_relevant');
   const relevantSurvived = survived.filter(
