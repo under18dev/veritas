@@ -9,7 +9,7 @@ import {
   type TestAssessment,
   type TestCase,
 } from '@under18dev/veritas-core';
-import type { ConflictGroup } from '@under18dev/veritas-property-engine';
+import { AMBIGUOUS_BINDING, type ConflictGroup } from '@under18dev/veritas-property-engine';
 
 export interface FindingInput {
   properties: Property[];
@@ -29,7 +29,8 @@ function functionLocation(symbol: string, functions: FunctionInfo[]): Location[]
 
 /**
  * Derive findings. Certainty is `confirmed` only when a replayed solver counterexample backs the finding and the
- * property is accepted; otherwise it is `suspected` (or `informational`). Survivors are test gaps, not bugs.
+ * property is accepted; otherwise it is `suspected` (or `informational`). A conflict between documents is `confirmed`
+ * only when every reading in it is reproducible and unambiguously bound. Survivors are test gaps, not bugs.
  */
 export function deriveFindings(input: FindingInput): Finding[] {
   const findings: Finding[] = [];
@@ -88,15 +89,21 @@ export function deriveFindings(input: FindingInput): Finding[] {
   }
 
   for (const c of input.conflicts) {
+    const members = input.properties.filter((p) => c.propertyIds.includes(p.id));
+    // The documents disagree only as far as every reading is reproducible and bound to this parameter without doubt.
+    // A threshold an LLM read (experimental) or a binding with other plausible parameters may be the actual cause.
+    const doubtful = members.some(
+      (p) => p.experimental || p.assumptions.some((a) => a.startsWith(AMBIGUOUS_BINDING)),
+    );
     findings.push({
       id: stableId('F', { kind: 'spec_conflict', conflict: c.id }),
       kind: 'spec_conflict',
       title: `conflicting specifications for ${c.symbol} (${c.param})`,
       severity: 'medium',
-      certainty: 'confirmed',
+      certainty: doubtful ? 'suspected' : 'confirmed',
       locations: functionLocation(c.symbol, input.functions),
       propertyIds: c.propertyIds,
-      sourceIds: input.properties.filter((p) => c.propertyIds.includes(p.id)).flatMap((p) => p.sourceIds),
+      sourceIds: [...new Set(members.flatMap((p) => p.sourceIds))],
       testIds: [],
       mutantIds: [],
       claimIds: [],
