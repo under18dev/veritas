@@ -782,6 +782,7 @@ async function runInContext(
 
       if (confirmed) {
         result.confirmation = confirmed.confirmation;
+        result.timeBudgetExhausted = outstandingBudget(result, confirmed.confirmation.adopted);
         result.mutants = confirmed.mutants;
         result.counts = countMutants(result.mutants);
         external.push(...confirmed.artifacts);
@@ -1597,6 +1598,24 @@ export function literalInput(
   }
 
   return input;
+}
+
+/**
+ * The time-budget overrun still outstanding once the confirmation's kills are adopted: the mutants the main run did
+ * not start are `pending`, and each one the confirmation killed now has a verdict. The record stays (with `notRun`
+ * possibly 0) so the result is still not cached.
+ */
+export function outstandingBudget(
+  result: Pick<MutationRunResult, 'mutants' | 'timeBudgetExhausted'>,
+  adopted: string[],
+): MutationRunResult['timeBudgetExhausted'] {
+  const budget = result.timeBudgetExhausted;
+
+  if (!budget) return budget;
+  const pending = new Set(result.mutants.filter((m) => m.status === 'pending').map((m) => m.id));
+  const decided = adopted.filter((id) => pending.has(id)).length;
+
+  return { ...budget, notRun: Math.max(0, budget.notRun - decided) };
 }
 
 /**

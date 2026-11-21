@@ -1,6 +1,11 @@
 import type { Mutant } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
-import { cacheableMutationResult, literalInput, mutationStageStatus } from '../src/index.js';
+import {
+  cacheableMutationResult,
+  literalInput,
+  mutationStageStatus,
+  outstandingBudget,
+} from '../src/index.js';
 
 const mutant = (status: Mutant['status']) => ({ status }) as Mutant;
 
@@ -145,5 +150,35 @@ describe('literalInput', () => {
         jsParams,
       ),
     ).toMatchObject({ xs__length: '0', xs__0: '1', xs__1: '1' });
+  });
+});
+
+describe('outstandingBudget', () => {
+  const run = (statuses: Mutant['status'][], notRun: number) => ({
+    mutants: statuses.map((status, i) => ({ id: `M-${i}`, status }) as Mutant),
+    timeBudgetExhausted: { seconds: 60, notRun },
+  });
+
+  it('takes the pending mutants the confirmation killed off the overrun, so a run they complete is not partial', () => {
+    const main = run(['killed', 'pending', 'pending'], 2);
+    const budget = outstandingBudget(main, ['M-1', 'M-2']);
+    expect(budget).toEqual({ seconds: 60, notRun: 0 });
+    // Still recorded, so the result is not cached.
+    expect(cacheableMutationResult({ status: 'succeeded', timeBudgetExhausted: budget })).toBe(false);
+    expect(
+      mutationStageStatus({
+        status: 'succeeded',
+        mutants: [mutant('killed'), mutant('killed'), mutant('killed')],
+        timeBudgetExhausted: budget,
+      }).status,
+    ).toBe('succeeded');
+  });
+
+  it('keeps the mutants still not run, and ignores adopted mutants that were not pending', () => {
+    expect(outstandingBudget(run(['pending', 'pending', 'unknown'], 2), ['M-0', 'M-2'])).toEqual({
+      seconds: 60,
+      notRun: 1,
+    });
+    expect(outstandingBudget({ mutants: [] }, ['M-0'])).toBeUndefined();
   });
 });
