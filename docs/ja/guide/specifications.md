@@ -9,7 +9,7 @@
 | 出典                   | 読むもの                                                                                    | 既定 |
 | ---------------------- | ------------------------------------------------------------------------------------------- | ---- |
 | README                 | `README*` のファイル                                                                        | オン |
-| ドキュメント           | `docs/**/*.md`、`CHANGELOG*`、`RELEASE*`                                                    | オン |
+| ドキュメント           | `docs/**/*.md` と、Markdown かテキストの `CHANGELOG*`・`RELEASE*`                           | オン |
 | コードのコメント       | `analysis.include` に当てはまるファイルで、export された宣言の JSDoc                        | オン |
 | スキーマ               | OpenAPI と JSON Schema の範囲指定（`openapi.{json,yaml}`、`*.openapi.*`、`*.schema.*`）     | オン |
 | git の履歴             | コミットメッセージ                                                                          | オン |

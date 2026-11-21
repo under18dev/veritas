@@ -415,7 +415,9 @@ async function collectLocal(
     const rel = path.relative(root, file).split(path.sep).join('/');
     const base = path.basename(file);
     const readme = /^README(?:\.|$)/i.test(base);
-    const docs = (rel.startsWith('docs/') && /\.md$/i.test(base)) || /^CHANGELOG|^RELEASE/i.test(base);
+    const docs =
+      (rel.startsWith('docs/') && /\.md$/i.test(base)) ||
+      /^(?:CHANGELOG|RELEASE)[^.]*(?:\.(?:md|markdown|mdx|txt|rst))?$/i.test(base);
     const schema =
       /(?:\.openapi|\.schema)\.(?:json|ya?ml)$/i.test(base) || /^openapi\.(?:json|ya?ml)$/i.test(base);
     const code =

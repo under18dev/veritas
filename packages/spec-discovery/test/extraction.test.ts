@@ -187,6 +187,15 @@ describe('sentence splitting', () => {
     expect(quotes('2.\n---\n55. 4.\n| 1 | 2 |\nreal text')).toEqual(['real text']);
   });
 
+  it('reads CHANGELOG and RELEASE documents, not files that only start with those names', async () => {
+    const root = tempProject('release-files');
+    writeProjectFile(root, 'CHANGELOG.md', 'Uploads must be at most 5 MB.\n');
+    writeProjectFile(root, 'RELEASE_NOTES', 'Retries must be at most 3.\n');
+    writeProjectFile(root, '.github/workflows/release-linux.yml', 'name: must run on ubuntu-22.04\n');
+    const result = await discoverEvidence({ root, config: config(), offline: true });
+    expect(result.sources.map((s) => s.locator).sort()).toEqual(['CHANGELOG.md', 'RELEASE_NOTES']);
+  });
+
   it('extracts no fragment statements from version-heavy documents', async () => {
     const root = tempProject('versions');
     writeProjectFile(

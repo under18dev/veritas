@@ -9,7 +9,7 @@ Veritas never decides on its own what your specification is. It creates each pro
 | Source          | What is read                                                                                 | Default |
 | --------------- | -------------------------------------------------------------------------------------------- | ------- |
 | README          | `README*` files                                                                              | On      |
-| Documentation   | `docs/**/*.md`, `CHANGELOG*`, `RELEASE*`                                                     | On      |
+| Documentation   | `docs/**/*.md`, and `CHANGELOG*` and `RELEASE*` files in Markdown or plain text              | On      |
 | Code comments   | JSDoc on exported declarations in files matched by `analysis.include`                        | On      |
 | Schemas         | Bounds in OpenAPI and JSON Schema files (`openapi.{json,yaml}`, `*.openapi.*`, `*.schema.*`) | On      |
 | Git history     | Commit messages                                                                              | On      |
