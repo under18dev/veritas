@@ -194,7 +194,7 @@ function mapStatement(
   const quantityWords = words(relation.quantity);
   const units = unitWords(statement.quote, relation.value);
   const scored: (Target & { paramHit: boolean })[] = [];
-  // Compared record fields whose declared type is not a number (`state.lastUsedDay: string | null`).
+  // Compared record fields the wording points at whose declared type is not a number (`state.lastUsedDay: string | null`).
   const wrongType: string[] = [];
 
   for (const fn of index.functions) {
@@ -205,6 +205,7 @@ function mapStatement(
 
       return base?.fields?.find((f) => f.name === name.slice(dot + 1));
     };
+    const nameHits = words(fn.name).filter((w) => quoteWords.has(w)).length;
     // Number parameters, and fields of record parameters the function compares (`order.total`). A field whose
     // declared type is not a number is never modelled as an integer.
     const fields = [
@@ -213,7 +214,8 @@ function mapStatement(
       const field = declared(name);
 
       if (field && !numberOnly(field.type)) {
-        wrongType.push(`${fn.name}(${name}: ${field.type})`);
+        if (nameHits > 0 || words(field.name).some((w) => quoteWords.has(w)))
+          wrongType.push(`${fn.name}(${name}: ${field.type})`);
 
         return false;
       }
@@ -238,7 +240,6 @@ function mapStatement(
             : fields.filter((f) => f.startsWith(`${p.name}.`)).length),
       0,
     );
-    const nameHits = words(fn.name).filter((w) => quoteWords.has(w)).length;
 
     for (const p of numeric) {
       // An array's length only when the statement talks about a count ("3 or more items", "the item count"),

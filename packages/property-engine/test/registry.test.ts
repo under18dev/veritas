@@ -480,6 +480,9 @@ describe('binding statements to record fields', { timeout: 60_000 }, () => {
     const registry = promptRegistry([daysStatement, declineStatement]);
     const decline = registry.mapping.find((m) => m.statementId === 'ST-decline');
     expect(decline?.status).toBe('unmapped');
+    expect(decline?.reason).toMatch(
+      /skipped fields not declared as numbers: .*state\.lastUsedDay: string \| null/,
+    );
     expect(registry.conflicts).toEqual([]);
   });
 
