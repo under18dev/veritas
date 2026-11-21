@@ -442,6 +442,44 @@ export async function load(): Promise<number> { return 1; }
     expect(get('continuation of something else').asserted).toBe(false);
   });
 
+  it('links an awaited project call to an assertion on clock readings taken around it', () => {
+    const get = inventory(
+      `${header}
+      import { sleep } from '../src/sleep.js';
+      it('bracketed', async () => {
+        const before = Date.now();
+        const promise = sleep(1000);
+        await promise;
+        const after = Date.now();
+        expect(after).toBeGreaterThanOrEqual(before + 1000);
+      });
+      it('difference', async () => {
+        const start = performance.now();
+        await sleep(10);
+        const end = performance.now();
+        expect(end - start).toBeGreaterThanOrEqual(10);
+      });
+      it('not around the call', async () => {
+        await sleep(10);
+        const before = Date.now();
+        await Promise.resolve();
+        const after = Date.now();
+        expect(after).toBeGreaterThanOrEqual(before);
+      });
+      it('one reading', async () => {
+        await sleep(10);
+        const now = new Date();
+        expect(now).toBeDefined();
+      });
+    `,
+      { 'src/sleep.ts': 'export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));\n' },
+    );
+    expect(get('bracketed').asserted).toBe(true);
+    expect(get('difference').asserted).toBe(true);
+    expect(get('not around the call').asserted).toBe(false);
+    expect(get('one reading').asserted).toBe(false);
+  });
+
   it('links counters a callback increments and locals that store project results', () => {
     const extra = {
       'src/fns.ts': `export function each(items: number[], cb: () => void) { for (const _ of items) cb(); }

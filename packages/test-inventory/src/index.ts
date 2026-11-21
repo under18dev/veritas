@@ -506,6 +506,39 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
 
     for (const { node } of calls) if (contains(value, node)) asserted.add(node);
   }
+  // `const before = Date.now(); await sleep(1000); const after = Date.now(); expect(after - before)…`: an
+  // assertion comparing clock readings taken before and after awaiting a project call checks how long it took.
+  const clocks = new Map<ts.Symbol, number>();
+
+  for (const node of descendants(body))
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      isClockReading(node.initializer) &&
+      !inNestedFunction(node, body)
+    ) {
+      const symbol = checker.getSymbolAtLocation(node.name);
+
+      if (symbol) clocks.set(symbol, node.getEnd());
+    }
+  const awaited = descendants(body).filter(
+    (node): node is ts.AwaitExpression => ts.isAwaitExpression(node) && !inNestedFunction(node, body),
+  );
+
+  for (const value of clocks.size >= 2 ? assertions.map(comparedValues) : []) {
+    const readings = value
+      .flatMap((expression) => [expression, ...descendants(expression)])
+      .filter(ts.isIdentifier)
+      .map((identifier) => clocks.get(checker.getSymbolAtLocation(identifier) as ts.Symbol))
+      .filter((position): position is number => position !== undefined);
+    const first = Math.min(...readings);
+    const last = Math.max(...readings);
+
+    for (const node of awaited)
+      if (first < node.getStart() && node.getEnd() < last)
+        for (const call of sourcesOf([node.expression])) asserted.add(call);
+  }
   // A value passed to a test helper that asserts on that parameter is asserted too. The helper is resolved
   // through the checker, so a shadowing local of the same name is not mistaken for it, and an imported helper
   // (through any re-exports) is looked up in the file that declares it.
@@ -525,6 +558,31 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
     }
   }
   return { calls, assertions, asserted, unresolvedImports, helperAsserts, opaque, returned };
+}
+
+/** `Date.now()`, `performance.now()` or `new Date()`: a reading of the clock. */
+function isClockReading(expression: ts.Expression): boolean {
+  const value = skipParens(expression);
+
+  if (ts.isNewExpression(value))
+    return ts.isIdentifier(value.expression) && value.expression.text === 'Date' && !value.arguments?.length;
+
+  return (
+    ts.isCallExpression(value) &&
+    value.arguments.length === 0 &&
+    ts.isPropertyAccessExpression(value.expression) &&
+    value.expression.name.text === 'now' &&
+    ts.isIdentifier(value.expression.expression) &&
+    ['Date', 'performance'].includes(value.expression.expression.text)
+  );
+}
+
+/** Whether a node sits in a function nested in `body`, which runs at another time than `body` itself. */
+function inNestedFunction(node: ts.Node, body: ts.Node): boolean {
+  for (let current = node.parent; current && current !== body; current = current.parent)
+    if (isFunctionLike(current)) return true;
+
+  return false;
 }
 
 /** Promise methods whose callbacks run with the settled result of what they are called on. */
