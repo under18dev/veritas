@@ -79,6 +79,7 @@ it('a', async () => { expect(a()).toBe(1); await import('../src/b.js'); path.sep
     ]);
   });
 
+  // It type-checks a small project several times; under a loaded machine that takes longer than the default 5 s.
   it('follows a barrel symbol by symbol, and counts whole what may run otherwise', () => {
     const dependencies = (test: string, extra: Record<string, string> = {}) =>
       inventory({
@@ -124,7 +125,7 @@ it('a', async () => { expect(a()).toBe(1); await import('../src/b.js'); path.sep
         'src/index.ts': "export { used } from './used.js';\nexport { registry } from './effect.js';\n",
       }),
     ).toEqual(['src/effect.ts', 'src/helper.ts', 'src/used.ts']);
-  });
+  }, 30_000);
 });
 
 describe('module resolution that fails', () => {
