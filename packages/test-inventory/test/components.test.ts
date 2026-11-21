@@ -732,6 +732,84 @@ describe('renders in shared setup', () => {
   });
 });
 
+describe('ordering, running and provenance of page reads', () => {
+  it('orders reads by where an element is mounted, not where it is made', () => {
+    const byName = inventory(`${header}
+      it('read before the mount', () => {
+        const ui = <Dialog open title="Hi" />;
+        const before = screen.queryByText('Hi');
+        render(ui);
+        expect(before).toBeNull();
+      });
+      it('read after the mount', () => {
+        const ui = <Dialog open title="Hi" />;
+        render(ui);
+        const after = screen.queryByText('Hi');
+        expect(after).not.toBeNull();
+      });
+    `);
+
+    expect(byName('read before the mount').asserted).toBe(false);
+    expect(byName('read after the mount').asserted).toBe(true);
+  });
+
+  it('counts JSX returned by a function only when the function runs', () => {
+    const byName = inventory(`${header}
+      it('function never called', () => {
+        function unused() { return <Dialog open />; }
+        render(<p>Hi</p>);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('factory called', () => {
+        const make = () => <Dialog open title="Hi" />;
+        render(make());
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+    `);
+
+    expect(byName('function never called')).toMatchObject({ symbols: [], asserted: false });
+    expect(byName('factory called')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
+  });
+
+  it('credits a within query only when its container comes from the rendered page', () => {
+    const byName = inventory(`${header}
+      it('detached container', () => {
+        render(<Dialog open title="Hi" />);
+        expect(within(document.createElement('div')).queryByText('Hi')).toBeNull();
+      });
+      it('container from the render result', () => {
+        const { container } = render(<Dialog open title="Hi" />);
+        expect(within(container).getByText('Hi')).toBeTruthy();
+      });
+      it('container from the document', () => {
+        render(<Dialog open title="Hi" />);
+        expect(within(document.body).getByText('Hi')).toBeTruthy();
+      });
+    `);
+
+    expect(byName('detached container').asserted).toBe(false);
+    expect(byName('container from the render result').asserted).toBe(true);
+    expect(byName('container from the document').asserted).toBe(true);
+  });
+
+  it('follows a query helper written as a function declaration', () => {
+    const byName = inventory(`${header}
+      function query() { return screen.queryByText('Hi'); }
+      it('declared helper', () => {
+        render(<Dialog open title="Hi" />);
+        expect(query()).toBeTruthy();
+      });
+      it('declared helper not called', () => {
+        render(<Dialog open title="Hi" />);
+        expect(query).toBeTruthy();
+      });
+    `);
+
+    expect(byName('declared helper').asserted).toBe(true);
+    expect(byName('declared helper not called').asserted).toBe(false);
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}

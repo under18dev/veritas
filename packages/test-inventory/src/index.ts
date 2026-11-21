@@ -346,6 +346,8 @@ function analyzeBody(
   const { checker } = ctx;
   // Components rendered by shared setup that runs before the body (`beforeEach(() => render(<Dialog />))`).
   const setupEntries = new Set<BodyAnalysis['calls'][number]>();
+  // Where an element made outside the body is mounted in it (`render(ui)`).
+  const mountedAt = new Map<Invocation, number>();
   const source = body.getSourceFile();
   const calls: BodyAnalysis['calls'] = [];
   const recorded = new Set<Invocation>();
@@ -664,8 +666,13 @@ function analyzeBody(
             isJsxInvocation(element) &&
             jsxTop(ts.isJsxOpeningElement(element) ? element.parent : element) === initializer &&
             record(element)
-          )
+          ) {
             bindCallOutputs(element);
+            mountedAt.set(
+              element,
+              Math.min(mountedAt.get(element) ?? Number.POSITIVE_INFINITY, node.getStart()),
+            );
+          }
       }
 
     if (record(node)) bindCallOutputs(node);
@@ -911,11 +918,34 @@ function analyzeBody(
     }
   }
 
+  // Where a rendered call puts its output on the page: setup before everything, an element where the call that mounts
+  // it runs (`const ui = <Dialog />; …; render(ui)`), anything else where it is written. Not found: never.
+  const renderedAt = (entry: BodyAnalysis['calls'][number]): number => {
+    if (setupEntries.has(entry)) return Number.NEGATIVE_INFINITY;
+    const { node } = entry;
+    const outside = mountedAt.get(node);
+
+    if (outside !== undefined) return outside;
+
+    if (!isJsxInvocation(node)) return node.getStart();
+    const top = jsxTop(ts.isJsxOpeningElement(node) ? node.parent : node);
+    const holder = top.parent;
+
+    if (!ts.isVariableDeclaration(holder) || holder.initializer !== top || !ts.isIdentifier(holder.name))
+      return node.getStart();
+    const symbol = checker.getSymbolAtLocation(holder.name);
+    const mounts = (symbol ? referencesOf(symbol, source, checker) : [])
+      .filter((item) => item !== holder.name && contains(body, item) && mountedExpression(item, ctx, 0))
+      .map((item) => item.getStart());
+
+    return mounts.length > 0 ? Math.min(...mounts) : Number.POSITIVE_INFINITY;
+  };
+
   for (const entry of calls)
     if (
       entry.target.rendered &&
       !entry.target.passThrough &&
-      documentChecks.some((position) => setupEntries.has(entry) || entry.node.getStart() < position)
+      documentChecks.some((position) => renderedAt(entry) < position)
     )
       observed.add(entry);
   const awaitedProject = awaited.filter((node) => sourcesOf([node.expression]).length > 0);
@@ -1037,6 +1067,12 @@ function assertionReach(
         const fn = localFunction(item, checker);
 
         if (fn) executed.add(fn);
+
+        // A function declaration is not a variable whose initializer is followed: its body runs at the assertion.
+        if (fn && ts.isFunctionDeclaration(fn) && fn.body && !executed.has(fn.body) && depth < 20) {
+          executed.add(fn.body);
+          visit(fn.body, depth + 1, assertion.getEnd());
+        }
       }
 
       if ((ts.isCallExpression(item) && isDocumentQuery(item, checker)) || isDocumentRead(item, checker)) {
@@ -1319,8 +1355,43 @@ function isDocumentQuery(call: ts.CallExpression, checker: ts.TypeChecker): bool
     within !== undefined &&
     ts.isCallExpression(within) &&
     ts.isIdentifier(within.expression) &&
-    testingLibraryExport(within.expression, checker) === 'within'
+    testingLibraryExport(within.expression, checker) === 'within' &&
+    within.arguments[0] !== undefined &&
+    fromRenderedPage(within.arguments[0], checker, 0)
   );
+}
+
+/**
+ * Whether an element comes from the rendered page: a Testing Library query, a read of the global `document`, what a
+ * mounting call (`render`) or a local helper returns, through local variables. A detached
+ * `document.createElement(...)` or a value the test built does not.
+ */
+function fromRenderedPage(expression: ts.Expression, checker: ts.TypeChecker, depth: number): boolean {
+  if (depth > 5) return false;
+
+  return [expression, ...descendants(expression)].some((item) => {
+    if (ts.isCallExpression(item)) {
+      if (isDocumentQuery(item, checker)) return true;
+      const callee = skipParens(item.expression);
+
+      if (
+        ts.isIdentifier(callee) &&
+        (MOUNTING_FUNCTIONS.has(importedName(callee, checker)) || localFunction(callee, checker))
+      )
+        return true;
+    }
+
+    if (isDocumentRead(item, checker)) return true;
+
+    if (!ts.isIdentifier(item)) return false;
+    const initializer = variableInitializer(valueSymbol(item, checker)?.valueDeclaration);
+
+    return (
+      initializer !== undefined &&
+      initializer !== expression &&
+      fromRenderedPage(initializer, checker, depth + 1)
+    );
+  });
 }
 
 /** The name a `@testing-library/*` package exports that an identifier refers to, if it refers to one. */
@@ -1660,6 +1731,43 @@ function mountedJsx(node: ts.JsxSelfClosingElement | ts.JsxOpeningElement, ctx: 
   return mountedExpression(ts.isJsxOpeningElement(node) ? node.parent : node, ctx, 0);
 }
 
+/**
+ * Whether a function is run: given to a call (a callback such as `renderHook(() => …)`, other than `expect`), or
+ * named somewhere as a callee, a JSX tag or an argument. A method, whose callers are not tracked, counts as run.
+ */
+function functionRuns(fn: ts.Node, checker: ts.TypeChecker): boolean {
+  if (ts.isMethodDeclaration(fn)) return true;
+  let current: ts.Node = fn;
+
+  while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
+  const holder = current.parent;
+  const usedAt = (node: ts.Node): boolean => {
+    const parent = node.parent;
+
+    if (ts.isCallExpression(parent) || ts.isNewExpression(parent))
+      return (
+        parent.expression === node ||
+        (parent.arguments?.includes(node as ts.Expression) === true &&
+          !isExpectCall(parent as ts.CallExpression))
+      );
+
+    return (ts.isJsxOpeningElement(parent) || ts.isJsxSelfClosingElement(parent)) && parent.tagName === node;
+  };
+
+  if (usedAt(current)) return true;
+  const name = ts.isFunctionDeclaration(fn)
+    ? fn.name
+    : ts.isVariableDeclaration(holder) && holder.initializer === current && ts.isIdentifier(holder.name)
+      ? holder.name
+      : undefined;
+  const symbol = name && checker.getSymbolAtLocation(name);
+
+  return (
+    symbol !== undefined &&
+    referencesOf(symbol, fn.getSourceFile(), checker).some((item) => item !== name && usedAt(item))
+  );
+}
+
 /** The outermost expression of the JSX tree an element sits in, through conditionals, arrays and parentheses. */
 function jsxTop(expression: ts.Node): ts.Node {
   let current = expression;
@@ -1698,8 +1806,14 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount 
   const current = jsxTop(expression);
   const parent = current.parent;
 
-  if (ts.isReturnStatement(parent) || (ts.isArrowFunction(parent) && parent.body === current))
-    return 'document';
+  // Returned by a component or helper: rendered where that function runs, so only if something runs it.
+  if (ts.isReturnStatement(parent) || (ts.isArrowFunction(parent) && parent.body === current)) {
+    let fn: ts.Node | undefined = parent;
+
+    while (fn && !isFunctionLike(fn)) fn = fn.parent;
+
+    return fn && functionRuns(fn, ctx.checker) ? 'document' : undefined;
+  }
 
   if (
     (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&

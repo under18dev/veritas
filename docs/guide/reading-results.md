@@ -99,6 +99,8 @@ Some assertions still do not count:
 - a value of a props object that the test set itself
 - the calls of a mock the test also calls itself, whether through a matcher such as `toHaveBeenCalled` or through `.mock.calls`
 - a page read made before the component rendered (`const before = screen.queryByText('x')` before `render`), or a read of something the test wrote to the page itself (`document.body.className = 'dark'`). Once the test puts content into the page itself (`innerHTML`, `appendChild` and the like), no later read of the page counts, because it may find that content. An element the test creates with `document.createElement` and appends without filling it only stops queries by role or by page structure, since a text query cannot find an empty element
+- a `within(...)` query on a container that does not come from the rendered page, such as `document.createElement('div')`
+- an element returned by a function that nothing runs
 - a page query when nothing from the project rendered, so a test that renders only third-party components is still reported
 
 A page query also does not credit a project component whose children in the test hold no project component, such as `<Providers><Button>Go</Button></Providers>` or a provider helper that wraps whatever it is given: the query may find only what the test supplied. This also leaves out a component like `<Card>Body</Card>` when the query looks for something the card renders itself; such a test is reported unless another assertion links it.
