@@ -5745,13 +5745,18 @@ type Route = {
 /**
  * Where in a test's run code outside or inside its body runs, relative to the body's own positions: in the body,
  * where it runs (a local function where it is called, never if it is not); before the body when it is module or
- * describe-level code of a describe enclosing the test, or a `beforeEach`/`beforeAll` hook there; never otherwise
- * (another test, an `after` hook, a helper nothing shown calls).
+ * describe-level code of a describe enclosing the test, or a `beforeEach`/`beforeAll` hook there; in a helper of the
+ * file, where the earliest call or hook registration of that helper runs, followed through helpers calling helpers;
+ * never otherwise (another test, an `after` hook, a helper nothing shown calls).
  */
-function handOffAt(node: ts.Node, body: ts.Node, checker: ts.TypeChecker): number {
+function handOffAt(
+  node: ts.Node,
+  body: ts.Node,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Node> = new Set(),
+): number {
   if (contains(body, node)) return invokedAt(node, body, checker);
-  const callback = body.parent;
-  const registration = callback?.parent;
+  const registration = body.parent?.parent;
 
   for (let current = node.parent; current; current = current.parent) {
     if (!isFunctionLike(current)) continue;
@@ -5761,7 +5766,7 @@ function handOffAt(node: ts.Node, body: ts.Node, checker: ts.TypeChecker): numbe
     const call = fn.parent;
 
     if (!ts.isCallExpression(call) || !call.arguments.includes(fn as ts.Expression))
-      return Number.POSITIVE_INFINITY;
+      return helperRunsAt(current, fn, body, checker, seen);
     const suite = describeRegistration(call);
 
     if (suite?.callback === fn) {
@@ -5771,24 +5776,79 @@ function handOffAt(node: ts.Node, body: ts.Node, checker: ts.TypeChecker): numbe
     }
 
     if (testRegistration(call)) return Number.POSITIVE_INFINITY;
-    const callee = skipParens(call.expression);
 
     // `vi.hoisted(() => …)` runs when the file loads.
-    if (ts.isCallExpression(call) && mockCall(call, checker) !== undefined) continue;
+    if (mockCall(call, checker) !== undefined) continue;
 
-    if (!ts.isIdentifier(callee) || !runner.setup.has(runnerName(callee))) return Number.POSITIVE_INFINITY;
-    // A setup hook runs before the tests of the describe it is in.
-    let scope: ts.Node | undefined = call.parent;
-
-    while (scope && !(isFunctionLike(scope) && describeRegistration(scope.parent as ts.CallExpression)))
-      scope = scope.parent;
-
-    return !scope || (registration && contains(scope, registration))
-      ? Number.NEGATIVE_INFINITY
-      : Number.POSITIVE_INFINITY;
+    return setupHookAt(call, registration);
   }
 
   return Number.NEGATIVE_INFINITY;
+}
+
+/**
+ * For a call given a callback: before the test (`-Infinity`) when it is a `beforeEach`/`beforeAll` hook of a
+ * describe enclosing the test or of the file; never (`Infinity`) for anything else.
+ */
+function setupHookAt(call: ts.CallExpression, registration: ts.Node | undefined): number {
+  const callee = skipParens(call.expression);
+
+  if (!ts.isIdentifier(callee) || !runner.setup.has(runnerName(callee))) return Number.POSITIVE_INFINITY;
+  // A setup hook runs before the tests of the describe it is in.
+  let scope: ts.Node | undefined = call.parent;
+
+  while (
+    scope &&
+    !(isFunctionLike(scope) && ts.isCallExpression(scope.parent) && describeRegistration(scope.parent))
+  )
+    scope = scope.parent;
+
+  return !scope || (registration && contains(scope, registration))
+    ? Number.NEGATIVE_INFINITY
+    : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Where a named helper of the test file runs (`function install() { … }`, `const install = () => { … }`): at its
+ * earliest call that runs in the test, or before the test when it is registered as a setup hook (`beforeEach(install)`)
+ * that applies to it; never when nothing that runs calls it.
+ */
+function helperRunsAt(
+  current: ts.Node,
+  fn: ts.Node,
+  body: ts.Node,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Node>,
+): number {
+  const name = ts.isFunctionDeclaration(current)
+    ? current.name
+    : ts.isVariableDeclaration(fn.parent) && fn.parent.initializer === fn && ts.isIdentifier(fn.parent.name)
+      ? fn.parent.name
+      : undefined;
+  const symbol = name && checker.getSymbolAtLocation(name);
+
+  if (!name || !symbol || seen.has(current)) return Number.POSITIVE_INFINITY;
+  seen.add(current);
+  const registration = body.parent?.parent;
+  let earliest = Number.POSITIVE_INFINITY;
+
+  for (const reference of referencesOf(symbol, body.getSourceFile(), checker)) {
+    if (reference === name) continue;
+    const parent = reference.parent;
+    const at =
+      ts.isCallExpression(parent) && parent.expression === reference
+        ? handOffAt(parent, body, checker, seen)
+        : ts.isCallExpression(parent) && parent.arguments.includes(reference)
+          ? // Passed to a hook (`beforeEach(install)`): the hook must itself apply to the test.
+            handOffAt(parent, body, checker, seen) === Number.NEGATIVE_INFINITY
+            ? setupHookAt(parent, registration)
+            : Number.POSITIVE_INFINITY
+          : Number.POSITIVE_INFINITY;
+
+    earliest = Math.min(earliest, at);
+  }
+
+  return earliest;
 }
 
 /**

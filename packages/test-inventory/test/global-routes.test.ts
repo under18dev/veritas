@@ -388,12 +388,50 @@ describe('links through globals and mocked modules', () => {
         const late = vi.fn();
         const other = vi.fn();
         const stray = vi.fn();
+        const d1 = vi.fn();
+        const d2 = vi.fn();
+        const d3 = vi.fn();
+        const d4 = vi.fn();
+        const d5 = vi.fn();
         function install() { window.monaco = { dispose: stray }; }
+        function installD1() { window.monaco = { dispose: d1 }; }
+        function setupD2() { window.monaco = { dispose: d2 }; }
+        const installD3 = () => { window.monaco = { dispose: d3 }; };
+        function outerD4() { installD4(); }
+        function installD4() { window.monaco = { dispose: d4 }; }
+        function teardownD5() { window.monaco = { dispose: d5 }; }
         describe('with setup', () => {
           beforeEach(() => { window.monaco = { dispose: shared }; });
           it('installed by a before hook', () => {
             closeAll();
             expect(shared).toHaveBeenCalled();
+          });
+        });
+        describe('helpers of the file', () => {
+          beforeEach(setupD2);
+          afterEach(teardownD5);
+          it('helper called before the call', () => {
+            installD1();
+            closeAll();
+            expect(d1).toHaveBeenCalled();
+          });
+          it('helper registered as a before hook', () => {
+            closeAll();
+            expect(d2).toHaveBeenCalled();
+          });
+          it('helper called only after the call', () => {
+            closeAll();
+            installD3();
+            expect(d3).not.toHaveBeenCalled();
+          });
+          it('helper called by a helper called before the call', () => {
+            outerD4();
+            closeAll();
+            expect(d4).toHaveBeenCalled();
+          });
+          it('helper registered as an after hook', () => {
+            closeAll();
+            expect(d5).not.toHaveBeenCalled();
           });
         });
         describe('elsewhere', () => {
@@ -439,7 +477,12 @@ describe('links through globals and mocked modules', () => {
 
     expect(byName('installed by a before hook')).toBe('reachable');
     expect(byName('installed by a local function called before')).toBe('reachable');
+    expect(byName('helper called before the call')).toBe('reachable');
+    expect(byName('helper registered as a before hook')).toBe('reachable');
+    expect(byName('helper called by a helper called before the call')).toBe('reachable');
     for (const name of [
+      'helper called only after the call',
+      'helper registered as an after hook',
       'installed by an after hook',
       'installed after the call',
       'installed by a helper nothing calls',

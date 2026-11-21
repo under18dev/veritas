@@ -297,4 +297,46 @@ describe('Jest tests', () => {
     ]);
     expect(byName(tests, 'code reaching neither').suspicions).not.toContain('reachable_by_name');
   });
+
+  it('follows a helper of the file that puts a mock into a global, called or registered as a hook', () => {
+    const root = tempProject({
+      'src/models.ts':
+        'declare global { interface Window { monaco?: { dispose(): void } } }\nexport function closeAll(): void { window.monaco?.dispose(); }\n',
+      'test/helpers.test.ts': `
+        import { closeAll } from '../src/models.js';
+        const d1 = jest.fn();
+        const d2 = jest.fn();
+        function install() { window.monaco = { dispose: d1 }; }
+        function setup() { window.monaco = { dispose: d2 }; }
+        it('called helper', () => {
+          install();
+          closeAll();
+          expect(d1).toHaveBeenCalled();
+        });
+        describe('hooked', () => {
+          beforeEach(setup);
+          it('hook helper', () => {
+            closeAll();
+            expect(d2).toHaveBeenCalled();
+          });
+        });
+        it('helper called after', () => {
+          closeAll();
+          install();
+          expect(d1).toHaveBeenCalled();
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of ['called helper', 'hook helper']) {
+      const test = byName(tests, name);
+      expect(
+        test.targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(false);
+      expect(test.targetCalls[0]?.reachedVia, name).toEqual(['global monaco']);
+    }
+    expect(byName(tests, 'helper called after').suspicions).not.toContain('reachable_by_name');
+  });
 });
