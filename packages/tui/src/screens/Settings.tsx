@@ -7,7 +7,17 @@ import {
 } from '@under18dev/veritas-core';
 import { Box, type DOMElement, Text, useBoxMetrics, useInput } from 'ink';
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Card, Confirm, ErrorView, type Hints, numbered, TextInput, useLoad } from '../components.js';
+import {
+  Badge,
+  Card,
+  Confirm,
+  ErrorView,
+  type Hints,
+  numbered,
+  ScrollView,
+  TextInput,
+  useLoad,
+} from '../components.js';
 import type { ScreenProps } from '../screen.js';
 
 type Path = (string | number)[];
@@ -293,7 +303,8 @@ type Mode =
   | { kind: 'pick'; field: ConfigField; index: number }
   | { kind: 'list'; field: ConfigField; index: number; input: 'none' | 'add' | 'edit' }
   | { kind: 'review' }
-  | { kind: 'discard' };
+  | { kind: 'discard' }
+  | { kind: 'problems' };
 
 export function Settings({ api, active, onBack, onChange, height, width, version, setHints }: ScreenProps) {
   const config = useLoad(() => api.readConfig(), [version]);
@@ -324,6 +335,8 @@ export function Settings({ api, active, onBack, onChange, height, width, version
   const changes = data?.kind === 'json' ? diff(saved, draft) : [];
 
   const editable = !config.error && data?.kind === 'json';
+  const problems = editable ? validate(draft) : [];
+  const problemKey: Hints = problems.length ? [['p', 'problems']] : [];
   const hints: Hints = !editable
     ? [['Esc', 'back']]
     : mode.kind === 'text'
@@ -351,25 +364,38 @@ export function Settings({ api, active, onBack, onChange, height, width, version
                 ['d', 'delete'],
                 ['Esc', 'done'],
               ]
-          : mode.kind === 'review' || mode.kind === 'discard'
+          : mode.kind === 'review'
             ? [
+                ['↑↓', 'scroll'],
                 ['y', 'yes'],
                 ['n', 'no'],
               ]
-            : row?.kind === 'section'
+            : mode.kind === 'discard'
               ? [
-                  ['↑↓', 'move'],
-                  ['Enter', open.has(row.section.key) ? 'close' : 'open'],
-                  ['s', 'review & save'],
-                  ['Esc', 'back'],
+                  ['y', 'yes'],
+                  ['n', 'no'],
                 ]
-              : [
-                  ['↑↓', 'move'],
-                  ['Enter', 'change'],
-                  ['r', 'reset'],
-                  ['s', 'review & save'],
-                  ['Esc', 'back'],
-                ];
+              : mode.kind === 'problems'
+                ? [
+                    ['↑↓', 'scroll'],
+                    ['Esc', 'back to the settings'],
+                  ]
+                : row?.kind === 'section'
+                  ? [
+                      ['↑↓', 'move'],
+                      ['Enter', open.has(row.section.key) ? 'close' : 'open'],
+                      ['s', 'review & save'],
+                      ...problemKey,
+                      ['Esc', 'back'],
+                    ]
+                  : [
+                      ['↑↓', 'move'],
+                      ['Enter', 'change'],
+                      ['r', 'reset'],
+                      ['s', 'review & save'],
+                      ...problemKey,
+                      ['Esc', 'back'],
+                    ];
   const hintKey = JSON.stringify(hints);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: the hints are compared by their text
@@ -425,9 +451,8 @@ export function Settings({ api, active, onBack, onChange, height, width, version
       if (k.upArrow || input === 'k') setCursor(Math.max(0, at - 1));
       else if (k.downArrow || input === 'j') setCursor(Math.min(rows.length - 1, at + 1));
       else if (k.escape) leave();
+      else if (input === 'p' && problems.length) setMode({ kind: 'problems' });
       else if (input === 's') {
-        const problems = validate(draft);
-
         if (problems.length)
           setMessage(
             `Fix ${problems.length} problem${problems.length === 1 ? '' : 's'} before saving: ${problems[0]}`,
@@ -514,7 +539,6 @@ export function Settings({ api, active, onBack, onChange, height, width, version
   }
 
   const file = path.relative(api.root, data.file) || data.file;
-  const problems = validate(draft);
 
   if (mode.kind === 'review')
     return (
@@ -538,6 +562,16 @@ export function Settings({ api, active, onBack, onChange, height, width, version
       />
     );
 
+  if (mode.kind === 'problems')
+    return (
+      <Problems
+        problems={problems}
+        active={active}
+        height={height}
+        onClose={() => setMode({ kind: 'browse' })}
+      />
+    );
+
   const start = Math.max(0, Math.min(at - Math.floor(listRows / 2), rows.length - listRows));
   const visible = rows.slice(start, start + listRows);
 
@@ -556,7 +590,8 @@ export function Settings({ api, active, onBack, onChange, height, width, version
       </Box>
       {problems.length ? (
         <Text color="yellow" wrap="truncate-end">
-          {problems.length} problem{problems.length === 1 ? '' : 's'} to fix before saving: {problems[0]}
+          {problems.length} problem{problems.length === 1 ? '' : 's'} to fix before saving (p lists them):{' '}
+          {problems[0]}
         </Text>
       ) : null}
       <Box ref={listBox} flexDirection="column" flexGrow={1} flexShrink={1} minHeight={1} overflow="hidden">
@@ -602,6 +637,7 @@ export function Settings({ api, active, onBack, onChange, height, width, version
             onApply={(next) => apply(row.field, next)}
             onError={(messages) => setErrors({ path: key(row.field), messages })}
             onMode={setMode}
+            height={height}
           />
         ) : row?.kind === 'section' ? (
           <Card title={sectionTitle(row.section)}>
@@ -737,6 +773,7 @@ function FieldPanel({
   onApply,
   onError,
   onMode,
+  height,
 }: {
   field: ConfigField;
   draft: unknown;
@@ -748,6 +785,8 @@ function FieldPanel({
   onError: (messages: string[]) => void;
   onApply: (next: unknown) => boolean;
   onMode: (mode: Mode) => void;
+  /** Rows of the whole Settings screen, which the list editor must fit in. */
+  height: number;
 }) {
   const value = effective(draft, field);
   const written = getAt(draft, field.path);
@@ -828,6 +867,7 @@ function FieldPanel({
           errors={errors}
           onApply={onApply}
           onMode={onMode}
+          height={height}
         />
       ) : null}
       {!editing || mode.kind === 'pick' || (mode.kind === 'list' && mode.input === 'none')
@@ -898,6 +938,7 @@ function ListEditor({
   errors,
   onApply,
   onMode,
+  height,
 }: {
   field: ConfigField;
   mode: Extract<Mode, { kind: 'list' }>;
@@ -906,6 +947,7 @@ function ListEditor({
   errors: string[];
   onApply: (next: unknown) => boolean;
   onMode: (mode: Mode) => void;
+  height: number;
 }) {
   const choices = field.items?.type === 'enum' ? (field.items.options ?? []) : null;
   const value = effective(draft, field);
@@ -913,6 +955,12 @@ function ListEditor({
   const rows = choices ?? items;
   const index = Math.min(mode.index, Math.max(0, rows.length - 1));
   const write = (next: string[]) => onApply(setField(draft, field, next));
+  // Entries shown at once: the screen less the settings above the panel, the panel's own lines, the line that says
+  // which entries are shown and, while an entry is typed, the field with its errors (each may take two lines).
+  const typing = mode.input !== 'none' ? 3 + errors.length * 2 : 0;
+  const fit = Math.max(1, height - LIST_CHROME - typing);
+  const first = Math.max(0, Math.min(index - Math.floor(fit / 2), rows.length - fit));
+  const shown = numbered(rows).slice(first, first + fit);
 
   useInput(
     (input, k) => {
@@ -936,13 +984,18 @@ function ListEditor({
     <Box flexDirection="column" marginTop={1}>
       {rows.length === 0 ? <Text dimColor>(empty: press a to add an entry)</Text> : null}
       {/* Entries can repeat while a list is edited; the position tells them apart. */}
-      {numbered(rows).map(({ key: rowKey, n: i, text: r }) => (
+      {shown.map(({ key: rowKey, n: i, text: r }) => (
         <Text key={rowKey} wrap="truncate-end" {...(i === index ? { color: 'cyan' } : {})}>
           {i === index ? '› ' : '  '}
           {choices ? (items.includes(r) ? '[x] ' : '[ ] ') : ''}
           {r}
         </Text>
       ))}
+      {rows.length > fit ? (
+        <Text dimColor>
+          entries {first + 1}-{first + shown.length} of {rows.length}, ↑↓ to move
+        </Text>
+      ) : null}
       {mode.input !== 'none' ? (
         <TextInput
           active={active}
@@ -960,6 +1013,55 @@ function ListEditor({
           }}
         />
       ) : null}
+    </Box>
+  );
+}
+
+/**
+ * Rows around the entries of the list editor: the settings title and at least one row of the list above the panel,
+ * the panel's border, title, description, current value, allowed values and gap, and the line under the entries.
+ */
+const LIST_CHROME = 10;
+
+/** Every schema problem of the edited configuration, scrolled when they do not fit. */
+function Problems({
+  problems,
+  active,
+  height,
+  onClose,
+}: {
+  problems: string[];
+  active: boolean;
+  height: number;
+  onClose: () => void;
+}) {
+  useInput(
+    (input, k) => {
+      if (k.escape || input === 'p') onClose();
+    },
+    { isActive: active },
+  );
+  const unknown = problems.some((p) => /unrecognized key/i.test(p));
+
+  return (
+    <Box flexDirection="column" height={height} overflow="hidden">
+      <Text bold color="yellow">
+        {problems.length} problem{problems.length === 1 ? '' : 's'} to fix before saving
+      </Text>
+      <Text dimColor wrap="wrap">
+        Saving waits until there are none. An edit is accepted when it adds no new problem.
+        {unknown ? ' Keys the schema does not know cannot be shown here: remove them in your editor.' : ''}
+      </Text>
+      <Box marginTop={1} flexDirection="column">
+        {/* The title, a note of up to three lines and the gap above the list. */}
+        <ScrollView active={active} height={Math.max(1, height - 6)}>
+          {numbered(problems).map((p) => (
+            <Text key={p.key} wrap="wrap">
+              {p.text}
+            </Text>
+          ))}
+        </ScrollView>
+      </Box>
     </Box>
   );
 }

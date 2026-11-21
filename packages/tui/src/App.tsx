@@ -34,7 +34,7 @@ const HELP = [
   '  Esc cancels a running run, and Enter on the result opens Results.',
   'Improve tests: create a plan (nothing is written), review it, then apply it.',
   'Settings: Enter opens a section and changes a value (Enter or Space toggles a switch, a list of choices',
-  '  opens for others); r resets it to the default. s shows the changes and saves them after you confirm.',
+  '  opens for others); r resets it to the default. s shows the changes and saves them after you confirm; p lists problems.',
 ];
 
 function Header({ api, version }: { api: TuiApi; version: number }) {

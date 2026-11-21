@@ -765,6 +765,7 @@ describe('the TUI', { timeout: 20_000 }, () => {
     await until(app, '6 unsaved');
     await press(app, 's');
     await until(app, 'Review 6 changes to .veritas/config.json');
+    expect(app.lastFrame()).toMatch(/↑↓\s+scroll\s+y\s+yes/);
     expect(app.lastFrame()).toContain('+2 more (↓)');
     expect(app.lastFrame()).toContain('turns on network');
     await press(app, 'y');
@@ -781,6 +782,61 @@ describe('the TUI', { timeout: 20_000 }, () => {
     });
   });
 
+  it('says that keys the schema does not know must be removed in an editor, and does not save', async () => {
+    const api = fakeApi({
+      readConfig: () => ({
+        kind: 'json',
+        file: '/projects/shop/.veritas/config.json',
+        raw: { mutation: { timeoutMs: 1000 }, extra: true },
+      }),
+    });
+    const app = await open(api, 5);
+    await until(app, '1 problem to fix before saving');
+    await press(app, 'p');
+    await until(app, '1 problem to fix before saving');
+    expect(app.lastFrame()).toContain('Unrecognized key: "extra"');
+    // The note wraps; its words are on screen.
+    expect(app.lastFrame()).toContain('cannot be shown here');
+    expect(app.lastFrame()).toContain('them in your editor');
+    await press(app, KEY.escape, 's');
+    await until(app, 'Fix 1 problem before saving');
+    expect(api.writeConfig).not.toHaveBeenCalled();
+  });
+
+  it('scrolls a long list to the selected entry and keeps the entry field in view', async () => {
+    const include = Array.from({ length: 10 }, (_, i) => `src/part${i}/**/*.ts`);
+    const api = fakeApi({
+      readConfig: () => ({
+        kind: 'json',
+        file: '/projects/shop/.veritas/config.json',
+        raw: { analysis: { include } },
+      }),
+    });
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.enter);
+    await until(app, 'entries 1-7 of 10');
+    expect(app.lastFrame()).toContain('› src/part0/**/*.ts');
+    expect(app.lastFrame()).not.toContain('src/part9/**/*.ts');
+    expect(app.lastFrame()).not.toContain('src/part7/**/*.ts');
+    await press(app, ...Array(9).fill(KEY.down));
+    await until(app, 'entries 4-10 of 10');
+    expect(app.lastFrame()).toContain('› src/part9/**/*.ts');
+    // The entries above the window are no longer rows of the list (the value line still names some of them).
+    const row = (n: number) => new RegExp(`│\\s+src/part${n}/\\*\\*/\\*\\.ts\\s+│`);
+    expect(app.lastFrame()).toMatch(row(3));
+    expect(app.lastFrame()).not.toMatch(row(2));
+    // The entry field takes rows from the list, not from the screen below it.
+    await press(app, 'a');
+    await until(app, 'New entry:');
+    expect(app.lastFrame()).toContain('Enter to confirm, Esc to cancel');
+    expect(app.lastFrame()).toContain('› src/part9/**/*.ts');
+    expect(app.lastFrame()).toContain('entries 7-10 of 10');
+    await press(app, 'l', 'i', 'b', KEY.enter);
+    await until(app, 'entries 5-11 of 11');
+    expect(app.lastFrame()).toContain('› lib');
+  });
+
   it('fixes a file with problems one setting at a time and saves only once it is valid', async () => {
     const api = fakeApi({
       readConfig: () => ({
@@ -790,11 +846,18 @@ describe('the TUI', { timeout: 20_000 }, () => {
       }),
     });
     const app = await open(api, 5);
-    await until(app, '2 problems to fix before saving');
+    await until(app, '2 problems to fix before saving (p lists them)');
+    // p lists every problem, not only the first.
+    await press(app, 'p');
+    await until(app, 'Saving waits until there are none');
+    expect(app.lastFrame()).toContain('mutation.timeoutMs:');
+    expect(app.lastFrame()).toContain('pbt.numRuns:');
+    await press(app, KEY.escape);
+    await until(app, 'Mutation testing');
     await press(app, ...Array(4).fill(KEY.down), KEY.enter, ...Array(3).fill(KEY.down), KEY.enter);
     await until(app, 'New value:');
     await press(app, KEY.backspace, KEY.backspace, '5', '0', '0', '0', KEY.enter);
-    await until(app, '1 problem to fix before saving: pbt.numRuns');
+    await until(app, '1 problem to fix before saving (p lists them): pbt.numRuns');
     await press(app, 's');
     await until(app, 'Fix 1 problem before saving');
     expect(api.writeConfig).not.toHaveBeenCalled();
