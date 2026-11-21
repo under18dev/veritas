@@ -231,6 +231,15 @@
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991
+        },
+        "typecheck": {
+          "default": "auto",
+          "description": "auto lets mutator type-check mutants before running them and leave out those that do not compile; off starts mutants right after the baseline, but mutants the compiler would reject are run and counted too.",
+          "type": "string",
+          "enum": [
+            "auto",
+            "off"
+          ]
         }
       },
       "additionalProperties": false

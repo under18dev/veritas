@@ -43,6 +43,7 @@ pathe has about 1,020 mutants; two cold `run --profile standard` runs took 98.6 
 - Start with `quick`. It runs no project code and took at most 15 s on the projects above, with up to 5,333 tests.
 - Run mutation testing on what changed: `--since <ref>` in pull requests, or `mutate --scope <path>` for one area. `--scope` can be given more than once.
 - Raise `mutation.timeoutMs` when a full mutation run needs longer than 120 s.
+- When a mutation run times out before any mutant has finished and the message says mutator had not printed its plan, mutator most likely spent the time type-checking the mutants. `mutation.typecheck: "off"` skips that step; see [Troubleshooting](/guide/troubleshooting).
 - Mutation results, decisive solver results and LLM responses are cached in `.veritas/cache/`, keyed by content. A run reuses them when the code, the configuration, the tool versions and the run's options (such as `--scope` or `--since`) are unchanged.
 
 The budget that CI enforces on the fixtures is in [ADR 0009](/adr/0009-performance-budget).

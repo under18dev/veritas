@@ -240,6 +240,23 @@ export function killedByNewTests(before: MeasuredMutant[], after: MeasuredMutant
 }
 
 /**
+ * Why a succeeded mutation run did not run every mutant in scope, or null when it did. Killed counts of such runs
+ * cannot be compared before and after a patch: the mutants each run left out differ, so more kills after the patch
+ * need not come from the new tests.
+ */
+export function incompleteMutationRun(
+  result: Pick<MutationRunResult, 'timeBudgetExhausted' | 'excludedFiles'>,
+): string | null {
+  if (result.timeBudgetExhausted?.notRun)
+    return `mutator's time budget ran out and ${result.timeBudgetExhausted.notRun} mutant(s) were not run`;
+
+  if (result.excludedFiles?.length)
+    return `${result.excludedFiles.length} source file(s) were left out (${result.excludedFiles.join(', ')})`;
+
+  return null;
+}
+
+/**
  * Claims of a run that the patched copy must produce again: conformance claims (about the implementation itself) and
  * claims about a mutant, except a mutant the new tests kill (see `killedByNewTests`), whose claims change with its
  * status. A mutant that was already killed before the patch keeps its claims.
@@ -286,8 +303,8 @@ function recordedClaimStatuses(root: string, runId: string): Record<string, stri
 
 /**
  * Apply an approved plan: measure it in an isolated copy (baseline tests + mutation, patched tests + mutation)
- * and copy the new test files into the repository only when the killed-mutant count increases and no
- * previously passing test fails. Any failure leaves the repository unchanged.
+ * and copy the new test files into the repository only when both mutation runs are complete, the killed-mutant count
+ * increases, an added test kills a mutant the baseline left alive, and no previously passing test fails. Any failure leaves the repository unchanged.
  */
 export async function applyImprovement(options: ApplyOptions): Promise<PatchAttempt> {
   const { root, planId } = options;
@@ -489,6 +506,17 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         { workspace, rolledBack: false },
       );
     }
+    const baselineGap = incompleteMutationRun(mutationBefore);
+
+    if (baselineGap !== null) {
+      return end(
+        'no_safe_improvement',
+        [
+          `the baseline mutation run is incomplete: ${baselineGap}, so killed mutants before and after the patch cannot be compared; nothing was applied. Raise mutation.timeoutMs or the plan's time budget, or plan for a narrower scope`,
+        ],
+        { workspace, rolledBack: false },
+      );
+    }
     const before = snapshot(testsBefore, mutationBefore, recordedClaimStatuses(root, doc.runId));
 
     // Patched.
@@ -539,6 +567,17 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         { workspace, before, rolledBack: true },
       );
     }
+    const patchedGap = incompleteMutationRun(mutationAfter);
+
+    if (patchedGap !== null) {
+      return end(
+        'no_safe_improvement',
+        [
+          `the patched mutation run is incomplete: ${patchedGap}, so killed mutants before and after the patch cannot be compared; the patch was discarded`,
+        ],
+        { workspace, before, rolledBack: true },
+      );
+    }
     const reassessed = await reassess(workspace, root, doc.runId, options);
     if (reassessed.failed.length > 0) {
       return end(
@@ -554,13 +593,11 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
       mutationBefore.mutants.filter((m) => m.status === 'killed').map((m) => m.id),
     );
     const newlyKilled = mutationAfter.mutants.filter((m) => m.status === 'killed' && !killedBefore.has(m.id));
+    const byNewTests = killedByNewTests(mutationBefore.mutants, mutationAfter.mutants);
     const lost = lostResults(
       before.claimStatuses,
       reassessed.statuses,
-      requiredClaimIds(
-        runClaims(root, doc.runId),
-        killedByNewTests(mutationBefore.mutants, mutationAfter.mutants),
-      ),
+      requiredClaimIds(runClaims(root, doc.runId), byNewTests),
     );
     if (lost.length > 0) {
       return end(
@@ -579,6 +616,16 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         'no_safe_improvement',
         [
           `killed mutants did not increase (${before.mutantsKilled} -> ${after.mutantsKilled}); the patch was discarded`,
+        ],
+        { workspace, before, after, rolledBack: true },
+      );
+    }
+
+    if (byNewTests.size === 0) {
+      return end(
+        'no_safe_improvement',
+        [
+          `killed mutants went from ${before.mutantsKilled} to ${after.mutantsKilled}, but no added test killed a mutant the baseline left alive; the patch was discarded`,
         ],
         { workspace, before, after, rolledBack: true },
       );

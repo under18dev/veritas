@@ -173,6 +173,12 @@ export const VeritasConfig = z
           .positive()
           .default(120_000)
           .describe('Time allowed for mutation testing, in milliseconds.'),
+        typecheck: z
+          .enum(['auto', 'off'])
+          .default('auto')
+          .describe(
+            'auto lets mutator type-check mutants before running them and leave out those that do not compile; off starts mutants right after the baseline, but mutants the compiler would reject are run and counted too.',
+          ),
       })
       .strict()
       .prefault({})

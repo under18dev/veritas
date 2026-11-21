@@ -229,3 +229,26 @@ describe('memory limits', () => {
     expect(result.error).toMatch(/ran out of memory \(limit 32 MiB/);
   }, 90_000);
 });
+
+describe('stderr past maxOutputBytes', () => {
+  it('keeps the head in stderr and the end in stderrTail', async () => {
+    const script =
+      "for (let i = 0; i < 2000; i++) console.error('line ' + i); console.error('time budget of 45s exhausted: 2 mutants not run');";
+    const r = await runCommand(process.execPath, ['-e', script], {
+      cwd: tmp(),
+      timeoutMs: 20_000,
+      maxOutputBytes: 1000,
+    });
+    expect(r.stderr.startsWith('line 0\n')).toBe(true);
+    expect(r.stderr).not.toContain('time budget');
+    expect(r.stderrTail).toMatch(/line 1999\ntime budget of 45s exhausted: 2 mutants not run\n$/);
+  });
+
+  it('sets no stderrTail when stderr fits', async () => {
+    const r = await runCommand(process.execPath, ['-e', "console.error('short')"], {
+      cwd: tmp(),
+      timeoutMs: 20_000,
+    });
+    expect(r.stderrTail).toBeUndefined();
+  });
+});

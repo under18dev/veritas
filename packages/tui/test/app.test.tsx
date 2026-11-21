@@ -626,7 +626,7 @@ describe('the TUI', { timeout: 20_000 }, () => {
     const frame = app.lastFrame() ?? '';
     for (const title of ['General', 'Project', 'Sources', 'Analysis', 'Property-based testing', 'LLM'])
       expect(frame).toContain(title);
-    expect(frame).toMatch(/Mutation testing\s+3 settings\s+1 changed/);
+    expect(frame).toMatch(/Mutation testing\s+4 settings\s+1 changed/);
     await press(app, KEY.down, KEY.down, KEY.down, KEY.down);
     await until(app, 'Mutation testing with mutator.');
     await press(app, KEY.enter, KEY.down, KEY.down, KEY.down);
@@ -984,7 +984,8 @@ describe('the TUI', { timeout: 20_000 }, () => {
     await until(app, 'New value:');
     await press(app, ...Array(4).fill(KEY.backspace), '0', KEY.enter);
     await until(app, 'mutation.timeoutMs: Too small');
-    await press(app, KEY.escape, KEY.down, KEY.enter, KEY.down, KEY.enter);
+    // Past mutation.typecheck to the property-based testing section, then its run count.
+    await press(app, KEY.escape, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.enter);
     await until(app, 'New value:');
     await press(app, KEY.backspace, '9', KEY.enter);
     await until(app, '2 unsaved');
