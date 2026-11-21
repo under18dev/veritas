@@ -23,7 +23,7 @@ export async function doctorCommand(opts: GlobalOptions): Promise<ExitCode> {
 
     for (const f of report.features)
       emitText(
-        `${f.state.padEnd(9)} ${f.feature}${f.missing.length ? ` (missing: ${f.missing.join(', ')})` : ''}`,
+        `${f.state.padEnd(9)} ${f.feature}${f.missing.length ? ` (missing: ${f.missing.join(', ')})` : ''}${f.partial?.length ? ` (partial: ${f.partial.join(', ')})` : ''}`,
       );
   }
 

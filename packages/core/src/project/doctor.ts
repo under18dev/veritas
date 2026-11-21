@@ -34,6 +34,12 @@ export interface FeatureStatus {
   feature: string;
   state: 'enabled' | 'degraded' | 'disabled';
   missing: CapabilityName[];
+  /**
+   * Required capabilities that work only in part and make the feature degraded although nothing is missing; only the
+   * mutator is such a capability, when mutation with the project's test runner is experimental (Jest). Absent when
+   * empty.
+   */
+  partial?: CapabilityName[];
 }
 
 export interface DoctorReport {
@@ -258,17 +264,19 @@ export async function runDoctor(
   const statuses: FeatureStatus[] = Object.entries(features).map(([feature, deps]) => {
     const missingRequired = deps.required.filter((n) => !usable(n));
     const missingOptional = deps.optional.filter((n) => stateOf.get(n) !== 'available');
-    // A required capability that works only in part (experimental mutation with Jest) degrades the feature.
-    const degradedRequired = deps.required.some((n) => stateOf.get(n) === 'degraded');
+    // An experimental mutator (mutation with Jest) works only in part, so the features that need it are degraded.
+    // Other required capabilities that are degraded keep counting as usable, as they always have.
+    const partial = deps.required.filter((n) => n === 'mutator' && stateOf.get(n) === 'degraded');
 
     return {
       feature,
       state: missingRequired.length
         ? 'disabled'
-        : missingOptional.length || degradedRequired
+        : missingOptional.length || partial.length
           ? 'degraded'
           : 'enabled',
       missing: [...missingRequired, ...missingOptional],
+      ...(partial.length > 0 && missingRequired.length === 0 ? { partial } : {}),
     };
   });
 
