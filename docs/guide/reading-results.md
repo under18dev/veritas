@@ -109,7 +109,14 @@ Some assertions still do not count:
 
 A page query also does not credit a project component whose children in the test hold no project component, such as `<Providers><Button>Go</Button></Providers>` or a provider helper that wraps whatever it is given: the query may find only what the test supplied. This also leaves out a component like `<Card>Body</Card>` when the query looks for something the card renders itself; such a test is reported unless another assertion links it.
 
-A module the test file replaces with `vi.mock` is linked when project code calls it internally: `log('hi'); expect(send).toHaveBeenCalledWith('hi')` checks `log` when `send` is imported from the mocked module and the file declaring `log`, or a local file it loads, imports that module. The mock must be read after the project call, and the test must not call it itself. Static analysis does not yet follow a spy on a global object (`vi.spyOn(document, …)`), a mock put in a global (`window.monaco = …`), or an object that a mocked function returns (`vi.mocked(load).mockResolvedValue(store)` with `store.set` checked). Static analysis alone (the `quick` profile) therefore reports tests that check only those as `tautological_or_disconnected`, so read them before acting on the finding.
+Project code that reaches a mock or the page without being handed anything is followed too, when the assertion comes after the project call:
+
+- a mock imported from a module the test file replaces with `vi.mock`, or held by that module's mock factory (`vi.mock('./tabs', () => ({ useTabs: () => ({ remove: h.remove }) }))`) or by the value configured for one of its mocks (`vi.mocked(load).mockResolvedValue(store)` with `store.set` checked), when the file declaring the project function, or a local file it loads, imports that module
+- a read of the page through the global `document` after a project function whose code (or a local file it loads) uses `document`, as in `applyTheme('dark'); expect(document.documentElement.dataset.theme)…`
+- a spy on a global object or prototype (`vi.spyOn(Element.prototype, 'scrollIntoView')`, `vi.spyOn(document, 'removeEventListener')`) when the project code names that method, unless the test calls that method itself
+- a mock put into a global (`window.monaco = { editor }`, `vi.stubGlobal('monaco', mock)`, or a helper that assigns its argument to a global) when the project code uses that global's name
+
+These links are read from names in the project code, not from what it does at run time, so they say that the project code can reach the mock or the page, not that the assertion checks a particular result. The rules above still apply: a mock the test calls itself, a read made before the project call, and what the test wrote to the page itself do not count. Static analysis still does not follow state a mocked module writes into an object the test imports (`captured.path` filled by a mocked component), so read such tests before acting on the finding.
 
 ### How mutation testing confirms a missing link
 
