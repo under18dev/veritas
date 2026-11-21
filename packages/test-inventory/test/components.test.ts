@@ -1029,6 +1029,114 @@ it('function thrown', () => { expect(() => compute(1)).not.toThrow(); });
   });
 });
 
+describe('props, setup hand-offs, writes that run and namespaces', () => {
+  it('counts an element given as a prop only when the component renders that prop', () => {
+    const byName = inventory(`${header}
+      function Ignore({ unused }: { unused: JSX.Element }) { return <p>Hi</p>; }
+      function Layout({ header }: { header: JSX.Element }) { return <main>{header}</main>; }
+      function Shell(props: { body: JSX.Element }) { return <div>{props.body}</div>; }
+      it('prop ignored', () => {
+        render(<Ignore unused={<Dialog open title="Hi" />} />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('prop rendered', () => {
+        render(<Layout header={<Dialog open title="Hi" />} />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('prop rendered through props', () => {
+        render(<Shell body={<Dialog open title="Hi" />} />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('prop of a third-party component', () => {
+        render(<Button startIcon={<Dialog open title="Hi" />}>Go</Button>);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+    `);
+
+    expect(byName('prop ignored')).toMatchObject({ symbols: [], asserted: false });
+    expect(byName('prop rendered')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
+    expect(byName('prop rendered through props')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: true,
+    });
+    expect(byName('prop of a third-party component')).toMatchObject({ symbols: [], asserted: false });
+  });
+
+  it('links the mocks a beforeEach render was handed', () => {
+    const byName = inventory(`${header}
+      describe('setup', () => {
+        const props = { open: true, onSave: vi.fn(), onCancel: vi.fn() };
+        beforeEach(() => { render(<Dialog onSave={props.onSave} open />); });
+        it('handed mock', () => {
+          fireEvent.click(screen.getByText('save'));
+          expect(props.onSave).toHaveBeenCalled();
+        });
+        it('mock not handed', () => { expect(props.onCancel).not.toHaveBeenCalled(); });
+      });
+    `);
+
+    expect(byName('handed mock')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
+    expect(byName('mock not handed')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: false });
+  });
+
+  it('counts a write to the page only when its code runs', () => {
+    const byName = inventory(`${header}
+      it('write in a function never called', () => {
+        const reset = () => { document.body.innerHTML = ''; };
+        render(<Dialog open title="Hi" />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('write in a function called', () => {
+        const fill = () => { document.body.innerHTML = '<p>Hi</p>'; };
+        fill();
+        render(<Dialog open />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('listener that never fires', () => {
+        window.addEventListener('message', () => { document.body.innerHTML = '<p>Hi</p>'; });
+        render(<Dialog open title="Hi" />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('listener with events fired', () => {
+        window.addEventListener('click', () => { document.body.innerHTML = '<p>Hi</p>'; });
+        render(<Dialog open />);
+        fireEvent.click(document.body);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+    `);
+
+    expect(byName('write in a function never called').asserted).toBe(true);
+    expect(byName('write in a function called').asserted).toBe(false);
+    expect(byName('listener that never fires').asserted).toBe(true);
+    expect(byName('listener with events fired').asserted).toBe(false);
+  });
+
+  it('resolves Testing Library namespace imports', () => {
+    const byName = inventory(`${header}
+      import * as rtl from '@testing-library/react';
+      it('namespace screen', () => {
+        rtl.render(<Dialog open title="Hi" />);
+        expect(rtl.screen.getByText('Hi')).toBeTruthy();
+      });
+      it('namespace within', () => {
+        rtl.render(<Dialog open title="Hi" />);
+        expect(rtl.within(rtl.screen.getByRole('dialog')).getByText('Hi')).toBeTruthy();
+      });
+      it('namespace screen without a project render', () => {
+        rtl.render(<p>Hi</p>);
+        expect(rtl.screen.getByText('Hi')).toBeTruthy();
+      });
+    `);
+
+    expect(byName('namespace screen').asserted).toBe(true);
+    expect(byName('namespace within').asserted).toBe(true);
+    expect(byName('namespace screen without a project render')).toMatchObject({
+      symbols: [],
+      asserted: false,
+    });
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}

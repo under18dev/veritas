@@ -586,6 +586,8 @@ function analyzeBody(
         calls.push(entry);
         setupEntries.add(entry);
       }
+    // What the setup render was handed (`render(<Dialog {...props} />)`) is checked as if handed here.
+    bindCallOutputs(node);
   }
 
   for (const node of descendants(body)) {
@@ -780,6 +782,8 @@ function analyzeBody(
   const documentWrites: DocumentWrite[] = [];
 
   for (const node of descendants(body)) {
+    // A write in a function that never runs (`const reset = () => { document.body.innerHTML = ''; }`) writes nothing.
+    if (!writeRuns(node, body, checker)) continue;
     let written: ts.Expression | undefined;
     let content = false;
 
@@ -1292,6 +1296,79 @@ function documentRoot(expression: ts.Expression, checker: ts.TypeChecker, depth:
   return ts.isIdentifier(value) ? documentBase(value, checker, depth + 1) : undefined;
 }
 
+/** Calls that make the page fire events, so listeners given to `addEventListener` may run. */
+const EVENT_SOURCES = /^(?:fireEvent|userEvent|user)$|^(?:dispatchEvent|click|focus|blur|submit)$/;
+
+/**
+ * Whether code in a test body runs: every function between it and the body is called (where written, or by name in
+ * the body), or given to a call other than `expect`. A listener given to `addEventListener` runs only if the body
+ * makes events fire (`fireEvent`, `userEvent`, `dispatchEvent`, `click()`).
+ */
+function writeRuns(node: ts.Node, body: ts.Node, checker: ts.TypeChecker): boolean {
+  for (let current = node.parent; current && current !== body; current = current.parent) {
+    if (!isFunctionLike(current)) continue;
+    let fn: ts.Node = current;
+
+    while (ts.isParenthesizedExpression(fn.parent)) fn = fn.parent;
+    const parent = fn.parent;
+
+    if (ts.isCallExpression(parent) && parent.expression === fn) continue;
+
+    if (
+      (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
+      parent.arguments?.includes(fn as ts.Expression)
+    ) {
+      if (ts.isCallExpression(parent) && isAssertionChainCall(parent)) return false;
+      const callee = skipParens(parent.expression);
+
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        callee.name.text === 'addEventListener' &&
+        !firesEvents(body)
+      )
+        return false;
+      continue;
+    }
+    const name = ts.isFunctionDeclaration(current)
+      ? current.name
+      : ts.isVariableDeclaration(parent) && parent.initializer === fn && ts.isIdentifier(parent.name)
+        ? parent.name
+        : undefined;
+    const symbol = name && checker.getSymbolAtLocation(name);
+    const called =
+      symbol !== undefined &&
+      referencesOf(symbol, body.getSourceFile(), checker).some(
+        (item) =>
+          item !== name &&
+          contains(body, item) &&
+          ((ts.isCallExpression(item.parent) && item.parent.expression === item) ||
+            ((ts.isCallExpression(item.parent) || ts.isNewExpression(item.parent)) &&
+              item.parent.arguments?.includes(item) === true &&
+              !(ts.isCallExpression(item.parent) && isAssertionChainCall(item.parent)))),
+      );
+
+    if (!called) return false;
+  }
+
+  return true;
+}
+
+/** Whether a test body makes events fire on the page. */
+function firesEvents(body: ts.Node): boolean {
+  return descendants(body).some((node) => {
+    if (!ts.isCallExpression(node)) return false;
+    const callee = skipParens(node.expression);
+    let root: ts.Expression = callee;
+
+    while (ts.isPropertyAccessExpression(root)) root = skipParens(root.expression);
+
+    return (
+      (ts.isPropertyAccessExpression(callee) && EVENT_SOURCES.test(callee.name.text)) ||
+      (ts.isIdentifier(root) && EVENT_SOURCES.test(root.text))
+    );
+  });
+}
+
 /** A write of the test to the page: the member chain written, where, and whether it put content there. */
 interface DocumentWrite {
   chain: string;
@@ -1422,7 +1499,7 @@ function isDocumentQuery(call: ts.CallExpression, checker: ts.TypeChecker): bool
   if (!ts.isPropertyAccessExpression(callee) || !DOCUMENT_QUERY.test(callee.name.text)) return false;
   const receiver = skipParens(callee.expression);
 
-  if (ts.isIdentifier(receiver) && testingLibraryExport(receiver, checker) === 'screen') return true;
+  if (testingLibraryMember(receiver, checker) === 'screen') return true;
   // A query on what `within(element)` returns, inline or kept in a local; `within(...)` alone queries nothing.
   const scoped = ts.isIdentifier(receiver)
     ? variableInitializer(valueSymbol(receiver, checker)?.valueDeclaration)
@@ -1432,8 +1509,7 @@ function isDocumentQuery(call: ts.CallExpression, checker: ts.TypeChecker): bool
   return (
     within !== undefined &&
     ts.isCallExpression(within) &&
-    ts.isIdentifier(within.expression) &&
-    testingLibraryExport(within.expression, checker) === 'within' &&
+    testingLibraryMember(within.expression, checker) === 'within' &&
     within.arguments[0] !== undefined &&
     fromRenderedPage(within.arguments[0], checker, 0)
   );
@@ -1473,6 +1549,25 @@ function fromRenderedPage(expression: ts.Expression, checker: ts.TypeChecker, de
       fromRenderedPage(initializer, checker, depth + 1)
     );
   });
+}
+
+/**
+ * The `@testing-library/*` export an expression names: an imported identifier (`screen`) or a member of a namespace
+ * import (`rtl.screen` with `import * as rtl from '@testing-library/react'`).
+ */
+function testingLibraryMember(expression: ts.Expression, checker: ts.TypeChecker): string | undefined {
+  const value = skipParens(expression);
+
+  if (ts.isIdentifier(value)) return testingLibraryExport(value, checker);
+
+  if (!ts.isPropertyAccessExpression(value) || !ts.isIdentifier(skipParens(value.expression)))
+    return undefined;
+  const source = importSource(skipParens(value.expression) as ts.Identifier, checker);
+  const namespace = (checker.getSymbolAtLocation(skipParens(value.expression))?.declarations ?? []).some(
+    ts.isNamespaceImport,
+  );
+
+  return namespace && source?.startsWith('@testing-library/') ? value.name.text : undefined;
 }
 
 /** The name a `@testing-library/*` package exports that an identifier refers to, if it refers to one. */
@@ -1953,11 +2048,72 @@ function argumentMount(
   return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
 }
 
+/**
+ * How an element given as the `name` prop of a component is mounted: where the component's own code puts that prop
+ * (`function Layout({ header }) { return <main>{header}</main>; }`), judged like any other expression, and only if the
+ * component itself is mounted. Components whose body is not visible (intrinsic, third-party) mount nothing.
+ */
+function propMount(
+  element: ts.JsxOpeningElement | ts.JsxSelfClosingElement,
+  name: string,
+  ctx: Ctx,
+  depth: number,
+): Mount {
+  let symbol = aliasTarget(element.tagName as ts.Expression, ctx.checker);
+
+  if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = ctx.checker.getAliasedSymbol(symbol);
+  const fn = (symbol?.declarations ?? [])
+    .map((item) => (ts.isVariableDeclaration(item) && item.initializer ? skipParens(item.initializer) : item))
+    .find(
+      (item) => isFunctionLike(item) && item.body !== undefined && !item.getSourceFile().isDeclarationFile,
+    );
+
+  if (!fn || !isFunctionLike(fn) || !fn.body) return undefined;
+  const parameter = fn.parameters[0];
+
+  if (!parameter) return undefined;
+  const reads: ts.Expression[] = [];
+
+  if (ts.isIdentifier(parameter.name)) {
+    // `props.header`
+    const props = ctx.checker.getSymbolAtLocation(parameter.name);
+
+    for (const item of descendants(fn.body))
+      if (
+        ts.isPropertyAccessExpression(item) &&
+        item.name.text === name &&
+        ts.isIdentifier(item.expression) &&
+        ctx.checker.getSymbolAtLocation(item.expression) === props
+      )
+        reads.push(item);
+  } else if (ts.isObjectBindingPattern(parameter.name)) {
+    // `{ header }` or `{ header: top }`
+    const binding = parameter.name.elements.find((item) => {
+      const property = item.propertyName ?? item.name;
+
+      return !item.dotDotDotToken && ts.isIdentifier(property) && property.text === name;
+    });
+    const local =
+      binding && ts.isIdentifier(binding.name) ? ctx.checker.getSymbolAtLocation(binding.name) : undefined;
+
+    if (local)
+      for (const item of descendants(fn.body))
+        if (ts.isIdentifier(item) && ctx.checker.getSymbolAtLocation(item) === local) reads.push(item);
+  }
+  const mounts = reads.map((read) => mountedExpression(read, ctx, depth + 1));
+
+  return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
+}
+
 /** The outermost expression of the JSX tree an element sits in, through conditionals, arrays and parentheses. */
 function jsxTop(expression: ts.Node): ts.Node {
   let current = expression;
   for (;;) {
     const parent = current.parent;
+
+    // A prop value (`<Ignore unused={<Dialog />} />`) is handed to that component, which may not render it: it is
+    // judged as an argument, not as part of the tree around it.
+    if (ts.isJsxExpression(parent) && ts.isJsxAttribute(parent.parent)) break;
 
     if (
       ts.isJsxElement(parent) ||
@@ -2011,6 +2167,16 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount 
     return hasFunctionBody(parent, ctx.checker)
       ? argumentMount(parent, index, ctx, depth)
       : rendererKind(parent.expression, ctx.checker);
+  }
+
+  // `<Layout header={<Dialog />} />`: mounted where the component renders that prop.
+  if (ts.isJsxExpression(parent) && ts.isJsxAttribute(parent.parent)) {
+    const attribute = parent.parent;
+    const element = attribute.parent.parent;
+
+    return ts.isIdentifier(attribute.name) && depth < 5
+      ? propMount(element, attribute.name.text, ctx, depth)
+      : undefined;
   }
 
   // `const ui = <Dialog />; render(ui)`.
@@ -2720,10 +2886,9 @@ function renderHookInitialProps(
     return undefined;
   const call = callback.parent;
 
-  if (!ts.isCallExpression(call) || call.arguments[0] !== callback || !ts.isIdentifier(call.expression))
-    return undefined;
+  if (!ts.isCallExpression(call) || call.arguments[0] !== callback) return undefined;
 
-  if (testingLibraryExport(call.expression, checker) !== 'renderHook') return undefined;
+  if (testingLibraryMember(call.expression, checker) !== 'renderHook') return undefined;
   const options = call.arguments[1] && skipParens(call.arguments[1]);
 
   if (!options || !ts.isObjectLiteralExpression(options)) return undefined;
