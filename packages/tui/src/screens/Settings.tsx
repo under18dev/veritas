@@ -713,8 +713,8 @@ function FieldPanel({
         </Text>
       }
     >
-      {/* While a value is typed, the description keeps to one line to leave room for the editor. */}
-      <Text wrap={editing && mode.kind !== 'pick' ? 'truncate-end' : 'wrap'}>{field.description}</Text>
+      {/* While a value is changed, the description keeps to one line to leave room for the editor. */}
+      <Text wrap={editing ? 'truncate-end' : 'wrap'}>{field.description}</Text>
       <Text wrap="truncate-end">
         <Text dimColor>now </Text>
         <Text {...(changed(draft, field) ? { color: 'yellow' } : {})}>{show(value, field)}</Text>
@@ -723,7 +723,7 @@ function FieldPanel({
         {show(field.default, field)}
         {unsaved ? <Text color="magenta">{'   unsaved'}</Text> : null}
       </Text>
-      {allowed(field) ? (
+      {allowed(field) && mode.kind !== 'pick' ? (
         <Text dimColor wrap="truncate-end">
           allowed: {allowed(field)}
         </Text>
