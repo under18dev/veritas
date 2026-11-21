@@ -50,10 +50,19 @@ function secretValues(env: NodeJS.ProcessEnv): string[] {
   return values;
 }
 
+/**
+ * Every pattern below needs one of these substrings, so a text with none of them (and no secret value) is returned
+ * as is without running each pattern over it.
+ */
+const MAY_HOLD_SECRET =
+  /sk-|gh[pousr]_|github_pat_|AKIA|xox[abprs]-|-----BEGIN|passw|secret|token|api[_-]?key|auth|:\/\/|bearer|basic/i;
+
 function redactWith(text: string, secrets: string[]): string {
   let out = text;
 
   for (const value of secrets) if (out.includes(value)) out = out.split(value).join(REDACTED);
+
+  if (!MAY_HOLD_SECRET.test(out)) return out;
 
   for (const [pattern, replacement] of KEEP_PREFIX) out = out.replace(pattern, replacement);
 

@@ -1,8 +1,8 @@
 import { realpathSync } from 'node:fs';
 import {
+  createRedactor,
   Mutant,
   type MutantStatus,
-  redact,
   resolveInsideRoot,
   stableId,
   toPosixRelative,
@@ -89,6 +89,8 @@ export interface ImportOptions {
  * equivalence is never inferred here.
  */
 export function importMutationReport(json: unknown, options: ImportOptions): Mutant[] {
+  // Secret environment values read once for the whole report, not for every field of every mutant.
+  const redact = createRedactor();
   const parsed = MutationTestingReport.safeParse(json);
 
   if (!parsed.success) {
