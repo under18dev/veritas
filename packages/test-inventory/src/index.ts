@@ -5725,7 +5725,28 @@ function codeReach(starts: ts.Node[], ctx: Ctx, followProject: boolean): Reach {
     if (visited.has(start) || depth > 12) return;
     visited.add(start);
 
-    for (const node of [start, ...descendants(start)]) {
+    // Types run nothing: their subtrees, and interfaces or type aliases, are not walked.
+    const nodes: ts.Node[] = [];
+    const collect = (node: ts.Node) => {
+      if (ts.isTypeNode(node) || ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) return;
+      nodes.push(node);
+      ts.forEachChild(node, collect);
+    };
+    collect(start);
+
+    for (const node of nodes) {
+      // A module loaded on demand (`await import('mermaid')`) is used by the code that loads it.
+      if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        const specifier = literalString(node.arguments[0]);
+        const file =
+          specifier === undefined
+            ? undefined
+            : resolvedModuleFile(specifier, node.getSourceFile().fileName, ctx);
+
+        if (file !== undefined) reach.modules.add(file);
+        continue;
+      }
+
       if (ts.isPropertyAccessExpression(node)) {
         if (isWritten(node)) continue;
         const member = checker.getSymbolAtLocation(node.name);

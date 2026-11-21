@@ -246,7 +246,7 @@ describe('links through globals and mocked modules', () => {
     expect(byName('factory, member not handed over')).toBe('none');
   });
 
-  it('follows a method of an exported object and a default export', () => {
+  it('follows a method of an exported object, a default export and a dynamic import', () => {
     const byName = asserted(
       {
         'src/api.ts': 'export function send(x: string): void { void x; }\n',
@@ -254,22 +254,27 @@ describe('links through globals and mocked modules', () => {
           "import { send } from './api.js';\nexport const client = { log(m: string): void { send(m); }, idle(): number { return 1; } };\n",
         'src/panel.ts':
           "import { send } from './api.js';\nexport default function panel(): void { send('open'); }\n",
+        'src/lazy.ts':
+          "export async function lazy(): Promise<void> { const m = await import('./api.js'); m.send('l'); }\n",
       },
       `
         import { expect, it, vi } from 'vitest';
         import { send } from '../src/api.js';
         import { client } from '../src/client.js';
         import panel from '../src/panel.js';
+        import { lazy } from '../src/lazy.js';
         vi.mock('../src/api.js');
         it('method', () => { client.log('m'); expect(send).toHaveBeenCalledWith('m'); });
         it('other method', () => { client.idle(); expect(send).not.toHaveBeenCalled(); });
         it('default export', () => { panel(); expect(send).toHaveBeenCalledWith('open'); });
+        it('dynamic import', async () => { await lazy(); expect(send).toHaveBeenCalledWith('l'); });
       `,
     );
 
     expect(byName('method')).toBe('reachable');
     expect(byName('other method')).toBe('none');
     expect(byName('default export')).toBe('reachable');
+    expect(byName('dynamic import')).toBe('reachable');
   });
 
   it('records no route where project code reachable from the call does not use the global, API or module', () => {
