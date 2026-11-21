@@ -1768,40 +1768,67 @@ function localDependencies(start: ts.SourceFile, checker: ts.TypeChecker, root: 
     .sort();
 }
 
-/** The local files a file loads, transitively: what its imports, re-exports and dynamic imports name. */
+/** The local files a source names in its imports, re-exports and literal dynamic imports, in source order. */
+const directImportsCache = new WeakMap<ts.SourceFile, ts.SourceFile[]>();
+
+function directLocalImports(source: ts.SourceFile, checker: ts.TypeChecker, root: string): ts.SourceFile[] {
+  const cached = directImportsCache.get(source);
+
+  if (cached) return cached;
+  const found: ts.SourceFile[] = [];
+
+  for (const node of descendants(source)) {
+    let specifier: ts.Expression | undefined;
+
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier)
+      specifier = node.moduleSpecifier;
+    else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
+      specifier = node.arguments[0];
+
+    if (!specifier || !ts.isStringLiteralLike(specifier)) continue;
+    const target = checker
+      .getSymbolAtLocation(specifier)
+      ?.declarations?.find((declaration) => ts.isSourceFile(declaration));
+
+    if (!target || !ts.isSourceFile(target) || target.isDeclarationFile) continue;
+    const relative = path.relative(root, path.resolve(target.fileName));
+
+    if (
+      relative.startsWith('..') ||
+      path.isAbsolute(relative) ||
+      relative.split(path.sep).includes('node_modules')
+    )
+      continue;
+    found.push(target);
+  }
+  directImportsCache.set(source, found);
+
+  return found;
+}
+
+/**
+ * The local files a file loads, transitively: what its imports, re-exports and dynamic imports name. Each file's
+ * own imports are read once per analysis, and so is the closure of each start file.
+ */
+const loadedFilesCache = new WeakMap<ts.SourceFile, ts.SourceFile[]>();
+
 function loadedFiles(start: ts.SourceFile, checker: ts.TypeChecker, root: string): ts.SourceFile[] {
+  const cached = loadedFilesCache.get(start);
+
+  if (cached) return cached;
   const seen = new Set<ts.SourceFile>([start]);
   const queue = [start];
 
-  for (let source = queue.shift(); source; source = queue.shift()) {
-    for (const node of descendants(source)) {
-      let specifier: ts.Expression | undefined;
-
-      if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier)
-        specifier = node.moduleSpecifier;
-      else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
-        specifier = node.arguments[0];
-
-      if (!specifier || !ts.isStringLiteralLike(specifier)) continue;
-      const target = checker
-        .getSymbolAtLocation(specifier)
-        ?.declarations?.find((declaration) => ts.isSourceFile(declaration));
-
-      if (!target || !ts.isSourceFile(target) || target.isDeclarationFile || seen.has(target)) continue;
-      const relative = path.relative(root, path.resolve(target.fileName));
-
-      if (
-        relative.startsWith('..') ||
-        path.isAbsolute(relative) ||
-        relative.split(path.sep).includes('node_modules')
-      )
-        continue;
+  for (let source = queue.shift(); source; source = queue.shift())
+    for (const target of directLocalImports(source, checker, root)) {
+      if (seen.has(target)) continue;
       seen.add(target);
       queue.push(target);
     }
-  }
+  const result = [...seen].filter((source) => source !== start);
+  loadedFilesCache.set(start, result);
 
-  return [...seen].filter((source) => source !== start);
+  return result;
 }
 
 /**
