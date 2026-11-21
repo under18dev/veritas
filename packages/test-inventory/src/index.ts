@@ -187,6 +187,8 @@ interface Ctx {
 interface MockReference {
   symbol: ts.Symbol;
   path: string[];
+  /** Properties right below `path` that were not handed over (replaced by a later JSX attribute). */
+  except?: string[];
 }
 
 /** Whether an assertion reading `keys` of a helper's result (`null`: all of it) reads what carries `target`. */
@@ -196,7 +198,13 @@ function keysMatch(keys: Set<string> | null | undefined, target: Target): boolea
 
 /** Whether handing over `given` hands over the mock `read` checks: the whole value, or a property above it. */
 function covers(given: MockReference, read: MockReference): boolean {
-  return given.symbol === read.symbol && given.path.every((name, index) => read.path[index] === name);
+  const below = read.path[given.path.length];
+
+  return (
+    given.symbol === read.symbol &&
+    given.path.every((name, index) => read.path[index] === name) &&
+    !(below !== undefined && given.except?.includes(below))
+  );
 }
 
 /**
@@ -527,8 +535,8 @@ function analyzeBody(
 
     // An object holding mocks (`render(<Dialog {...props} />)`) is not followed as a value: only an assertion on how
     // one of the mocks handed over was called checks the call (`expect(props.onSave).toHaveBeenCalled()`).
-    for (const { declaration, path } of [
-      ...holders.mocks.map((declaration) => ({ declaration, path: [] as string[] })),
+    for (const { declaration, path, except } of [
+      ...holders.mocks.map((declaration) => ({ declaration, path: [] as string[], except: undefined })),
       ...holders.containers,
     ]) {
       if (declaration.getSourceFile() !== source) continue;
@@ -537,11 +545,12 @@ function analyzeBody(
         const symbol = checker.getSymbolAtLocation(identifier);
 
         if (!symbol) continue;
-        mockHolders.set(call, [...(mockHolders.get(call) ?? []), { symbol, path }]);
+        const reference = { symbol, path, ...(except ? { except } : {}) };
+        mockHolders.set(call, [...(mockHolders.get(call) ?? []), reference]);
 
         // A mock of an enclosing scope that a helper hands over (`const renderDialog = () => render(<Dialog
         // onSave={onSave} />)`) is checked where the helper is called, which this body's caller sees.
-        if (!contains(body, declaration)) handed.set(call, [...(handed.get(call) ?? []), { symbol, path }]);
+        if (!contains(body, declaration)) handed.set(call, [...(handed.get(call) ?? []), reference]);
       }
     }
 
@@ -1204,12 +1213,57 @@ function documentChain(
   while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root))
     root = skipParens(root.expression);
 
-  if (!ts.isIdentifier(root) || root.text !== 'document' || root === top) return undefined;
-  const declarations = checker.getSymbolAtLocation(root)?.declarations ?? [];
+  if (!ts.isIdentifier(root)) return undefined;
+  const rest = top.getText().replace(/\s+/g, '').slice(root.text.length);
+  const base = documentBase(root, checker, 0);
 
-  if (!declarations.every((declaration) => declaration.getSourceFile().isDeclarationFile)) return undefined;
+  // The bare global `document` names no member of the page.
+  return base === undefined || (base === 'document' && rest === '') ? undefined : base + rest;
+}
 
-  return top.getText().replace(/\s+/g, '');
+/**
+ * The `document` chain an identifier stands for: the global `document`, or a local holding part of it (`const body =
+ * document.body`, `const { body } = document`).
+ */
+function documentBase(identifier: ts.Identifier, checker: ts.TypeChecker, depth: number): string | undefined {
+  const symbol = checker.getSymbolAtLocation(identifier);
+  const declarations = symbol?.declarations ?? [];
+
+  if (identifier.text === 'document' && declarations.every((item) => item.getSourceFile().isDeclarationFile))
+    return 'document';
+  const declaration = symbol?.valueDeclaration;
+
+  if (!declaration || depth > 3) return undefined;
+
+  if (ts.isVariableDeclaration(declaration) && ts.isIdentifier(declaration.name) && declaration.initializer)
+    return (
+      documentChain(declaration.initializer, checker) ?? documentRoot(declaration.initializer, checker, depth)
+    );
+
+  if (
+    ts.isBindingElement(declaration) &&
+    ts.isObjectBindingPattern(declaration.parent) &&
+    !declaration.dotDotDotToken
+  ) {
+    const holder = declaration.parent.parent;
+    const property = declaration.propertyName ?? declaration.name;
+
+    if (!ts.isVariableDeclaration(holder) || !holder.initializer || !ts.isIdentifier(property))
+      return undefined;
+    const base =
+      documentChain(holder.initializer, checker) ?? documentRoot(holder.initializer, checker, depth);
+
+    return base === undefined ? undefined : `${base}.${property.text}`;
+  }
+
+  return undefined;
+}
+
+/** `document` itself (or a local holding it) as an initializer. */
+function documentRoot(expression: ts.Expression, checker: ts.TypeChecker, depth: number): string | undefined {
+  const value = skipParens(expression);
+
+  return ts.isIdentifier(value) ? documentBase(value, checker, depth + 1) : undefined;
 }
 
 /** A write of the test to the page: the member chain written, where, and whether it put content there. */
@@ -1305,10 +1359,8 @@ function isDocumentRead(node: ts.Node, checker: ts.TypeChecker): boolean {
   if (!ts.isPropertyAccessExpression(node) || !DOCUMENT_READS.has(node.name.text)) return false;
   const receiver = skipParens(node.expression);
 
-  if (!ts.isIdentifier(receiver) || receiver.text !== 'document') return false;
-  const declarations = checker.getSymbolAtLocation(receiver)?.declarations ?? [];
-
-  return declarations.every((declaration) => declaration.getSourceFile().isDeclarationFile);
+  // `document.body`, or the same through a local holding `document` (`const doc = document; doc.body`).
+  return ts.isIdentifier(receiver) && documentBase(receiver, checker, 0) === 'document';
 }
 
 /** The variable an identifier names; in `{ value }` that is the variable, not the property it makes. */
@@ -1706,20 +1758,25 @@ function inBeforeEach(node: ts.Node): boolean {
 }
 
 /** Functions that mount the element they are given: Testing Library, react-dom, react-test-renderer, Enzyme. */
-const MOUNTING_FUNCTIONS = new Set([
-  'render',
-  'rerender',
-  'hydrate',
-  'hydrateRoot',
-  'mount',
-  'shallow',
+const MOUNTING_FUNCTIONS = new Set(['render', 'rerender', 'hydrate', 'hydrateRoot']);
+
+/**
+ * Functions that run the components of an element into what they return, outside the page: server rendering to a
+ * string of HTML, react-test-renderer's `create`, and Enzyme's `shallow` and `mount` (which attaches to a node of its
+ * own, not the document, unless told otherwise).
+ */
+const STRING_RENDERING_FUNCTIONS = new Set([
+  'renderToString',
+  'renderToStaticMarkup',
   'create',
+  'shallow',
+  'mount',
 ]);
 
-/** Functions that run the components of an element into a string of HTML, outside the document. */
-const STRING_RENDERING_FUNCTIONS = new Set(['renderToString', 'renderToStaticMarkup']);
-
-/** How a JSX element is mounted: into the document, into a string of HTML (server rendering), or not at all. */
+/**
+ * How a JSX element is mounted: into the document, into the returned output of a renderer (`'string'`: server
+ * rendering, a test renderer), or not at all.
+ */
 type Mount = 'document' | 'string' | undefined;
 
 /**
@@ -1732,40 +1789,73 @@ function mountedJsx(node: ts.JsxSelfClosingElement | ts.JsxOpeningElement, ctx: 
 }
 
 /**
- * Whether a function is run: given to a call (a callback such as `renderHook(() => …)`, other than `expect`), or
- * named somewhere as a callee, a JSX tag or an argument. A method, whose callers are not tracked, counts as run.
+ * How what a function returns is mounted: at each call (`render(make())`), or as a component rendered under its
+ * name (`<Harness />`), whichever reaches a renderer. A function given to another call, or a method, is not
+ * followed.
  */
-function functionRuns(fn: ts.Node, checker: ts.TypeChecker): boolean {
-  if (ts.isMethodDeclaration(fn)) return true;
+function resultMount(fn: ts.Node, ctx: Ctx, depth: number): Mount {
+  if (depth > 5) return undefined;
   let current: ts.Node = fn;
 
   while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
   const holder = current.parent;
-  const usedAt = (node: ts.Node): boolean => {
+  const mountOf = (node: ts.Node): Mount => {
     const parent = node.parent;
 
-    if (ts.isCallExpression(parent) || ts.isNewExpression(parent))
-      return (
-        parent.expression === node ||
-        (parent.arguments?.includes(node as ts.Expression) === true &&
-          !isExpectCall(parent as ts.CallExpression))
-      );
+    if (ts.isCallExpression(parent) && parent.expression === node)
+      return mountedExpression(parent, ctx, depth + 1);
 
-    return (ts.isJsxOpeningElement(parent) || ts.isJsxSelfClosingElement(parent)) && parent.tagName === node;
+    if ((ts.isJsxOpeningElement(parent) || ts.isJsxSelfClosingElement(parent)) && parent.tagName === node)
+      return mountedExpression(ts.isJsxOpeningElement(parent) ? parent.parent : parent, ctx, depth + 1);
+
+    return undefined;
   };
+  const direct = mountOf(current);
 
-  if (usedAt(current)) return true;
+  if (direct) return direct;
   const name = ts.isFunctionDeclaration(fn)
     ? fn.name
     : ts.isVariableDeclaration(holder) && holder.initializer === current && ts.isIdentifier(holder.name)
       ? holder.name
       : undefined;
-  const symbol = name && checker.getSymbolAtLocation(name);
+  const symbol = name && ctx.checker.getSymbolAtLocation(name);
+  const mounts = (symbol ? referencesOf(symbol, fn.getSourceFile(), ctx.checker) : [])
+    .filter((item) => item !== name)
+    .map(mountOf);
 
-  return (
-    symbol !== undefined &&
-    referencesOf(symbol, fn.getSourceFile(), checker).some((item) => item !== name && usedAt(item))
-  );
+  return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
+}
+
+/**
+ * How an element given as the `index`-th argument of a helper or project function is mounted: where the function
+ * hands that parameter to a renderer, directly or through further helpers. Unknown bodies mount nothing.
+ */
+function argumentMount(
+  call: ts.CallExpression | ts.NewExpression,
+  index: number,
+  ctx: Ctx,
+  depth: number,
+): Mount {
+  if (index < 0 || depth > 5) return undefined;
+  let symbol = aliasTarget(call.expression, ctx.checker);
+
+  if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = ctx.checker.getAliasedSymbol(symbol);
+  const fn = (symbol?.declarations ?? [])
+    .map((item) => (ts.isVariableDeclaration(item) && item.initializer ? skipParens(item.initializer) : item))
+    .find(
+      (item) => isFunctionLike(item) && item.body !== undefined && !item.getSourceFile().isDeclarationFile,
+    );
+
+  if (!fn || !isFunctionLike(fn) || !fn.body) return undefined;
+  const parameter = fn.parameters[index];
+
+  if (!parameter || parameter.dotDotDotToken || !ts.isIdentifier(parameter.name)) return undefined;
+  const target = ctx.checker.getSymbolAtLocation(parameter.name);
+  const mounts = descendants(fn.body)
+    .filter((item) => ts.isIdentifier(item) && ctx.checker.getSymbolAtLocation(item) === target)
+    .map((item) => mountedExpression(item, ctx, depth + 1));
+
+  return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
 }
 
 /** The outermost expression of the JSX tree an element sits in, through conditionals, arrays and parentheses. */
@@ -1806,13 +1896,13 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount 
   const current = jsxTop(expression);
   const parent = current.parent;
 
-  // Returned by a component or helper: rendered where that function runs, so only if something runs it.
+  // Returned by a component or factory: mounted where what the function returns is, so only if that is.
   if (ts.isReturnStatement(parent) || (ts.isArrowFunction(parent) && parent.body === current)) {
     let fn: ts.Node | undefined = parent;
 
     while (fn && !isFunctionLike(fn)) fn = fn.parent;
 
-    return fn && functionRuns(fn, ctx.checker) ? 'document' : undefined;
+    return fn ? resultMount(fn, ctx, depth) : undefined;
   }
 
   if (
@@ -1829,11 +1919,10 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount 
 
     if (name !== undefined && STRING_RENDERING_FUNCTIONS.has(name)) return 'string';
 
-    return (name !== undefined && MOUNTING_FUNCTIONS.has(name)) ||
-      helperBody(parent, ctx) !== undefined ||
-      resolveProjectCall(parent, ctx.checker, ctx.projectSet, ctx.root) !== undefined
-      ? 'document'
-      : undefined;
+    if (name !== undefined && MOUNTING_FUNCTIONS.has(name)) return 'document';
+
+    // Given to a helper or a project function: mounted only where that function hands it to a renderer.
+    return argumentMount(parent, parent.arguments?.indexOf(current as ts.Expression) ?? -1, ctx, depth);
   }
 
   // `const ui = <Dialog />; render(ui)`.
@@ -2233,7 +2322,7 @@ function mockHoldersPassed(call: Invocation, checker: ts.TypeChecker): MockHolde
 /** What `mockHoldersPassed` finds; a member path names the property of a container that was passed. */
 interface MockHolders {
   mocks: ts.VariableDeclaration[];
-  containers: { declaration: ts.VariableDeclaration; path: string[] }[];
+  containers: { declaration: ts.VariableDeclaration; path: string[]; except?: string[] }[];
 }
 
 const mockHoldersCache = new WeakMap<Invocation, MockHolders>();
@@ -2267,21 +2356,56 @@ function invocationsGiven(declaration: ts.VariableDeclaration, checker: ts.TypeC
 
 function findMockHolders(call: Invocation, checker: ts.TypeChecker): MockHolders {
   const mocks = new Set<ts.VariableDeclaration>();
-  const containers = new Map<string, { declaration: ts.VariableDeclaration; path: string[] }>();
+  const containers = new Map<
+    string,
+    { declaration: ts.VariableDeclaration; path: string[]; except?: string[] }
+  >();
   const followed = new Set<string>();
   const ids = new Map<ts.Node, number>();
-  const values = [...argumentsOf(call)];
-  const follow = (node: ts.Node, key: string, expressions: ts.Expression[]) => {
+  // Each value with the top-level properties of it that do not reach the callee (`<Dialog {...props} onSave={x} />`
+  // replaces `props.onSave`).
+  const values: { expression: ts.Expression; except: Set<string> }[] = handedValues(call, checker);
+  const follow = (node: ts.Node, key: string, expressions: ts.Expression[], except = new Set<string>()) => {
     if (!ids.has(node)) ids.set(node, ids.size);
-    const id = `${ids.get(node)}:${key}`;
+    const id = `${ids.get(node)}:${key}:${[...except].join(',')}`;
 
     if (followed.has(id) || followed.size >= 20) return;
     followed.add(id);
-    values.push(...expressions);
+    values.push(...expressions.map((expression) => ({ expression, except })));
   };
 
   for (let index = 0; index < values.length; index++) {
-    const argument = values[index] as ts.Expression;
+    const { expression: argument, except } = values[index] as (typeof values)[number];
+    const literal = skipParens(argument);
+
+    // An object literal hands over its properties but the replaced ones.
+    if (ts.isObjectLiteralExpression(literal) && except.size > 0) {
+      for (const property of literal.properties) {
+        const name = property.name && ts.isIdentifier(property.name) ? property.name.text : undefined;
+
+        if (name !== undefined && except.has(name)) continue;
+
+        if (ts.isPropertyAssignment(property))
+          values.push({ expression: property.initializer, except: new Set() });
+        else if (ts.isShorthandPropertyAssignment(property))
+          values.push({ expression: property.name, except: new Set() });
+        else if (ts.isSpreadAssignment(property)) values.push({ expression: property.expression, except });
+      }
+      continue;
+    }
+
+    if (ts.isCallExpression(literal) && except.size > 0) {
+      const fn = localFunction(skipParens(literal.expression), checker);
+
+      if (fn && isFunctionLike(fn) && fn.body)
+        follow(
+          fn,
+          '',
+          ts.isBlock(fn.body) ? returnedExpressions(fn.body) : [fn.body as ts.Expression],
+          except,
+        );
+      continue;
+    }
 
     for (const item of [argument, ...descendants(argument)]) {
       if (ts.isCallExpression(item)) {
@@ -2301,10 +2425,21 @@ function findMockHolders(call: Invocation, checker: ts.TypeChecker): MockHolders
       if (holding === 'mock') mocks.add(declaration as ts.VariableDeclaration);
 
       if (holding === 'container' && declaration && ts.isVariableDeclaration(declaration)) {
-        // `title={props.title}` hands over only `title`; `{...props}` or `props` hands over all of it.
+        // `title={props.title}` hands over only `title`; `{...props}` or `props` hands over all of it, but the
+        // properties a later attribute replaces.
         const path = memberPath(item);
-        containers.set(`${ids.get(declaration) ?? declaration.pos}:${path.join('.')}`, { declaration, path });
-        follow(declaration, path.join('.'), memberValues(valuesOf(declaration, checker), path));
+        const replaced = item === literal && path.length === 0 ? [...except] : [];
+        containers.set(`${ids.get(declaration) ?? declaration.pos}:${path.join('.')}:${replaced.join(',')}`, {
+          declaration,
+          path,
+          ...(replaced.length > 0 ? { except: replaced } : {}),
+        });
+        follow(
+          declaration,
+          path.join('.'),
+          memberValues(valuesOf(declaration, checker), path),
+          new Set(replaced),
+        );
       }
 
       // `renderHook((props) => useAutoSave(props), { initialProps: params })` calls the hook with `params`.
@@ -2319,6 +2454,75 @@ function findMockHolders(call: Invocation, checker: ts.TypeChecker): MockHolders
   }
 
   return { mocks: [...mocks], containers: [...containers.values()] };
+}
+
+/**
+ * The values an invocation hands over (see `argumentsOf`). For a JSX element, props resolve in order: an attribute
+ * written after a spread replaces that property of the spread, and a spread after an attribute may replace it, so
+ * that attribute is not counted unless the spread's own properties are known not to include it.
+ */
+function handedValues(
+  call: Invocation,
+  checker: ts.TypeChecker,
+): { expression: ts.Expression; except: Set<string> }[] {
+  if (!isJsxInvocation(call))
+    return argumentsOf(call).map((expression) => ({ expression, except: new Set() }));
+  const attributes = call.attributes.properties;
+  const values: { expression: ts.Expression; except: Set<string> }[] = [];
+  const nameOf = (attribute: ts.JsxAttributeLike) =>
+    ts.isJsxAttribute(attribute) && ts.isIdentifier(attribute.name) ? attribute.name.text : undefined;
+
+  for (const [index, attribute] of attributes.entries()) {
+    const later = attributes.slice(index + 1);
+
+    if (ts.isJsxSpreadAttribute(attribute)) {
+      const replaced = new Set(later.map(nameOf).filter((name): name is string => name !== undefined));
+      values.push({ expression: attribute.expression, except: replaced });
+      continue;
+    }
+    const name = nameOf(attribute);
+    const replacedBySpread = later.some(
+      (other) =>
+        ts.isJsxSpreadAttribute(other) &&
+        (name === undefined || spreadKeys(other.expression, checker)?.has(name) !== false),
+    );
+    const value = attribute.initializer;
+
+    if (!replacedBySpread && value && ts.isJsxExpression(value) && value.expression)
+      values.push({ expression: value.expression, except: new Set() });
+  }
+
+  if (ts.isJsxOpeningElement(call))
+    for (const child of call.parent.children)
+      if (ts.isJsxExpression(child) && child.expression)
+        values.push({ expression: child.expression, except: new Set() });
+
+  return values;
+}
+
+/** The property names a spread value is known to have: an object literal, or a local initialised with one. */
+function spreadKeys(expression: ts.Expression, checker: ts.TypeChecker): Set<string> | undefined {
+  let value = skipParens(expression);
+
+  if (ts.isIdentifier(value)) {
+    const initializer = variableInitializer(valueSymbol(value, checker)?.valueDeclaration);
+
+    if (!initializer) return undefined;
+    value = skipParens(initializer);
+  }
+
+  if (!ts.isObjectLiteralExpression(value)) return undefined;
+  const keys = new Set<string>();
+
+  for (const property of value.properties) {
+    if (ts.isSpreadAssignment(property)) return undefined;
+
+    if (property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)))
+      keys.add(property.name.text);
+    else return undefined;
+  }
+
+  return keys;
 }
 
 /** The plain member path read below an identifier: `props.a.b` gives `['a', 'b']`; a computed member ends it. */

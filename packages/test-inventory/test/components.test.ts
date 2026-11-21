@@ -810,6 +810,112 @@ describe('ordering, running and provenance of page reads', () => {
   });
 });
 
+describe('reaching a renderer and the page', () => {
+  it('follows an element given to a helper into the renderer it reaches', () => {
+    const byName = inventory(`${header}
+      import { isValidElement } from 'react';
+      const check = (element: unknown) => isValidElement(element);
+      const show = (element: JSX.Element) => render(<div>{element}</div>);
+      it('helper that only inspects', () => { expect(check(<Dialog open />)).toBe(true); });
+      it('helper that renders', () => {
+        show(<Dialog open title="Hi" />);
+        expect(screen.getByText('Hi')).toBeTruthy();
+      });
+    `);
+
+    expect(byName('helper that only inspects')).toMatchObject({ symbols: [], asserted: false });
+    expect(byName('helper that renders')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: true,
+    });
+  });
+
+  it('links renderers outside the page only to their own output', () => {
+    const byName = inventory(`${header}
+      import { create } from 'react-test-renderer';
+      import { shallow } from 'enzyme';
+      it('test renderer, then the document', () => {
+        create(<Dialog open title="Hi" />);
+        expect(document.body.textContent).toBe('');
+      });
+      it('test renderer output', () => {
+        const tree = create(<Dialog open title="Hi" />);
+        expect(tree.toJSON()).toBeTruthy();
+      });
+      it('enzyme, then the screen', () => {
+        shallow(<Dialog open title="Hi" />);
+        expect(screen.queryByText('Hi')).toBeNull();
+      });
+    `);
+
+    expect(byName('test renderer, then the document')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: false,
+    });
+    expect(byName('test renderer output').asserted).toBe(true);
+    expect(byName('enzyme, then the screen').asserted).toBe(false);
+  });
+
+  it('resolves JSX attribute precedence before counting what was handed over', () => {
+    const byName = inventory(`${header}
+      it('spread overridden by a later attribute', () => {
+        const props = { onSave: vi.fn() };
+        render(<Dialog {...props} onSave={undefined} />);
+        expect(props.onSave).not.toHaveBeenCalled();
+      });
+      it('attribute overridden by a later spread', () => {
+        const onSave = vi.fn();
+        const rest = { onSave: () => {} };
+        render(<Dialog onSave={onSave} {...rest} />);
+        expect(onSave).not.toHaveBeenCalled();
+      });
+      it('spread with another attribute after it', () => {
+        const props = { onSave: vi.fn() };
+        render(<Dialog {...props} title="Hi" />);
+        expect(props.onSave).not.toHaveBeenCalled();
+      });
+      it('attribute after a spread without it', () => {
+        const onSave = vi.fn();
+        const rest = { title: 'Hi' };
+        render(<Dialog onSave={onSave} {...rest} />);
+        expect(onSave).not.toHaveBeenCalled();
+      });
+    `);
+
+    expect(byName('spread overridden by a later attribute').asserted).toBe(false);
+    expect(byName('attribute overridden by a later spread').asserted).toBe(false);
+    expect(byName('spread with another attribute after it').asserted).toBe(true);
+    expect(byName('attribute after a spread without it').asserted).toBe(true);
+  });
+
+  it('follows locals holding part of the document when finding what the test wrote', () => {
+    const byName = inventory(`${header}
+      it('alias of the body', () => {
+        const body = document.body;
+        body.innerHTML = '<p>Hi</p>';
+        render(<Dialog open />);
+        expect(screen.getByText('Hi')).toBeTruthy();
+      });
+      it('destructured body', () => {
+        const { body } = document;
+        body.appendChild(document.createTextNode('Hi'));
+        render(<Dialog open />);
+        expect(screen.getByText('Hi')).toBeTruthy();
+      });
+      it('alias only read', () => {
+        const body = document.body;
+        render(<Dialog open title="Hi" />);
+        expect(body.textContent).toContain('Hi');
+      });
+    `);
+
+    expect(byName('alias of the body').asserted).toBe(false);
+    expect(byName('destructured body').asserted).toBe(false);
+    // The local is read where it is set, before the render: not counted (conservative).
+    expect(byName('alias only read').asserted).toBe(false);
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}
