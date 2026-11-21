@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { gitOutput } from '../artifacts/store.js';
 
 export type PackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun' | 'unknown';
 
@@ -63,6 +64,41 @@ export function resolvePackageVersion(root: string, name: string): string | null
     if (parent === dir) return null;
     dir = parent;
   }
+}
+
+/**
+ * The package manager the project uses. Lockfiles are read from the nearest directory, from `root` upwards, that has
+ * one. A lockfile committed to git outweighs the `packageManager` field of package.json, which outweighs a lockfile
+ * that is only on disk: running another package manager once leaves its lockfile behind (a `pnpm-lock.yaml` next to
+ * the committed `package-lock.json`), and that does not change what the project uses.
+ */
+function detectPackageManager(root: string, pkg: Record<string, unknown> | null): PackageManager {
+  let dir = path.resolve(root);
+  let present: [string, PackageManager][] = [];
+
+  for (;;) {
+    present = LOCKFILES.filter(([file]) => existsSync(path.join(dir, file)));
+
+    if (present.length > 0) break;
+    const parent = path.dirname(dir);
+
+    if (parent === dir) break;
+    dir = parent;
+  }
+  // Read-only: `git ls-files` lists which of these lockfiles are committed; null outside a repository.
+  const committed = new Set(
+    present.length > 0
+      ? (gitOutput(dir, ['ls-files', '--', ...present.map(([file]) => file)]) ?? '')
+          .split('\n')
+          .map((line) => line.trim())
+      : [],
+  );
+  const declared =
+    typeof pkg?.packageManager === 'string'
+      ? (pkg.packageManager.split('@')[0] as PackageManager)
+      : undefined;
+
+  return present.find(([file]) => committed.has(file))?.[1] ?? declared ?? present[0]?.[1] ?? 'unknown';
 }
 
 function findUp(start: string, name: string): boolean {
@@ -172,11 +208,7 @@ function hasFileNamed(dir: string, test: (name: string, parent: string) => boole
 export function detectProject(root: string): ProjectInfo {
   const pkg = readPackageJson(root);
   const deps = { ...((pkg?.dependencies as object) ?? {}), ...((pkg?.devDependencies as object) ?? {}) };
-  const packageManager =
-    LOCKFILES.find(([file]) => findUp(root, file))?.[1] ??
-    (typeof pkg?.packageManager === 'string'
-      ? (pkg.packageManager.split('@')[0] as PackageManager)
-      : 'unknown');
+  const packageManager = detectPackageManager(root, pkg);
   const sourceDir = ['src', 'lib'].find((d) => isDir(path.join(root, d)));
   // Source of the workspace packages too, so a test that calls a package of the same repository reaches analysed code.
   const packageSources = workspacePackages(root, pkg).flatMap((dir) => {
