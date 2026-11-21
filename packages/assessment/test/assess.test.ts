@@ -89,6 +89,24 @@ describe('assessTest', () => {
     expect(a.rationale.join(' ')).toMatch(/no assertion checks the result/);
   });
 
+  it('says a disconnected test killed no mutant only when it ran mutants, not when it was outside the scope', () => {
+    const t = testCase({ id: 'T-a', suspicions: ['no_assertion'], assertionCount: 0 });
+    const ran = assessTest(t, input({ mutants: [mutant('M-1', 'survived', [], ['T-a', 'T-b'])] }));
+    expect(ran.outcome).toBe('tautological_or_disconnected');
+    expect(ran.rationale).toContain('killed none of the 1 mutant(s) it runs');
+
+    const outside = assessTest(t, input({ mutants: [mutant('M-1', 'survived', [], ['T-b'])] }));
+    expect(outside.outcome).toBe('tautological_or_disconnected');
+    expect(outside.rationale.join(' ')).not.toMatch(/killed/);
+    expect(outside.vector.unknowns.join(' ')).toMatch(
+      /no mutant of this run is recorded as run by this test/,
+    );
+
+    // A kill counts as running the mutant even when the report does not list the test as covering it.
+    const killedOnly = assessTest(t, input({ mutants: [mutant('M-1', 'killed', ['T-a'], [])] }));
+    expect(killedOnly.vector.unknowns.join(' ')).not.toMatch(/no mutant of this run/);
+  });
+
   it('is inconclusive, not disconnected, when the asserted call goes through an unresolved import', () => {
     const t = testCase({ id: 'T-a', calledSymbols: [], suspicions: ['unresolved_import'] });
     const a = assessTest(t, input());

@@ -96,8 +96,15 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
   ];
   const unknowns: string[] = [];
 
+  // Some reports list a killing test without listing it as covering, so a kill also counts as running the mutant.
+  const ranMutants = covered.length > 0 || killed.length > 0;
+
   if (!input.mutationAvailable)
     unknowns.push('no mutation results for this run; detection power not measured');
+  else if (!ranMutants)
+    unknowns.push(
+      'no mutant of this run is recorded as run by this test (outside the mutation scope, or coverage not reported)',
+    );
 
   if (test.granularity === 'suite') unknowns.push('analysed at suite level only');
 
@@ -168,7 +175,9 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
 
     if (!assertedCall) rationale.push('no assertion checks the result of a project function');
 
-    if (input.mutationAvailable && killed.length === 0) rationale.push('killed no mutant');
+    // Only a test that ran mutants can be said to have missed them; others were outside the mutation scope.
+    if (input.mutationAvailable && covered.length > 0 && killed.length === 0)
+      rationale.push(`killed none of the ${covered.length} mutant(s) it runs`);
   } else if (!assertedCall) {
     // Only reachable when the link is unknown: the asserted value may come from project code, so do not judge it.
     outcome = 'inconclusive';
