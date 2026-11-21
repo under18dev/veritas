@@ -2,13 +2,14 @@
 
 Veritas は、Z3、fast-check、Lean 4 の三つの方法で Property をコードと照らし合わせます。方法ごとに、結果が何を保証するかと、検査を自分で再実行する方法を載せています。
 
-| エンジン   | コマンド                                      | 結果                                    | 対象                                               |
-| ---------- | --------------------------------------------- | --------------------------------------- | -------------------------------------------------- |
-| Z3         | `veritas prove`、`veritas run --profile deep` | `smt_bounded` の結果                    | 整数モデルで、範囲内のすべての入力                 |
-| fast-check | `veritas run --profile deep`                  | シードを記録した property-based testing | 抽出した入力を JavaScript で実行                   |
-| Lean 4     | `veritas prove --engine lean`                 | `kernel_checked` の結果                 | 関数の Lean モデルについて、カーネルで検査した証明 |
+| エンジン   | コマンド                                      | 結果                                        | 対象                                               |
+| ---------- | --------------------------------------------- | ------------------------------------------- | -------------------------------------------------- |
+| Z3         | `veritas prove`、`veritas run --profile deep` | `smt_bounded` の結果                        | 整数モデルで、範囲内のすべての入力                 |
+| fast-check | `veritas run --profile deep`                  | シードを記録した property-based testing     | 抽出した入力を JavaScript で実行                   |
+| Lean 4     | `veritas prove --engine lean`                 | `kernel_checked` の結果                     | 関数の Lean モデルについて、カーネルで検査した証明 |
+| Z3 + Lean  | `veritas prove --engine both`                 | 両方の結果（Lean は Z3 が証明したものだけ） | 上の二つの両方                                     |
 
-三つとも accepted な Property を検査します。`--include-proposed` を付けると proposed な Property も検査しますが、結果は `suspected` のままです。
+どれも accepted な Property を検査します。`--include-proposed` を付けると proposed な Property も検査しますが、結果は `suspected` のままです。
 
 ## Z3 で Property を検査する
 
@@ -131,7 +132,14 @@ Veritas は関数の Lean モデルと Property の定理を生成し、`lake bu
 - Lean のモデルは Property の形式モデルから生成します。TypeScript のコードと対応しているかは証明されておらず、どの Lean の結果にも semantic gaps として記載されます。
 - Lean のビルドには制限時間がありますが、メモリの上限はありません。
 
-両方の根拠がほしいときは、`--engine both` を付けるか、`formal.backend` を `both` にします。すべての Property を Z3 でコードに対して確かめ、Lean に翻訳できる Property には Lean の証明も加えます。Lean に翻訳できない Property と、Z3 が反例を見つけた Property では Lean を飛ばし、`unsupported` ではなく飛ばしたと表示します。`--engine` を付けなければ、`prove` は `formal.backend` に従います。
+両方の根拠がほしいときは、`--engine both` を付けるか、`formal.backend` を `both` にします。すべての Property を Z3 でコードに対して確かめたうえで、Z3 が証明でき、Lean に翻訳できる Property について Lean でも証明を試み、kernel で検査した証明が得られたら 2 つ目の結果として加えます。`both` にしても、Z3 だけのときより結果が悪くなることはありません。
+
+- Z3 が証明できなかった Property（反例、semantic mismatch、`unknown`、timeout）では Lean を飛ばします。Lean は同じモデルを数学的な整数で証明するためです。
+- Lean に翻訳できない Property でも Lean を飛ばします。
+- Lean が入っていなければ、そのことを 1 行表示し、Z3 の結果だけを記録します。そのため `both` の設定をコミットしても、Lean のないマシンや CI でそのまま使えます。
+- Z3 が証明した Property を Lean が証明できなかったときは、ステージのメッセージでそう伝え、Lean の結果は記録しません。Z3 の結果はそのまま有効です。
+
+`--engine` を付けなければ、`prove` は `formal.backend` に従います。以前の `veritas init` が書いた `formal.backend: lean` の設定では、`prove` が Lean を使うようになります。Z3 だけで確かめたいときは `--engine z3` を付けてください。`both` に対応する前の Veritas は、`both` を使った設定を読み込めません。
 
 ## `proven_within_model` の意味
 

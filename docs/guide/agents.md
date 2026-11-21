@@ -77,17 +77,17 @@ Each client session starts its own server process. `discover_specs`, `analyze_te
 
 ### Tools
 
-| Tool                         | What it does                                                                                                           |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `discover_specs`             | Collects specification evidence, offline                                                                               |
-| `list_properties`            | Lists properties of the latest run with status, origin and sources                                                     |
-| `analyze_tests`              | Indexes code and tests and assesses each test (no mutation run)                                                        |
-| `run_mutation`               | Runs mutation testing and relates mutants to properties and tests                                                      |
-| `verify_property`            | Checks formalized properties with the backend in `formal.backend` (Z3 by default, or Lean) and replays counterexamples |
-| `get_evidence`               | Returns the evidence chain of a finding                                                                                |
-| `get_run_status`             | Returns the status, stages, verdict and usage of a run                                                                 |
-| `plan_improvement`           | Plans test-only improvements and returns the plan and its approval token                                               |
-| `apply_approved_improvement` | Applies a reviewed plan. Only with `--allow-write`                                                                     |
+| Tool                         | What it does                                                                                                                 |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `discover_specs`             | Collects specification evidence, offline                                                                                     |
+| `list_properties`            | Lists properties of the latest run with status, origin and sources                                                           |
+| `analyze_tests`              | Indexes code and tests and assesses each test (no mutation run)                                                              |
+| `run_mutation`               | Runs mutation testing and relates mutants to properties and tests                                                            |
+| `verify_property`            | Checks formalized properties with the backend in `formal.backend` (Z3 by default, Lean, or both) and replays counterexamples |
+| `get_evidence`               | Returns the evidence chain of a finding                                                                                      |
+| `get_run_status`             | Returns the status, stages, verdict and usage of a run                                                                       |
+| `plan_improvement`           | Plans test-only improvements and returns the plan and its approval token                                                     |
+| `apply_approved_improvement` | Applies a reviewed plan. Only with `--allow-write`                                                                           |
 
 The [MCP reference](/reference/mcp) documents the inputs and outputs of each tool.
 
