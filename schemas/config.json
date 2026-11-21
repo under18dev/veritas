@@ -4,10 +4,12 @@
   "type": "object",
   "properties": {
     "$schema": {
+      "description": "JSON Schema reference for editor completion; Veritas does not read it.",
       "type": "string"
     },
     "schemaVersion": {
       "default": "1.0.0",
+      "description": "Version of this configuration format.",
       "type": "string",
       "const": "1.0.0"
     },
@@ -16,10 +18,12 @@
         "packageManager": "unknown",
         "tsconfig": null
       },
+      "description": "The project being verified.",
       "type": "object",
       "properties": {
         "packageManager": {
           "default": "unknown",
+          "description": "Package manager used to run the project's tools.",
           "type": "string",
           "enum": [
             "pnpm",
@@ -31,6 +35,7 @@
         },
         "tsconfig": {
           "default": null,
+          "description": "tsconfig file used for code analysis, relative to the project root; null uses tsconfig.json.",
           "type": [
             "string",
             "null"
@@ -40,24 +45,29 @@
       "additionalProperties": false
     },
     "sources": {
+      "description": "Where specifications come from. Network sources are off by default.",
       "default": {},
       "type": "object",
       "properties": {
         "local": {
           "default": true,
+          "description": "Read specifications from documents in the repository.",
           "type": "boolean"
         },
         "github": {
           "default": {
             "enabled": false
           },
+          "description": "Issues and pull requests on GitHub as specification sources.",
           "type": "object",
           "properties": {
             "enabled": {
               "default": false,
+              "description": "Read issues and pull requests of the repository from GitHub. Uses the network when a run is not offline.",
               "type": "boolean"
             },
             "repo": {
+              "description": "GitHub repository to read, as owner/name.",
               "type": "string",
               "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\\/(?!\\.\\.?$)[A-Za-z0-9._-]{1,100}$"
             }
@@ -74,14 +84,17 @@
             "timeoutMs": 30000,
             "maxDurationMs": 120000
           },
+          "description": "Web pages as specification sources.",
           "type": "object",
           "properties": {
             "enabled": {
               "default": false,
+              "description": "Fetch web pages on the allowed domains. Uses the network when a run is not offline.",
               "type": "boolean"
             },
             "allowDomains": {
               "default": [],
+              "description": "Domains web pages may be fetched from; no other domain is contacted.",
               "type": "array",
               "items": {
                 "type": "string",
@@ -90,30 +103,35 @@
             },
             "maxPages": {
               "default": 30,
+              "description": "Most web pages fetched in one run.",
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 1000
             },
             "maxDepth": {
               "default": 1,
+              "description": "How many links deep the crawl follows from a starting page.",
               "type": "integer",
               "minimum": 0,
               "maximum": 5
             },
             "maxChars": {
               "default": 200000,
+              "description": "Characters of page text read in total; the crawl stops beyond it.",
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
             },
             "timeoutMs": {
               "default": 30000,
+              "description": "Time allowed for one page request, in milliseconds.",
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
             },
             "maxDurationMs": {
               "default": 120000,
+              "description": "Time allowed for the whole crawl, in milliseconds.",
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
@@ -123,12 +141,14 @@
         },
         "sendFullTextToLlm": {
           "default": false,
+          "description": "Send whole source documents to the LLM instead of the relevant excerpts.",
           "type": "boolean"
         }
       },
       "additionalProperties": false
     },
     "analysis": {
+      "description": "Which files are analyzed and how specifications are inferred.",
       "default": {},
       "type": "object",
       "properties": {
@@ -136,6 +156,7 @@
           "default": [
             "src/**/*.{ts,tsx,js,mjs}"
           ],
+          "description": "Glob patterns of the source files to analyze.",
           "minItems": 1,
           "type": "array",
           "items": {
@@ -148,6 +169,7 @@
             "**/node_modules/**",
             "**/dist/**"
           ],
+          "description": "Glob patterns of files never analyzed.",
           "type": "array",
           "items": {
             "type": "string"
@@ -157,6 +179,7 @@
           "default": [
             "**/*.{test,spec}.{ts,tsx,js,mjs}"
           ],
+          "description": "Glob patterns of the test files.",
           "type": "array",
           "items": {
             "type": "string"
@@ -164,15 +187,18 @@
         },
         "testFramework": {
           "default": "vitest",
+          "description": "Test framework; only Vitest is supported.",
           "type": "string",
           "const": "vitest"
         },
         "inferSpecsFromCode": {
           "default": true,
+          "description": "Propose specifications inferred from code. They stay proposed until accepted.",
           "type": "boolean"
         },
         "requireApprovalForNormativeClaims": {
           "default": true,
+          "description": "Specifications from documents need an explicit approval to become accepted.",
           "type": "boolean",
           "const": true
         }
@@ -180,16 +206,19 @@
       "additionalProperties": false
     },
     "mutation": {
+      "description": "Mutation testing with mutator.",
       "default": {},
       "type": "object",
       "properties": {
         "backend": {
           "default": "mizchi",
+          "description": "Mutation testing tool; only mutator (@mizchi/mutator) is supported.",
           "type": "string",
           "const": "mizchi"
         },
         "mode": {
           "default": "diff",
+          "description": "diff mutates only the code changed since --since; full mutates everything in scope.",
           "type": "string",
           "enum": [
             "diff",
@@ -198,6 +227,7 @@
         },
         "timeoutMs": {
           "default": 120000,
+          "description": "Time allowed for mutation testing, in milliseconds.",
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991
@@ -206,16 +236,19 @@
       "additionalProperties": false
     },
     "pbt": {
+      "description": "Property-based testing with fast-check.",
       "default": {},
       "type": "object",
       "properties": {
         "numRuns": {
           "default": 1000,
+          "description": "Generated inputs tried per property.",
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 1000000
         },
         "seed": {
+          "description": "Fixed random seed; unset uses a stable seed per property.",
           "type": "integer",
           "minimum": -9007199254740991,
           "maximum": 9007199254740991
@@ -224,11 +257,13 @@
       "additionalProperties": false
     },
     "formal": {
+      "description": "Formal checks with Z3 and Lean.",
       "default": {},
       "type": "object",
       "properties": {
         "backend": {
           "default": "z3",
+          "description": "Solver used for formal checks.",
           "type": "string",
           "enum": [
             "z3",
@@ -241,15 +276,18 @@
             "min": "-10000",
             "max": "10000"
           },
+          "description": "Range integer inputs are checked over, as decimal strings.",
           "type": "object",
           "properties": {
             "min": {
               "type": "string",
-              "pattern": "^-?\\d+$"
+              "pattern": "^-?\\d+$",
+              "description": "Smallest integer input checked."
             },
             "max": {
               "type": "string",
-              "pattern": "^-?\\d+$"
+              "pattern": "^-?\\d+$",
+              "description": "Largest integer input checked."
             }
           },
           "required": [
@@ -260,18 +298,21 @@
         },
         "maxSolverMs": {
           "default": 30000,
+          "description": "Time allowed for one solver call, in milliseconds.",
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991
         },
         "maxArrayLength": {
           "default": 3,
+          "description": "Longest array modelled in formal checks.",
           "type": "integer",
           "minimum": 1,
           "maximum": 8
         },
         "rejectUnsupportedSemantics": {
           "default": true,
+          "description": "Code outside the supported formal subset is reported as unsupported.",
           "type": "boolean",
           "const": true
         }
@@ -279,11 +320,13 @@
       "additionalProperties": false
     },
     "llm": {
+      "description": "LLM provider used to read specifications. None by default.",
       "default": {},
       "type": "object",
       "properties": {
         "provider": {
           "default": "none",
+          "description": "LLM that reads specifications; none uses no LLM. Sends text to the provider when a run is not offline.",
           "type": "string",
           "enum": [
             "none",
@@ -294,43 +337,51 @@
           ]
         },
         "model": {
+          "description": "Model name for the provider; unset uses its default.",
           "type": "string"
         },
         "maxTokensPerRun": {
           "default": 200000,
+          "description": "Most LLM tokens one run may use.",
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991
         },
         "allowCodexFileReads": {
           "default": false,
+          "description": "Allow the codex provider, whose shell can read local files.",
           "type": "boolean"
         }
       },
       "additionalProperties": false
     },
     "improvement": {
+      "description": "Limits for test improvement plans.",
       "default": {},
       "type": "object",
       "properties": {
         "autoApply": {
           "default": false,
+          "description": "Improvements are never applied without approval.",
           "type": "boolean",
           "const": false
         },
         "testFilesOnly": {
           "default": true,
+          "description": "Improvements only add test files.",
           "type": "boolean",
           "const": true
         },
         "maxIterations": {
           "default": 3,
+          "description": "Most attempts an improvement may make.",
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 20
         },
         "maxPatchFiles": {
           "default": 5,
+          "description": "Most files one improvement may write.",
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 50
@@ -339,6 +390,7 @@
       "additionalProperties": false
     },
     "reports": {
+      "description": "Report files written for each run.",
       "default": {},
       "type": "object",
       "properties": {
@@ -349,6 +401,7 @@
             "html",
             "sarif"
           ],
+          "description": "Report formats written for each run.",
           "type": "array",
           "items": {
             "type": "string",
@@ -365,11 +418,13 @@
       "additionalProperties": false
     },
     "policy": {
+      "description": "How results decide the exit code.",
       "default": {},
       "type": "object",
       "properties": {
         "confirmedViolation": {
           "default": "fail",
+          "description": "What a confirmed specification violation does to the exit code.",
           "type": "string",
           "enum": [
             "fail",
@@ -378,6 +433,7 @@
         },
         "inconclusiveBehavior": {
           "default": "warn",
+          "description": "What inconclusive results do to the exit code.",
           "type": "string",
           "enum": [
             "fail",
@@ -386,11 +442,13 @@
           ]
         },
         "maxNewSurvivors": {
+          "description": "Fail when more mutants than this survive; unset turns the check off.",
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991
         },
         "minPropertyCoverage": {
+          "description": "Fail when a smaller share (0 to 1) of accepted properties has a meaningful test; unset turns the check off.",
           "type": "number",
           "minimum": 0,
           "maximum": 1
@@ -399,28 +457,33 @@
       "additionalProperties": false
     },
     "sandbox": {
+      "description": "How project code is isolated.",
       "default": {},
       "type": "object",
       "properties": {
         "allowNetworkWithoutIsolation": {
           "default": false,
+          "description": "Run project code even where its network access cannot be blocked.",
           "type": "boolean"
         }
       },
       "additionalProperties": false
     },
     "storage": {
+      "description": "What is kept under .veritas.",
       "default": {},
       "type": "object",
       "properties": {
         "retainRuns": {
           "default": 20,
+          "description": "Run directories kept; older ones are removed.",
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991
         },
         "storePrompts": {
           "default": false,
+          "description": "Prompts sent to an LLM are never stored.",
           "type": "boolean",
           "const": false
         }
@@ -428,22 +491,26 @@
       "additionalProperties": false
     },
     "cache": {
+      "description": "Result cache under .veritas/cache.",
       "default": {},
       "type": "object",
       "properties": {
         "enabled": {
           "default": true,
+          "description": "Reuse solver, LLM and mutation results from earlier runs.",
           "type": "boolean"
         }
       },
       "additionalProperties": false
     },
     "limits": {
+      "description": "Resource limits for the processes Veritas starts.",
       "default": {},
       "type": "object",
       "properties": {
         "memoryMb": {
           "default": 2048,
+          "description": "Memory limit for project code and Z3 processes, in MiB.",
           "type": "integer",
           "minimum": 256,
           "maximum": 65536

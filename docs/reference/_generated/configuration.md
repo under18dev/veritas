@@ -6,125 +6,125 @@ Unknown keys are rejected.
 
 ### Top level
 
-| Setting         | Type   | Default   | Allowed values         |
-| --------------- | ------ | --------- | ---------------------- |
-| `$schema`       | string | unset     |                        |
-| `schemaVersion` | string | `"1.0.0"` | only `"1.0.0"` (fixed) |
+| Setting         | Type   | Default   | Allowed values         | Description                                                            |
+| --------------- | ------ | --------- | ---------------------- | ---------------------------------------------------------------------- |
+| `$schema`       | string | unset     |                        | JSON Schema reference for editor completion; Veritas does not read it. |
+| `schemaVersion` | string | `"1.0.0"` | only `"1.0.0"` (fixed) | Version of this configuration format.                                  |
 
 ### `project`
 
-| Setting                  | Type           | Default     | Allowed values                          |
-| ------------------------ | -------------- | ----------- | --------------------------------------- |
-| `project.packageManager` | string         | `"unknown"` | `pnpm`, `npm`, `yarn`, `bun`, `unknown` |
-| `project.tsconfig`       | string or null | `null`      |                                         |
+| Setting                  | Type           | Default     | Allowed values                          | Description                                                                                  |
+| ------------------------ | -------------- | ----------- | --------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `project.packageManager` | string         | `"unknown"` | `pnpm`, `npm`, `yarn`, `bun`, `unknown` | Package manager used to run the project's tools.                                             |
+| `project.tsconfig`       | string or null | `null`      |                                         | tsconfig file used for code analysis, relative to the project root; null uses tsconfig.json. |
 
 ### `sources`
 
-| Setting                     | Type            | Default  | Allowed values                                                                 |
-| --------------------------- | --------------- | -------- | ------------------------------------------------------------------------------ |
-| `sources.local`             | boolean         | `true`   |                                                                                |
-| `sources.github.enabled`    | boolean         | `false`  |                                                                                |
-| `sources.github.repo`       | string          | unset    | matches `^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/(?!\.\.?$)[A-Za-z0-9._-]{1,100}$` |
-| `sources.web.enabled`       | boolean         | `false`  |                                                                                |
-| `sources.web.allowDomains`  | array of string | `[]`     | items match `^[a-z0-9.-]+$`                                                    |
-| `sources.web.maxPages`      | integer         | `30`     | > 0, <= 1000                                                                   |
-| `sources.web.maxDepth`      | integer         | `1`      | >= 0, <= 5                                                                     |
-| `sources.web.maxChars`      | integer         | `200000` | > 0                                                                            |
-| `sources.web.timeoutMs`     | integer         | `30000`  | > 0                                                                            |
-| `sources.web.maxDurationMs` | integer         | `120000` | > 0                                                                            |
-| `sources.sendFullTextToLlm` | boolean         | `false`  |                                                                                |
+| Setting                     | Type            | Default  | Allowed values                                                                 | Description                                                                                              |
+| --------------------------- | --------------- | -------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `sources.local`             | boolean         | `true`   |                                                                                | Read specifications from documents in the repository.                                                    |
+| `sources.github.enabled`    | boolean         | `false`  |                                                                                | Read issues and pull requests of the repository from GitHub. Uses the network when a run is not offline. |
+| `sources.github.repo`       | string          | unset    | matches `^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/(?!\.\.?$)[A-Za-z0-9._-]{1,100}$` | GitHub repository to read, as owner/name.                                                                |
+| `sources.web.enabled`       | boolean         | `false`  |                                                                                | Fetch web pages on the allowed domains. Uses the network when a run is not offline.                      |
+| `sources.web.allowDomains`  | array of string | `[]`     | items match `^[a-z0-9.-]+$`                                                    | Domains web pages may be fetched from; no other domain is contacted.                                     |
+| `sources.web.maxPages`      | integer         | `30`     | > 0, <= 1000                                                                   | Most web pages fetched in one run.                                                                       |
+| `sources.web.maxDepth`      | integer         | `1`      | >= 0, <= 5                                                                     | How many links deep the crawl follows from a starting page.                                              |
+| `sources.web.maxChars`      | integer         | `200000` | > 0                                                                            | Characters of page text read in total; the crawl stops beyond it.                                        |
+| `sources.web.timeoutMs`     | integer         | `30000`  | > 0                                                                            | Time allowed for one page request, in milliseconds.                                                      |
+| `sources.web.maxDurationMs` | integer         | `120000` | > 0                                                                            | Time allowed for the whole crawl, in milliseconds.                                                       |
+| `sources.sendFullTextToLlm` | boolean         | `false`  |                                                                                | Send whole source documents to the LLM instead of the relevant excerpts.                                 |
 
 ### `analysis`
 
-| Setting                                      | Type                         | Default                                                  | Allowed values          |
-| -------------------------------------------- | ---------------------------- | -------------------------------------------------------- | ----------------------- |
-| `analysis.include`                           | array of string (at least 1) | `["src/**/*.{ts,tsx,js,mjs}"]`                           |                         |
-| `analysis.exclude`                           | array of string              | `["**/*.generated.*","**/node_modules/**","**/dist/**"]` |                         |
-| `analysis.testInclude`                       | array of string              | `["**/*.{test,spec}.{ts,tsx,js,mjs}"]`                   |                         |
-| `analysis.testFramework`                     | string                       | `"vitest"`                                               | only `"vitest"` (fixed) |
-| `analysis.inferSpecsFromCode`                | boolean                      | `true`                                                   |                         |
-| `analysis.requireApprovalForNormativeClaims` | boolean                      | `true`                                                   | only `true` (fixed)     |
+| Setting                                      | Type                         | Default                                                  | Allowed values          | Description                                                                   |
+| -------------------------------------------- | ---------------------------- | -------------------------------------------------------- | ----------------------- | ----------------------------------------------------------------------------- |
+| `analysis.include`                           | array of string (at least 1) | `["src/**/*.{ts,tsx,js,mjs}"]`                           |                         | Glob patterns of the source files to analyze.                                 |
+| `analysis.exclude`                           | array of string              | `["**/*.generated.*","**/node_modules/**","**/dist/**"]` |                         | Glob patterns of files never analyzed.                                        |
+| `analysis.testInclude`                       | array of string              | `["**/*.{test,spec}.{ts,tsx,js,mjs}"]`                   |                         | Glob patterns of the test files.                                              |
+| `analysis.testFramework`                     | string                       | `"vitest"`                                               | only `"vitest"` (fixed) | Test framework; only Vitest is supported.                                     |
+| `analysis.inferSpecsFromCode`                | boolean                      | `true`                                                   |                         | Propose specifications inferred from code. They stay proposed until accepted. |
+| `analysis.requireApprovalForNormativeClaims` | boolean                      | `true`                                                   | only `true` (fixed)     | Specifications from documents need an explicit approval to become accepted.   |
 
 ### `mutation`
 
-| Setting              | Type    | Default    | Allowed values          |
-| -------------------- | ------- | ---------- | ----------------------- |
-| `mutation.backend`   | string  | `"mizchi"` | only `"mizchi"` (fixed) |
-| `mutation.mode`      | string  | `"diff"`   | `diff`, `full`          |
-| `mutation.timeoutMs` | integer | `120000`   | > 0                     |
+| Setting              | Type    | Default    | Allowed values          | Description                                                                         |
+| -------------------- | ------- | ---------- | ----------------------- | ----------------------------------------------------------------------------------- |
+| `mutation.backend`   | string  | `"mizchi"` | only `"mizchi"` (fixed) | Mutation testing tool; only mutator (@mizchi/mutator) is supported.                 |
+| `mutation.mode`      | string  | `"diff"`   | `diff`, `full`          | diff mutates only the code changed since --since; full mutates everything in scope. |
+| `mutation.timeoutMs` | integer | `120000`   | > 0                     | Time allowed for mutation testing, in milliseconds.                                 |
 
 ### `pbt`
 
-| Setting       | Type    | Default | Allowed values  |
-| ------------- | ------- | ------- | --------------- |
-| `pbt.numRuns` | integer | `1000`  | > 0, <= 1000000 |
-| `pbt.seed`    | integer | unset   |                 |
+| Setting       | Type    | Default | Allowed values  | Description                                               |
+| ------------- | ------- | ------- | --------------- | --------------------------------------------------------- |
+| `pbt.numRuns` | integer | `1000`  | > 0, <= 1000000 | Generated inputs tried per property.                      |
+| `pbt.seed`    | integer | unset   |                 | Fixed random seed; unset uses a stable seed per property. |
 
 ### `formal`
 
-| Setting                             | Type    | Default    | Allowed values       |
-| ----------------------------------- | ------- | ---------- | -------------------- |
-| `formal.backend`                    | string  | `"z3"`     | `z3`, `lean`, `both` |
-| `formal.integerDomain.min`          | string  | `"-10000"` | matches `^-?\d+$`    |
-| `formal.integerDomain.max`          | string  | `"10000"`  | matches `^-?\d+$`    |
-| `formal.maxSolverMs`                | integer | `30000`    | > 0                  |
-| `formal.maxArrayLength`             | integer | `3`        | >= 1, <= 8           |
-| `formal.rejectUnsupportedSemantics` | boolean | `true`     | only `true` (fixed)  |
+| Setting                             | Type    | Default    | Allowed values       | Description                                                          |
+| ----------------------------------- | ------- | ---------- | -------------------- | -------------------------------------------------------------------- |
+| `formal.backend`                    | string  | `"z3"`     | `z3`, `lean`, `both` | Solver used for formal checks.                                       |
+| `formal.integerDomain.min`          | string  | `"-10000"` | matches `^-?\d+$`    | Smallest integer input checked.                                      |
+| `formal.integerDomain.max`          | string  | `"10000"`  | matches `^-?\d+$`    | Largest integer input checked.                                       |
+| `formal.maxSolverMs`                | integer | `30000`    | > 0                  | Time allowed for one solver call, in milliseconds.                   |
+| `formal.maxArrayLength`             | integer | `3`        | >= 1, <= 8           | Longest array modelled in formal checks.                             |
+| `formal.rejectUnsupportedSemantics` | boolean | `true`     | only `true` (fixed)  | Code outside the supported formal subset is reported as unsupported. |
 
 ### `llm`
 
-| Setting                   | Type    | Default  | Allowed values                                     |
-| ------------------------- | ------- | -------- | -------------------------------------------------- |
-| `llm.provider`            | string  | `"none"` | `none`, `claude`, `claude-code`, `openai`, `codex` |
-| `llm.model`               | string  | unset    |                                                    |
-| `llm.maxTokensPerRun`     | integer | `200000` | >= 0                                               |
-| `llm.allowCodexFileReads` | boolean | `false`  |                                                    |
+| Setting                   | Type    | Default  | Allowed values                                     | Description                                                                                            |
+| ------------------------- | ------- | -------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `llm.provider`            | string  | `"none"` | `none`, `claude`, `claude-code`, `openai`, `codex` | LLM that reads specifications; none uses no LLM. Sends text to the provider when a run is not offline. |
+| `llm.model`               | string  | unset    |                                                    | Model name for the provider; unset uses its default.                                                   |
+| `llm.maxTokensPerRun`     | integer | `200000` | >= 0                                               | Most LLM tokens one run may use.                                                                       |
+| `llm.allowCodexFileReads` | boolean | `false`  |                                                    | Allow the codex provider, whose shell can read local files.                                            |
 
 ### `improvement`
 
-| Setting                     | Type    | Default | Allowed values       |
-| --------------------------- | ------- | ------- | -------------------- |
-| `improvement.autoApply`     | boolean | `false` | only `false` (fixed) |
-| `improvement.testFilesOnly` | boolean | `true`  | only `true` (fixed)  |
-| `improvement.maxIterations` | integer | `3`     | > 0, <= 20           |
-| `improvement.maxPatchFiles` | integer | `5`     | > 0, <= 50           |
+| Setting                     | Type    | Default | Allowed values       | Description                                      |
+| --------------------------- | ------- | ------- | -------------------- | ------------------------------------------------ |
+| `improvement.autoApply`     | boolean | `false` | only `false` (fixed) | Improvements are never applied without approval. |
+| `improvement.testFilesOnly` | boolean | `true`  | only `true` (fixed)  | Improvements only add test files.                |
+| `improvement.maxIterations` | integer | `3`     | > 0, <= 20           | Most attempts an improvement may make.           |
+| `improvement.maxPatchFiles` | integer | `5`     | > 0, <= 50           | Most files one improvement may write.            |
 
 ### `reports`
 
-| Setting           | Type            | Default                              | Allowed values                              |
-| ----------------- | --------------- | ------------------------------------ | ------------------------------------------- |
-| `reports.formats` | array of string | `["json","markdown","html","sarif"]` | `text`, `json`, `markdown`, `html`, `sarif` |
+| Setting           | Type            | Default                              | Allowed values                              | Description                          |
+| ----------------- | --------------- | ------------------------------------ | ------------------------------------------- | ------------------------------------ |
+| `reports.formats` | array of string | `["json","markdown","html","sarif"]` | `text`, `json`, `markdown`, `html`, `sarif` | Report formats written for each run. |
 
 ### `policy`
 
-| Setting                       | Type    | Default  | Allowed values           |
-| ----------------------------- | ------- | -------- | ------------------------ |
-| `policy.confirmedViolation`   | string  | `"fail"` | `fail`, `warn`           |
-| `policy.inconclusiveBehavior` | string  | `"warn"` | `fail`, `warn`, `ignore` |
-| `policy.maxNewSurvivors`      | integer | unset    | >= 0                     |
-| `policy.minPropertyCoverage`  | number  | unset    | >= 0, <= 1               |
+| Setting                       | Type    | Default  | Allowed values           | Description                                                                                                 |
+| ----------------------------- | ------- | -------- | ------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `policy.confirmedViolation`   | string  | `"fail"` | `fail`, `warn`           | What a confirmed specification violation does to the exit code.                                             |
+| `policy.inconclusiveBehavior` | string  | `"warn"` | `fail`, `warn`, `ignore` | What inconclusive results do to the exit code.                                                              |
+| `policy.maxNewSurvivors`      | integer | unset    | >= 0                     | Fail when more mutants than this survive; unset turns the check off.                                        |
+| `policy.minPropertyCoverage`  | number  | unset    | >= 0, <= 1               | Fail when a smaller share (0 to 1) of accepted properties has a meaningful test; unset turns the check off. |
 
 ### `sandbox`
 
-| Setting                                | Type    | Default | Allowed values |
-| -------------------------------------- | ------- | ------- | -------------- |
-| `sandbox.allowNetworkWithoutIsolation` | boolean | `false` |                |
+| Setting                                | Type    | Default | Allowed values | Description                                                       |
+| -------------------------------------- | ------- | ------- | -------------- | ----------------------------------------------------------------- |
+| `sandbox.allowNetworkWithoutIsolation` | boolean | `false` |                | Run project code even where its network access cannot be blocked. |
 
 ### `storage`
 
-| Setting                | Type    | Default | Allowed values       |
-| ---------------------- | ------- | ------- | -------------------- |
-| `storage.retainRuns`   | integer | `20`    | > 0                  |
-| `storage.storePrompts` | boolean | `false` | only `false` (fixed) |
+| Setting                | Type    | Default | Allowed values       | Description                                   |
+| ---------------------- | ------- | ------- | -------------------- | --------------------------------------------- |
+| `storage.retainRuns`   | integer | `20`    | > 0                  | Run directories kept; older ones are removed. |
+| `storage.storePrompts` | boolean | `false` | only `false` (fixed) | Prompts sent to an LLM are never stored.      |
 
 ### `cache`
 
-| Setting         | Type    | Default | Allowed values |
-| --------------- | ------- | ------- | -------------- |
-| `cache.enabled` | boolean | `true`  |                |
+| Setting         | Type    | Default | Allowed values | Description                                               |
+| --------------- | ------- | ------- | -------------- | --------------------------------------------------------- |
+| `cache.enabled` | boolean | `true`  |                | Reuse solver, LLM and mutation results from earlier runs. |
 
 ### `limits`
 
-| Setting           | Type    | Default | Allowed values   |
-| ----------------- | ------- | ------- | ---------------- |
-| `limits.memoryMb` | integer | `2048`  | >= 256, <= 65536 |
+| Setting           | Type    | Default | Allowed values   | Description                                             |
+| ----------------- | ------- | ------- | ---------------- | ------------------------------------------------------- |
+| `limits.memoryMb` | integer | `2048`  | >= 256, <= 65536 | Memory limit for project code and Z3 processes, in MiB. |
