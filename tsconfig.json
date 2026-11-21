@@ -68,6 +68,9 @@
       "path": "packages/test-runners/vitest"
     },
     {
+      "path": "packages/test-runners/jest"
+    },
+    {
       "path": "packages/solver-lean"
     },
     {

@@ -196,6 +196,9 @@ importers:
       '@under18dev/veritas-reports':
         specifier: workspace:*
         version: link:packages/reports
+      '@under18dev/veritas-test-runner-jest':
+        specifier: workspace:*
+        version: link:packages/test-runners/jest
       '@under18dev/veritas-test-runner-vitest':
         specifier: workspace:*
         version: link:packages/test-runners/vitest
@@ -454,6 +457,9 @@ importers:
       '@under18dev/veritas-test-inventory':
         specifier: workspace:*
         version: link:../test-inventory
+      '@under18dev/veritas-test-runner-jest':
+        specifier: workspace:*
+        version: link:../test-runners/jest
       '@under18dev/veritas-test-runner-vitest':
         specifier: workspace:*
         version: link:../test-runners/vitest
@@ -697,6 +703,12 @@ importers:
       zod:
         specifier: 4.6.7
         version: 4.6.7
+
+  packages/test-runners/jest:
+    dependencies:
+      '@under18dev/veritas-core':
+        specifier: workspace:*
+        version: link:../../core
 
   packages/test-runners/vitest:
     dependencies:
