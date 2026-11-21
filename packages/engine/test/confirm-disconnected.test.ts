@@ -92,6 +92,15 @@ describe('mergeConfirmation', () => {
     expect(merged.killedBy).toEqual(['T-a']);
     expect(merged.ranBy).toEqual({ 'T-a': ['M-killed', 'M-survived'] });
     expect(merged.inconsistent).toEqual([]);
+    expect(merged.adopted).toEqual(['M-pending']);
+  });
+
+  it('reports a mutant the main run found covered by no test, but the check killed, instead of merging it', () => {
+    const main = [mutant('M-1', 'no_coverage', [], [])];
+    const merged = mergeConfirmation(main, [mutant('M-1', 'killed', ['T-a'], ['T-a'])], ['T-a']);
+    expect(merged.mutants).toEqual(main);
+    expect(merged.inconsistent).toEqual(['M-1']);
+    expect(merged.adopted).toEqual([]);
   });
 
   it('reports a main-run survivor a checked test killed instead of merging it', () => {

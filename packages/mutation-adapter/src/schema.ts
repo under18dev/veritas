@@ -50,8 +50,13 @@ export const MutationConfirmation = z.object({
   killedBy: z.array(z.string()),
   /** For each checked test, the mutants (ids of the main run) it ran to a verdict, killed or survived. */
   ranBy: z.record(z.string(), z.array(z.string())),
-  /** Mutants killed in this run that the main run had decided otherwise (a survivor), which were not merged. */
+  /** Mutants killed in this run that the main run had decided otherwise (survived, no coverage); not merged. */
   inconsistent: z.array(z.string()),
+  /**
+   * Mutants the main run left undecided (pending, unknown) that this run killed: the stage counts them as killed,
+   * and each carries a `statusReason` saying so.
+   */
+  adopted: z.array(z.string()).default([]),
   warnings: z.array(z.string()),
 });
 export type MutationConfirmation = z.infer<typeof MutationConfirmation>;

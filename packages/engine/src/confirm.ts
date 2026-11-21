@@ -77,8 +77,13 @@ export interface MergedConfirmation {
   ranBy: Record<string, string[]>;
   /** Confirmed tests that killed at least one mutant. */
   killedBy: string[];
-  /** Mutants the confirmation killed that the main run reports as survivors; left as the main run has them. */
+  /**
+   * Mutants the confirmation killed that the main run reports as survivors or as covered by no test, which
+   * contradicts it; left as the main run has them.
+   */
   inconsistent: string[];
+  /** Mutants the main run left undecided (`pending`, `unknown`) that are killed now because the check killed them. */
+  adopted: string[];
 }
 
 /**
@@ -86,7 +91,7 @@ export interface MergedConfirmation {
  * run can establish are taken over: a kill by a confirmed test (a mutant the main run killed or left undecided,
  * such as one its time budget did not reach, becomes killed), and that a confirmed test ran a mutant the main run
  * decided. A survivor of the confirmation says nothing about tests it did not run, so it never changes a status.
- * A main-run survivor the confirmation killed (a flaky test, say) is reported, not merged.
+ * A main-run survivor or uncovered mutant the confirmation killed (a flaky test, say) is reported, not merged.
  */
 export function mergeConfirmation(
   mutants: readonly Mutant[],
@@ -98,7 +103,8 @@ export function mergeConfirmation(
   const ranBy: Record<string, string[]> = {};
   const killedBy = new Set<string>();
   const inconsistent: string[] = [];
-  const undecided = new Set<Mutant['status']>(['pending', 'unknown', 'no_coverage']);
+  const adopted: string[] = [];
+  const undecided = new Set<Mutant['status']>(['pending', 'unknown']);
   const merged = mutants.map((m) => {
     const c = byId.get(m.id);
 
@@ -106,14 +112,15 @@ export function mergeConfirmation(
     const killers = c.status === 'killed' ? c.killedBy.filter((t) => checked.has(t)) : [];
     const ran = [...new Set([...c.coveredBy, ...c.killedBy])].filter((t) => checked.has(t));
 
-    if (c.status === 'killed' && m.status === 'survived') {
-      if (killers.length > 0) inconsistent.push(m.id);
+    if (c.status === 'killed' && (m.status === 'survived' || m.status === 'no_coverage')) {
+      if (c.killedBy.length > 0) inconsistent.push(m.id);
 
       return m;
     }
     let next = m;
 
     if (c.status === 'killed' && undecided.has(m.status)) {
+      adopted.push(m.id);
       next = {
         ...m,
         status: 'killed',
@@ -138,5 +145,5 @@ export function mergeConfirmation(
     return next;
   });
 
-  return { mutants: merged, ranBy, killedBy: [...killedBy].sort(), inconsistent };
+  return { mutants: merged, ranBy, killedBy: [...killedBy].sort(), inconsistent, adopted };
 }

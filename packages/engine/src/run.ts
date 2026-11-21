@@ -389,7 +389,14 @@ async function runInContext(
     artifacts: string[];
     messages: string[];
   } | null> => {
-    if (!config.mutation.confirmDisconnected || !inventory || main.status !== 'succeeded') return null;
+    // A main run under --kill-matrix already ran every covering test on every mutant: nothing is left to check.
+    if (
+      !config.mutation.confirmDisconnected ||
+      options.killMatrix ||
+      !inventory ||
+      main.status !== 'succeeded'
+    )
+      return null;
     const selection = selectConfirmation(inventory, main.mutants, config, options.scope);
 
     if (selection.testIds.length === 0) return null;
@@ -409,6 +416,7 @@ async function runInContext(
           killedBy: [],
           ranBy: {},
           inconsistent: [],
+          adopted: [],
           warnings: [],
         },
         mutants: main.mutants,
@@ -447,7 +455,7 @@ async function runInContext(
     const merged =
       run.status === 'succeeded'
         ? mergeConfirmation(main.mutants, run.mutants, selection.testIds)
-        : { mutants: main.mutants, ranBy: {}, killedBy: [], inconsistent: [] };
+        : { mutants: main.mutants, ranBy: {}, killedBy: [], inconsistent: [], adopted: [] };
     const ranSome = Object.keys(merged.ranBy).length;
 
     return {
@@ -461,6 +469,7 @@ async function runInContext(
         killedBy: merged.killedBy,
         ranBy: merged.ranBy,
         inconsistent: merged.inconsistent,
+        adopted: merged.adopted,
         warnings: run.warnings,
       },
       mutants: merged.mutants,
@@ -475,7 +484,12 @@ async function runInContext(
           : ['no test was checked; they stay as static analysis reports them']),
         ...(merged.inconsistent.length
           ? [
-              `${merged.inconsistent.length} mutant(s) survived the main run but were killed in the check (a flaky test?); the main run's result was kept: ${merged.inconsistent.join(', ')}`,
+              `${merged.inconsistent.length} mutant(s) survived the main run or were covered by no test there, but were killed in the check (a flaky test?); the main run's result was kept: ${merged.inconsistent.join(', ')}`,
+            ]
+          : []),
+        ...(merged.adopted.length
+          ? [
+              `${merged.adopted.length} mutant(s) the main run did not decide (pending) were killed in the check and are counted as killed in this stage's counts; each says so in its statusReason`,
             ]
           : []),
         ...run.warnings.map((w) => `check: ${w}`),
@@ -706,8 +720,13 @@ async function runInContext(
         : null;
       const cached = cache && cacheKey ? cache.get('mutation', cacheKey, MutationRunResult) : undefined;
       // With tests to check after it, the main run stops starting mutants earlier, to leave the check some time.
+      // Only when what is left would let the check run with some room: otherwise the main run would lose time and
+      // the check would still be skipped.
       const reserve =
         config.mutation.confirmDisconnected &&
+        !options.killMatrix &&
+        !cached &&
+        config.mutation.timeoutMs * (1 - MAIN_RUN_BUDGET_SHARE) >= MIN_CONFIRMATION_MS * 2 &&
         mapped !== undefined &&
         selectConfirmation(mapped, [], config, options.scope).testIds.length > 0;
       const result =
@@ -772,6 +791,11 @@ async function runInContext(
         usage: { mutants: result.mutants.length },
         messages: [
           ...(cached ? [`mutation results reused from cache ${cacheKey}`] : []),
+          ...(reserve
+            ? [
+                `the main run started no new mutant after ${Math.round(MAIN_RUN_BUDGET_SHARE * 100)}% of mutation.timeoutMs (instead of 75%), to leave time for the check of tests static analysis could not link`,
+              ]
+            : []),
           ...(cacheMessage ? [cacheMessage] : []),
           `mutator ${result.backend.version ?? 'unknown'}: ${result.status}${result.detail ? ` (${result.detail})` : ''}`,
           ...(result.typecheck === 'off'
@@ -1228,6 +1252,7 @@ async function runInContext(
         claims,
         functions,
         mutationAvailable,
+        killMatrix: Boolean(options.killMatrix) && !imported,
         ranMutantIds: new Map(
           Object.entries(
             (ctx.outputs.get('mutate') as MutationRunResult | undefined)?.confirmation?.ranBy ?? {},
