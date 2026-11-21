@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { inventoryTests, testId } from '../src/index.js';
 import { tempProject } from './helpers.js';
 
-const inventory = (root: string, recognition = jest.recognition) =>
+const inventory = (root: string, recognition = jest.recognitionFor(root)) =>
   inventoryTests({ recognition, root, config: VeritasConfig.parse({ analysis: { testFramework: 'jest' } }) });
 
 function byName(tests: ReturnType<typeof inventory>['tests'], name: string) {
@@ -98,8 +98,9 @@ describe('Jest tests', () => {
     expect(byName(tests, 'concurrent').modifiers).toContain('concurrent');
   });
 
-  it('records jest.mock, jest.spyOn and jest.fn as mocks with the roles of vi', () => {
+  it('records jest.mock (hoisted in CommonJS), jest.spyOn and jest.fn as mocks with the roles of vi', () => {
     const root = tempProject({
+      'package.json': JSON.stringify({ name: 'p', devDependencies: { jest: '30', 'ts-jest': '29' } }),
       'src/value.ts': 'export function fn(value: number): number { return value; }\n',
       'src/use.ts':
         "import { fn } from './value.js';\nexport const run = (cb: (n: number) => void) => cb(fn(1));\n",
@@ -133,6 +134,51 @@ describe('Jest tests', () => {
     expect(byName(tests, 'spied').suspicions).toContain('unconditional_mock');
     expect(byName(tests, 'callback')).toMatchObject({ usesMocks: true });
     expect(byName(tests, 'callback').calledSymbols).toContain('src/use.ts#run');
+  });
+
+  it('does not take jest.mock for a mock of static imports in native ES modules', () => {
+    const files = {
+      'src/value.ts': 'export function fn(value: number): number { return value; }\n',
+      'test/module.test.ts': `
+        import * as mod from '../src/value.js';
+        jest.mock('../src/value.js');
+        test('static import', () => expect(mod.fn(1)).toBe(1));
+      `,
+      'test/esm-mock.test.ts': `
+        import { jest } from '@jest/globals';
+        jest.unstable_mockModule('../src/value.js', () => ({ fn: () => 2 }));
+        test('dynamic import after unstable_mockModule', async () => {
+          const mod = await import('../src/value.js');
+          expect(mod.fn(1)).toBe(2);
+        });
+      `,
+      'test/spy.test.ts': `
+        import * as mod from '../src/value.js';
+        test('spied', () => {
+          jest.spyOn(mod, 'fn').mockReturnValue(2);
+          expect(mod.fn(1)).toBe(2);
+        });
+      `,
+    };
+    const esm = tempProject({ 'package.json': JSON.stringify({ type: 'module' }), ...files });
+    const { tests } = inventory(esm);
+
+    // Jest runs the real implementation here: the static import is bound before jest.mock runs.
+    expect(byName(tests, 'static import')).toMatchObject({ usesMocks: false });
+    expect(byName(tests, 'static import').suspicions).not.toContain('unconditional_mock');
+    expect(byName(tests, 'static import').calledSymbols).toEqual(['src/value.ts#fn']);
+    // What the dynamic import loads is not followed: the test stays unknown rather than linked.
+    expect(byName(tests, 'dynamic import after unstable_mockModule').suspicions).toContain('opaque_call');
+    // Spies still replace members wherever they run.
+    expect(byName(tests, 'spied')).toMatchObject({ usesMocks: true });
+    // A Babel config may compile the tests to CommonJS, where jest.mock is hoisted: it stays a mock.
+    const babel = tempProject({
+      'package.json': JSON.stringify({ type: 'module' }),
+      'babel.config.json': '{}',
+      ...files,
+    });
+
+    expect(byName(inventory(babel).tests, 'static import')).toMatchObject({ usesMocks: true });
   });
 
   it('does not take vi for a mock in a Jest project, nor jest in a Vitest one', () => {

@@ -5,9 +5,11 @@ import {
   type TestRunnerProvider,
   type TestRunnerTemplates,
 } from '@under18dev/veritas-core';
+import { runsNativeEsm } from './module-system.js';
 import { JEST_CONFIG_FILES, mutationUnsupportedReason, writeMutationJestConfig } from './mutation-config.js';
 import { runJest } from './run.js';
 
+export { runsNativeEsm } from './module-system.js';
 export {
   findJestConfig,
   JEST_CONFIG_FILES,
@@ -84,7 +86,8 @@ export const jestTestRunner: TestRunnerProvider = {
         // `jest.replaceProperty(object, 'name', value)` replaces a member, as a spy does.
         replaceProperty: 'spy',
         mocked: 'wrap',
-        // babel-jest and ts-jest hoist `jest.mock` to the top of the file.
+        // babel-jest and ts-jest hoist `jest.mock` above the imports of a file they compile to CommonJS; in native
+        // ES modules it cannot replace static imports (see `recognitionFor`).
         mock: 'module_hoisted',
         doMock: 'module',
         // The ES module form; it is not hoisted, and only takes effect for modules imported after it.
@@ -97,6 +100,26 @@ export const jestTestRunner: TestRunnerProvider = {
       },
       configureMethod: '^mock[A-Z]',
     },
+  },
+  recognitionFor(root) {
+    const { recognition } = jestTestRunner;
+
+    if (!runsNativeEsm(root)) return recognition;
+
+    // In native ES modules the static imports are bound before any code of the file runs, `jest.mock` included:
+    // these calls only affect what is loaded after them (a dynamic `import()` or a `require`).
+    return {
+      ...recognition,
+      mocks: {
+        ...recognition.mocks,
+        calls: {
+          ...recognition.mocks.calls,
+          mock: 'module_late',
+          doMock: 'module_late',
+          unstable_mockModule: 'module_late',
+        },
+      },
+    };
   },
   execution: {
     command: 'jest',

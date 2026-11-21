@@ -352,7 +352,7 @@ async function runInContext(
   /** The test inventory the map stage made, or one made now when it has not run; undefined when it cannot be made. */
   const mutationInventory = (mapped: TestInventory | undefined): TestInventory | undefined => {
     try {
-      return mapped ?? inventoryTests({ root, config, recognition: testRunner.recognition });
+      return mapped ?? inventoryTests({ root, config, recognition: testRunner.recognitionFor(root) });
     } catch {
       return undefined;
     }
@@ -542,7 +542,7 @@ async function runInContext(
     name: 'map',
     dependsOn: [],
     run: async () => {
-      const inventory = inventoryTests({ root, config, recognition: testRunner.recognition });
+      const inventory = inventoryTests({ root, config, recognition: testRunner.recognitionFor(root) });
 
       return {
         status: 'succeeded',

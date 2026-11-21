@@ -4990,7 +4990,7 @@ function directlyUsedFiles(
 }
 
 /** Mock calls that name a module to replace or load (`vi.mock('./x')`, `vi.importActual('./x')`). */
-const MODULE_MOCK_ROLES = new Set<MockCallRole>(['module_hoisted', 'module', 'module_access']);
+const MODULE_MOCK_ROLES = new Set<MockCallRole>(['module_hoisted', 'module', 'module_access', 'module_late']);
 
 function isModuleMockCall(node: ts.CallExpression, checker: ts.TypeChecker): boolean {
   const role = mockCall(node, checker);
@@ -5258,7 +5258,10 @@ interface MockRecord {
   targets: string[];
 }
 
-/** Mock calls recorded as mocks of a test; loading a module (`module_access`) is not one. */
+/**
+ * Mock calls recorded as mocks of a test; loading a module (`module_access`) is not one, nor a replacement that only
+ * later loads see (`module_late`): the code a test reaches through static imports stays the real one.
+ */
 const RECORDED_MOCK_ROLES = new Set<MockCallRole>([
   'module_hoisted',
   'module',

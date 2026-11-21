@@ -22,7 +22,13 @@ export interface TestRunnerProvider {
    */
   readonly fullNameSeparator: string;
   readonly detection: TestRunnerDetection;
+  /** The runner's test API as it works in most projects; `recognitionFor` adapts it to one project. */
   readonly recognition: TestRunnerRecognition;
+  /**
+   * The test API as it works in the project at `root`, read without running anything (for Jest, what `jest.mock`
+   * does depends on whether the tests run as native ES modules).
+   */
+  recognitionFor(root: string): TestRunnerRecognition;
   readonly execution: TestRunnerExecution;
   readonly mutation: TestRunnerMutation;
   /** Syntax of generated test files for the project at `root`, whose installed packages can change the imports. */
@@ -70,6 +76,9 @@ export type TestModifier = TestCase['modifiers'][number];
  * - `module_hoisted`: replaces a module for the whole file wherever it is written (`vi.mock`, hoisted by Vitest);
  * - `module`: replaces a module from where it is called (`vi.doMock`);
  * - `module_access`: loads or restores a module by its specifier without replacing it (`vi.importActual`);
+ * - `module_late`: replaces a module only for code that loads it after the call (a later `require` or dynamic
+ *   `import()`), never for the file's static imports, which are bound before any of its code runs (`jest.mock` in a
+ *   native ES module); it is not recorded as a mock of the code the file imports;
  * - `stub_global`: replaces a global (`vi.stubGlobal`).
  */
 export type MockCallRole =
@@ -79,6 +88,7 @@ export type MockCallRole =
   | 'module_hoisted'
   | 'module'
   | 'module_access'
+  | 'module_late'
   | 'stub_global';
 
 /**

@@ -101,6 +101,9 @@ export const vitestTestRunner: TestRunnerProvider = {
       });
     },
   },
+  recognitionFor() {
+    return vitestTestRunner.recognition;
+  },
   templates: () => ({
     imports(names: readonly TemplateApi[]) {
       return names.length === 0 ? [] : [`import { ${[...new Set(names)].sort().join(', ')} } from 'vitest';`];
