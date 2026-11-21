@@ -19,6 +19,12 @@ export const TestCase = z.object({
       args: z.array(z.string().nullable()),
       asserted: z.boolean(),
       location: Location,
+      /**
+       * When no assertion is linked to the call: how its code could reach what an assertion reads without being
+       * handed it (`mocked module src/api.ts`, `global monaco`, `spied Element.prototype.scrollIntoView`, `the page,
+       * through the global document`). Found from names in the code, so it shows the link is possible, not made.
+       */
+      reachedVia: z.array(z.string()).optional(),
     }),
   ),
   usesMocks: z.boolean(),
@@ -34,6 +40,8 @@ export const TestCase = z.object({
    * checks that the call settles (does not block), not what the call returns; the link to the result is unknown.
    * `caller_supplied`: the test is registered inside a function (a shared or parameterized suite) and calls values
    * that function's caller supplies, so what it calls is decided at a call site static analysis does not follow.
+   * `reachable_by_name`: no assertion is linked to a project call, but the code of a call could reach what an
+   * assertion reads (see `reachedVia`): the link is possible, not shown.
    */
   suspicions: z.array(
     z.enum([
@@ -46,6 +54,7 @@ export const TestCase = z.object({
       'type_level_only',
       'progress_only',
       'caller_supplied',
+      'reachable_by_name',
     ]),
   ),
   granularity: z.enum(['test', 'suite']),

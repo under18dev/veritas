@@ -64,6 +64,7 @@ import {
   countMutants,
   importMutationResult,
   locateMutator,
+  type MutationConfirmation,
   MutationRunResult,
   runMutation,
 } from '@under18dev/veritas-mutation-adapter';
@@ -78,6 +79,13 @@ import { detectLean, leanTranslatable, proveWithLean } from '@under18dev/veritas
 import { type DiscoveryResult, discoverEvidence } from '@under18dev/veritas-spec-discovery';
 import { inventoryTests, isTestSupportPath, type TestInventory } from '@under18dev/veritas-test-inventory';
 import { ARTIFACTS } from './artifacts.js';
+import {
+  CONFIRMATION_MUTANTS_PER_LINE,
+  MAIN_RUN_BUDGET_SHARE,
+  MIN_CONFIRMATION_MS,
+  mergeConfirmation,
+  selectConfirmation,
+} from './confirm.js';
 import { extractWithLlm } from './llm-extract.js';
 import { createLlmProvider } from './llm-providers.js';
 import { defaultSeed, latestRunWith, openProject, readArtifact } from './project.js';
@@ -371,6 +379,131 @@ async function runInContext(
     }
   };
 
+  /**
+   * Check the tests static analysis could not link to project code, by running mutator again on their test files
+   * alone, on the project sources those files import, with --kill-matrix (every covering test runs every mutant)
+   * and one mutant per line, within what is left of mutation.timeoutMs. Their kills and the mutants they ran are
+   * merged into the main run's mutants; a test whose check did not run keeps what the main run says.
+   */
+  const confirmDisconnected = async (
+    main: MutationRunResult,
+    inventory: TestInventory | undefined,
+    remainingMs: number,
+  ): Promise<{
+    confirmation: MutationConfirmation;
+    mutants: Mutant[];
+    artifacts: string[];
+    messages: string[];
+  } | null> => {
+    // A main run under --kill-matrix already ran every covering test on every mutant: nothing is left to check.
+    if (
+      !config.mutation.confirmDisconnected ||
+      options.killMatrix ||
+      !inventory ||
+      main.status !== 'succeeded'
+    )
+      return null;
+    const selection = selectConfirmation(inventory, main.mutants, config, options.scope);
+
+    if (selection.testIds.length === 0) return null;
+    const label = `check of ${selection.testIds.length} test(s) static analysis could not link to project code`;
+
+    if (remainingMs < MIN_CONFIRMATION_MS) {
+      const detail = `${Math.max(0, Math.round(remainingMs / 1000))}s of mutation.timeoutMs left, less than the ${MIN_CONFIRMATION_MS / 1000}s it needs; raise mutation.timeoutMs or narrow the run with --since`;
+
+      return {
+        confirmation: {
+          status: 'skipped',
+          detail,
+          ...selection,
+          command: [],
+          durationMs: 0,
+          counts: countMutants([]),
+          killedBy: [],
+          ranBy: {},
+          inconsistent: [],
+          adopted: [],
+          warnings: [],
+        },
+        mutants: main.mutants,
+        artifacts: [],
+        messages: [`${label}: skipped (${detail}); they stay as static analysis reports them`],
+      };
+    }
+    const cacheKey = cache
+      ? mutationCacheKey(cache, root, {
+          configHash,
+          since: options.since,
+          scope: selection.sourceFiles,
+          killMatrix: true,
+          testFiles: selection.testFiles,
+          mutantsPerLine: CONFIRMATION_MUTANTS_PER_LINE,
+          testRunner,
+        })
+      : null;
+    const cached = cache && cacheKey ? cache.get('mutation', cacheKey, MutationRunResult) : undefined;
+    const run =
+      cached ??
+      (await runMutation({
+        root,
+        config: { ...config, mutation: { ...config.mutation, timeoutMs: Math.floor(remainingMs) } },
+        testRunner,
+        reportDir: store.pathFor('mutation-confirm'),
+        signal,
+        ...(options.since ? { since: options.since } : {}),
+        scope: selection.sourceFiles,
+        testFiles: selection.testFiles,
+        killMatrix: true,
+        mutantsPerLine: CONFIRMATION_MUTANTS_PER_LINE,
+        tests: inventory.tests,
+      }));
+
+    if (!cached && cache && cacheKey && cacheableMutationResult(run)) cache.set('mutation', cacheKey, run);
+    const merged =
+      run.status === 'succeeded'
+        ? mergeConfirmation(main.mutants, run.mutants, selection.testIds)
+        : { mutants: main.mutants, ranBy: {}, killedBy: [], inconsistent: [], adopted: [] };
+    const ranSome = Object.keys(merged.ranBy).length;
+
+    return {
+      confirmation: {
+        status: run.status,
+        detail: run.detail,
+        ...selection,
+        command: run.command,
+        durationMs: run.durationMs,
+        counts: run.counts,
+        killedBy: merged.killedBy,
+        ranBy: merged.ranBy,
+        inconsistent: merged.inconsistent,
+        adopted: merged.adopted,
+        warnings: run.warnings,
+      },
+      mutants: merged.mutants,
+      artifacts: cached ? [] : store.recordExternal('mutation-confirm'),
+      messages: [
+        `${label}: ${run.status}${run.detail ? ` (${run.detail})` : ''}${cached ? ` (reused from cache ${cacheKey})` : ''}; mutator ran ${selection.testFiles.length} test file(s) on ${selection.sourceFiles.length} source file(s) they import, with --kill-matrix and at most ${CONFIRMATION_MUTANTS_PER_LINE} mutant(s) per line`,
+        ...(run.status === 'succeeded'
+          ? [
+              `of the ${selection.testIds.length} test(s) checked: ${merged.killedBy.length} killed at least one mutant, ${ranSome - merged.killedBy.length} ran mutants and killed none, ${selection.testIds.length - ranSome} ran no mutant to a verdict (those stay as static analysis reports them)`,
+              `check counts: ${JSON.stringify(Object.fromEntries(Object.entries(run.counts).filter(([, n]) => n > 0)))}`,
+            ]
+          : ['no test was checked; they stay as static analysis reports them']),
+        ...(merged.inconsistent.length
+          ? [
+              `${merged.inconsistent.length} mutant(s) survived the main run or were covered by no test there, but were killed in the check (a flaky test?); the main run's result was kept: ${merged.inconsistent.join(', ')}`,
+            ]
+          : []),
+        ...(merged.adopted.length
+          ? [
+              `${merged.adopted.length} mutant(s) the main run did not decide (pending) were killed in the check and are counted as killed in this stage's counts; each says so in its statusReason`,
+            ]
+          : []),
+        ...run.warnings.map((w) => `check: ${w}`),
+      ],
+    };
+  };
+
   add({
     name: 'index',
     dependsOn: [],
@@ -579,6 +712,7 @@ async function runInContext(
           ],
         };
       }
+      const started = Date.now();
       const inventory = mutationInventory(ctx.outputs.get('map') as TestInventory | undefined);
       const testFiles = mutationTestFiles(inventory);
       const cacheKey = cache
@@ -592,12 +726,25 @@ async function runInContext(
           })
         : null;
       const cached = cache && cacheKey ? cache.get('mutation', cacheKey, MutationRunResult) : undefined;
+      // With tests to check after it, the main run stops starting mutants earlier, to leave the check some time.
+      // Only when what is left would let the check run with some room: otherwise the main run would lose time and
+      // the check would still be skipped.
+      const reserve =
+        config.mutation.confirmDisconnected &&
+        !options.killMatrix &&
+        !cached &&
+        config.mutation.timeoutMs * (1 - MAIN_RUN_BUDGET_SHARE) >= MIN_CONFIRMATION_MS * 2 &&
+        inventory !== undefined &&
+        selectConfirmation(inventory, [], config, options.scope).testIds.length > 0;
       const result =
         cached ??
         (await runMutation({
           root,
           config,
           testRunner,
+          ...(reserve
+            ? { timeBudgetSeconds: (config.mutation.timeoutMs * MAIN_RUN_BUDGET_SHARE) / 1000 }
+            : {}),
           reportDir: store.pathFor('mutation'),
           signal,
           ...(options.since ? { since: options.since } : {}),
@@ -612,6 +759,9 @@ async function runInContext(
         cache.set('mutation', cacheKey, result);
 
       if (cached) result.rawReportPath = null;
+      // The mutants mutator itself left unrun, before --since relabels others as pending.
+      const budgetBefore = result.timeBudgetExhausted?.notRun;
+      const unrun = result.mutants.filter((m) => m.status === 'pending').map((m) => m.id);
       // Tests were chosen by the changed files, so mutator calls a mutant of an unchanged file "no coverage". It
       // was outside --since and not run: pending, as without the narrower test selection.
       const changed = testFiles ? changedSinceFiles() : undefined;
@@ -625,9 +775,26 @@ async function runInContext(
         );
         result.counts = countMutants(result.mutants);
       }
-      mutants = result.mutants;
       // The mutator writes its own report files; index them so they carry the run metadata and a hash.
       const external = cached ? [] : store.recordExternal('mutation');
+      const confirmed = await confirmDisconnected(
+        result,
+        inventory,
+        config.mutation.timeoutMs - (Date.now() - started),
+      );
+
+      if (confirmed) {
+        result.confirmation = confirmed.confirmation;
+        result.timeBudgetExhausted = outstandingBudget(
+          result.timeBudgetExhausted,
+          unrun,
+          confirmed.confirmation.adopted,
+        );
+        result.mutants = confirmed.mutants;
+        result.counts = countMutants(result.mutants);
+        external.push(...confirmed.artifacts);
+      }
+      mutants = result.mutants;
       const { status, undecided, empty } = mutationStageStatus(result, {
         incremental: Boolean(options.since),
       });
@@ -640,6 +807,11 @@ async function runInContext(
         usage: { mutants: result.mutants.length },
         messages: [
           ...(cached ? [`mutation results reused from cache ${cacheKey}`] : []),
+          ...(reserve
+            ? [
+                `the main run started no new mutant after ${Math.round(MAIN_RUN_BUDGET_SHARE * 100)}% of mutation.timeoutMs (instead of 75%), to leave time for the check of tests static analysis could not link`,
+              ]
+            : []),
           ...(cacheMessage ? [cacheMessage] : []),
           `mutator ${result.backend.version ?? 'unknown'}: ${result.status}${result.detail ? ` (${result.detail})` : ''}`,
           ...(result.typecheck === 'off'
@@ -661,6 +833,14 @@ async function runInContext(
             : []),
           ...(empty && result.status === 'succeeded'
             ? ['no mutant was generated; mutation results are partial']
+            : []),
+          ...(confirmed?.messages ?? []),
+          ...(confirmed &&
+          result.timeBudgetExhausted &&
+          result.timeBudgetExhausted.notRun < (budgetBefore ?? 0)
+            ? [
+                `the check of unlinked tests killed mutants the main run had no time for: ${result.timeBudgetExhausted.notRun} mutant(s) are still not run`,
+              ]
             : []),
         ],
       };
@@ -1095,6 +1275,12 @@ async function runInContext(
         claims,
         functions,
         mutationAvailable,
+        killMatrix: Boolean(options.killMatrix) && !imported,
+        ranMutantIds: new Map(
+          Object.entries(
+            (ctx.outputs.get('mutate') as MutationRunResult | undefined)?.confirmation?.ranBy ?? {},
+          ).map(([testId, ids]) => [testId, new Set(ids)]),
+        ),
       });
       policyEvidence = { mutants: linkedMutants, properties: spec.properties, assessments };
       findings = deriveFindings({
@@ -1296,6 +1482,7 @@ export function mutationCacheKey(
     scope?: string[] | undefined;
     killMatrix?: boolean;
     testFiles?: string[] | undefined;
+    mutantsPerLine?: number;
     /** The provider of the project's test runner, whose installed version is part of the key (default: Vitest). */
     testRunner?: TestRunnerProvider;
   },
@@ -1337,6 +1524,8 @@ export function mutationCacheKey(
     scope: selection.scope ?? [],
     killMatrix: selection.killMatrix ?? false,
     testFiles: selection.testFiles ?? null,
+    // Absent unless set, so the keys of runs without it stay as they were.
+    ...(selection.mutantsPerLine === undefined ? {} : { mutantsPerLine: selection.mutantsPerLine }),
   });
 }
 
@@ -1423,6 +1612,23 @@ export function literalInput(
   }
 
   return input;
+}
+
+/**
+ * The time-budget overrun still outstanding once the confirmation's kills are adopted: each mutant mutator left unrun
+ * (`unrun`, its own `pending` mutants, not those `--since` relabelled) that the confirmation killed now has a verdict.
+ * The record stays (with `notRun` possibly 0) so the result is still not cached.
+ */
+export function outstandingBudget(
+  budget: MutationRunResult['timeBudgetExhausted'],
+  unrun: string[],
+  adopted: string[],
+): MutationRunResult['timeBudgetExhausted'] {
+  if (!budget) return budget;
+  const pending = new Set(unrun);
+  const decided = adopted.filter((id) => pending.has(id)).length;
+
+  return { ...budget, notRun: Math.max(0, budget.notRun - decided) };
 }
 
 /**

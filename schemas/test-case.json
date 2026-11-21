@@ -124,6 +124,12 @@
             "required": [
               "file"
             ]
+          },
+          "reachedVia": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -159,7 +165,8 @@
           "opaque_call",
           "type_level_only",
           "progress_only",
-          "caller_supplied"
+          "caller_supplied",
+          "reachable_by_name"
         ]
       }
     },

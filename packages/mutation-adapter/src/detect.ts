@@ -22,6 +22,7 @@ export const OPTIONAL_CAPABILITIES = [
   '--jest-config',
   '--[no-]typecheck',
   '--time-budget',
+  '--mutants-per-line',
   'agent',
   'json',
 ] as const;

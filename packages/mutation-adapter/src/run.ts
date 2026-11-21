@@ -60,6 +60,13 @@ export interface RunMutationOptions {
   noTypecheck?: boolean;
   /** Source files (relative to the root, no glob characters) passed as `--exclude`. */
   exclude?: string[];
+  /** Run at most this many mutants per source line (`--mutants-per-line`); the rest stay `pending`. */
+  mutantsPerLine?: number;
+  /**
+   * Seconds after which mutator starts no new mutant, when that is earlier than 75% of the timeout (the default), to
+   * leave time for work after this run.
+   */
+  timeBudgetSeconds?: number;
   /**
    * The project's inventoried tests, to resolve the test names in mutator's report to their ids exactly. Without
    * them, names are split with the runner's full-name separator.
@@ -124,11 +131,25 @@ export function buildMutatorArgs(
 
   if (options.killMatrix) args.push('--kill-matrix');
 
+  if (options.mutantsPerLine !== undefined) {
+    if (!Number.isInteger(options.mutantsPerLine) || options.mutantsPerLine < 1)
+      throw new TypeError(`invalid --mutants-per-line: ${options.mutantsPerLine}`);
+    args.push('--mutants-per-line', String(options.mutantsPerLine));
+  }
+
   for (const key of options.only ?? []) {
     if (!MUTANT_KEY.test(key)) throw new TypeError(`invalid mutant key for --only: ${JSON.stringify(key)}`);
     args.push('--only', key);
   }
-  args.push('--time-budget', String(timeBudgetSeconds(options.config.mutation.timeoutMs)));
+  const budget = timeBudgetSeconds(options.config.mutation.timeoutMs);
+  args.push(
+    '--time-budget',
+    String(
+      options.timeBudgetSeconds === undefined
+        ? budget
+        : Math.max(1, Math.min(budget, Math.floor(options.timeBudgetSeconds))),
+    ),
+  );
 
   return args;
 }
@@ -324,6 +345,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     (options.scope?.length ?? 0) > 0 && '--include',
     (options.exclude?.length ?? 0) > 0 && '--exclude',
     options.killMatrix && '--kill-matrix',
+    options.mutantsPerLine !== undefined && '--mutants-per-line',
     (options.only?.length ?? 0) > 0 && '--only',
     writesConfig && configFlag,
     mutatorRunner !== DEFAULT_MUTATOR_RUNNER && '--runner',
@@ -553,7 +575,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
 
   if (budget !== null) {
     warnings.push(
-      `mutator's time budget of ${budget.seconds}s ran out (75% of mutation.timeoutMs, or of what was left of it when mutator ran a second time): ${budget.notRun} mutant(s) were not run, so the results cover only part of the code in scope and mutation results are partial. Narrow the run with --since <ref>, or raise mutation.timeoutMs`,
+      `mutator's time budget of ${budget.seconds}s ran out (${options.timeBudgetSeconds === undefined ? '75% of mutation.timeoutMs' : 'set below 75% of mutation.timeoutMs to leave time for the work after this run'}, or of what was left of it when mutator ran a second time): ${budget.notRun} mutant(s) were not run, so the results cover only part of the code in scope and mutation results are partial. Narrow the run with --since <ref>, or raise mutation.timeoutMs`,
     );
   } else if (counts.pending > 0) {
     warnings.push(

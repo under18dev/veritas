@@ -133,6 +133,9 @@ export function inventoryTests(options: {
 
 function inventory(options: { root: string; config: VeritasConfig; files?: string[] }): TestInventory {
   const root = path.resolve(options.root);
+  // Module resolution depends on the compiler options and files of this project, and so does what code reaches.
+  resolvedModules.clear();
+  projectReachCache.clear();
   const testFiles =
     options.files?.map((file) =>
       resolveInsideRoot(root, path.isAbsolute(file) ? path.relative(root, file) : file),
@@ -419,6 +422,11 @@ interface BodyAnalysis {
    * the document, or a project call a mock was handed to in a helper.
    */
   observed: Set<BodyAnalysis['calls'][number]>;
+  /**
+   * Calls whose code could reach what an assertion reads without being handed it (a mocked module it imports, a
+   * global it reads, a global API it calls), with the routes: evidence that the link is possible, not that it is made.
+   */
+  reached: Map<BodyAnalysis['calls'][number], Set<string>>;
   /** Mocks (or objects holding mocks) declared outside the body that the body hands to project calls, by call. */
   handed: Map<Invocation, MockReference[]>;
   /** Variables holding mocks or objects holding mocks, with the part handed over, by the calls they are handed to. */
@@ -1146,6 +1154,19 @@ function analyzeBody(
   // (`render(<Dialog />); expect(screen.getByText('Save'))…`), and a project call that a helper handed a mock to is
   // observed by an assertion on that mock (`renderDialog(); expect(onSave).toHaveBeenCalled()`).
   const observed: BodyAnalysis['observed'] = new Set();
+  const reachedBy: BodyAnalysis['reached'] = new Map();
+  const noteReached = (entry: BodyAnalysis['calls'][number], label: string) => {
+    const labels = reachedBy.get(entry) ?? new Set<string>();
+    labels.add(label);
+    reachedBy.set(entry, labels);
+  };
+  // What the test itself, or a helper of the test code it calls, uses: then it may have made the calls or writes.
+  let testReach: Reach | undefined;
+  const testUses = (route: Route): boolean => {
+    testReach ??= testSideReach(body, ctx);
+
+    return routeReached(route, testReach);
+  };
 
   // `document.body.className = 'dark'`: what the test writes to the page itself is not what a component rendered.
   for (const assertion of assertions) {
@@ -1170,6 +1191,33 @@ function analyzeBody(
               keysMatch(keysRead(root.identifier, entry.node), entry.target)))
         )
           observed.add(entry);
+      // How project code could reach the mock without being handed it: through a module the file mocks or a global
+      // (see `mockRoutes`). That it can is not that the assertion checks what it did, so it is recorded apart.
+      const routes = mockRoutes(root, ctx).filter((route) => !testUses(route));
+
+      if (routes.length === 0) continue;
+
+      for (const entry of calls) {
+        if (observed.has(entry) || executedAt(entry.node) > root.at) continue;
+        const reach = projectReach(entry.target.symbol, ctx);
+
+        const at = executedAt(entry.node);
+
+        for (const route of routes)
+          if (
+            routeReached(route, reach) &&
+            // The mock must be handed over before the call runs, by code that runs: setup counts as before.
+            (route.handOffs === undefined ||
+              route.handOffs.some((node) => {
+                const handed = handOffAt(node, body, checker);
+
+                return (
+                  handed < at || (handed === Number.NEGATIVE_INFINITY && at === Number.NEGATIVE_INFINITY)
+                );
+              }))
+          )
+            noteReached(entry, route.label);
+      }
     }
   }
 
@@ -1180,6 +1228,20 @@ function analyzeBody(
       documentChecks.some((position) => executedAt(entry.node) < position)
     )
       observed.add(entry);
+
+  // A read of the page after a project call whose code reads the global `document` may read what that call wrote
+  // (`applyTheme('dark'); expect(document.documentElement.dataset.theme)…`). Recorded apart, as above; not when the
+  // test or a helper it calls uses `document` itself, which may have written what is read.
+  if (documentChecks.length > 0 && !testUses({ kind: 'global', name: 'document', label: '' }))
+    for (const entry of calls)
+      if (
+        !observed.has(entry) &&
+        !entry.target.rendered &&
+        !entry.target.deferred &&
+        documentChecks.some((position) => executedAt(entry.node) < position) &&
+        projectReach(entry.target.symbol, ctx).globals.has('document')
+      )
+        noteReached(entry, 'the page, through the global document');
   const awaitedProject = awaited.filter((node) => sourcesOf([node.expression]).length > 0);
   const checks = assertions.filter(
     (assertion) => !isAssertionCountCall(assertion) && !isTypeLevelAssertion(assertion),
@@ -1243,6 +1305,7 @@ function analyzeBody(
     returned,
     progressOnly,
     observed,
+    reached: reachedBy,
     handed,
     mockHolders,
     observesDocument: documentChecks.length > 0,
@@ -4410,6 +4473,7 @@ function analyzeTest(
           keysMatch(analysis.assertedKeys.get(node), target)) ||
         analysis?.observed.has(entry) === true,
       location: location(source, node, relativeFile),
+      reachedVia: [...(analysis?.reached.get(entry) ?? [])].sort(),
     };
   });
   // A component a local function of the body renders is recorded twice, once where the function is written and once
@@ -4438,7 +4502,11 @@ function analyzeTest(
           (original, duplicate) => original === index && allCalls[duplicate]?.asserted === true,
         ),
     }))
-    .filter((_, index) => (duplicateOf[index] ?? -1) < 0);
+    .filter((_, index) => (duplicateOf[index] ?? -1) < 0)
+    // A route is evidence only where no assertion is linked to the call.
+    .map(({ reachedVia, ...call }): TestCaseType['targetCalls'][number] =>
+      call.asserted || reachedVia.length === 0 ? call : { ...call, reachedVia },
+    );
   // Tautological only when every compared value (subject and expected) is a compile-time
   // constant; runtime values such as process.env or non-project call results are not.
   // Only type-level checks: Vitest's `expectTypeOf`/`assertType`, or no runtime assertion but a type check written
@@ -4503,6 +4571,9 @@ function analyzeTest(
   if (opaque) suspicions.push('opaque_call');
 
   if (analysis?.progressOnly) suspicions.push('progress_only');
+
+  if (!targetCalls.some((call) => call.asserted) && targetCalls.some((call) => call.reachedVia !== undefined))
+    suspicions.push('reachable_by_name');
 
   return {
     id: testId(toPosixRelative(root, file), suitePath, name),
@@ -5371,6 +5442,780 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
   }
 
   return records;
+}
+
+/** Resolved module files by containing directory and specifier, for the run of one inventory. */
+const resolvedModules = new Map<string, string | undefined>();
+
+/** The file a module specifier resolves to from `containingFile`, or undefined when it does not resolve. */
+function resolvedModuleFile(specifier: string, containingFile: string, ctx: Ctx): string | undefined {
+  const key = `${path.dirname(containingFile)}\0${specifier}`;
+
+  if (resolvedModules.has(key)) return resolvedModules.get(key);
+  const resolved = ts.resolveModuleName(
+    specifier,
+    containingFile,
+    ctx.compilerOptions,
+    ts.sys,
+  ).resolvedModule;
+  const file = resolved ? path.resolve(resolved.resolvedFileName) : undefined;
+  resolvedModules.set(key, file);
+
+  return file;
+}
+
+/**
+ * The file of the module `identifier` is imported from (a named, default or namespace import of the test file),
+ * when the test file replaces that module with a hoisted module mock (`vi.mock('./api')`); otherwise undefined.
+ */
+function mockedModuleOf(identifier: ts.Identifier, ctx: Ctx): string | undefined {
+  const declaration = ctx.checker.getSymbolAtLocation(identifier)?.declarations?.[0];
+  let node: ts.Node | undefined = declaration;
+
+  while (node && !ts.isImportDeclaration(node)) node = node.parent;
+
+  if (!node || !ts.isImportDeclaration(node) || node.importClause?.isTypeOnly) return undefined;
+  const specifier = literalString(node.moduleSpecifier);
+  const source = node.getSourceFile();
+  const file = specifier === undefined ? undefined : resolvedModuleFile(specifier, source.fileName, ctx);
+
+  if (file === undefined) return undefined;
+  let mocked = mockedModulesCache.get(source);
+
+  if (!mocked) {
+    mocked = new Set();
+
+    for (const call of descendants(source)) {
+      if (!ts.isCallExpression(call) || mockCall(call, ctx.checker) !== 'module_hoisted') continue;
+      const argument = call.arguments[0] && skipParens(call.arguments[0]);
+      const target =
+        argument && ts.isCallExpression(argument) && argument.expression.kind === ts.SyntaxKind.ImportKeyword
+          ? argument.arguments[0]
+          : argument;
+      const name = literalString(target);
+      const resolved = name === undefined ? undefined : resolvedModuleFile(name, source.fileName, ctx);
+
+      if (resolved !== undefined) mocked.add(resolved);
+    }
+    mockedModulesCache.set(source, mocked);
+  }
+
+  return mocked.has(file) ? file : undefined;
+}
+
+/** Per test file, the module files its hoisted module mocks replace. */
+const mockedModulesCache = new WeakMap<ts.SourceFile, Set<string>>();
+
+/** Globals a test can put a mock into: `window.x = mock`, `globalThis.x = mock`. */
+const GLOBAL_HOLDERS = new Set(['window', 'globalThis', 'global', 'self']);
+/** Configuration of a mock's result: the value it returns or resolves to, or an implementation returning it. */
+const MOCK_RESULT = /^mock(?:Resolved|Rejected)?(?:Return)?Value(?:Once)?$|^mockImplementation(?:Once)?$/;
+
+/** Whether an identifier names a global of the environment (declared only in declaration files, not imported). */
+function isGlobalIdentifier(identifier: ts.Identifier, checker: ts.TypeChecker): boolean {
+  const declarations = checker.getSymbolAtLocation(identifier)?.declarations ?? [];
+
+  return declarations.length > 0 && declarations.every((item) => item.getSourceFile().isDeclarationFile);
+}
+
+function unwrapExpression(expression: ts.Expression): ts.Expression {
+  let current = skipParens(expression);
+
+  while (
+    ts.isAsExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isTypeAssertionExpression(current)
+  )
+    current = skipParens(current.expression);
+
+  return current;
+}
+
+/** The global member a write targets (`window.monaco = …` gives `monaco`), or undefined. */
+function globalMemberWritten(left: ts.Expression, checker: ts.TypeChecker): string | undefined {
+  const target = unwrapExpression(left);
+
+  if (!ts.isPropertyAccessExpression(target)) return undefined;
+  const holder = unwrapExpression(target.expression);
+
+  return ts.isIdentifier(holder) && GLOBAL_HOLDERS.has(holder.text) && isGlobalIdentifier(holder, checker)
+    ? target.name.text
+    : undefined;
+}
+
+/** A value a test file hands to a mocked module or a global, and where project code would meet it. */
+/**
+ * A value a test file hands to a mocked module or a global, and where project code would meet it. `node` is the code
+ * that hands it over, which must run before the project call; a hoisted module mock factory (`hoisted`) applies to
+ * the whole file wherever it is written.
+ */
+type MockHolder = { value: ts.Node; node: ts.Node; hoisted?: boolean; module?: string; global?: string };
+
+/**
+ * Per function, the globals it assigns one of its parameters to, or a value built from it, by parameter index
+ * (`(m) => { window.monaco = { ...m } }`).
+ */
+const globalSettersCache = new WeakMap<ts.Node, Map<number, string>>();
+
+function globalSetter(
+  fn: ts.SignatureDeclaration & { body?: ts.Node },
+  checker: ts.TypeChecker,
+): Map<number, string> {
+  const cached = globalSettersCache.get(fn);
+
+  if (cached) return cached;
+  const found = new Map<number, string>();
+  const parameters = fn.parameters.map((parameter) =>
+    ts.isIdentifier(parameter.name) ? checker.getSymbolAtLocation(parameter.name) : undefined,
+  );
+
+  for (const node of fn.body ? descendants(fn.body) : []) {
+    if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) continue;
+    const name = globalMemberWritten(node.left, checker);
+
+    if (name === undefined) continue;
+
+    // The parameter itself or a value built from it (`window.monaco = { KeyMod, ...extra }`).
+    for (const item of [node.right, ...descendants(node.right)]) {
+      const index = ts.isIdentifier(item) ? parameters.indexOf(checker.getSymbolAtLocation(item)) : -1;
+
+      if (index >= 0) found.set(index, name);
+    }
+  }
+  globalSettersCache.set(fn, found);
+
+  return found;
+}
+
+/**
+ * Where a test file hands values to code it does not call itself: module mock factories (`vi.mock('./api', () =>
+ * …)`), the result configured for a mock of a mocked module (`vi.mocked(load).mockResolvedValue(store)`), and
+ * globals (`window.monaco = mock`, `vi.stubGlobal('monaco', mock)`, a helper that assigns its argument to a global).
+ */
+const fileMockHoldersCache = new WeakMap<ts.SourceFile, MockHolder[]>();
+
+function fileMockHolders(source: ts.SourceFile, ctx: Ctx): MockHolder[] {
+  const cached = fileMockHoldersCache.get(source);
+
+  if (cached) return cached;
+  const { checker } = ctx;
+  const holders: MockHolder[] = [];
+  const specifierFile = (argument: ts.Expression | undefined): string | undefined => {
+    const node = argument && skipParens(argument);
+    const target =
+      node && ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword
+        ? node.arguments[0]
+        : node;
+    const name = literalString(target);
+
+    return name === undefined ? undefined : resolvedModuleFile(name, source.fileName, ctx);
+  };
+
+  for (const node of descendants(source)) {
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const name = globalMemberWritten(node.left, checker);
+
+      if (name !== undefined) holders.push({ value: node.right, node, global: name });
+      continue;
+    }
+
+    if (!ts.isCallExpression(node)) continue;
+    const role = mockCall(node, checker);
+
+    if (role === 'module_hoisted') {
+      const file = specifierFile(node.arguments[0]);
+
+      if (file !== undefined && node.arguments[1])
+        holders.push({ value: node.arguments[1], node, hoisted: true, module: file });
+      continue;
+    }
+
+    if (role === 'stub_global') {
+      const name = literalString(node.arguments[0]);
+
+      if (name !== undefined && node.arguments[1])
+        holders.push({ value: node.arguments[1], node, global: name });
+      continue;
+    }
+    const callee = skipParens(node.expression);
+
+    // `<mock>.mockResolvedValue(value)` on an export of a mocked module, directly or through `vi.mocked(...)`.
+    if (ts.isPropertyAccessExpression(callee) && MOCK_RESULT.test(callee.name.text) && node.arguments[0]) {
+      let receiver = unwrapExpression(callee.expression);
+
+      if (ts.isCallExpression(receiver) && mockCall(receiver, checker) !== undefined && receiver.arguments[0])
+        receiver = unwrapExpression(receiver.arguments[0]);
+
+      while (ts.isPropertyAccessExpression(receiver)) receiver = unwrapExpression(receiver.expression);
+      const file = ts.isIdentifier(receiver) ? mockedModuleOf(receiver, ctx) : undefined;
+
+      if (file !== undefined) holders.push({ value: node.arguments[0], node, module: file });
+      continue;
+    }
+
+    // A helper that assigns an argument to a global (`setWindowMonaco(mock)`), wherever it is declared.
+    let symbol = ts.isIdentifier(callee) ? checker.getSymbolAtLocation(callee) : undefined;
+
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    const declaration = symbol?.valueDeclaration;
+    const fn =
+      declaration && ts.isFunctionDeclaration(declaration)
+        ? declaration
+        : declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+          ? skipParens(declaration.initializer)
+          : undefined;
+
+    if (
+      fn &&
+      (ts.isFunctionDeclaration(fn) || ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) &&
+      !fn.getSourceFile().isDeclarationFile
+    )
+      for (const [index, name] of globalSetter(fn, checker)) {
+        const argument = node.arguments[index];
+
+        if (argument) holders.push({ value: argument, node, global: name });
+      }
+  }
+  fileMockHoldersCache.set(source, holders);
+
+  return holders;
+}
+
+/** The member path below an identifier where it is used (`h.removeTabs.mock` gives `['removeTabs', 'mock']`). */
+function usedPath(identifier: ts.Identifier): string[] {
+  const path: string[] = [];
+  let current: ts.Node = identifier;
+
+  while (ts.isPropertyAccessExpression(current.parent) && current.parent.expression === current) {
+    path.push(current.parent.name.text);
+    current = current.parent;
+  }
+
+  return path;
+}
+
+/**
+ * Whether a value holds the mock `root`: names it (on a compatible member path, so `{ save: h.save }` holds
+ * `h.save` but not `h.load`), or names a local of the same file whose value does.
+ */
+function holdsMockRoot(value: ts.Node, root: MockReference, checker: ts.TypeChecker, depth = 0): boolean {
+  for (const item of [value, ...descendants(value)]) {
+    if (!ts.isIdentifier(item)) continue;
+    const symbol = valueSymbol(item, checker);
+
+    if (!symbol) continue;
+
+    if (symbol === root.symbol) {
+      const used = usedPath(item);
+      const shorter = Math.min(used.length, root.path.length);
+
+      if (used.slice(0, shorter).join('.') === root.path.slice(0, shorter).join('.')) return true;
+      continue;
+    }
+    const initializer = variableInitializer(symbol.valueDeclaration);
+
+    if (
+      depth < 4 &&
+      initializer &&
+      initializer.getSourceFile() === value.getSourceFile() &&
+      !contains(initializer, value) &&
+      holdsMockRoot(initializer, root, checker, depth + 1)
+    )
+      return true;
+  }
+
+  return false;
+}
+
+/** A way project code could reach a mock or the page without being handed it, with a label for reports. */
+type Route = {
+  label: string;
+  /**
+   * The code that hands the mock over (an assignment to a global, a spy's creation, a configured result), any of
+   * which must run before the project call; absent when the route does not depend on order (an import from a module
+   * a hoisted mock replaces).
+   */
+  handOffs?: ts.Node[];
+} & (
+  | { kind: 'module'; file: string }
+  | { kind: 'global'; name: string }
+  | { kind: 'member'; symbol: ts.Symbol }
+);
+
+/**
+ * Where in a test's run code outside or inside its body runs, relative to the body's own positions: in the body,
+ * where it runs (a local function where it is called, never if it is not); before the body when it is module or
+ * describe-level code of a describe enclosing the test, or a `beforeEach`/`beforeAll` hook there; in a helper of the
+ * file, where the earliest call or hook registration of that helper runs, followed through helpers calling helpers;
+ * never otherwise (another test, an `after` hook, a helper nothing shown calls).
+ */
+function handOffAt(
+  node: ts.Node,
+  body: ts.Node,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Node> = new Set(),
+): number {
+  if (contains(body, node)) return invokedAt(node, body, checker);
+  const registration = body.parent?.parent;
+
+  for (let current = node.parent; current; current = current.parent) {
+    if (!isFunctionLike(current)) continue;
+    let fn: ts.Node = current;
+
+    while (ts.isParenthesizedExpression(fn.parent)) fn = fn.parent;
+    const call = fn.parent;
+
+    if (!ts.isCallExpression(call) || !call.arguments.includes(fn as ts.Expression))
+      return helperRunsAt(current, fn, body, checker, seen);
+    const suite = describeRegistration(call);
+
+    if (suite?.callback === fn) {
+      // Code in a describe runs when tests are collected, for the tests inside it only.
+      if (!registration || !contains(fn, registration)) return Number.POSITIVE_INFINITY;
+      continue;
+    }
+
+    if (testRegistration(call)) return Number.POSITIVE_INFINITY;
+
+    // `vi.hoisted(() => …)` runs when the file loads.
+    if (mockCall(call, checker) !== undefined) continue;
+
+    return setupHookAt(call, registration);
+  }
+
+  return Number.NEGATIVE_INFINITY;
+}
+
+/**
+ * For a call given a callback: before the test (`-Infinity`) when it is a `beforeEach`/`beforeAll` hook of a
+ * describe enclosing the test or of the file; never (`Infinity`) for anything else.
+ */
+function setupHookAt(call: ts.CallExpression, registration: ts.Node | undefined): number {
+  const callee = skipParens(call.expression);
+
+  if (!ts.isIdentifier(callee) || !runner.setup.has(runnerName(callee))) return Number.POSITIVE_INFINITY;
+  // A setup hook runs before the tests of the describe it is in.
+  let scope: ts.Node | undefined = call.parent;
+
+  while (
+    scope &&
+    !(isFunctionLike(scope) && ts.isCallExpression(scope.parent) && describeRegistration(scope.parent))
+  )
+    scope = scope.parent;
+
+  return !scope || (registration && contains(scope, registration))
+    ? Number.NEGATIVE_INFINITY
+    : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Where a named helper of the test file runs (`function install() { … }`, `const install = () => { … }`): at its
+ * earliest call that runs in the test, or before the test when it is registered as a setup hook (`beforeEach(install)`)
+ * that applies to it; never when nothing that runs calls it.
+ */
+function helperRunsAt(
+  current: ts.Node,
+  fn: ts.Node,
+  body: ts.Node,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Node>,
+): number {
+  const name = ts.isFunctionDeclaration(current)
+    ? current.name
+    : ts.isVariableDeclaration(fn.parent) && fn.parent.initializer === fn && ts.isIdentifier(fn.parent.name)
+      ? fn.parent.name
+      : undefined;
+  const symbol = name && checker.getSymbolAtLocation(name);
+
+  if (!name || !symbol || seen.has(current)) return Number.POSITIVE_INFINITY;
+  seen.add(current);
+  const registration = body.parent?.parent;
+  let earliest = Number.POSITIVE_INFINITY;
+
+  for (const reference of referencesOf(symbol, body.getSourceFile(), checker)) {
+    if (reference === name) continue;
+    const parent = reference.parent;
+    const at =
+      ts.isCallExpression(parent) && parent.expression === reference
+        ? handOffAt(parent, body, checker, seen)
+        : ts.isCallExpression(parent) && parent.arguments.includes(reference)
+          ? // Passed to a hook (`beforeEach(install)`): the hook must itself apply to the test.
+            handOffAt(parent, body, checker, seen) === Number.NEGATIVE_INFINITY
+            ? setupHookAt(parent, registration)
+            : Number.POSITIVE_INFINITY
+          : Number.POSITIVE_INFINITY;
+
+    earliest = Math.min(earliest, at);
+  }
+
+  return earliest;
+}
+
+/**
+ * What code reads, followed through the functions, components and values it names: globals (`document`, `fetch`,
+ * and members of `window` or `globalThis` such as `monaco`), the members it accesses (by symbol, so `Math.log` is not
+ * `console.log`), and the modules of the imports it uses. Writes (`window.monaco = …`) are not reads.
+ */
+interface Reach {
+  globals: Set<string>;
+  /** Members by their declaration (`memberKey`): an inherited member is the same one whatever the receiver's type. */
+  members: Set<ts.Node | ts.Symbol>;
+  modules: Set<string>;
+}
+
+function memberKey(symbol: ts.Symbol): ts.Node | ts.Symbol {
+  return symbol.declarations?.[0] ?? symbol;
+}
+
+function routeReached(route: Route, reach: Reach): boolean {
+  return route.kind === 'module'
+    ? reach.modules.has(route.file)
+    : route.kind === 'global'
+      ? reach.globals.has(route.name)
+      : reach.members.has(memberKey(route.symbol));
+}
+
+function isWritten(node: ts.Expression): boolean {
+  const parent = node.parent;
+
+  return (
+    (ts.isBinaryExpression(parent) &&
+      parent.left === node &&
+      parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) ||
+    ts.isDeleteExpression(parent)
+  );
+}
+
+/**
+ * Walk code from `starts`, following declarations it names: in project files with `followProject`, otherwise in
+ * test code only (helpers), which is what the test itself does.
+ */
+function codeReach(starts: ts.Node[], ctx: Ctx, followProject: boolean): Reach {
+  const { checker } = ctx;
+  const reach: Reach = { globals: new Set(), members: new Set(), modules: new Set() };
+  const visited = new Set<ts.Node>();
+  const follow = (symbol: ts.Symbol | undefined, depth: number) => {
+    for (const declaration of symbol?.declarations ?? []) {
+      const sourceFile = declaration.getSourceFile();
+
+      if (sourceFile.isDeclarationFile) continue;
+      const inProject = ctx.projectSet.has(path.resolve(sourceFile.fileName));
+
+      if (followProject ? inProject : !inProject && isTestCodeFile(sourceFile, ctx))
+        visit(declaration, depth + 1);
+    }
+  };
+  const visit = (start: ts.Node, depth: number) => {
+    if (visited.has(start) || depth > 12) return;
+    visited.add(start);
+
+    // Types run nothing: their subtrees, and interfaces or type aliases, are not walked.
+    const nodes: ts.Node[] = [];
+    const collect = (node: ts.Node) => {
+      if (ts.isTypeNode(node) || ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) return;
+      nodes.push(node);
+      ts.forEachChild(node, collect);
+    };
+    collect(start);
+
+    for (const node of nodes) {
+      // A module loaded on demand (`await import('mermaid')`) is used by the code that loads it.
+      if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        const specifier = literalString(node.arguments[0]);
+        const file =
+          specifier === undefined
+            ? undefined
+            : resolvedModuleFile(specifier, node.getSourceFile().fileName, ctx);
+
+        if (file !== undefined) reach.modules.add(file);
+        continue;
+      }
+
+      if (ts.isPropertyAccessExpression(node)) {
+        if (isWritten(node)) continue;
+        const member = checker.getSymbolAtLocation(node.name);
+
+        if (member) {
+          reach.members.add(memberKey(member));
+          follow(member, depth);
+        }
+        const holder = unwrapExpression(node.expression);
+
+        if (ts.isIdentifier(holder) && GLOBAL_HOLDERS.has(holder.text) && isGlobalIdentifier(holder, checker))
+          reach.globals.add(node.name.text);
+        continue;
+      }
+
+      if (!ts.isIdentifier(node)) continue;
+      const parent = node.parent;
+
+      if (
+        (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+        (ts.isPropertyAssignment(parent) && parent.name === node)
+      )
+        continue;
+      let symbol = checker.getSymbolAtLocation(node);
+      const declarations = symbol?.declarations ?? [];
+
+      if (!symbol || declarations.length === 0) continue;
+
+      if (declarations.every((declaration) => declaration.getSourceFile().isDeclarationFile)) {
+        reach.globals.add(node.text);
+        continue;
+      }
+
+      if (symbol.flags & ts.SymbolFlags.Alias) {
+        let importNode: ts.Node | undefined = declarations[0];
+
+        while (importNode && !ts.isImportDeclaration(importNode)) importNode = importNode.parent;
+        const specifier =
+          importNode && ts.isImportDeclaration(importNode)
+            ? literalString(importNode.moduleSpecifier)
+            : undefined;
+        const file =
+          specifier === undefined
+            ? undefined
+            : resolvedModuleFile(specifier, node.getSourceFile().fileName, ctx);
+
+        if (file !== undefined) reach.modules.add(file);
+        symbol = checker.getAliasedSymbol(symbol);
+      }
+
+      // A parameter or local of the code being walked adds nothing by itself.
+      if (declarations.some((declaration) => contains(start, declaration))) continue;
+      follow(symbol, depth);
+    }
+  };
+
+  for (const start of starts) visit(start, 0);
+
+  return reach;
+}
+
+/** Reach of a project symbol (`file#name`), from its declaration. */
+const projectReachCache = new Map<string, Reach>();
+
+function projectReach(symbol: string, ctx: Ctx): Reach {
+  const cached = projectReachCache.get(symbol);
+
+  if (cached) return cached;
+  const index = symbol.lastIndexOf('#');
+  const sourceFile =
+    index > 0 ? ctx.program.getSourceFile(path.resolve(ctx.root, symbol.slice(0, index))) : undefined;
+  const moduleSymbol = sourceFile && ctx.checker.getSymbolAtLocation(sourceFile);
+  let exported = moduleSymbol
+    ? ctx.checker.getExportsOfModule(moduleSymbol).find((item) => item.getName() === symbol.slice(index + 1))
+    : undefined;
+
+  if (exported && exported.flags & ts.SymbolFlags.Alias) exported = ctx.checker.getAliasedSymbol(exported);
+  const name = symbol.slice(index + 1);
+  // A symbol id names an export, a default export by its local name, or a member (`storeApi.saveLanguage` is
+  // `storeApi.ts#saveLanguage`): find the declarations of that name in the file.
+  const declarations =
+    exported?.declarations ??
+    (sourceFile ? descendants(sourceFile) : []).filter(
+      (node) =>
+        (ts.isFunctionDeclaration(node) ||
+          ts.isClassDeclaration(node) ||
+          ts.isVariableDeclaration(node) ||
+          ts.isMethodDeclaration(node) ||
+          ts.isPropertyAssignment(node) ||
+          ts.isPropertyDeclaration(node)) &&
+        node.name !== undefined &&
+        ts.isIdentifier(node.name) &&
+        node.name.text === name,
+    );
+  const reach = codeReach(declarations, ctx, true);
+  projectReachCache.set(symbol, reach);
+
+  return reach;
+}
+
+/**
+ * What a test body does itself: the functions, globals and members it calls directly, and everything the helpers of
+ * the test code it calls read. A route the test uses this way may be how the calls or writes it checks were made.
+ */
+function testSideReach(body: ts.Node | undefined, ctx: Ctx): Reach {
+  const { checker } = ctx;
+  const reach: Reach = { globals: new Set(), members: new Set(), modules: new Set() };
+
+  if (!body) return reach;
+  const helpers: ts.Node[] = [];
+
+  for (const node of descendants(body)) {
+    if (!ts.isCallExpression(node)) continue;
+    const callee = unwrapExpression(node.expression);
+    const named = ts.isPropertyAccessExpression(callee)
+      ? callee.name
+      : ts.isIdentifier(callee)
+        ? callee
+        : undefined;
+
+    if (!named) continue;
+    // What is called, not what its receiver or arguments compute (`expect(send)` does not call `send`).
+    const base = ts.isPropertyAccessExpression(callee) ? unwrapExpression(callee.expression) : named;
+
+    if (ts.isPropertyAccessExpression(callee)) {
+      const member = checker.getSymbolAtLocation(callee.name);
+
+      if (member) reach.members.add(memberKey(member));
+
+      if (ts.isIdentifier(base) && GLOBAL_HOLDERS.has(base.text) && isGlobalIdentifier(base, checker))
+        reach.globals.add(callee.name.text);
+    }
+
+    if (ts.isIdentifier(base)) {
+      const baseSymbol = checker.getSymbolAtLocation(base);
+      const declarations = baseSymbol?.declarations ?? [];
+
+      if (
+        base === named &&
+        declarations.length > 0 &&
+        declarations.every((item) => item.getSourceFile().isDeclarationFile)
+      )
+        reach.globals.add(base.text);
+      let importNode: ts.Node | undefined =
+        baseSymbol && baseSymbol.flags & ts.SymbolFlags.Alias ? declarations[0] : undefined;
+
+      while (importNode && !ts.isImportDeclaration(importNode)) importNode = importNode.parent;
+      const specifier =
+        importNode && ts.isImportDeclaration(importNode)
+          ? literalString(importNode.moduleSpecifier)
+          : undefined;
+      const file =
+        specifier === undefined
+          ? undefined
+          : resolvedModuleFile(specifier, base.getSourceFile().fileName, ctx);
+
+      if (file !== undefined) reach.modules.add(file);
+    }
+    let symbol = checker.getSymbolAtLocation(named);
+
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+
+    for (const declaration of symbol?.declarations ?? []) {
+      const sourceFile = declaration.getSourceFile();
+
+      if (
+        !sourceFile.isDeclarationFile &&
+        !ctx.projectSet.has(path.resolve(sourceFile.fileName)) &&
+        isTestCodeFile(sourceFile, ctx) &&
+        !contains(body, declaration)
+      )
+        helpers.push(declaration);
+    }
+  }
+  const helped = codeReach(helpers, ctx, false);
+
+  for (const item of helped.globals) reach.globals.add(item);
+
+  for (const item of helped.members) reach.members.add(item);
+
+  for (const item of helped.modules) reach.modules.add(item);
+
+  return reach;
+}
+
+/** A module file for reports: relative to the root, or from the package name for a dependency. */
+function moduleLabel(file: string, ctx: Ctx): string {
+  const relative = toPosixRelative(ctx.root, file);
+  const index = relative.lastIndexOf('node_modules/');
+
+  return index < 0 ? relative : relative.slice(index + 'node_modules/'.length);
+}
+
+/**
+ * How project code could reach a mock the test checks without being handed it: through a module the file mocks (an
+ * import from it, its mock factory or a mocked function's result holding the mock), a global holding it
+ * (`window.monaco`, `vi.stubGlobal`), or the global API a spy watches (`Element.prototype.scrollIntoView`).
+ */
+function mockRoutes(root: MockReference & { identifier: ts.Identifier }, ctx: Ctx): Route[] {
+  const { checker } = ctx;
+  const routes: Route[] = [];
+  const moduleRoute = (file: string) => {
+    if (!routes.some((route) => route.kind === 'module' && route.file === file))
+      routes.push({ kind: 'module', file, label: `mocked module ${moduleLabel(file, ctx)}` });
+  };
+  const imported = mockedModuleOf(root.identifier, ctx);
+
+  if (imported !== undefined) moduleRoute(imported);
+  const source = root.identifier.getSourceFile();
+  const declaration = root.symbol.valueDeclaration;
+  // A local naming an export of a mocked module (`const render = vi.mocked(mermaid.render)`, `const send = api.send`).
+  let alias =
+    variableInitializer(declaration) && unwrapExpression(variableInitializer(declaration) as ts.Expression);
+
+  if (alias && ts.isCallExpression(alias) && mockCall(alias, checker) !== undefined && alias.arguments[0])
+    alias = unwrapExpression(alias.arguments[0]);
+
+  while (alias && ts.isPropertyAccessExpression(alias)) alias = unwrapExpression(alias.expression);
+  const aliased = alias && ts.isIdentifier(alias) ? mockedModuleOf(alias, ctx) : undefined;
+
+  if (aliased !== undefined) moduleRoute(aliased);
+  // A spy on a global object or prototype (`vi.spyOn(Element.prototype, 'scrollIntoView')`), kept in a local.
+  const values = [
+    ...(variableInitializer(declaration) ? [variableInitializer(declaration) as ts.Expression] : []),
+    ...assignmentsTo(root.symbol, source, checker),
+  ];
+
+  for (const value of values) {
+    let call = unwrapExpression(value);
+
+    // `vi.spyOn(...).mockImplementation(...)` configures the spy and returns it.
+    while (
+      ts.isCallExpression(call) &&
+      ts.isPropertyAccessExpression(call.expression) &&
+      mockCall(call, checker) === undefined &&
+      ts.isCallExpression(unwrapExpression(call.expression.expression))
+    )
+      call = unwrapExpression(call.expression.expression);
+
+    if (!ts.isCallExpression(call) || mockCall(call, checker) !== 'spy') continue;
+    const [object, nameNode] = call.arguments;
+    const name = literalString(nameNode);
+    let base = object && unwrapExpression(object);
+
+    while (base && ts.isPropertyAccessExpression(base)) base = unwrapExpression(base.expression);
+
+    if (
+      !object ||
+      name === undefined ||
+      !base ||
+      !ts.isIdentifier(base) ||
+      !isGlobalIdentifier(base, checker)
+    )
+      continue;
+    const member = checker.getTypeAtLocation(object).getProperty(name);
+
+    if (member)
+      routes.push({
+        kind: 'member',
+        symbol: member,
+        label: `spied ${object.getText()}.${name}`,
+        handOffs: [value],
+      });
+  }
+
+  for (const holder of fileMockHolders(source, ctx))
+    if (holdsMockRoot(holder.value, root, checker)) {
+      if (holder.module !== undefined)
+        routes.push({
+          kind: 'module',
+          file: holder.module,
+          label: `mocked module ${moduleLabel(holder.module, ctx)}`,
+          ...(holder.hoisted ? {} : { handOffs: [holder.node] }),
+        });
+
+      if (holder.global !== undefined)
+        routes.push({
+          kind: 'global',
+          name: holder.global,
+          label: `global ${holder.global}`,
+          handOffs: [holder.node],
+        });
+    }
+
+  return routes;
 }
 
 /** Project symbols exported by the module a `vi.mock(specifier)` call replaces. */
