@@ -308,6 +308,53 @@ describe('the TUI', () => {
     expect(signal?.aborted).toBe(true);
   });
 
+  it('shows a run cancelled with Esc as cancelled even when the run returns a summary', async () => {
+    let emit: (message: string) => void = () => {};
+    const api = fakeApi({
+      // The engine does not reject a cancelled run: it records the stages as cancelled and returns a summary.
+      run: vi.fn(
+        (_request, signal, onEvent) =>
+          new Promise((resolve) => {
+            emit = (message) =>
+              onEvent({ time: '2026-11-21T10:00:03.000Z', level: 'debug', message, event: 'process-start' });
+            emit('mutator started');
+            signal.addEventListener('abort', () => {
+              emit('mutator exited SIGKILL');
+              resolve({
+                runId: 'R-3',
+                dir: '',
+                run: {
+                  ...RUN,
+                  stages: [
+                    { stage: 'index', status: 'succeeded', durationMs: 5 },
+                    { stage: 'mutate', status: 'cancelled', durationMs: 7 },
+                  ],
+                },
+                findings: [],
+                decision: { exitCode: 0, verdict: 'pass_with_warnings', reasons: [] },
+              } as never);
+            });
+          }),
+      ) as TuiApi['run'],
+    });
+    const app = await open(api, 3);
+    await until(app, 'Profile: quick');
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.down, KEY.enter);
+    await until(app, 'mutator started');
+    await press(app, KEY.escape);
+    await until(app, 'Run cancelled.');
+    const frame = app.lastFrame() ?? '';
+    // No verdict claims the run passed; the log, the recorded stages and the run id stay.
+    expect(frame).not.toContain('pass_with_warnings');
+    expect(frame).toContain('R-3');
+    expect(frame).toMatch(/mutate\s+cancelled 7 ms/);
+    expect(frame).toContain('10:00:03 mutator started');
+    expect(frame).toContain('10:00:03 mutator exited SIGKILL');
+    expect(frame).toContain('Enter opens Results for this cancelled run');
+    await press(app, KEY.enter);
+    await until(app, 'R-1');
+  });
+
   it('applies a plan only after it is confirmed, with the plan token', async () => {
     const api = fakeApi();
     const app = await open(api, 4);

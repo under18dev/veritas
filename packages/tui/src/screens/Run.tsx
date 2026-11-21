@@ -78,6 +78,7 @@ const STAGE_MARK: Record<string, { mark: string; color: string }> = {
   partial: { mark: '!', color: 'yellow' },
   skipped: { mark: '-', color: 'gray' },
   cancelled: { mark: '✖', color: 'yellow' },
+  timeout: { mark: '✖', color: 'yellow' },
   error: { mark: '✖', color: 'red' },
   failed: { mark: '✖', color: 'red' },
 };
@@ -156,7 +157,8 @@ type State =
   | { kind: 'form' }
   | { kind: 'since' }
   | { kind: 'running'; startedAt: number }
-  | { kind: 'done'; summary: RunSummary; durationMs: number }
+  /** `cancelled`: the run was cancelled and returned what it had recorded; its results are incomplete. */
+  | { kind: 'done'; summary: RunSummary; durationMs: number; cancelled: boolean }
   | { kind: 'failed'; error: unknown; cancelled: boolean };
 
 export function RunScreen({ api, active, height, onBack, onChange, navigate }: ScreenProps) {
@@ -225,12 +227,18 @@ export function RunScreen({ api, active, height, onBack, onChange, navigate }: S
       })
       .then(
         (summary) => {
-          // The stages as the run recorded them; the activity log is only for watching the run.
+          // The stages as the run recorded them.
           setStages(
             summary.run.stages.map((s) => ({ stage: s.stage, status: s.status, durationMs: s.durationMs })),
           );
-          setLog([]);
-          setState({ kind: 'done', summary, durationMs: Date.now() - startedAt });
+          // A cancelled run still returns a summary (its stages cancelled). The activity log, which is only for
+          // watching the run, is kept for it to show where it stopped, and cleared once a run has finished.
+          const cancelled = c.signal.aborted;
+          const events = pending.current.splice(0);
+
+          if (cancelled) setLog((lines) => appendLog(lines, events));
+          else setLog([]);
+          setState({ kind: 'done', summary, durationMs: Date.now() - startedAt, cancelled });
         },
         (error: unknown) => {
           const events = pending.current.splice(0);
@@ -320,7 +328,20 @@ export function RunScreen({ api, active, height, onBack, onChange, navigate }: S
           <ActivityLog log={log} rows={logRows} />
         </Box>
       ) : null}
-      {state.kind === 'done' ? (
+      {state.kind === 'done' && state.cancelled ? (
+        <Box flexDirection="column">
+          <Text color="yellow">Run cancelled. Its results are incomplete.</Text>
+          <Text dimColor>
+            {state.summary.runId} · stopped after {clock(state.durationMs)}
+          </Text>
+          <Box marginTop={1}>
+            <StageList stages={stages} frame={0} now={0} startedAt={new Map()} />
+          </Box>
+          {log.length ? <ActivityLog log={log} rows={Math.min(logRows, log.length)} /> : null}
+          <Text dimColor>Enter opens Results for this cancelled run · Esc returns to the form</Text>
+        </Box>
+      ) : null}
+      {state.kind === 'done' && !state.cancelled ? (
         <Box flexDirection="column">
           <Box>
             <Badge color={verdictColor(state.summary.decision.verdict)}>
