@@ -53,13 +53,8 @@ interface InputIndex {
   covered: Map<string, AssessInput['mutants']>;
 }
 
-const indexes = new WeakMap<AssessInput, InputIndex>();
-
-/** Edges and mutants by test id, built once per input (in input order), instead of scanning them for every test. */
+/** Edges and mutants by test id (in input order), so assessing every test does not scan them for each one. */
 function indexOf(input: AssessInput): InputIndex {
-  const cached = indexes.get(input);
-
-  if (cached) return cached;
   const push = <T>(map: Map<string, T[]>, key: string, value: T) => {
     const list = map.get(key);
     if (list) list.push(value);
@@ -73,13 +68,14 @@ function indexOf(input: AssessInput): InputIndex {
     for (const id of new Set(mutant.killedBy)) push(index.killed, id, mutant);
     for (const id of new Set(mutant.coveredBy)) push(index.covered, id, mutant);
   }
-  indexes.set(input, index);
-
   return index;
 }
 
-export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
-  const index = indexOf(input);
+export function assessTest(
+  test: TestCase,
+  input: AssessInput,
+  index: InputIndex = indexOf(input),
+): TestAssessment {
   const edges = index.edges.get(test.id) ?? [];
   const propertyIds = [...new Set(edges.map((e) => e.propertyId).filter((id): id is string => id !== null))];
   const wanted = new Set(propertyIds);
@@ -321,7 +317,10 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
 }
 
 export function assessTests(input: AssessInput): TestAssessment[] {
-  return input.tests.map((t) => assessTest(t, input));
+  // Built for this call only: an input changed and passed again gets a fresh index.
+  const index = indexOf(input);
+
+  return input.tests.map((t) => assessTest(t, input, index));
 }
 
 /**

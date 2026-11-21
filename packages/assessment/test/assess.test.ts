@@ -133,6 +133,14 @@ describe('assessTest', () => {
     expect(a.rationale.join(' ')).toMatch(/checks that the call settles/);
   });
 
+  it('sees changes to an input passed again', () => {
+    const t = testCase({ id: 'T-a', targetCalls: [call(['1000'], true)] });
+    const data = input({ mutants: [] });
+    expect(assessTest(t, data).vector.mutationDetection.killed).toEqual([]);
+    data.mutants.push(mutant('M-1', 'killed', ['T-a'], ['T-a']));
+    expect(assessTest(t, data).vector.mutationDetection.killed).toEqual(['M-1']);
+  });
+
   it('is inconclusive, not disconnected, when the test belongs to a suite its caller supplies', () => {
     const t = testCase({ id: 'T-a', calledSymbols: [], suspicions: ['caller_supplied'] });
     const a = assessTest(t, input());
