@@ -1,4 +1,5 @@
 import { TestCase, VeritasConfig } from '@under18dev/veritas-core';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { inventoryTests } from '../src/index.js';
 import { copyFixture } from './helpers.js';
@@ -6,6 +7,7 @@ import { copyFixture } from './helpers.js';
 describe('discount-boundary fixture', () => {
   it('maps shipping boundary calls to directly asserted edges', () => {
     const inventory = inventoryTests({
+      recognition: vitest.recognition,
       root: copyFixture('discount-boundary'),
       config: VeritasConfig.parse({}),
     });
@@ -26,6 +28,7 @@ describe('discount-boundary fixture', () => {
 
   it('keeps the tautological test disconnected', () => {
     const inventory = inventoryTests({
+      recognition: vitest.recognition,
       root: copyFixture('discount-boundary'),
       config: VeritasConfig.parse({}),
     });
@@ -37,6 +40,7 @@ describe('discount-boundary fixture', () => {
 
   it('validates the inventory and every test against the core schema', () => {
     const inventory = inventoryTests({
+      recognition: vitest.recognition,
       root: copyFixture('discount-boundary'),
       config: VeritasConfig.parse({}),
     });

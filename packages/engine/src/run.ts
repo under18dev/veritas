@@ -355,7 +355,11 @@ async function runInContext(
     const scope = options.scope?.length ? options.scope : changed?.length ? changed : undefined;
 
     try {
-      return selectMutationTestFiles(mapped ?? inventoryTests({ root, config }), config, scope);
+      return selectMutationTestFiles(
+        mapped ?? inventoryTests({ root, config, recognition: testRunner.recognition }),
+        config,
+        scope,
+      );
     } catch {
       return undefined;
     }
@@ -532,13 +536,13 @@ async function runInContext(
     name: 'map',
     dependsOn: [],
     run: async () => {
-      const inventory = inventoryTests({ root, config });
+      const inventory = inventoryTests({ root, config, recognition: testRunner.recognition });
 
       return {
         status: 'succeeded',
         output: inventory,
         messages: [
-          // Counted as written in the test files, so Vitest, which counts each case of a loop or .each, may report more.
+          // Counted as written in the test files, so the test runner, which counts each case of a loop or .each, may report more.
           `${inventory.tests.length} test registration(s) (a loop or .each counts once), ${inventory.edges.length} symbol edge(s)`,
         ],
       };

@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { VeritasConfig } from '@under18dev/veritas-core';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { inventoryTests } from '../src/index.js';
@@ -15,7 +16,11 @@ describe('scope and diagnostics', () => {
       'test/ignored.ts': `import { test } from 'vitest'; test('ignored', () => {});`,
       'test/broken.test.ts': `import { test } from 'vitest'; test('broken', () => {`,
     });
-    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
 
     expect(inventory.tests.map((test) => test.name)).toContain('included');
     expect(inventory.tests.map((test) => test.name)).not.toContain('ignored');
@@ -38,7 +43,11 @@ describe('scope and diagnostics', () => {
       // Creating file links needs extra privileges on some Windows runners.
       linked = false;
     }
-    const names = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests.map((test) => test.name);
+    const names = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests.map((test) => test.name);
 
     expect(names).toContain('inside');
     expect(names).not.toContain('outside the root');
@@ -63,7 +72,11 @@ describe('scope and diagnostics', () => {
       'test/required.test.ts': `import { test } from 'vitest'; test('cjs', () => { require('../src/value.js'); });`,
       'test/created.test.ts': `import { test } from 'vitest'; import { createRequire } from 'node:module'; const load = createRequire(import.meta.url); test('x', () => { load('../src/value.js'); });`,
     });
-    const files = inventoryTests({ root, config: VeritasConfig.parse({}) }).files;
+    const files = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).files;
     const unseen = (name: string) => files.find((file) => file.path === name)?.unseenReach;
     expect(unseen('test/plain.test.ts')).toBe(false);
     expect(unseen('test/custom.test.ts')).toBe(true);
@@ -72,7 +85,11 @@ describe('scope and diagnostics', () => {
     expect(unseen('test/required.test.ts')).toBe(true);
     expect(unseen('test/created.test.ts')).toBe(true);
     // The same calls inside a test make it opaque, so its kills are not credited to the linked call alone.
-    const tests = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests;
+    const tests = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests;
     expect(tests.find((t) => t.name === 'cjs')?.suspicions).toContain('opaque_call');
     expect(tests.find((t) => t.name === 'x')?.suspicions).toContain('opaque_call');
   });
@@ -115,7 +132,11 @@ describe('scope and diagnostics', () => {
         test('direct', () => expect(value(1)).toBe(1));
       `,
     });
-    const tests = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests;
+    const tests = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests;
     const suspicions = (file: string) => tests.find((t) => t.file === file)?.suspicions;
     expect(suspicions('test/load-spawn.test.ts')).toContain('opaque_call');
     expect(suspicions('test/load-missing.test.ts')).toContain('unresolved_import');
@@ -135,7 +156,11 @@ describe('scope and diagnostics', () => {
         test('non-project', () => { expect(path.basename('/x/y')).toBe('y'); });
       `,
     });
-    const testCase = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests.at(0);
+    const testCase = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests.at(0);
 
     if (!testCase) throw new Error('missing non-project test');
 
@@ -162,10 +187,18 @@ describe('tsconfig containment', () => {
 
     try {
       // No tsconfig in the root: the parent's must not be picked up.
-      inventoryTests({ root, config: VeritasConfig.parse({}) });
+      inventoryTests({ recognition: vitest.recognition, root, config: VeritasConfig.parse({}) });
       writeFileSync(path.join(root, 'tsconfig.json'), JSON.stringify({ extends: '../base.json' }));
-      inventoryTests({ root, config: VeritasConfig.parse({ project: { tsconfig: 'tsconfig.json' } }) });
-      inventoryTests({ root, config: VeritasConfig.parse({ project: { tsconfig: '../tsconfig.json' } }) });
+      inventoryTests({
+        recognition: vitest.recognition,
+        root,
+        config: VeritasConfig.parse({ project: { tsconfig: 'tsconfig.json' } }),
+      });
+      inventoryTests({
+        recognition: vitest.recognition,
+        root,
+        config: VeritasConfig.parse({ project: { tsconfig: '../tsconfig.json' } }),
+      });
     } finally {
       ts.sys.readFile = original;
     }

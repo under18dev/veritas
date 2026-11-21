@@ -1,4 +1,5 @@
 import { VeritasConfig } from '@under18dev/veritas-core';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { inventoryTests } from '../src/index.js';
 import { tempProject } from './helpers.js';
@@ -18,7 +19,11 @@ describe('assertion evidence', () => {
         test('direct', () => { expect(fn(1)).toBe(2); });
       `,
     });
-    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
     const byName = (name: string) => {
       const test = inventory.tests.find((candidate) => candidate.name === name);
 
@@ -62,7 +67,11 @@ describe('assertion evidence', () => {
         });
       `,
     });
-    const tests = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests;
+    const tests = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests;
     const asserted = (name: string) => tests.find((t) => t.name === name)?.targetCalls[0]?.asserted;
     expect(asserted('second parameter')).toBe(true);
     expect(asserted('arrow helper with a local')).toBe(true);
@@ -97,7 +106,11 @@ describe('assertion evidence', () => {
         });
       `,
     });
-    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
     const asserted = (name: string) =>
       inventory.tests.find((test) => test.name === name)?.targetCalls.map((call) => call.asserted);
 
@@ -125,7 +138,11 @@ describe('assertion evidence', () => {
         test('snapshots', () => { expect(fn(1)).toMatchSnapshot(); expect(fn(2)).toMatchFileSnapshot('x'); });
       `,
     });
-    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
 
     expect(inventory.tests.find((test) => test.name === 'assertions')?.assertionCount).toBe(2);
     expect(inventory.tests.find((test) => test.name === 'snapshots')?.assertionCount).toBe(2);
@@ -144,7 +161,11 @@ describe('assertion evidence', () => {
         test('not literal', () => { expect(fee({ total: 1, vip: true, ...{} }, items)).toBe(0); });
       `,
     });
-    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
     const args = (name: string) => inventory.tests.find((t) => t.name === name)?.targetCalls[0]?.args;
     expect(args('literals')).toEqual(['{"total":"9007199254740993","vip":true}', '["1","-2"]']);
     expect(args('not literal')).toEqual([null, null]);
