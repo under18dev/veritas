@@ -56,6 +56,13 @@ export const MutationRunResult = z.object({
    * TypeScript when it finds it) or `off` (`--no-typecheck`). Absent when mutator was not run.
    */
   typecheck: z.enum(['auto', 'off']).optional(),
+  /**
+   * Set when mutator stopped starting mutants because its `--time-budget` ran out. The mutants it did not run are
+   * `pending`, and the results cover only part of the code in scope, whatever `--since` selected.
+   */
+  timeBudgetExhausted: z
+    .object({ seconds: z.number().int().nonnegative(), notRun: z.number().int().nonnegative() })
+    .optional(),
 });
 export type MutationRunResult = z.infer<typeof MutationRunResult>;
 

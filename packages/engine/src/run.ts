@@ -640,6 +640,11 @@ async function runInContext(
           ...(undecided > 0
             ? [`${undecided} mutant(s) not decided (pending or unknown); mutation results are partial`]
             : []),
+          ...(result.timeBudgetExhausted?.notRun
+            ? [
+                `${result.timeBudgetExhausted.notRun} mutant(s) not run because mutator's time budget ran out; mutation results are partial`,
+              ]
+            : []),
           ...(result.excludedFiles?.length
             ? [
                 `${result.excludedFiles.length} source file(s) left out of mutation (${result.excludedFiles.join(', ')}); mutation results are partial`,
@@ -1408,11 +1413,14 @@ export function literalInput(
   return input;
 }
 
-/** Whether a mutation result may be reused from the cache: a succeeded run that covered every file in scope. */
+/**
+ * Whether a mutation result may be reused from the cache: a succeeded run that covered every file in scope and ran
+ * every mutant within its time budget.
+ */
 export function cacheableMutationResult(
-  result: Pick<MutationRunResult, 'status' | 'excludedFiles'>,
+  result: Pick<MutationRunResult, 'status' | 'excludedFiles' | 'timeBudgetExhausted'>,
 ): boolean {
-  return result.status === 'succeeded' && !result.excludedFiles?.length;
+  return result.status === 'succeeded' && !result.excludedFiles?.length && !result.timeBudgetExhausted;
 }
 
 /**
@@ -1420,10 +1428,16 @@ export function cacheableMutationResult(
  * `partial`, and so do mutants that were not run (`pending`) unless the run was incremental (`--since`), where
  * mutants outside the change are left out on purpose. A complete run without a single mutant is `partial` too:
  * it is no evidence about the tests. So is a run that left source files out because their instrumented copy did
- * not parse. A `partial` stage means the run cannot report `pass`.
+ * not parse, and a run that stopped starting mutants because its time budget ran out, `--since` or not: those
+ * mutants were selected and not run. A `partial` stage means the run cannot report `pass`.
  */
 export function mutationStageStatus(
-  result: { status: StageResult['status'] | 'unsupported'; mutants: Mutant[]; excludedFiles?: string[] },
+  result: {
+    status: StageResult['status'] | 'unsupported';
+    mutants: Mutant[];
+    excludedFiles?: string[];
+    timeBudgetExhausted?: { notRun: number };
+  },
   options: { incremental?: boolean } = {},
 ): { status: StageResult['status']; undecided: number; empty: boolean } {
   const undecided = result.mutants.filter(
@@ -1434,6 +1448,11 @@ export function mutationStageStatus(
   if (result.status !== 'succeeded') return { status: result.status, undecided, empty };
 
   const excluded = (result.excludedFiles?.length ?? 0) > 0;
+  const overBudget = (result.timeBudgetExhausted?.notRun ?? 0) > 0;
 
-  return { status: undecided > 0 || empty || excluded ? 'partial' : 'succeeded', undecided, empty };
+  return {
+    status: undecided > 0 || empty || excluded || overBudget ? 'partial' : 'succeeded',
+    undecided,
+    empty,
+  };
 }

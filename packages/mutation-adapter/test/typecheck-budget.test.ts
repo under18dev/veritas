@@ -1,7 +1,13 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildMutatorArgs, MutationRunResult, mutatorProgress, runMutation } from '../src/index.js';
+import {
+  buildMutatorArgs,
+  MutationRunResult,
+  mutatorProgress,
+  runMutation,
+  timeBudgetExhausted,
+} from '../src/index.js';
 import { config, tempDir } from './helpers.js';
 
 /** A stand-in CLI that advertises the real flags, records its argv and runs `body`. */
@@ -35,7 +41,7 @@ const mutant = (id: string, status: string) => ({
   killedBy: [],
   coveredBy: [],
 });
-/** A report with one killed mutant and two survivors. */
+/** A report with one killed mutant and two that the time budget left pending. */
 const REPORT = JSON.stringify({
   schemaVersion: '2',
   thresholds: { high: 80, low: 60 },
@@ -153,6 +159,34 @@ describe('a timeout before any mutant ran', () => {
   }, 30_000);
 });
 
+describe('an exhausted time budget', () => {
+  it('records how many mutants were not run and suggests narrowing the run', async () => {
+    const { root, bin } = stubCli(
+      [
+        BASELINE,
+        "console.error('[1/3] Killed   src/f.ts:2 a > 10 -> a >= 10');",
+        "console.error('time budget of 45s exhausted: 2 mutants not run');",
+        `fs.writeFileSync(dir + '/mutation.json', ${JSON.stringify(REPORT)});`,
+        "console.log('{}');",
+      ].join('\n'),
+    );
+    const r = await runMutation({
+      root,
+      config: config({ timeoutMs: 60_000 }),
+      reportDir: path.join(root, 'out'),
+      mutatorBin: bin,
+      since: 'origin/main',
+    });
+    expect(r.status).toBe('succeeded');
+    expect(MutationRunResult.parse(r)).toEqual(r);
+    expect(r.timeBudgetExhausted).toEqual({ seconds: 45, notRun: 2 });
+    expect(r.counts.pending).toBe(2);
+    expect(r.warnings.join('\n')).toMatch(
+      /time budget of 45s .* ran out: 2 mutant\(s\) were not run.*--since <ref>, or raise mutation\.timeoutMs/,
+    );
+  });
+});
+
 describe('reading mutator progress', () => {
   it('tells the baseline, mutant progress and the finished type check apart', () => {
     expect(mutatorProgress('dry run finished in 21.4s\n')).toEqual({
@@ -169,5 +203,15 @@ describe('reading mutator progress', () => {
       mutatorProgress('\u001b[2mdry run finished in 1.0s\u001b[22m\n[3/9] Survived src/a.ts:1 x -> y')
         .mutantsStarted,
     ).toBe(true);
+  });
+
+  it('reads the exhausted time budget', () => {
+    expect(
+      timeBudgetExhausted('x\ntime budget of 450s exhausted: 11039 mutants not run\nreport written'),
+    ).toEqual({
+      seconds: 450,
+      notRun: 11039,
+    });
+    expect(timeBudgetExhausted('report written to out')).toBeNull();
   });
 });

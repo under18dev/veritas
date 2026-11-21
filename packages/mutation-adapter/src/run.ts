@@ -21,6 +21,7 @@ import {
   isRelativeGlob,
   listSome,
   mutatorProgress,
+  timeBudgetExhausted,
   transformErrorLine,
   withoutDebug,
 } from './diagnose.js';
@@ -513,8 +514,13 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     warnings.push('--kill-matrix was requested but the agent report has no killMatrix');
   }
   const counts = countMutants(mutants);
+  const budget = timeBudgetExhausted(run.stderr);
 
-  if (counts.pending > 0) {
+  if (budget !== null) {
+    warnings.push(
+      `mutator's time budget of ${budget.seconds}s (75% of mutation.timeoutMs) ran out: ${budget.notRun} mutant(s) were not run, so the results cover only part of the code in scope. Narrow the run with --since <ref>, or raise mutation.timeoutMs`,
+    );
+  } else if (counts.pending > 0) {
     warnings.push(
       `${counts.pending} mutant(s) are pending (not run: outside --since, or over the time budget)`,
     );
@@ -527,6 +533,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     agentReport,
     killMatrix: agent?.killMatrix ?? null,
     detail: null,
+    ...(budget === null ? {} : { timeBudgetExhausted: budget }),
   });
 }
 

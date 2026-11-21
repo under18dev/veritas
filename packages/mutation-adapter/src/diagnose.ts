@@ -225,6 +225,8 @@ const DRY_RUN_FINISHED = /^dry run finished in [\d.]+s/m;
 const MUTANT_PROGRESS = /^(?:\[\d+\/\d+\] |progress: \d+\/\d+)/m;
 /** `typecheck (TypeScript 5.9.3): 1200 mutants in 81.0s`, printed when mutator has type-checked the mutants. */
 const TYPECHECK_FINISHED = /^typecheck \(TypeScript [^)]*\): \d+ mutants in /m;
+/** `time budget of 450s exhausted: 11039 mutants not run`. */
+const BUDGET_EXHAUSTED = /^time budget of (\d+)s exhausted: (\d+) mutants not run/m;
 
 /**
  * How far a mutation run got, read from mutator's progress output on stderr: whether the baseline (dry run)
@@ -242,4 +244,11 @@ export function mutatorProgress(stderr: string): {
     mutantsStarted: MUTANT_PROGRESS.test(text),
     typecheckFinished: TYPECHECK_FINISHED.test(text),
   };
+}
+
+/** The time budget and the number of mutants mutator did not run when its `--time-budget` ran out, or null. */
+export function timeBudgetExhausted(stderr: string): { seconds: number; notRun: number } | null {
+  const match = BUDGET_EXHAUSTED.exec(withoutDebug(stderr));
+
+  return match ? { seconds: Number(match[1]), notRun: Number(match[2]) } : null;
 }
