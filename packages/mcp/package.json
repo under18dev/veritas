@@ -1,6 +1,6 @@
 {
   "name": "@under18dev/veritas-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "MCP server exposing Veritas to agents",
   "license": "Apache-2.0",
   "repository": {

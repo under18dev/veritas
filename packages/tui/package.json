@@ -1,6 +1,6 @@
 {
   "name": "@under18dev/veritas-tui",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Terminal user interface for Veritas, opened by running `veritas` without arguments",
   "license": "Apache-2.0",
   "repository": {
