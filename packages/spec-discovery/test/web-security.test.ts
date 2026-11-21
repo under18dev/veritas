@@ -248,6 +248,7 @@ describe('web crawl limits', () => {
         'https://docs.example.test/served-as-css',
         'https://docs.example.test/served-as-js',
         'https://docs.example.test/logo',
+        'https://docs.example.test/theme.css',
       ].join(' '),
     );
     const requested: string[] = [];
@@ -283,7 +284,16 @@ describe('web crawl limits', () => {
         return new Response(body, { headers: { 'content-type': types[url.pathname] ?? 'text/css' } });
       },
     });
-    expect(requested).toEqual(['/guide', '/notes.md', '/served-as-css', '/served-as-js', '/logo', '/child']);
+    // A URL the project names itself is fetched even when it looks like an asset, then judged by its type.
+    expect(requested).toEqual([
+      '/guide',
+      '/notes.md',
+      '/served-as-css',
+      '/served-as-js',
+      '/logo',
+      '/theme.css',
+      '/child',
+    ]);
     expect(result.sources.filter((s) => s.kind === 'web').map((s) => new URL(s.locator).pathname)).toEqual([
       '/guide',
       '/notes.md',
@@ -297,6 +307,7 @@ describe('web crawl limits', () => {
           reason: 'not a text document (application/javascript)',
         },
         { source: 'https://docs.example.test/logo', reason: 'not a text document (image/png)' },
+        { source: 'https://docs.example.test/theme.css', reason: 'not a text document (text/css)' },
       ]),
     );
   });

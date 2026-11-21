@@ -733,9 +733,12 @@ function nonDocumentType(response: Response): string | null {
   return !type || TEXT_DOCUMENT_TYPES.has(type) ? null : type;
 }
 
-/** A link to a stylesheet, script, image, font, media file or archive, by the extension of its path. */
+/**
+ * A link to a stylesheet, script (or its source map), image or font, by the extension of its path. Only links found
+ * while crawling are left out this way; a URL the project names itself is fetched and judged by its Content-Type.
+ */
 function looksLikeAsset(url: URL): boolean {
-  return /\.(?:css|js|mjs|cjs|map|json|wasm|png|jpe?g|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp[34]|webm|ogg|wav|pdf|zip|gz|tgz)$/i.test(
+  return /\.(?:css|js|mjs|cjs|map|png|jpe?g|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot)$/i.test(
     url.pathname,
   );
 }
@@ -795,10 +798,6 @@ async function collectWeb(
       continue;
     }
 
-    if (looksLikeAsset(url)) {
-      skipped.push({ source: next.url, reason: 'not a text document (asset link)' });
-      continue;
-    }
     // DNS counts against the crawl deadline too: a resolver that never answers must not stall discovery.
     const dnsRefusal = await withDeadline(
       refuseByDns(url.hostname, lookup),
