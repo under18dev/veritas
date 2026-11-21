@@ -1,4 +1,12 @@
-import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +14,7 @@ import { analyzeCode, inferBehaviorCandidates } from '@under18dev/veritas-code-i
 import { type EvidenceSource, Property, sha256, VeritasConfig } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import {
+  AMBIGUOUS_BINDING,
   APPROVALS_FILE,
   applyApprovals,
   buildRegistry,
@@ -381,6 +390,126 @@ describe('registry from documentation and code', { timeout: 60_000 }, () => {
     };
     const { registry } = registryFor('discount-boundary', discovery);
     expect(registry.mapping.find((m) => m.statementId === 'ST-copy')?.status).toBe('duplicate');
+  });
+});
+
+// A record parameter whose fields include a counter of days (number) and a date key (string | null), as in a
+// "rate this app" prompt: the documented day threshold is about the counter, the decline limit about neither.
+const PROMPT_SOURCE = `export interface PromptState {
+  daysUsed: number;
+  lastUsedDay: string | null;
+  saveCount: number;
+  declineCount: number;
+}
+
+export const MIN_DAYS_USED = 5;
+export const MAX_DECLINES = 3;
+
+/** Count one manual save. */
+export function recordPromptSave(state: PromptState, now: number): PromptState {
+  const day = String(now);
+  const isNewDay = state.lastUsedDay !== day;
+  return { ...state, saveCount: state.saveCount + 1, daysUsed: isNewDay ? state.daysUsed + 1 : state.daysUsed, lastUsedDay: day };
+}
+
+/** Why the prompt must not show yet, or null. */
+export function promptBlockReason(state: PromptState): string | null {
+  if (state.daysUsed < MIN_DAYS_USED) return 'days';
+  if (state.saveCount < 30) return 'saves';
+  return null;
+}
+
+/** Record a decline. */
+export function declinePrompt(state: PromptState): PromptState {
+  const declineCount = state.declineCount + 1;
+  return { ...state, declineCount, saveCount: declineCount >= MAX_DECLINES ? 0 : state.saveCount };
+}
+`;
+
+function promptRegistry(statements: StatementInput[]) {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-pe-prompt-')));
+  mkdirSync(path.join(root, 'src'));
+  writeFileSync(path.join(root, 'src/prompt.ts'), PROMPT_SOURCE);
+  const code = analyzeCode({ root, config });
+
+  return buildRegistry({
+    discovery: {
+      sources: [source('S-changelog', 'docs', 'CHANGELOG.md'), source('S-guide', 'docs', 'docs/guide.md')],
+      statements,
+      provenance: [],
+    },
+    code,
+    candidates: [],
+  });
+}
+
+const daysStatement = threshold(
+  'ST-days',
+  'S-changelog',
+  15,
+  'The card appears after saving on 5 or more distinct days and after 30 or more manual saves.',
+  'on',
+  '>=',
+  '5',
+  'The card appears after saving on 5 or more distinct days and after 30 or more manual saves.',
+);
+const declineStatement = threshold(
+  'ST-decline',
+  'S-changelog',
+  15,
+  'Closing it backs off for 30 days and doubles the required saves, and the third decline retires it for good.',
+  'number of declines',
+  '>=',
+  '3',
+  'the third decline retires it for good',
+  ['llm_extracted'],
+);
+
+describe('binding statements to record fields', { timeout: 60_000 }, () => {
+  it('never binds a numeric threshold to a field declared as a string, and prefers the numeric day counter', () => {
+    const registry = promptRegistry([daysStatement, declineStatement]);
+    const params = registry.properties.map((p) => p.predicate?.param);
+    expect(params).not.toContain('state.lastUsedDay');
+    const days = registry.properties.find((p) => p.statementIds.includes('ST-days'));
+    expect(days?.targetSymbols).toEqual(['src/prompt.ts#promptBlockReason']);
+    expect(days?.predicate).toMatchObject({ param: 'state.daysUsed', operator: '>=', value: '5' });
+    expect(days?.inputDomain).toEqual({ 'state.daysUsed': 'integer' });
+  });
+
+  it('does not bind the decline limit to an unrelated day or save field, so no conflict is reported', () => {
+    const registry = promptRegistry([daysStatement, declineStatement]);
+    const decline = registry.mapping.find((m) => m.statementId === 'ST-decline');
+    expect(decline?.status).toBe('unmapped');
+    expect(registry.conflicts).toEqual([]);
+  });
+
+  it('says which other parameters the statement could also be about', () => {
+    const registry = promptRegistry([daysStatement]);
+    const days = registry.properties.find((p) => p.statementIds.includes('ST-days'));
+    const note = days?.assumptions.find((a) => a.startsWith(AMBIGUOUS_BINDING));
+    expect(note).toMatch(/promptBlockReason\(state\.saveCount\)/);
+    expect(registry.mapping.find((m) => m.statementId === 'ST-days')?.reason).toMatch(
+      /also: .*state\.saveCount/,
+    );
+  });
+
+  it('explains in the conflict when a reading came from an LLM or from an ambiguous binding', () => {
+    const llmDays = threshold(
+      'ST-llm',
+      'S-guide',
+      3,
+      'The card shows once the app was used on 3 or more distinct days.',
+      'days',
+      '>=',
+      '3',
+      'The card shows once the app was used on 3 or more distinct days.',
+      ['llm_extracted'],
+    );
+    const registry = promptRegistry([daysStatement, llmDays]);
+    expect(registry.conflicts).toHaveLength(1);
+    const rationale = registry.conflicts[0]?.rationale.join('\n') ?? '';
+    expect(rationale).toMatch(/docs\/guide\.md:3: threshold read by an LLM from free text; not reproducible/);
+    expect(rationale).toMatch(/CHANGELOG\.md:15: binding to state\.daysUsed is ambiguous/);
   });
 });
 

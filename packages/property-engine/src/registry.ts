@@ -70,6 +70,42 @@ interface Target {
   score: number;
 }
 
+/** What a statement maps to, plus the other readings that were close enough to mention. */
+interface Mapping {
+  target: Target | null;
+  /** Other function parameters that also match the statement's wording, as `fn(param)`. */
+  alternatives: string[];
+  /** Why nothing was chosen, when nothing was. */
+  reason: string;
+}
+
+/**
+ * Prefix of the assumption recorded on a property whose binding had other plausible parameters. A conflict between
+ * such properties may be an artefact of the binding, so it is never reported as confirmed.
+ */
+export const AMBIGUOUS_BINDING = 'other parameters also match this statement';
+
+/** Assumption recorded on a property whose threshold an LLM read from free text. */
+export const LLM_THRESHOLD =
+  'threshold read by an LLM from free text; not reproducible, review before accepting';
+
+const label = (t: Target) => `${t.fn.name}(${t.param})`;
+
+/**
+ * Words naming what the threshold counts, taken from right after the number ("5 or more distinct days" -> "distinct",
+ * "day"). They outweigh other words of the sentence, which may describe a different number.
+ */
+function unitWords(quote: string, value: string): string[] {
+  const digits = value.replace(/^-/, '');
+  const re = new RegExp(
+    `(?<![\\d.,])${digits}(?![\\d]|[.,]\\d)\\s*(?:\\+\\s*)?(?:(?:or|and)\\s+(?:more|fewer|less|greater|above|over|up|below|under)\\s+)?((?:[A-Za-z][\\w-]*\\s+)?[A-Za-z][\\w-]*)`,
+    'i',
+  );
+  const hit = re.exec(quote)?.[1];
+
+  return hit ? words(hit) : [];
+}
+
 /**
  * Whether a statement is about how many elements an array has: it says count/number of/length/size, or puts
  * the number right before the array's noun ("3 or more items", "at least 2 values") without an ordinal
@@ -153,22 +189,55 @@ function mapStatement(
   relation: ThresholdRelation,
   index: CodeIndex,
   inScope: (fn: FunctionInfo) => boolean = () => true,
-): Target | null {
+): Mapping {
   const quoteWords = new Set([...words(statement.quote), ...statement.subjects.flatMap(words)]);
   const quantityWords = words(relation.quantity);
-  const scored: Target[] = [];
+  const units = unitWords(statement.quote, relation.value);
+  const scored: (Target & { paramHit: boolean })[] = [];
+  // Compared record fields whose declared type is not a number (`state.lastUsedDay: string | null`).
+  const wrongType: string[] = [];
 
   for (const fn of index.functions) {
     if (!fn.exported || !inScope(fn)) continue;
-    // Number parameters, and fields of record parameters the function compares (`order.total`).
+    const declared = (name: string) => {
+      const dot = name.indexOf('.');
+      const base = fn.params.find((p) => p.name === name.slice(0, dot));
+
+      return base?.fields?.find((f) => f.name === name.slice(dot + 1));
+    };
+    // Number parameters, and fields of record parameters the function compares (`order.total`). A field whose
+    // declared type is not a number is never modelled as an integer.
+    const fields = [
+      ...new Set(fn.comparisons.map((c) => c.param).filter((n): n is string => n?.includes('.') ?? false)),
+    ].filter((name) => {
+      const field = declared(name);
+
+      if (field && !numberOnly(field.type)) {
+        wrongType.push(`${fn.name}(${name}: ${field.type})`);
+
+        return false;
+      }
+
+      return true;
+    });
     const numeric = [
       ...fn.params.filter((p) => numberOnly(p.type)).map((p) => ({ name: p.name, words: words(p.name) })),
-      ...[
-        ...new Set(fn.comparisons.map((c) => c.param).filter((n): n is string => n?.includes('.') ?? false)),
-      ].map((name) => ({ name, words: words(name.slice(name.indexOf('.') + 1)) })),
+      ...fields.map((name) => ({ name, words: words(name.slice(name.indexOf('.') + 1)) })),
     ];
 
     if (numeric.length === 0) continue;
+    // Every number the function takes, including declared number fields it does not compare: a statement naming
+    // only the function is about its parameter only when there is exactly one.
+    const inputs = fn.params.reduce(
+      (n, p) =>
+        n +
+        (numberOnly(p.type)
+          ? 1
+          : p.fields
+            ? p.fields.filter((f) => numberOnly(f.type)).length
+            : fields.filter((f) => f.startsWith(`${p.name}.`)).length),
+      0,
+    );
     const nameHits = words(fn.name).filter((w) => quoteWords.has(w)).length;
 
     for (const p of numeric) {
@@ -184,24 +253,52 @@ function mapStatement(
         p.name.endsWith('.length') ||
         quantityWords.some((w) => paramWords.includes(w)) ||
         paramWords.some((w) => quoteWords.has(w));
+      const unitHit = units.some((w) => paramWords.includes(w));
       const compared = fn.comparisons.some((c) => c.param === p.name);
       const score =
         (paramHit ? 2 : 0) +
+        (unitHit ? 2 : 0) +
         nameHits * 2 +
         (compared ? 1 : 0) +
-        (numeric.length === 1 && nameHits > 0 ? 1 : 0);
+        (numeric.length === 1 && inputs <= 1 && nameHits > 0 ? 1 : 0);
 
-      if (paramHit || nameHits > 0) scored.push({ fn, param: p.name, score });
+      if (paramHit || nameHits > 0) scored.push({ fn, param: p.name, score, paramHit });
     }
   }
   scored.sort((a, b) => b.score - a.score);
   const [best, second] = scored;
+  const skipped = wrongType.length
+    ? `; skipped fields not declared as numbers: ${[...new Set(wrongType)].slice(0, 3).join(', ')}`
+    : '';
 
-  if (!best || best.score < 3) return null;
+  if (!best || best.score < 3) {
+    return {
+      target: null,
+      alternatives: [],
+      reason: `no single exported function and parameter clearly matches${skipped}`,
+    };
+  }
 
-  if (second && second.score === best.score) return null;
+  if (second && second.score === best.score) {
+    const tied = scored.filter((t) => t.score === best.score).slice(0, 3);
 
-  return best;
+    return {
+      target: null,
+      alternatives: [],
+      reason: `ambiguous: ${tied.map(label).join(', ')} match equally; not bound${skipped}`,
+    };
+  }
+  // Readings that name the parameter itself and pass the mapping bar are worth a reviewer's look.
+  const alternatives = [
+    ...new Set(
+      scored
+        .slice(1)
+        .filter((t) => t.paramHit && t.score >= 3)
+        .map(label),
+    ),
+  ].slice(0, 3);
+
+  return { target: best, alternatives, reason: '' };
 }
 
 /** Compare the documented predicate with the implementation's comparisons on the same parameter. */
@@ -332,15 +429,11 @@ export function buildRegistry(options: BuildOptions): Registry {
       continue;
     }
     const relation = statement.relation;
-    const target = mapStatement(statement, relation, code, statementScope(statement, source, code.functions));
+    const mapped = mapStatement(statement, relation, code, statementScope(statement, source, code.functions));
+    const target = mapped.target;
 
     if (!target) {
-      mapping.push({
-        statementId: statement.id,
-        status: 'unmapped',
-        symbol: null,
-        reason: 'no single exported function and parameter clearly matches',
-      });
+      mapping.push({ statementId: statement.id, status: 'unmapped', symbol: null, reason: mapped.reason });
       continue;
     }
     const stale = statement.flags.includes('stale');
@@ -398,16 +491,20 @@ export function buildRegistry(options: BuildOptions): Registry {
     if (instructionLike)
       property.assumptions.push('source text contains instruction-like content; treated as data only');
 
-    if (llmExtracted)
+    if (llmExtracted) property.assumptions.push(LLM_THRESHOLD);
+
+    if (mapped.alternatives.length)
       property.assumptions.push(
-        'threshold read by an LLM from free text; not reproducible, review before accepting',
+        `${AMBIGUOUS_BINDING}: ${mapped.alternatives.join(', ')}; check that ${target.param} is the intended one before accepting`,
       );
     properties.push(property);
     mapping.push({
       statementId: statement.id,
       status: stale ? 'stale' : 'mapped',
       symbol: target.fn.symbol,
-      reason: `matched ${target.fn.name}(${target.param})`,
+      reason:
+        `matched ${label(target)}` +
+        (mapped.alternatives.length ? ` (also: ${mapped.alternatives.join(', ')})` : ''),
     });
     const key = `${target.fn.symbol}#${target.param}`;
     const group = bySymbolParam.get(key) ?? [];
@@ -482,6 +579,21 @@ export function buildRegistry(options: BuildOptions): Registry {
           tie || !top
             ? 'no source is clearly preferable; a human decision is required'
             : `suggested: ${top.property.citations[0]} (newer release, higher source rank or an explicit decision/outdated marker); not applied without approval`,
+          ...live
+            .filter((g) => g.statement.flags.includes('llm_extracted'))
+            .map(
+              (g) =>
+                `${g.property.citations[0]}: threshold read by an LLM from free text; not reproducible, so this conflict is only suspected`,
+            ),
+          ...live.flatMap((g) => {
+            const note = g.property.assumptions.find((a) => a.startsWith(AMBIGUOUS_BINDING));
+
+            return note
+              ? [
+                  `${g.property.citations[0]}: binding to ${param} is ambiguous (${note.slice(AMBIGUOUS_BINDING.length + 2)})`,
+                ]
+              : [];
+          }),
           ...group
             .filter((g) => g.stale)
             .map((g) => `${g.property.citations[0]} is marked stale and was not counted`),
