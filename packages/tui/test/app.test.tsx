@@ -402,6 +402,72 @@ describe('the TUI', { timeout: 20_000 }, () => {
     expect(app.lastFrame()).toMatch(/inconclusive\s+partial\s+2 findings/);
   });
 
+  it('scrolls the evidence counts of a deep run instead of cutting them', async () => {
+    const stages = [
+      'index',
+      'discover',
+      'analyze',
+      'spec',
+      'map',
+      'mutate',
+      'pbt',
+      'prove',
+      'assess',
+      'improve',
+      'report',
+    ];
+    const api = fakeApi({
+      readRun: () =>
+        ({
+          ...RUN,
+          profile: 'deep',
+          policyReasons: ['1 test is weak', '2 mutants survived', 'formal check inconclusive'],
+          stages: stages.map((stage) => ({ stage, status: 'succeeded', durationMs: 12_345 })),
+        }) as unknown as Run,
+      readEvidence: () => ({
+        tests: [
+          ['meaningful_with_evidence', 3],
+          ['weak_or_incomplete', 2],
+          ['tautological_or_disconnected', 1],
+          ['spec_conflict', 1],
+          ['inconclusive', 1],
+        ],
+        mutants: [
+          ['killed', 16],
+          ['survived', 2],
+          ['timeout', 1],
+          ['no_coverage', 3],
+          ['suspected_equivalent', 1],
+          ['compile_error', 1],
+        ],
+        pbt: [
+          ['passed', 4],
+          ['counterexample', 1],
+          ['timeout', 1],
+          ['cancelled', 1],
+        ],
+        claims: [
+          ['proven_within_model', 2],
+          ['counterexample_found', 1],
+          ['unknown', 1],
+          ['unsupported', 1],
+          ['semantic_mismatch', 1],
+        ],
+      }),
+    });
+    const app = await open(api, 1);
+    await until(app, 'R-1');
+    await press(app, KEY.enter);
+    await until(app, 'boundary is not checked');
+    await press(app, 'e');
+    await until(app, 'counts per status');
+    // Not everything fits: the card scrolls, and the solver claims come into view.
+    expect(app.lastFrame()).toMatch(/rows 1-\d+ of \d+, ↑↓ to scroll/);
+    expect(app.lastFrame()).not.toContain('1 semantic_mismatch');
+    await scrollUntil(app, '1 semantic_mismatch');
+    expect(app.lastFrame()).toContain('1 unsupported');
+  });
+
   it('keeps the finding under the cursor when the evidence counts are shown and hidden', async () => {
     const app = await open(fakeApi(), 1);
     await until(app, 'R-1');

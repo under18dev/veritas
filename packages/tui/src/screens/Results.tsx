@@ -258,9 +258,12 @@ function RunDetail({
       )}
       <Box ref={listBox} flexGrow={1} flexShrink={1} minHeight={1} flexDirection="column" overflow="hidden">
         {showEvidence ? (
-          <Card title="Evidence" right={<Text dimColor>counts per status; e shows the findings</Text>}>
-            {evidence ? <Evidence evidence={evidence} /> : <Text color="yellow">unreadable</Text>}
-          </Card>
+          // A deep run leaves few rows here; the counts scroll instead of being cut.
+          <ScrollView active={active} height={Math.max(1, listRows)}>
+            <Card title="Evidence" right={<Text dimColor>counts per status; e shows the findings</Text>}>
+              {evidence ? <Evidence evidence={evidence} /> : <Text color="yellow">unreadable</Text>}
+            </Card>
+          </ScrollView>
         ) : findings.length ? (
           <SelectList
             active={active}
