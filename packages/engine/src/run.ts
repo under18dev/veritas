@@ -349,17 +349,23 @@ async function runInContext(
     return changedSince;
   };
   const testRunner = testRunnerFor(config);
-  const mutationTestFiles = (mapped: TestInventory | undefined): string[] | undefined => {
+  /** The test inventory the map stage made, or one made now when it has not run; undefined when it cannot be made. */
+  const mutationInventory = (mapped: TestInventory | undefined): TestInventory | undefined => {
+    try {
+      return mapped ?? inventoryTests({ root, config, recognition: testRunner.recognition });
+    } catch {
+      return undefined;
+    }
+  };
+  const mutationTestFiles = (inventory: TestInventory | undefined): string[] | undefined => {
     // With --since, mutator only mutates what changed, so only tests that reach a changed file can kill a mutant.
     const changed = changedSinceFiles();
     const scope = options.scope?.length ? options.scope : changed?.length ? changed : undefined;
 
+    if (!inventory) return undefined;
+
     try {
-      return selectMutationTestFiles(
-        mapped ?? inventoryTests({ root, config, recognition: testRunner.recognition }),
-        config,
-        scope,
-      );
+      return selectMutationTestFiles(inventory, config, scope);
     } catch {
       return undefined;
     }
@@ -573,7 +579,8 @@ async function runInContext(
           ],
         };
       }
-      const testFiles = mutationTestFiles(ctx.outputs.get('map') as TestInventory | undefined);
+      const inventory = mutationInventory(ctx.outputs.get('map') as TestInventory | undefined);
+      const testFiles = mutationTestFiles(inventory);
       const cacheKey = cache
         ? mutationCacheKey(cache, root, {
             configHash,
@@ -597,6 +604,7 @@ async function runInContext(
           ...(options.scope ? { scope: options.scope } : {}),
           ...(options.killMatrix ? { killMatrix: true } : {}),
           ...(testFiles ? { testFiles } : {}),
+          ...(inventory ? { tests: inventory.tests } : {}),
         }));
 
       // Only a complete mutation run is reused; a failed or unsupported one, or one that left files out, is run again.
