@@ -485,6 +485,14 @@ describe('binding statements to record fields', { timeout: 60_000 }, () => {
     expect(registry.conflicts).toEqual([]);
   });
 
+  it('does not read "number of declines" as being about a parameter named lineNumber', () => {
+    const code = `${PROMPT_SOURCE}
+export function pickLine(cursor: { lineNumber: number }): number { return cursor.lineNumber > 3 ? 1 : 0; }
+`;
+    const registry = promptRegistry([declineStatement], code);
+    expect(registry.mapping.find((m) => m.statementId === 'ST-decline')?.status).toBe('unmapped');
+  });
+
   it('says which other parameters the statement could also be about', () => {
     const registry = promptRegistry([daysStatement]);
     const days = registry.properties.find((p) => p.statementIds.includes('ST-days'));

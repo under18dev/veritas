@@ -96,6 +96,8 @@ const label = (t: Target) => `${t.fn.name}(${t.param})`;
  * "distinct", "day"; "5 failed login attempts" -> "failed", "login", "attempt"). They outweigh other words of the
  * sentence, which may describe a different number.
  */
+const GENERIC_QUANTITY = new Set(['number', 'amount', 'quantity', 'value']);
+
 const UNIT_STOP = new Set([
   ...'a an the of to for in within per after before and or with than on at by from is are was be'.split(' '),
   // Verbs of the consequence ("1000 or more get discount 100"): what follows is the result, not what is counted.
@@ -227,7 +229,8 @@ function mapStatement(
   inScope: (fn: FunctionInfo) => boolean = () => true,
 ): Mapping {
   const quoteWords = new Set([...words(statement.quote), ...statement.subjects.flatMap(words)]);
-  const quantityWords = words(relation.quantity);
+  // "number of declines" names declines; "number", "amount" and the default "value" say nothing about which one.
+  const quantityWords = words(relation.quantity).filter((w) => !GENERIC_QUANTITY.has(w));
   const units = unitWords(statement.quote, relation.value);
   const scored: Scored[] = [];
   // Declared number fields the function does not compare, scored the same way. They are never bound (there is no
