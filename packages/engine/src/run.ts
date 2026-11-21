@@ -580,8 +580,8 @@ async function runInContext(
           ...(testFiles ? { testFiles } : {}),
         }));
 
-      // Only a complete mutation run is reused; a failed or unsupported one is always retried.
-      if (!cached && cache && cacheKey && result.status === 'succeeded')
+      // Only a complete mutation run is reused; a failed or unsupported one, or one that left files out, is run again.
+      if (!cached && cache && cacheKey && cacheableMutationResult(result))
         cache.set('mutation', cacheKey, result);
 
       if (cached) result.rawReportPath = null;
@@ -1352,6 +1352,13 @@ export function literalInput(
   }
 
   return input;
+}
+
+/** Whether a mutation result may be reused from the cache: a succeeded run that covered every file in scope. */
+export function cacheableMutationResult(
+  result: Pick<MutationRunResult, 'status' | 'excludedFiles'>,
+): boolean {
+  return result.status === 'succeeded' && !result.excludedFiles?.length;
 }
 
 /**

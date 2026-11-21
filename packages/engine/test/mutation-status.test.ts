@@ -1,6 +1,6 @@
 import type { Mutant } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
-import { literalInput, mutationStageStatus } from '../src/index.js';
+import { cacheableMutationResult, literalInput, mutationStageStatus } from '../src/index.js';
 
 const mutant = (status: Mutant['status']) => ({ status }) as Mutant;
 
@@ -65,6 +65,15 @@ describe('mutationStageStatus', () => {
     expect(mutationStageStatus({ status: 'succeeded', mutants: [] }, { incremental: true }).status).toBe(
       'succeeded',
     );
+  });
+});
+
+describe('cacheableMutationResult', () => {
+  it('reuses only a succeeded run that left no file out', () => {
+    expect(cacheableMutationResult({ status: 'succeeded' })).toBe(true);
+    expect(cacheableMutationResult({ status: 'succeeded', excludedFiles: [] })).toBe(true);
+    expect(cacheableMutationResult({ status: 'succeeded', excludedFiles: ['src/a.ts'] })).toBe(false);
+    expect(cacheableMutationResult({ status: 'failed' })).toBe(false);
   });
 });
 
