@@ -25,6 +25,8 @@ veritas discover --sources local,web --allow-domain docs.example.com --max-pages
 
 `--allow-domain` と `--max-pages` はその実行にだけ効き、これだけでは Web の収集は有効になりません。GitHub の出典は、`GITHUB_TOKEN` が設定されていればそれを送ります。
 
+Web の収集で読むのは、HTML、プレーンテキスト、Markdown のテキスト文書だけです。スタイルシート、スクリプト、画像、フォントなど、ほかの種類の応答は `not a text document (<type>)` という理由でスキップし、本文も読みません。リンクをたどるときは `<a href>` のリンクだけを使い、そうしたファイル（`.css`、`.js`、画像、フォントなど）へのリンクはたどりません。
+
 読んだテキストは、信頼しないデータとして保存します。README や Issue や Web ページの中に指示が書かれていても、引用するだけで従いません。
 
 ## 規則が Property になるまで

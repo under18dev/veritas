@@ -199,4 +199,67 @@ describe('web crawl limits', () => {
       reason: 'DNS lookup timed out',
     });
   });
+
+  it('reads only text documents and follows no links to stylesheets, scripts, images or fonts', async () => {
+    const root = tempProject('web-content-type');
+    seed(
+      root,
+      [
+        'https://docs.example.test/guide',
+        'https://docs.example.test/notes.md',
+        'https://docs.example.test/served-as-css',
+        'https://docs.example.test/served-as-js',
+        'https://docs.example.test/logo',
+      ].join(' '),
+    );
+    const requested: string[] = [];
+    const types: Record<string, string> = {
+      '/guide': 'text/html; charset=utf-8',
+      '/notes.md': 'text/markdown',
+      '/served-as-css': 'text/css',
+      '/served-as-js': 'application/javascript',
+      '/logo': 'image/png',
+      '/child': 'text/html',
+    };
+    const result = await discoverEvidence({
+      root,
+      lookup: publicLookup,
+      config: webConfig({ maxDepth: 1 }),
+      fetch: async (input) => {
+        const url = new URL(String(input));
+        requested.push(url.pathname);
+        const body =
+          url.pathname === '/guide'
+            ? [
+                '<link rel="stylesheet" href="/_astro/Code.abc123.css">',
+                '<script src="/_astro/page.js"></script>',
+                '<p>The total must be at least 10.</p>',
+                '<a href="/_astro/font.woff2">font</a>',
+                '<a href="/img/shot.PNG?v=2">shot</a>',
+                '<a href="/child">child</a>',
+              ].join('')
+            : url.pathname === '/served-as-css'
+              ? '.a{color:red}.b{margin:0 auto}'
+              : '<p>Retries must be at most 3.</p>';
+
+        return new Response(body, { headers: { 'content-type': types[url.pathname] ?? 'text/css' } });
+      },
+    });
+    expect(requested).toEqual(['/guide', '/notes.md', '/served-as-css', '/served-as-js', '/logo', '/child']);
+    expect(result.sources.filter((s) => s.kind === 'web').map((s) => new URL(s.locator).pathname)).toEqual([
+      '/guide',
+      '/notes.md',
+      '/child',
+    ]);
+    expect(result.skipped).toEqual(
+      expect.arrayContaining([
+        { source: 'https://docs.example.test/served-as-css', reason: 'not a text document (text/css)' },
+        {
+          source: 'https://docs.example.test/served-as-js',
+          reason: 'not a text document (application/javascript)',
+        },
+        { source: 'https://docs.example.test/logo', reason: 'not a text document (image/png)' },
+      ]),
+    );
+  });
 });

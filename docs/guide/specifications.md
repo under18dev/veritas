@@ -25,6 +25,8 @@ veritas discover --sources local,web --allow-domain docs.example.com --max-pages
 
 `--allow-domain` and `--max-pages` apply to one run and do not enable web discovery by themselves. The GitHub source sends `GITHUB_TOKEN` when it is set.
 
+The web crawl reads only text documents: HTML, plain text and Markdown. A response of another type, such as a stylesheet, a script, an image or a font, is skipped with the reason `not a text document (<type>)` and its body is not read. When it follows links, the crawl takes only `<a href>` links and leaves out links to such files (`.css`, `.js`, images, fonts and the like).
+
 Text from these sources is stored as untrusted data. Instructions written inside a README, an issue or a web page are quoted, never followed.
 
 ## How a rule becomes a property

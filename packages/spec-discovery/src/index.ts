@@ -691,6 +691,29 @@ async function refuseByDns(host: string, lookup: HostLookup): Promise<string | n
   return null;
 }
 
+/** Media types of documents people write rules in; stylesheets, scripts, images and fonts are not evidence. */
+const TEXT_DOCUMENT_TYPES = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'text/plain',
+  'text/markdown',
+  'text/x-markdown',
+]);
+
+/** The media type of a response that is not a text document, or null when it is one (or does not say). */
+function nonDocumentType(response: Response): string | null {
+  const type = response.headers?.get('content-type')?.split(';')[0]?.trim().toLowerCase();
+
+  return !type || TEXT_DOCUMENT_TYPES.has(type) ? null : type;
+}
+
+/** A link to a stylesheet, script, image, font, media file or archive, by the extension of its path. */
+function looksLikeAsset(url: URL): boolean {
+  return /\.(?:css|js|mjs|cjs|map|json|wasm|png|jpe?g|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp[34]|webm|ogg|wav|pdf|zip|gz|tgz)$/i.test(
+    url.pathname,
+  );
+}
+
 async function collectWeb(
   inputs: SourceInput[],
   config: VeritasConfig,
@@ -747,6 +770,11 @@ async function collectWeb(
       skipped.push({ source: next.url, reason: 'URL refused by protocol, SSRF, or allowlist policy' });
       continue;
     }
+
+    if (looksLikeAsset(url)) {
+      skipped.push({ source: next.url, reason: 'not a text document (asset link)' });
+      continue;
+    }
     // DNS counts against the crawl deadline too: a resolver that never answers must not stall discovery.
     const dnsRefusal = await withDeadline(
       refuseByDns(url.hostname, lookup),
@@ -784,6 +812,14 @@ async function collectWeb(
         skipped.push({ source: next.url, reason: 'redirect refused by allowlist or SSRF policy' });
         continue;
       }
+      const type = nonDocumentType(response);
+
+      if (type) {
+        // Minified CSS or a script read as text would be quoted as evidence; its body is not read at all.
+        await response.body?.cancel().catch(() => {});
+        skipped.push({ source: next.url, reason: `not a text document (${type})` });
+        continue;
+      }
       // Read at most what the character budget can still use (4 bytes per character covers UTF-8).
       const html = await readLimited(response, Math.max(4096, (config.sources.web.maxChars - chars) * 4));
       const text = redact(
@@ -799,14 +835,16 @@ async function collectWeb(
       if (clipped) inputs.push({ kind: 'web', locator: url.href, text: clipped });
 
       if (next.depth < config.sources.web.maxDepth && chars < config.sources.web.maxChars)
-        for (const link of html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)) {
+        // Only links people follow (`<a href>`), not `<link href>` stylesheets and icons, and no links to assets.
+        for (const link of html.matchAll(/<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/gi)) {
           try {
             const href = link[1];
 
             if (!href) continue;
-            const child = new URL(href, url).href;
+            const child = new URL(href, url);
 
-            if (!seen.has(child)) queue.push({ url: child, depth: next.depth + 1 });
+            if (!looksLikeAsset(child) && !seen.has(child.href))
+              queue.push({ url: child.href, depth: next.depth + 1 });
           } catch {
             /* untrusted link */
           }
