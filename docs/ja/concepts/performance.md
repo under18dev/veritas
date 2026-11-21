@@ -36,7 +36,7 @@ quick プロファイルは、コードとテストの索引作り、仕様の�
 
 これらの実行では、時間のほとんどを mutation testing が占めます。ufo では 44.4 秒のうち 42.7 秒、es-toolkit では 45.1 秒のうち 27.1 秒です。mutant が多いほど、またそれを実行するテストに時間がかかるほど、長くなります。`--since` を付けると、変更したファイルに届くテストと、届く範囲を静的に確かめられないテスト（動的 import、解決できない import、独自の登録方法）を実行し、変更していないファイルの mutant は `pending` のままにします。
 
-pathe は mutant が約 1,020 個あり、キャッシュなしの `run --profile standard` を 2 回実行すると、98.6 秒と 93.1 秒かかりました（最大メモリ 2.2 GB）。これは `mutation.timeoutMs` の既定値の 120 秒に近い時間です。1 回目は 4 件の mutant を残して打ち切り、`mutate` ステージが `partial` で終わりました。遅いマシンでは `timeout` で終わることもあります。どちらも成功とは報告しません。
+pathe は mutant が約 1,020 個あり、キャッシュなしの `run --profile standard` を 2 回実行すると、98.6 秒と 93.1 秒かかりました（最大メモリ 2.2 GB）。これは `mutation.timeoutMs` の既定値の 120 秒に近い時間です。1 回目は 4 件の mutant を残して打ち切ったため、`mutate` ステージは `partial` になり、理由の一覧に `inconclusive (warn): stage mutate=partial` が出ました（verdict は `pass_with_warnings`、既定の `warn` の policy なので終了コードは 0）。遅いマシンでは、`timeout` で終わることもあります。どちらも、完了した mutation の結果としては扱いません。
 
 ## 大きなプロジェクトでの進め方
 

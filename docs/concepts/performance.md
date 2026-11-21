@@ -36,7 +36,7 @@ The quick profile indexes code and tests, collects specifications and assesses t
 
 Mutation testing takes most of these runs: 42.7 s of the 44.4 s for ufo, 27.1 s of the 45.1 s for es-toolkit. Its time grows with the number of mutants and with how long the tests that cover them take. With `--since`, the tests that reach a changed file are run, plus tests whose reach static analysis cannot see (dynamic imports, unresolved imports, custom registrations), and mutants of unchanged files stay `pending`.
 
-pathe has about 1,020 mutants; two cold `run --profile standard` runs took 98.6 s and 93.1 s (peak memory 2.2 GB). That is close to the default `mutation.timeoutMs` of 120 s: the first run stopped 4 mutants short and ended with the `mutate` stage `partial`, and a slower machine can end with `timeout`. Neither is reported as success.
+pathe has about 1,020 mutants; two cold `run --profile standard` runs took 98.6 s and 93.1 s (peak memory 2.2 GB). That is close to the default `mutation.timeoutMs` of 120 s: the first run stopped 4 mutants short, so its `mutate` stage was `partial` and the run listed `inconclusive (warn): stage mutate=partial` among its reasons (verdict `pass_with_warnings`, exit code 0 under the default `warn` policy). On a slower machine the stage can end with `timeout` instead. Neither is counted as a complete mutation result.
 
 ## Large projects
 

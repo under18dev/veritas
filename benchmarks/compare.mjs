@@ -1,4 +1,6 @@
 // Compares two benchmark results (base and head) and prints a Markdown report, as the benchmark workflow posts it.
+// The results may come from a pull request's own run, so they are read as data only: names are restricted to a safe
+// character set, numbers must be finite, and no free text from them reaches the report.
 // Usage: node benchmarks/compare.mjs --base <fixtures.json> --head <fixtures.json>
 //          [--real-base <real.json> --real-head <real.json>] [--base-ref <name>] [--head-ref <name>]
 import { readFileSync } from 'node:fs';
@@ -23,23 +25,28 @@ const realHead = read(option('--real-head'));
 // Shared runners vary by about this much between two runs of the same code.
 const NOISE = 0.15;
 
-const seconds = (ms) => (typeof ms === 'number' ? `${(ms / 1000).toFixed(1)} s` : 'n/a');
-const memory = (mb) => (typeof mb === 'number' ? `${mb} MB` : 'n/a');
+const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const name = (v) => (typeof v === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(v) ? v : 'unnamed');
+const seconds = (ms) => (num(ms) === null ? 'n/a' : `${(ms / 1000).toFixed(1)} s`);
+const memory = (mb) => (num(mb) === null ? 'n/a' : `${Math.round(mb)} MB`);
+const count = (v) => (num(v) === null ? 'n/a' : String(Math.round(v)));
+const ref = (v) => (typeof v === 'string' && /^[A-Za-z0-9._/@ -]{1,80}$/.test(v) ? v : '');
+const list = (r) => (Array.isArray(r?.results) ? r.results : []);
 function change(before, after) {
-  if (typeof before !== 'number' || typeof after !== 'number' || before === 0) return 'n/a';
+  if (num(before) === null || num(after) === null || before === 0) return 'n/a';
   const ratio = after / before - 1;
   const text = `${ratio >= 0 ? '+' : ''}${(ratio * 100).toFixed(0)}%`;
 
   return Math.abs(ratio) > NOISE ? `**${text}**` : text;
 }
 const exit = (r) =>
-  r && r.exitCode !== undefined && ![0, 1, 4].includes(r.exitCode) ? ` (exit ${r.exitCode})` : '';
+  r && r.exitCode !== undefined && ![0, 1, 4].includes(r.exitCode) ? ` (exit ${count(r.exitCode)})` : '';
 
 const lines = [
   '<!-- veritas-benchmark -->',
   '## Benchmark',
   '',
-  `Base \`${option('--base-ref') ?? 'base'}\` and head \`${option('--head-ref') ?? 'head'}\`, measured one after the other on the same runner (${head.platform}, Node.js ${head.node}, ${head.cpus} CPUs). Changes larger than ${NOISE * 100}% are in bold; smaller ones are within the usual variation between runs.`,
+  `Base \`${ref(option('--base-ref')) || 'base'}\` and head \`${ref(option('--head-ref')) || 'head'}\`, measured one after the other on the same runner (${name(head.platform)}, Node.js ${name(head.node)}, ${count(head.cpus)} CPUs). Changes larger than ${NOISE * 100}% are in bold; smaller ones are within the usual variation between runs.`,
   '',
   '### Fixtures (`run --offline --include-proposed`)',
   '',
@@ -47,10 +54,10 @@ const lines = [
   '| --- | --- | ---: | ---: | ---: | --- |',
 ];
 
-for (const h of head.results) {
-  const b = base.results.find((r) => r.fixture === h.fixture && r.profile === h.profile);
+for (const h of list(head)) {
+  const b = list(base).find((r) => r.fixture === h.fixture && r.profile === h.profile);
   lines.push(
-    `| ${h.fixture} | ${h.profile} | ${seconds(b?.wallMs)}${exit(b)} | ${seconds(h.wallMs)}${exit(h)} | ${change(b?.wallMs, h.wallMs)} | ${memory(b?.peakRssMb)} → ${memory(h.peakRssMb)} |`,
+    `| ${name(h.fixture)} | ${name(h.profile)} | ${seconds(b?.wallMs)}${exit(b)} | ${seconds(h.wallMs)}${exit(h)} | ${change(b?.wallMs, h.wallMs)} | ${memory(b?.peakRssMb)} → ${memory(h.peakRssMb)} |`,
   );
 }
 
@@ -63,16 +70,16 @@ if (realHead) {
     '| --- | ---: | ---: | ---: | ---: | --- | --- |',
   );
 
-  for (const h of realHead.results) {
-    const b = realBase?.results.find((r) => r.project === h.project);
+  for (const h of list(realHead)) {
+    const b = list(realBase).find((r) => r.project === h.project);
 
     if (h.error || b?.error) {
-      lines.push(`| ${h.project} | | | | | | skipped: ${(h.error ?? b?.error ?? '').replaceAll('|', '/')} |`);
+      lines.push(`| ${name(h.project)} | | | | | | skipped (see the workflow log) |`);
       continue;
     }
-    const disconnected = (r) => r?.outcomes?.tautological_or_disconnected ?? 0;
+    const disconnected = (r) => count(r?.outcomes?.tautological_or_disconnected ?? 0);
     lines.push(
-      `| ${h.project} | ${h.tests ?? 'n/a'} | ${seconds(b?.wallMs)}${exit(b)} | ${seconds(h.wallMs)}${exit(h)} | ${change(b?.wallMs, h.wallMs)} | ${memory(b?.peakRssMb)} → ${memory(h.peakRssMb)} | ${disconnected(b)} → ${disconnected(h)} |`,
+      `| ${name(h.project)} | ${count(h.tests)} | ${seconds(b?.wallMs)}${exit(b)} | ${seconds(h.wallMs)}${exit(h)} | ${change(b?.wallMs, h.wallMs)} | ${memory(b?.peakRssMb)} → ${memory(h.peakRssMb)} | ${disconnected(b)} → ${disconnected(h)} |`,
     );
   }
 }

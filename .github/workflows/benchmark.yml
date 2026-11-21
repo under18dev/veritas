@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # The pull request merged into its base (the default for pull_request): what main would become.
       - name: Check out the head
         uses: actions/checkout@v4
         with:
@@ -43,9 +44,14 @@ jobs:
       - name: Build the head
         working-directory: head
         run: pnpm install --frozen-lockfile && pnpm build
+      # The base is built with the pnpm version it declares, which may differ from the head's.
       - name: Build the base
         working-directory: base
-        run: pnpm install --frozen-lockfile && pnpm build
+        run: |
+          pm=$(jq -r '.packageManager // "pnpm"' package.json)
+          pm=${pm%%+*} # drop a +sha512... integrity suffix
+          npx --yes "$pm" install --frozen-lockfile
+          npx --yes "$pm" run build
       # The head's scripts measure both builds on the same fixtures and projects, base first.
       - name: Fixtures (base)
         run: node head/benchmarks/run.mjs --cli base/packages/cli/dist/bin.js --out out/fixtures-base.json
@@ -55,19 +61,17 @@ jobs:
         run: node head/benchmarks/real.mjs --work work --cli base/packages/cli/dist/bin.js --out out/real-base.json
       - name: Open-source projects (head)
         run: node head/benchmarks/real.mjs --work work --cli head/packages/cli/dist/bin.js --out out/real-head.json
+      # Only data goes into the artifact; benchmark-comment writes the comment with its own (main's) compare.mjs.
       - name: Report
         env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          printf '{"number":%s,"headSha":"%s"}\n' "$PR_NUMBER" "$HEAD_SHA" > out/pr.json
           node head/benchmarks/compare.mjs \
             --base out/fixtures-base.json --head out/fixtures-head.json \
             --real-base out/real-base.json --real-head out/real-head.json \
-            --base-ref "$BASE_REF@${BASE_SHA:0:7}" --head-ref "${HEAD_SHA:0:7}" > out/comment.md
-          printf '{"number":%s,"headSha":"%s"}\n' "$PR_NUMBER" "$HEAD_SHA" > out/pr.json
-          cat out/comment.md >> "$GITHUB_STEP_SUMMARY"
+            --base-ref base --head-ref "merge of ${HEAD_SHA:0:7}" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: benchmark
