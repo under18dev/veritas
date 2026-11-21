@@ -104,14 +104,66 @@ describe('text and markdown reports', () => {
     expect(renderText(input)).toMatch(/formal evidence claim-1 [^(]+\(conformance, assurance \w+\)/);
   });
 
-  it('lists incomplete stages, claim limitations, and inferred properties', () => {
-    const output = renderMarkdown(fixture());
-    expect(output).toContain('stage prove was timeout');
-    expect(output).toContain('claim claim-3 is unsupported');
-    expect(output).toContain('claim claim-4 is semantic_mismatch');
-    expect(output).toContain('claim claim-5 is timeout');
-    expect(output).toContain('claim claim-6 is unknown');
-    expect(output).toContain('property property-2 is inferred (not a specification)');
+  it('lists incomplete stages and claim limitations, and counts inferred properties', () => {
+    for (const output of [renderMarkdown(fixture()), renderText(fixture())]) {
+      expect(output).toContain('stage prove was timeout');
+      expect(output).toContain('claim claim-3 is unsupported');
+      expect(output).toContain('claim claim-4 is semantic_mismatch');
+      expect(output).toContain('claim claim-5 is timeout');
+      expect(output).toContain('claim claim-6 is unknown');
+      expect(output).toContain('1 property is inferred (not a specification)');
+      expect(output).not.toContain('property property-2 is inferred');
+    }
+  });
+
+  it('summarizes evidence and inferred properties in Markdown, and keeps the text report complete', () => {
+    const input = fixture();
+    const source = input.sources[0];
+    const statement = input.statements[0];
+    const inferred = input.properties[1];
+
+    if (!source || !statement || !inferred) throw new Error('fixture is incomplete');
+    input.sources = Array.from({ length: 40 }, (_, n) => ({
+      ...source,
+      id: `source-${String(n).padStart(2, '0')}`,
+      kind: n % 2 ? 'web' : 'docs',
+      locator: n % 2 ? `https://docs.example.test/page-${n}` : `docs/page-${n}.md`,
+    }));
+    input.statements = input.sources.flatMap((s, n) =>
+      Array.from({ length: (n % 5) + 1 }, (_, k) => ({
+        ...statement,
+        id: `statement-${s.id}-${k}`,
+        sourceId: s.id,
+        quote: `quote ${k} of ${s.locator}`,
+      })),
+    );
+    input.properties = [
+      ...input.properties.slice(0, 1),
+      ...Array.from({ length: 30 }, (_, n) => ({
+        ...inferred,
+        id: `property-i${String(n).padStart(2, '0')}`,
+      })),
+    ];
+    const markdown = renderMarkdown(input);
+    const evidence = markdown.slice(markdown.indexOf('## 2.'), markdown.indexOf('## 3.'));
+    expect(evidence).toContain('40 sources, 120 statements');
+    expect(evidence).toContain('- docs: 20 sources, 60 statements');
+    expect(evidence).toContain('- web: 20 sources, 60 statements');
+    // A few sources per kind, those with the most statements first.
+    expect(evidence).toContain('source-14: docs docs/page-14.md:7, 5 statements; quote quote 0');
+    expect((evidence.match(/^ {2}- source-/gm) ?? []).length).toBe(6);
+    expect(evidence).toContain('report.json');
+    const ledger = markdown.slice(markdown.indexOf('## 3.'), markdown.indexOf('## 4.'));
+    expect(ledger).toContain('accepted: property-1 (normative)');
+    expect(ledger).toContain('proposed: 30 inferred');
+    expect(ledger).toMatch(/^property-1 \[accepted, normative\]/m);
+    expect((ledger.match(/^property-i\d+ \[proposed, inferred\]/gm) ?? []).length).toBe(5);
+    expect(ledger).toContain('25 more inferred properties');
+    expect(markdown).toContain('30 properties are inferred (not a specification)');
+
+    const text = renderText(input);
+    expect((text.match(/; quote /g) ?? []).length).toBe(120);
+    expect((text.match(/^property-i\d+ \[proposed, inferred\]/gm) ?? []).length).toBe(30);
   });
 
   it('shows the replay command in the run metadata of text and markdown', () => {

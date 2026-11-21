@@ -38,6 +38,8 @@ The JSON, Markdown and HTML reports have the same ten sections:
 | 9. Improvement proposals                      | Improvement plans made from the run, with their apply attempts                                                           |
 | 10. Limitations                               | What the run could not check, and why                                                                                    |
 
+The Markdown report summarizes the two sections that grow with the size of the project. "2. Collected evidence with provenance" gives the number of sources and statements of each source kind, with the three sources of each kind that have the most statements and two of their quotes. "3. Property ledger" lists every property that is not inferred, and shows the first five inferred properties in detail and counts the others. The JSON and HTML reports, and `evidence.json` and `properties.json` of the run, keep every entry. In every format, "10. Limitations" counts the inferred properties in one line instead of naming each one; the ledger marks each of them as inferred.
+
 A section whose stage did not run is empty. An artifact that exists but cannot be read is an error, not an empty section, so a damaged file cannot hide its findings.
 
 `report.json` carries `schemaVersion` and `meta` (the envelope metadata below) at the top level, followed by `run`, `sources`, `statements`, `properties`, `conflicts`, `tests`, `edges`, `assessments`, `mutants`, `claims`, `findings`, `improvements` and `artifactBase`.
