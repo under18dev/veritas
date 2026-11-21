@@ -701,7 +701,7 @@ export type Pair<T> = [T, T];
 `,
     };
     const byName = inventory(
-      `import { describe as vDescribe, expect, it as vIt } from 'vitest';
+      `import { beforeEach, describe as vDescribe, expect, it as vIt } from 'vitest';
 import { matches, type Pair } from '../src/glob.js';
 type Assert = { true: (v: unknown) => void; is: (a: unknown, b: unknown) => void };
 const describe = (name: string, fn: (it: (label: string, body: (t: Assert) => void) => void) => void) =>
@@ -720,6 +720,21 @@ function runTest(fn: (a: string, b: string) => boolean) {
 runTest(matches);
 vIt('local thrower', () => { const block = () => matches(1 as never, 'a'); expect(block).toThrow(); });
 vIt('compiles', () => { function _check(a: string) { matches(a, a); } });
+function expectValue<T>(v: T) { if (v !== true) throw new Error('no'); }
+vIt('typed value check', () => { expectValue<boolean>(matches('a', 'a')); });
+function lexicalSuite() {
+  const expected = process.env.EXPECTED;
+  vIt('lexical', () => { expect(1).toBe(expected); });
+}
+lexicalSuite();
+const hookSuite = (getEnv: () => { fn: () => string }) => {
+  let fn: () => string;
+  vDescribe('hook suite', () => {
+    beforeEach(() => { ({ fn } = getEnv()); });
+    vIt('from hook', () => { expect(fn()).toBe('x'); });
+  });
+};
+hookSuite(() => ({ fn: () => 'x' }));
 vIt('local value', () => { const later = () => matches('a', 'a'); expect(later).toBeDefined(); });
 `,
       extra,
@@ -732,6 +747,12 @@ vIt('local value', () => { const later = () => matches('a', 'a'); expect(later).
     expect(byName('suite').suspicions).toEqual(['caller_supplied']);
     // The matcher runs the local function, so its call is checked.
     expect(byName('local thrower')).toMatchObject({ symbols: ['src/glob.ts#matches'], asserted: true });
+    // A typed helper given a runtime value checks that value, not only types.
+    expect(byName('typed value check').suspicions).not.toContain('type_level_only');
+    // A suite's own lexical value is not supplied by a caller.
+    expect(byName('lexical').suspicions).not.toContain('caller_supplied');
+    // Values set from the suite's parameter in a hook are.
+    expect(byName('from hook').suspicions).toEqual(['caller_supplied']);
     // toBeDefined only compares the function as a value; it does not run it.
     expect(byName('local value').asserted).toBe(false);
     // Declares a function and never runs it: a check that it compiles.

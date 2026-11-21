@@ -2687,7 +2687,9 @@ function hasTypeOnlyCheck(body: ts.Node): boolean {
       (ts.isCallExpression(node) &&
         node.typeArguments !== undefined &&
         node.typeArguments.length > 0 &&
-        /(?:assert|expect)/i.test(calleeName(node.expression))),
+        /(?:assert|expect)/i.test(calleeName(node.expression)) &&
+        // `assertEqual<A, B>(true)` checks types; `expectValue<number>(calculate())` checks a runtime value.
+        node.arguments.every((argument) => literalArgument(skipParens(argument)) !== null)),
   );
 }
 
@@ -2733,15 +2735,55 @@ function usesSuiteParameters(
     }
   }
 
-  if (!suite) return false;
-  const container = suite;
+  if (!suite || !isFunctionLike(suite)) return false;
+  // The suite's parameters, and the locals of the suite set from them (`const { css } = getEnv()`, or assigned in a
+  // hook: `({ css } = getEnv())`), are what its caller supplies.
+  const supplied = new Set<ts.Symbol>();
 
-  return descendants(body).some((node) => {
-    if (!ts.isIdentifier(node)) return false;
-    const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration;
+  for (const parameter of suite.parameters)
+    for (const identifier of bindingIdentifiers(parameter.name)) {
+      const symbol = checker.getSymbolAtLocation(identifier);
+      if (symbol) supplied.add(symbol);
+    }
+  const refersToSupplied = (node: ts.Node) =>
+    [node, ...descendants(node)].some((item) => {
+      if (!ts.isIdentifier(item)) return false;
+      const symbol = checker.getSymbolAtLocation(item);
 
-    return declaration !== undefined && contains(container, declaration) && !contains(body, declaration);
-  });
+      return symbol !== undefined && supplied.has(symbol);
+    });
+
+  for (let changed = true; changed; ) {
+    changed = false;
+
+    for (const node of descendants(suite)) {
+      let targets: ts.Identifier[] = [];
+
+      if (ts.isVariableDeclaration(node) && node.initializer && refersToSupplied(node.initializer))
+        targets = bindingIdentifiers(node.name);
+      else if (
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        refersToSupplied(node.right)
+      )
+        targets = [node.left, ...descendants(node.left)].filter(ts.isIdentifier);
+
+      for (const identifier of targets) {
+        // In `({ css } = getEnv())` the shorthand names the variable assigned, not the property.
+        const symbol = ts.isShorthandPropertyAssignment(identifier.parent)
+          ? checker.getShorthandAssignmentValueSymbol(identifier.parent)
+          : checker.getSymbolAtLocation(identifier);
+        const declaration = symbol?.valueDeclaration;
+
+        if (symbol && declaration && contains(suite, declaration) && !supplied.has(symbol)) {
+          supplied.add(symbol);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return refersToSupplied(body);
 }
 
 /** Vitest's type-level checks, which compare types at compile time and do nothing when the test runs. */
