@@ -36,6 +36,30 @@ export interface AssessInput {
   functions: FunctionInfo[];
   /** Whether mutation results exist for this run; without them detection power is unknown. */
   mutationAvailable: boolean;
+  /**
+   * Tests that ran every mutant they cover, as with mutator's `--kill-matrix`. Without it mutator stops running a
+   * mutant's tests at the first failure, so a test covering a mutant another test killed may never have run it.
+   */
+  fullyRunTestIds?: ReadonlySet<string>;
+}
+
+/**
+ * Whether static analysis calls the test disconnected only because it found no link from an assertion to project
+ * code: the test does assert, but static analysis cannot trace what to (a mock's calls, a global's state). That is
+ * an inference a killed mutant overturns, unlike a test that asserts nothing or only constants.
+ */
+export function unlinkedByInference(test: TestCase): boolean {
+  const s = test.suspicions;
+
+  if (s.includes('type_level_only') || s.includes('tautological_assertion') || s.includes('no_assertion'))
+    return false;
+  const linkUnknown =
+    s.includes('unresolved_import') ||
+    s.includes('opaque_call') ||
+    s.includes('progress_only') ||
+    s.includes('caller_supplied');
+
+  return s.includes('target_not_called') || (!test.targetCalls.some((c) => c.asserted) && !linkUnknown);
 }
 
 /**
@@ -192,10 +216,10 @@ export function assessTest(
   // can only fail it by making the code it runs throw, so a kill does not make it check a result.
   const assertsNothing =
     test.suspicions.includes('tautological_assertion') || test.suspicions.includes('no_assertion');
-  // Static analysis found no link from an assertion to project code. That is an inference, and a killed mutant
-  // is evidence against it: the test failed when project code changed, so it does observe project behaviour.
-  const unlinked = test.suspicions.includes('target_not_called') || (!assertedCall && !linkUnknown);
-  const killEvidence = !typeLevelOnly && !assertsNothing && unlinked && killed.length > 0;
+  // A killed mutant is evidence against an inferred missing link: the test failed when project code changed, so it
+  // does observe project behaviour.
+  const unlinked = unlinkedByInference(test);
+  const killEvidence = unlinked && killed.length > 0;
   const disconnected = !typeLevelOnly && (assertsNothing || (unlinked && !killEvidence));
 
   if (typeLevelOnly) {
@@ -211,9 +235,21 @@ export function assessTest(
 
     if (!assertedCall) rationale.push('no assertion checks the result of a project function');
 
-    // Only a test that ran mutants can be said to have missed them; others were outside the mutation scope.
-    if (input.mutationAvailable && covered.length > 0 && killed.length === 0)
-      rationale.push(`killed none of the ${covered.length} mutant(s) it runs`);
+    // Only a test that ran mutants can be said to have missed them; others were outside the mutation scope. Without
+    // a full run, it is known to have run only the mutants no test killed: mutator stops at the first failing test.
+    if (input.mutationAvailable && covered.length > 0 && killed.length === 0) {
+      const fullyRun = input.fullyRunTestIds?.has(test.id) ?? false;
+      const decided = covered.filter((m) => m.status === 'killed' || m.status === 'survived');
+      const ran = fullyRun ? decided : survived;
+      const unchecked = decided.length - ran.length;
+
+      if (ran.length > 0) rationale.push(`killed none of the ${ran.length} mutant(s) it runs`);
+
+      if (unchecked > 0)
+        rationale.push(
+          `${unchecked} other mutant(s) it covers were killed by another test first, so whether it detects them was not checked`,
+        );
+    }
   } else if (!assertedCall && !killEvidence) {
     // Only reachable when the link is unknown: the asserted value may come from project code, so do not judge it.
     outcome = 'inconclusive';

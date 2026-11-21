@@ -1,6 +1,6 @@
 import type { FormalClaim, Mutant, Property, TestCase, TestPropertyEdge } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
-import { type AssessInput, assessTest, boundaryPoints } from '../src/index.js';
+import { type AssessInput, assessTest, boundaryPoints, unlinkedByInference } from '../src/index.js';
 
 const location = { file: 'src/pricing.ts', range: { start: 3, end: 3 } };
 
@@ -116,6 +116,34 @@ describe('assessTest', () => {
     expect(a.outcome).toBe('weak_or_incomplete');
     expect(a.rationale.join(' ')).toMatch(/killed 1 mutant\(s\)/);
     expect(a.rationale.join(' ')).toMatch(/boundary not exercised/);
+  });
+
+  it('counts as run only the mutants a disconnected test is known to have run', () => {
+    const t = testCase({ id: 'T-a', targetCalls: [call(['1'], false)] });
+    const mutants = [
+      mutant('M-1', 'survived', [], ['T-a']),
+      mutant('M-2', 'killed', ['T-b'], ['T-a', 'T-b']),
+    ];
+    // mutator stops at the first failing test, so T-a may never have run M-2.
+    const partial = assessTest(t, input({ mutants }));
+    expect(partial.outcome).toBe('tautological_or_disconnected');
+    expect(partial.rationale).toContain('killed none of the 1 mutant(s) it runs');
+    expect(partial.rationale.join(' ')).toMatch(
+      /1 other mutant\(s\) it covers were killed by another test first/,
+    );
+
+    const full = assessTest(t, input({ mutants, fullyRunTestIds: new Set(['T-a']) }));
+    expect(full.rationale).toContain('killed none of the 2 mutant(s) it runs');
+    expect(full.rationale.join(' ')).not.toMatch(/another test first/);
+  });
+
+  it('tells which tests a killed mutant can show to be linked', () => {
+    expect(unlinkedByInference(testCase({ id: 'T-a', targetCalls: [call(['1'], false)] }))).toBe(true);
+    expect(unlinkedByInference(testCase({ id: 'T-a', suspicions: ['target_not_called'] }))).toBe(true);
+    expect(unlinkedByInference(testCase({ id: 'T-a', targetCalls: [call(['1'])] }))).toBe(false);
+
+    for (const s of ['no_assertion', 'tautological_assertion', 'type_level_only', 'opaque_call'] as const)
+      expect(unlinkedByInference(testCase({ id: 'T-a', suspicions: [s] }))).toBe(false);
   });
 
   it('keeps a test with no assertion disconnected even when it killed a mutant', () => {
