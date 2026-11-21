@@ -1422,6 +1422,11 @@ function mockHoldersPassed(
         follow(declaration, valuesOf(declaration, checker));
       }
 
+      // `renderHook((props) => useAutoSave(props), { initialProps: params })` calls the hook with `params`.
+      const initialProps = declaration && renderHookInitialProps(declaration, checker);
+
+      if (declaration && initialProps) follow(declaration, [initialProps]);
+
       // `const run = vi.spyOn(source, 'run'); wrap(source)`: the spy watches a method of what is passed.
       for (const spy of symbol ? (spiesOn(item.getSourceFile(), checker).get(symbol) ?? []) : [])
         mocks.add(spy);
@@ -1429,6 +1434,39 @@ function mockHoldersPassed(
   }
 
   return { mocks: [...mocks], containers: [...containers] };
+}
+
+/**
+ * The `initialProps` a parameter of a Testing Library `renderHook` callback receives: in
+ * `renderHook((props) => useHook(props), { initialProps: params })`, `props` is `params`.
+ */
+function renderHookInitialProps(
+  declaration: ts.Declaration,
+  checker: ts.TypeChecker,
+): ts.Expression | undefined {
+  const callback = declaration.parent;
+
+  if (!ts.isParameter(declaration) || !isFunction(callback) || callback.parameters[0] !== declaration)
+    return undefined;
+  const call = callback.parent;
+
+  if (!ts.isCallExpression(call) || call.arguments[0] !== callback || !ts.isIdentifier(call.expression))
+    return undefined;
+
+  if (testingLibraryExport(call.expression, checker) !== 'renderHook') return undefined;
+  const options = call.arguments[1] && skipParens(call.arguments[1]);
+
+  if (!options || !ts.isObjectLiteralExpression(options)) return undefined;
+
+  for (const property of options.properties) {
+    if (property.name && ts.isIdentifier(property.name) && property.name.text === 'initialProps') {
+      if (ts.isPropertyAssignment(property)) return property.initializer;
+
+      if (ts.isShorthandPropertyAssignment(property)) return property.name;
+    }
+  }
+
+  return undefined;
 }
 
 /** The values a variable is given: its initializer, or what it is assigned (a `let` set in a hook). */

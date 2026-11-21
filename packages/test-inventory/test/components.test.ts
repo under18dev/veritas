@@ -307,6 +307,12 @@ describe('rendered components', () => {
           renderHook(() => useForm({ onSubmit: () => {} }));
           expect(onChange).not.toHaveBeenCalled();
         });
+        it('initial props', () => {
+          const initial = params();
+          const { result } = renderHook((props) => useForm(props), { initialProps: initial });
+          result.current.submit();
+          expect(onSubmit).toHaveBeenCalledTimes(1);
+        });
       });
     `);
 
@@ -323,6 +329,7 @@ describe('rendered components', () => {
       symbols: ['src/useCounter.ts#useForm'],
       asserted: false,
     });
+    expect(byName('initial props')).toMatchObject({ symbols: ['src/useCounter.ts#useForm'], asserted: true });
   });
 
   it('treats a file under src/ that imports Vitest’s vi as test code', () => {
