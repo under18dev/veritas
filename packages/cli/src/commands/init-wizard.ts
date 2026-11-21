@@ -15,7 +15,7 @@ export interface WizardEnvironment {
   leanAvailable(): Promise<boolean>;
   /** `owner/name` of the git remote `origin` on GitHub, if any. */
   githubRepo(): string | null;
-  /** Whether the project itself has @mizchi/mutator (the bundled copy runs Veritas's own Vitest). */
+  /** Whether the project itself has @mizchi/mutator (the bundled copy loads some of its files from outside the project). */
   projectHasMutator: boolean;
   /** The mutator version Veritas runs, to add the same one to the project. */
   mutatorVersion: string | null;

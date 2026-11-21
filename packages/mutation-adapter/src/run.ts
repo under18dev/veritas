@@ -16,7 +16,7 @@ import {
 import { detectMutator, PINNED_MUTATOR_VERSION, summarize } from './detect.js';
 import { importMutationReport } from './import.js';
 import { countMutants, emptyCounts, type MutationRunResult, type MutationRunStatus } from './schema.js';
-import { writeNarrowedVitestConfig } from './vitest-config.js';
+import { mutatorVitestDir, projectViteUrl, writeMutationVitestConfig } from './vitest-config.js';
 
 export interface RunMutationOptions {
   root: string;
@@ -231,10 +231,12 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     return result('unsupported', { backend, detail: detection.detail });
   }
 
-  // The adapter's copy runs the Vitest installed with Veritas, not the project's, so test environments and plugins
-  // the tests load from the project (happy-dom, jsdom, ...) are not found there.
+  // The adapter's copy runs the project's Vitest, but Vitest loads mutator's setup file from where Veritas is
+  // installed, outside the project; that is allowed below, and anything else loaded from there may still fail.
   const ownCopyHint =
-    "the project has no @mizchi/mutator, so the copy bundled with Veritas ran the tests with its own Vitest; add @mizchi/mutator to the project's devDependencies to run them with the project's Vitest, test environments and plugins";
+    "the project has no @mizchi/mutator, so the copy bundled with Veritas ran the project's Vitest with files from outside the project; if the first error names such a file, add @mizchi/mutator to the project's devDependencies";
+  const fsAllowDir = detection.origin === 'adapter' ? mutatorVitestDir(detection.binPath) : null;
+  const writesConfig = options.testFiles !== undefined || fsAllowDir !== null;
 
   if (detection.origin === 'adapter') {
     warnings.push(`the project has no @mizchi/mutator; using the adapter's own copy at ${detection.binPath}`);
@@ -250,7 +252,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     (options.scope?.length ?? 0) > 0 && '--include',
     options.killMatrix && '--kill-matrix',
     (options.only?.length ?? 0) > 0 && '--only',
-    options.testFiles !== undefined && '--config',
+    writesConfig && '--config',
     noTypecheck && '--[no-]typecheck',
     '--time-budget',
     'agent',
@@ -271,11 +273,14 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
 
   mkdirSync(reportDir, { recursive: true });
 
-  if (options.testFiles !== undefined) {
-    const configPath = writeNarrowedVitestConfig({
+  if (writesConfig) {
+    const configPath = writeMutationVitestConfig({
       root: options.root,
       dir: reportDir,
-      testFiles: options.testFiles,
+      ...(options.testFiles === undefined ? {} : { testFiles: options.testFiles }),
+      ...(fsAllowDir === null
+        ? {}
+        : { fsAllow: { dirs: [fsAllowDir], viteUrl: projectViteUrl(options.root) } }),
     });
     args = buildMutatorArgs({ ...options, reportDir, configPath, noTypecheck });
   }
@@ -284,6 +289,8 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     cwd: options.root,
     timeoutMs: options.config.mutation.timeoutMs,
     memoryMb: options.config.limits.memoryMb,
+    // mutator logs why a test file failed to load only to this debug channel, and only when one does.
+    env: { NODE_DEBUG: 'mutator' },
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
   const reportPath = path.join(reportDir, 'mutation.json');
@@ -310,14 +317,14 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   if (run.exitCode === EXIT_BASELINE_FAILED) {
     return result('failed', {
       ...common,
-      detail: `tests fail without mutants (baseline, exit 4): ${summarize(redact(run.stderr))}${detection.origin === 'adapter' ? `; ${ownCopyHint}` : ''}`,
+      detail: `tests fail without mutants (baseline, exit 4): ${baselineFailure(redact(run.stderr), options.root)}${detection.origin === 'adapter' ? `; ${ownCopyHint}` : ''}`,
     });
   }
 
   if (run.exitCode !== 0 && run.exitCode !== EXIT_GATE_FAILED) {
     return result('error', {
       ...common,
-      detail: `mutator exited with ${run.exitCode ?? `signal ${run.signal}`}: ${summarize(redact(run.stderr))}`,
+      detail: `mutator exited with ${run.exitCode ?? `signal ${run.signal}`}: ${summarize(withoutDebug(redact(run.stderr)))}`,
     });
   }
 
@@ -423,4 +430,40 @@ export function importMutationResult(options: { root: string; reportFile: string
       ...(counts.pending > 0 ? [`${counts.pending} mutant(s) in the report are pending`] : []),
     ],
   };
+}
+
+/** `MUTATOR 123: /abs/a.test.ts: message`, what NODE_DEBUG=mutator prints for a test file that failed to load. */
+const DEBUG_LINE = /^MUTATOR \d+: (.+?\.[cm]?[jt]sx?): (.*)$/;
+
+/** mutator's own output, without the debug lines and the stack traces that follow them. */
+function withoutDebug(stderr: string): string {
+  const kept: string[] = [];
+  let inDebug = false;
+
+  for (const line of stderr.split('\n')) {
+    if (/^MUTATOR \d+: /.test(line)) inDebug = true;
+    else if (inDebug && !/^(\s+at |Error: |\S*Error: )/.test(line)) inDebug = false;
+
+    if (!inDebug) kept.push(line);
+  }
+
+  return kept.join('\n');
+}
+
+/**
+ * What a failed baseline says: mutator's summary (which tests fail), then the first reason a test file failed to
+ * load, which mutator prints only on its debug channel and which is usually the cause (`Cannot find module …`).
+ */
+export function baselineFailure(stderr: string, root: string): string {
+  const summary = summarize(withoutDebug(stderr));
+  const first = stderr
+    .split('\n')
+    .map((line) => DEBUG_LINE.exec(line))
+    .find((match) => match !== null);
+
+  if (!first) return summary;
+  const file = path.isAbsolute(first[1] as string) ? path.relative(root, first[1] as string) : first[1];
+  const message = (first[2] as string).length > 300 ? `${(first[2] as string).slice(0, 300)}…` : first[2];
+
+  return `${summary}\nfirst error: ${file}: ${message}`;
 }
