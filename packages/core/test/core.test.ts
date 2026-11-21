@@ -673,6 +673,26 @@ describe('doctor', { timeout: 30_000 }, () => {
     expect(detectProject(plain).packageManager).toBe('bun');
   });
 
+  it('looks past an untracked lockfile of a workspace package to the committed one at the root', () => {
+    const root = tmp();
+    const app = path.join(root, 'packages/app');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(path.join(root, 'package.json'), '{"name":"w","packageManager":"pnpm@9.0.0"}');
+    writeFileSync(path.join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+    writeFileSync(path.join(app, 'package.json'), '{"name":"app"}');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+    git('init', '-q');
+    git('add', 'package.json', 'pnpm-lock.yaml', 'packages/app/package.json');
+    writeFileSync(path.join(app, 'package-lock.json'), '{}');
+    expect(detectProject(app).packageManager).toBe('pnpm');
+    // Without a committed lockfile, the packageManager field of the workspace root still outweighs the stray one.
+    git('rm', '-q', '--cached', 'pnpm-lock.yaml');
+    expect(detectProject(app).packageManager).toBe('pnpm');
+    // With neither, the nearest lockfile on disk decides.
+    writeFileSync(path.join(root, 'package.json'), '{"name":"w"}');
+    expect(detectProject(app).packageManager).toBe('npm');
+  });
+
   it('does not take a test.ts or __tests__ file that does not use Vitest for a test', () => {
     const root = tmp();
     writeFileSync(path.join(root, 'package.json'), '{"name":"p","devDependencies":{"vitest":"^4.0.0"}}');

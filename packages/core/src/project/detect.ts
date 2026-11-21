@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { gitOutput } from '../artifacts/store.js';
 
@@ -66,39 +66,69 @@ export function resolvePackageVersion(root: string, name: string): string | null
   }
 }
 
+/** The manager named by the `packageManager` field of a package.json (`pnpm@9.0.0` is pnpm), if any. */
+function declaredManager(pkg: Record<string, unknown> | null): PackageManager | undefined {
+  return typeof pkg?.packageManager === 'string'
+    ? (pkg.packageManager.split('@')[0] as PackageManager)
+    : undefined;
+}
+
 /**
- * The package manager the project uses. Lockfiles are read from the nearest directory, from `root` upwards, that has
- * one. A lockfile committed to git outweighs the `packageManager` field of package.json, which outweighs a lockfile
- * that is only on disk: running another package manager once leaves its lockfile behind (a `pnpm-lock.yaml` next to
- * the committed `package-lock.json`), and that does not change what the project uses.
+ * The package manager the project uses, looking from `root` up to the root of its git repository (without git, up to
+ * the filesystem root). The nearest lockfile committed to git wins. Without one, the `packageManager` field of the
+ * nearest package.json that has it (up to the git root, or without git up to the nearest lockfile) decides, and only
+ * then the nearest lockfile that is on disk but not committed. Running another package manager once leaves its
+ * lockfile behind (a `pnpm-lock.yaml` next to the committed `package-lock.json`, an untracked `package-lock.json` in
+ * one workspace package), and that does not change what the project uses.
  */
 function detectPackageManager(root: string, pkg: Record<string, unknown> | null): PackageManager {
-  let dir = path.resolve(root);
-  let present: [string, PackageManager][] = [];
+  let start = path.resolve(root);
 
-  for (;;) {
-    present = LOCKFILES.filter(([file]) => existsSync(path.join(dir, file)));
+  try {
+    start = realpathSync(start);
+  } catch {
+    /* keep the resolved path */
+  }
+  // Read-only git commands; null outside a repository.
+  const top = gitOutput(start, ['rev-parse', '--show-toplevel'])?.trim() || null;
+  const levels: string[] = [];
 
-    if (present.length > 0) break;
+  for (let dir = start; ; ) {
+    levels.push(dir);
     const parent = path.dirname(dir);
 
-    if (parent === dir) break;
+    if ((top !== null && path.relative(top, dir) === '') || parent === dir) break;
     dir = parent;
   }
-  // Read-only: `git ls-files` lists which of these lockfiles are committed; null outside a repository.
-  const committed = new Set(
-    present.length > 0
-      ? (gitOutput(dir, ['ls-files', '--', ...present.map(([file]) => file)]) ?? '')
-          .split('\n')
-          .map((line) => line.trim())
-      : [],
-  );
-  const declared =
-    typeof pkg?.packageManager === 'string'
-      ? (pkg.packageManager.split('@')[0] as PackageManager)
-      : undefined;
+  let onDisk: { dir: string; manager: PackageManager } | undefined;
 
-  return present.find(([file]) => committed.has(file))?.[1] ?? declared ?? present[0]?.[1] ?? 'unknown';
+  for (const dir of levels) {
+    const present = LOCKFILES.filter(([file]) => existsSync(path.join(dir, file)));
+
+    if (present.length === 0) continue;
+    onDisk ??= { dir, manager: present[0]?.[1] ?? 'unknown' };
+
+    if (top === null) continue;
+    const committed = new Set(
+      (gitOutput(dir, ['ls-files', '--', ...present.map(([file]) => file)]) ?? '')
+        .split('\n')
+        .map((line) => line.trim()),
+    );
+    const found = present.find(([file]) => committed.has(file));
+
+    if (found) return found[1];
+  }
+  // Without git the nearest lockfile marks the project root, so no package.json above it is read.
+  const fieldLevels =
+    top !== null ? levels : onDisk ? levels.slice(0, levels.indexOf(onDisk.dir) + 1) : [start];
+
+  for (const dir of fieldLevels) {
+    const declared = declaredManager(dir === start ? pkg : readPackageJson(dir));
+
+    if (declared) return declared;
+  }
+
+  return onDisk?.manager ?? 'unknown';
 }
 
 function findUp(start: string, name: string): boolean {
