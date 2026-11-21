@@ -35,17 +35,18 @@ function charWidth(code: number): number {
 /** `text` cut to fit in `columns`, so a redrawn line never wraps and the cursor math stays exact. */
 export function fitColumns(text: string, columns: number): string {
   let width = 0;
-  let out = '';
+  const out: string[] = [];
 
   for (const char of text) {
     const w = charWidth(char.codePointAt(0) ?? 0);
 
-    if (width + w > columns) return `${out.slice(0, -1)}…`;
+    // The last whole character makes room for the ellipsis, never half of a surrogate pair.
+    if (width + w > columns) return `${out.slice(0, -1).join('')}…`;
     width += w;
-    out += char;
+    out.push(char);
   }
 
-  return out;
+  return out.join('');
 }
 
 /**

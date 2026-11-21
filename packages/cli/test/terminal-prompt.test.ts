@@ -71,7 +71,12 @@ describe('terminal prompter', () => {
     expect(await answer).toBe(false);
     expect(input.isRaw).toBe(false);
     expect(input.listenerCount('keypress')).toBe(0);
-    expect(written().endsWith('\u001B[?25h  ✔ No\n') || written().includes('\u001B[?25h')).toBe(true);
+    // The cursor is shown again, then the answer replaces the choices (colors aside).
+    const out = written();
+    const shown = out.lastIndexOf('\u001B[?25h');
+    expect(shown).toBeGreaterThan(-1);
+    expect(out.slice(shown)).toContain('✔');
+    expect(out.endsWith('No\u001B[0m\n') || out.endsWith('No\n')).toBe(true);
   });
 
   it('stops when the input ends instead of waiting forever', async () => {
@@ -95,6 +100,7 @@ describe('terminal prompter', () => {
     expect(fitColumns('abcdef', 10)).toBe('abcdef');
     expect(fitColumns('abcdefghijkl', 10)).toBe('abcdefghi…');
     expect(fitColumns('日本語のプロジェクト', 10)).toBe('日本語の…');
+    expect(fitColumns('ab😀😀', 5)).toBe('ab…');
   });
 
   it('stops on Ctrl+C', async () => {
