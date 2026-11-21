@@ -129,6 +129,21 @@ export const config = defineConfig;
     expect(test.asserted).toBe(true);
   });
 
+  it('links what a generator helper yields, and not what it only computes', () => {
+    const get = inventory(`${header}
+      function* values(n: number) { for (let i = 0; i < n; i++) yield fn(i); }
+      function* delegated(n: number) { yield* values(n); }
+      function* unrelated(n: number) { fn(n); yield 1; }
+      it('yielded', () => { for (const v of values(3)) expect(v).toBeGreaterThan(0); });
+      it('delegated', () => { const vs = [...delegated(2)]; expect(vs).toEqual([1, 2]); });
+      it('unrelated', () => { for (const v of unrelated(3)) expect(v).toBe(1); });
+    `);
+    expect(get('yielded').asserted).toBe(true);
+    expect(get('delegated').asserted).toBe(true);
+    expect(get('unrelated').symbols).toEqual(['src/math.ts#fn']);
+    expect(get('unrelated').asserted).toBe(false);
+  });
+
   it('does not count a helper whose return value is unrelated to the project call', () => {
     const test = inventory(`${header}
       function setup() { fn(1); return 5; }

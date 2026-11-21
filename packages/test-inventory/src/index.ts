@@ -760,13 +760,16 @@ function writtenOuterIdentifiers(callback: ts.Node, checker: ts.TypeChecker): ts
   return written;
 }
 
-/** Expressions of the `return` statements of a function body, not of functions nested in it. */
+/** Expressions a function body returns or yields, not those of functions nested in it. */
 function returnedExpressions(body: ts.Block): ts.Expression[] {
   const found: ts.Expression[] = [];
   const visit = (node: ts.Node) => {
     if (isFunctionLike(node)) return;
 
     if (ts.isReturnStatement(node) && node.expression) found.push(node.expression);
+
+    // A generator hands out what it yields (`yield f(x)`, or every value of `yield* values`).
+    if (ts.isYieldExpression(node) && node.expression) found.push(node.expression);
     ts.forEachChild(node, visit);
   };
   ts.forEachChild(body, visit);
