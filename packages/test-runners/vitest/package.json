@@ -1,6 +1,6 @@
 {
   "name": "@under18dev/veritas-test-runner-vitest",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Vitest provider for the Veritas test runner interface",
   "license": "Apache-2.0",
   "repository": {
