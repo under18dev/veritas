@@ -77,6 +77,12 @@ export const VeritasConfig = z
         backend: z.literal('mizchi').default('mizchi'),
         mode: z.enum(['diff', 'full']).default('diff'),
         timeoutMs: z.number().int().positive().default(120_000),
+        /**
+         * `auto` lets mutator type-check mutants with the project's TypeScript before running them, and leave out
+         * those that do not compile. `off` passes `--no-typecheck`: mutants start right after the baseline, but
+         * mutants the compiler would reject are run and counted too.
+         */
+        typecheck: z.enum(['auto', 'off']).default('auto'),
       })
       .strict()
       .prefault({}),

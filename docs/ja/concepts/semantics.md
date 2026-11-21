@@ -68,7 +68,7 @@ distinguishability が使うのは、引数がすべて定義域内の整数ま�
 - `suspected_equivalent`: 違いは観測されなかったが、等価であることは示されていない。
 - `equivalent_proven`: 示した有界な定義域のどの入力でも区別できない（`bounded_equivalence` の主張）。範囲も結果の一部です。
 - `timeout`: mutant のもとでテストの実行が終わらなかった（多くは変更されたループ）。ほかの mutation ツールと同じく検出したものとして数えますが、特定のテストによる kill とはみなしません。仕様に関係する timeout の mutant を通るテストには、それぞれ不明な点としてその mutant を載せます。
-- `pending`、`unknown`: mutant を実行しなかった、またはバックエンドが Veritas の知らない状態を報告した。`unknown` の mutant があると mutation のステージは `partial` になり、実行は `pass` になりません。`pending` も同じですが、差分の実行（`--since`）では、変更の外にある mutant を意図して除くので例外です。
+- `pending`、`unknown`: mutant を実行しなかった、またはバックエンドが Veritas の知らない状態を報告した。`unknown` の mutant があると mutation のステージは `partial` になり、実行は `pass` になりません。`pending` も同じですが、差分の実行（`--since`）では、変更の外にある mutant を意図して除くので例外です。ただし、mutator の時間予算が尽きて実行しなかった mutant も `pending` になり、この場合は `--since` を付けていてもステージは `partial` になります。
 
 mutator が実行するのは、範囲内の mutant を kill しうるテストファイルだけです。テストファイルを除くのは、そのファイルがプロジェクトのソースを import していて、そのどれも範囲内にないときだけです。次のファイルは常に残します。子プロセスでコードを実行するファイル、実行時にモジュールを読み込むファイル（動的な `import()`、`require`、`createRequire`）、解決できない相対モジュールを import するファイルと、これらに当たるローカルのファイルを import するファイルです。テストを認識できなかったファイルも残します。Vitest の設定（`globalSetup`、プラグイン）を通じてだけプロジェクトに届くコードは見えません。テストがそうしたコードに依存しているなら、それらのテストファイルが範囲内のソースを import するように範囲を設定してください。
 

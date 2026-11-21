@@ -20,6 +20,8 @@ import {
   instrumentationFailures,
   isRelativeGlob,
   listSome,
+  mutatorProgress,
+  timeBudgetExhausted,
   transformErrorLine,
   withoutDebug,
 } from './diagnose.js';
@@ -51,7 +53,10 @@ export interface RunMutationOptions {
   testFiles?: string[];
   /** Vitest config passed as `--config`. */
   configPath?: string;
-  /** Pass `--no-typecheck`. */
+  /**
+   * Pass `--no-typecheck` (true) or not (false), whatever `mutation.typecheck` says. By default `--no-typecheck` is
+   * passed when `mutation.typecheck` is `off`, or when the root tsconfig.json only references other projects.
+   */
   noTypecheck?: boolean;
   /** Source files (relative to the root, no glob characters) passed as `--exclude`. */
   exclude?: string[];
@@ -149,6 +154,25 @@ export function rootTsconfigHasNoFiles(root: string): boolean {
 }
 
 /**
+ * What to add to the detail of a timed-out run, from what mutator printed: when the baseline finished but no mutant
+ * had finished, `--time-budget` (which only stops new mutants from starting) did not help. When mutator had not yet
+ * printed its plan of mutants to run, the time most likely went to type-checking them, unless that was off.
+ */
+function timeoutHint(run: { stderr: string; stderrTail?: string }, noTypecheck: boolean): string {
+  const progress = mutatorProgress(`${run.stderr}\n${run.stderrTail ?? ''}`);
+
+  if (!progress.pastBaseline || progress.baselineFailed || progress.mutantFinished) return '';
+
+  const before =
+    '. mutator finished the baseline ("dry run finished") but no mutant had finished when it was killed; its --time-budget only stops new mutants from starting, so it did not end the run in time';
+
+  if (!noTypecheck && !progress.mutantsPlanned)
+    return `${before}. mutator had not printed its plan of mutants to run, so it most likely spent the time type-checking the mutants. Set mutation.typecheck to "off" to skip that, or narrow the run with --since <ref>`;
+
+  return `${before}. Narrow the run with --since <ref>, or raise mutation.timeoutMs`;
+}
+
+/**
  * Resolve `reportDir` and require it to be strictly inside `root` (symlinks included).
  * Throws VeritasError `REPORT_DIR_OUTSIDE_ROOT` otherwise.
  */
@@ -205,9 +229,14 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   }
   // Checked before anything is created or spawned: mutator writes wherever --report-dir points.
   const reportDir = confineReportDir(options.root, options.reportDir);
-  const noTypecheck = options.noTypecheck ?? rootTsconfigHasNoFiles(options.root);
+  const typecheckOff = options.noTypecheck === undefined && options.config.mutation.typecheck === 'off';
+  const noTypecheck = options.noTypecheck ?? (typecheckOff || rootTsconfigHasNoFiles(options.root));
 
-  if (noTypecheck && options.noTypecheck === undefined)
+  if (typecheckOff)
+    warnings.push(
+      'mutation.typecheck is "off": mutants were not type-checked, so mutants the compiler would reject were run and counted too. Some of them are killed only because the mutated code breaks at run time, which makes the counts read more favourably than a type-checked run would',
+    );
+  else if (noTypecheck && options.noTypecheck === undefined)
     warnings.push(
       'tsconfig.json at the root only references other projects, and mutator type-checks against that file alone: mutants were not type-checked, so some survivors may be type errors',
     );
@@ -337,6 +366,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     exitCode: run.exitCode,
     durationMs,
     rawReportPath: existsSync(reportPath) ? reportPath : null,
+    typecheck: noTypecheck ? ('off' as const) : ('auto' as const),
   });
   const adapterHint = detection.origin === 'adapter' ? `; ${ownCopyHint}` : '';
   args = argsExcluding([]);
@@ -422,7 +452,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
         options.testFiles === undefined
           ? ' (it ran every test the project config selects)'
           : ` (it ran ${options.testFiles.length} test file(s) that import the code in scope)`
-      }`,
+      }${timeoutHint(run, noTypecheck)}`,
     });
   }
 
@@ -484,8 +514,14 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     warnings.push('--kill-matrix was requested but the agent report has no killMatrix');
   }
   const counts = countMutants(mutants);
+  // On a very long run the head of stderr can fill up before mutator's last lines; its tail keeps them.
+  const budget = timeBudgetExhausted(run.stderr) ?? timeBudgetExhausted(run.stderrTail ?? '');
 
-  if (counts.pending > 0) {
+  if (budget !== null) {
+    warnings.push(
+      `mutator's time budget of ${budget.seconds}s ran out (75% of mutation.timeoutMs, or of what was left of it when mutator ran a second time): ${budget.notRun} mutant(s) were not run, so the results cover only part of the code in scope and mutation results are partial. Narrow the run with --since <ref>, or raise mutation.timeoutMs`,
+    );
+  } else if (counts.pending > 0) {
     warnings.push(
       `${counts.pending} mutant(s) are pending (not run: outside --since, or over the time budget)`,
     );
@@ -498,6 +534,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     agentReport,
     killMatrix: agent?.killMatrix ?? null,
     detail: null,
+    ...(budget === null ? {} : { timeBudgetExhausted: budget }),
   });
 }
 

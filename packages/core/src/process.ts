@@ -15,6 +15,11 @@ export interface CommandResult {
   stderr: string;
   durationMs: number;
   timedOut: boolean;
+  /**
+   * The last characters of stderr (at most STDERR_TAIL_CHARS) written after `stderr` reached `maxOutputBytes`. Set
+   * only then: `stderr` keeps the head of the output, and this keeps how it ended, where summaries are printed.
+   */
+  stderrTail?: string;
   /** Set when the executable could not be started at all (e.g. ENOENT). */
   spawnError?: string;
 }
@@ -46,6 +51,8 @@ export interface RunCommandOptions {
   label?: string;
 }
 
+/** Characters of stderr kept from its end once the head buffer is full. */
+export const STDERR_TAIL_CHARS = 64 * 1024;
 /** Output lines sent as events per process, so a chatty process cannot flood a trace. */
 const OUTPUT_EVENT_LIMIT = 2000;
 /** Characters of an output line shown in its event. */
@@ -168,6 +175,7 @@ export function runCommand(
   return new Promise((resolve) => {
     let stdout = '';
     let stderr = '';
+    let stderrTail: string | null = null;
     let timedOut = false;
     let settled = false;
     const child = spawn(command, args, {
@@ -277,6 +285,7 @@ export function runCommand(
       if (stream === 'stdout') {
         if (stdout.length < max) stdout += text;
       } else if (stderr.length < max) stderr += text;
+      else stderrTail = `${stderrTail ?? ''}${text}`.slice(-STDERR_TAIL_CHARS);
       logLines(stream, text);
     };
     const finish = (result: Partial<CommandResult>) => {
@@ -319,6 +328,7 @@ export function runCommand(
         signal: null,
         stdout: redact(stdout),
         stderr: redact(stderr),
+        ...(stderrTail === null ? {} : { stderrTail: redact(stderrTail) }),
         durationMs: Date.now() - started,
         timedOut,
         ...result,

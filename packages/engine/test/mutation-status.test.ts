@@ -56,6 +56,17 @@ describe('mutationStageStatus', () => {
     expect(mutationStageStatus({ ...run, status: 'failed' }).status).toBe('failed');
   });
 
+  it('is partial when the time budget left mutants unrun, even in an incremental run', () => {
+    const run = {
+      status: 'succeeded' as const,
+      mutants: [mutant('killed'), mutant('pending')],
+      timeBudgetExhausted: { notRun: 1 },
+    };
+    expect(mutationStageStatus(run).status).toBe('partial');
+    expect(mutationStageStatus(run, { incremental: true }).status).toBe('partial');
+    expect(mutationStageStatus({ ...run, status: 'timeout' }).status).toBe('timeout');
+  });
+
   it('is partial when a complete run has no mutant at all, except in an incremental run', () => {
     expect(mutationStageStatus({ status: 'succeeded', mutants: [] })).toEqual({
       status: 'partial',
@@ -74,6 +85,12 @@ describe('cacheableMutationResult', () => {
     expect(cacheableMutationResult({ status: 'succeeded', excludedFiles: [] })).toBe(true);
     expect(cacheableMutationResult({ status: 'succeeded', excludedFiles: ['src/a.ts'] })).toBe(false);
     expect(cacheableMutationResult({ status: 'failed' })).toBe(false);
+  });
+
+  it('does not reuse a run whose time budget ran out', () => {
+    expect(
+      cacheableMutationResult({ status: 'succeeded', timeBudgetExhausted: { seconds: 45, notRun: 3 } }),
+    ).toBe(false);
   });
 });
 
