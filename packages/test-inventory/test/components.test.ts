@@ -22,7 +22,7 @@ export function asMock<T>(fn: ReturnType<typeof vi.fn>): T { return fn as unknow
 
 const header = `import { render, renderHook, screen, fireEvent, within } from '@testing-library/react';
 import { Button } from '@mui/material';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import Dialog from '../src/Dialog';
 import { useCounter, useForm } from '../src/useCounter';
 import { label } from '../src/format';
@@ -697,6 +697,38 @@ describe('links found in more places', () => {
     expect(byName('aliased render')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
     expect(byName('shown')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
     expect(byName('not rendered here')).toMatchObject({ symbols: [], asserted: false });
+  });
+});
+
+describe('renders in shared setup', () => {
+  it('counts only mounting calls that run in a beforeEach hook', () => {
+    const byName = inventory(`${header}
+      const ui = <Dialog open title="Hi" />;
+      it('module A', () => { render(ui); expect(screen.getByText('Hi')).toBeTruthy(); });
+      it('module B', () => { render(<Button>Go</Button>); expect(screen.getByText('Go')).toBeTruthy(); });
+      describe('stored in a describe', () => {
+        const local = <Dialog open title="Hi" />;
+        it('describe A', () => { render(local); expect(screen.getByText('Hi')).toBeTruthy(); });
+        it('describe B', () => { render(<Button>Go</Button>); expect(screen.getByText('Go')).toBeTruthy(); });
+      });
+      describe('rendered in beforeEach from a stored element', () => {
+        const element = <Dialog open title="Hi" />;
+        beforeEach(() => { render(element); });
+        it('each', () => { expect(screen.getByText('Hi')).toBeTruthy(); });
+      });
+      describe('rendered in beforeAll', () => {
+        beforeAll(() => { render(<Dialog open title="Hi" />); });
+        it('first', () => { expect(screen.getByText('Hi')).toBeTruthy(); });
+      });
+    `);
+
+    expect(byName('module A').asserted).toBe(true);
+    expect(byName('module B')).toMatchObject({ symbols: [], asserted: false });
+    expect(byName('describe A').asserted).toBe(true);
+    expect(byName('describe B')).toMatchObject({ symbols: [], asserted: false });
+    expect(byName('each')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
+    // Testing Library cleans the page up after each test, so a beforeAll render is left out.
+    expect(byName('first')).toMatchObject({ symbols: [], asserted: false });
   });
 });
 

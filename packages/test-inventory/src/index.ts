@@ -649,6 +649,25 @@ function analyzeBody(
 
     if (!isInvocation(node)) continue;
 
+    // `render(ui)` with `const ui = <Dialog />` made outside the body mounts that element here.
+    if (ts.isCallExpression(node))
+      for (const argument of node.arguments) {
+        const value = skipParens(argument);
+        const initializer = ts.isIdentifier(value)
+          ? variableInitializer(checker.getSymbolAtLocation(value)?.valueDeclaration)
+          : undefined;
+
+        if (!initializer || contains(body, initializer) || !mountedExpression(value, ctx, 0)) continue;
+
+        for (const element of [initializer, ...descendants(initializer)])
+          if (
+            isJsxInvocation(element) &&
+            jsxTop(ts.isJsxOpeningElement(element) ? element.parent : element) === initializer &&
+            record(element)
+          )
+            bindCallOutputs(element);
+      }
+
     if (record(node)) bindCallOutputs(node);
     else {
       const specifier = unresolvedImportOf(calleeOf(node), ctx);
@@ -1558,23 +1577,61 @@ function importedName(identifier: ts.Identifier, checker: ts.TypeChecker): strin
 const setupRendersCache = new WeakMap<ts.SourceFile, Invocation[]>();
 
 /**
- * The invocations of a file's shared setup (module or describe level, `beforeEach`/`beforeAll`) that render a
- * component into the document, worked out once per file; which tests they run before is decided per test.
+ * The renders of a file's `beforeEach` hooks, worked out once per file; which tests they run before is decided per
+ * test. The mounting call itself must run in the hook (`beforeEach(() => render(<Dialog />))`, `render(ui)` with a
+ * `ui` element made elsewhere, or a render helper): an element only made or stored there renders nothing. Renders in
+ * `beforeAll` or directly at module or describe level are left out, since Testing Library cleans the page up after
+ * each test and only the first test would see them.
  */
 function setupRenders(source: ts.SourceFile, ctx: Ctx): Invocation[] {
   let found = setupRendersCache.get(source);
 
   if (!found) {
-    found = descendants(source).filter(
-      (node): node is Invocation =>
-        isInvocation(node) &&
-        runsBefore(node, undefined) &&
-        callInfo(node, ctx).targets.some((target) => target.rendered),
-    );
+    found = [];
+    const rendered = (node: Invocation) => callInfo(node, ctx).targets.some((target) => target.rendered);
+
+    for (const call of descendants(source)) {
+      if (!ts.isCallExpression(call) || !inBeforeEach(call)) continue;
+
+      if (rendered(call)) {
+        found.push(call);
+        continue;
+      }
+
+      for (const argument of call.arguments) {
+        // Elements given to this call, inline or through a local holding them.
+        const initializer = ts.isIdentifier(skipParens(argument))
+          ? variableInitializer(ctx.checker.getSymbolAtLocation(skipParens(argument))?.valueDeclaration)
+          : undefined;
+
+        for (const root of initializer ? [argument, initializer] : [argument])
+          for (const node of [root, ...descendants(root)])
+            if (
+              isJsxInvocation(node) &&
+              jsxTop(ts.isJsxOpeningElement(node) ? node.parent : node) === root &&
+              rendered(node)
+            )
+              found.push(node);
+      }
+    }
     setupRendersCache.set(source, found);
   }
 
   return found;
+}
+
+/** Whether code runs as shared setup inside a `beforeEach` hook (see `runsBefore`). */
+function inBeforeEach(node: ts.Node): boolean {
+  if (!runsBefore(node, undefined)) return false;
+
+  for (let current = node.parent; current; current = current.parent)
+    if (isFunctionLike(current) && ts.isCallExpression(current.parent)) {
+      const callee = current.parent.expression;
+
+      if (ts.isIdentifier(callee) && callee.text === 'beforeEach') return true;
+    }
+
+  return false;
 }
 
 /** Functions that mount the element they are given: Testing Library, react-dom, react-test-renderer, Enzyme. */
@@ -1603,9 +1660,9 @@ function mountedJsx(node: ts.JsxSelfClosingElement | ts.JsxOpeningElement, ctx: 
   return mountedExpression(ts.isJsxOpeningElement(node) ? node.parent : node, ctx, 0);
 }
 
-function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount {
+/** The outermost expression of the JSX tree an element sits in, through conditionals, arrays and parentheses. */
+function jsxTop(expression: ts.Node): ts.Node {
   let current = expression;
-
   for (;;) {
     const parent = current.parent;
 
@@ -1633,6 +1690,12 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount 
     }
     break;
   }
+
+  return current;
+}
+
+function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount {
+  const current = jsxTop(expression);
   const parent = current.parent;
 
   if (ts.isReturnStatement(parent) || (ts.isArrowFunction(parent) && parent.body === current))
