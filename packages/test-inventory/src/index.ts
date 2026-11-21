@@ -393,7 +393,9 @@ function analyzeBody(
       helperAsserts ||= info.helperAsserts;
       opaque ||= info.opaque;
 
-      if (info.observesDocument) documentChecks.push(node.getEnd());
+      // A helper that asserts on the page observes what rendered before it was called; what it renders itself is
+      // judged inside it, in its own order (`const before = screen.queryByText(…); render(…); expect(before)…`).
+      if (info.observesDocument) documentChecks.push(node.getStart());
     }
 
     return info.targets.some((target) => keepDeferred || !target.deferred);
@@ -459,7 +461,9 @@ function analyzeBody(
       if (declaration.initializer) expressions.push(declaration.initializer);
       else expressions.push(...assignmentsTo(symbol, source, checker));
     }
-    let sources = sourcesOf(expressions);
+    // `const ui = <Dialog />` outside the body describes an element: it runs only where this body mounts it
+    // (`render(ui)`), which records it there, not where another test does.
+    let sources = sourcesOf(expressions.filter((expression) => !isElementDescription(expression, checker)));
     const declaration = symbol.valueDeclaration;
 
     // A mock made outside the body (`const onChange = vi.fn()`) and handed to project code in shared setup
@@ -1477,12 +1481,22 @@ function runsFunction(fn: ts.Node, assertion: ts.CallExpression, executed: Set<t
   ) {
     if (parent === assertion) return runsCallback(assertion);
 
-    // `expect(x).toEqual(() => …)`: a matcher argument is compared, not run.
-    return !(ts.isCallExpression(parent) && isAssertionChainCall(parent));
+    // `expect(x).toEqual(() => …)`: a matcher argument is compared, not run; a predicate matcher runs it
+    // (`expect(x).to.satisfy((v) => …)`, jest-extended's `toSatisfy`).
+    if (ts.isCallExpression(parent) && isAssertionChainCall(parent))
+      return (
+        ts.isPropertyAccessExpression(parent.expression) &&
+        PREDICATE_MATCHERS.has(parent.expression.name.text)
+      );
+
+    return true;
   }
 
   return false;
 }
+
+/** Matchers that call the predicate they are given with the value under test. */
+const PREDICATE_MATCHERS = new Set(['satisfy', 'satisfies', 'toSatisfy', 'toSatisfyAll', 'toSatisfyAny']);
 
 /** Assertion methods that run the function they are given: `assert.throws(fn)`, AVA's `t.throws(fn)` and the like. */
 const RUNNING_ASSERTIONS = new Set([
@@ -2363,21 +2377,39 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
  * not append to the document, or any value not shown to come from it.
  */
 function detachedContainer(call: ts.CallExpression, checker: ts.TypeChecker): boolean {
-  const options = call.arguments[1] && skipParens(call.arguments[1]);
+  // The options object: written inline, held in a local (`const options = { container }`), or spread into one.
+  const containerOf = (
+    expression: ts.Expression | undefined,
+    depth: number,
+  ): ts.Expression | null | undefined => {
+    let options = expression && skipParens(expression);
 
-  if (!options || !ts.isObjectLiteralExpression(options)) return false;
-  const property = options.properties.find(
-    (item) => item.name && ts.isIdentifier(item.name) && item.name.text === 'container',
-  );
+    if (options && ts.isIdentifier(options))
+      options = variableInitializer(valueSymbol(options, checker)?.valueDeclaration) ?? options;
 
-  if (!property) return false;
-  const value = ts.isPropertyAssignment(property)
-    ? skipParens(property.initializer)
-    : ts.isShorthandPropertyAssignment(property)
-      ? property.name
-      : undefined;
+    if (!options || !ts.isObjectLiteralExpression(options) || depth > 3) return undefined;
+    let found: ts.Expression | null | undefined;
 
-  return !value || detachedNode(value, checker);
+    for (const property of options.properties) {
+      if (ts.isSpreadAssignment(property)) {
+        const inner = containerOf(property.expression, depth + 1);
+
+        if (inner !== undefined) found = inner;
+      } else if (property.name && ts.isIdentifier(property.name) && property.name.text === 'container')
+        found = ts.isPropertyAssignment(property)
+          ? skipParens(property.initializer)
+          : ts.isShorthandPropertyAssignment(property)
+            ? property.name
+            : null;
+    }
+
+    return found;
+  };
+  const value = containerOf(call.arguments[1], 0);
+
+  // No container given: Testing Library appends one to the page. A container not shown to be in the page keeps the
+  // output out of it.
+  return value === undefined ? false : value === null || detachedNode(value, checker);
 }
 
 /** React's `createPortal`, by the name it is imported under (`createPortal`, `ReactDOM.createPortal`). */
@@ -2583,6 +2615,15 @@ function inBeforeEach(node: ts.Node): boolean {
     }
 
   return false;
+}
+
+/** Whether an expression is a JSX element (or a choice of elements), the description of what to render. */
+function isElementDescription(expression: ts.Expression, checker: ts.TypeChecker): boolean {
+  return [expression, ...descendants(expression)].some(
+    (item) =>
+      isJsxInvocation(item) &&
+      jsxTop(ts.isJsxOpeningElement(item) ? item.parent : item, checker) === expression,
+  );
 }
 
 /** Functions that mount the element they are given: Testing Library, react-dom, react-test-renderer, Enzyme. */

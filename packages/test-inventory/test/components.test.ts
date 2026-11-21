@@ -2032,6 +2032,82 @@ it('compared only', () => { assert.ok(() => fail()); });
   });
 });
 
+describe('helper order, saved elements, option locals and predicate matchers', () => {
+  it('keeps the order of a read and a render inside a helper', () => {
+    const byName = inventory(`${header}
+      function prepare() {
+        const before = screen.queryByText('Hi');
+        render(<Dialog open title="Hi" />);
+        expect(before).toBeNull();
+      }
+      function show() {
+        render(<Dialog open title="Hi" />);
+        expect(screen.getByText('Hi')).toBeTruthy();
+      }
+      it('helper reads before it renders', () => { prepare(); });
+      it('helper renders then reads', () => { show(); });
+    `);
+
+    expect(byName('helper reads before it renders').asserted).toBe(false);
+    expect(byName('helper renders then reads').asserted).toBe(true);
+  });
+
+  it('records a saved element only in the test that mounts it', () => {
+    const byName = inventory(`${header}
+      const ui = <Dialog open title="Hi" />;
+      it('mounts the saved element', () => {
+        render(ui);
+        expect(screen.getByText('Hi')).toBeTruthy();
+      });
+      it('only reads the description', () => {
+        expect(ui.props.title).toBe('Hi');
+      });
+    `);
+
+    expect(byName('mounts the saved element')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: true,
+    });
+    expect(byName('only reads the description')).toMatchObject({ symbols: [], asserted: false });
+  });
+
+  it('resolves render options held in locals and spreads', () => {
+    const byName = inventory(`${header}
+      it('options local with a detached container', () => {
+        const options = { container: document.createElement('div') };
+        render(<Dialog open title="Hi" />, options);
+        expect(screen.queryByText('Hi')).toBeNull();
+      });
+      it('spread options with a detached container', () => {
+        const base = { container: document.createElement('div') };
+        render(<Dialog open title="Hi" />, { ...base });
+        expect(screen.queryByText('Hi')).toBeNull();
+      });
+      it('options local without a container', () => {
+        const options = { legacyRoot: false };
+        render(<Dialog open title="Hi" />, options);
+        expect(screen.getByText('Hi')).toBeTruthy();
+      });
+    `);
+
+    expect(byName('options local with a detached container').asserted).toBe(false);
+    expect(byName('spread options with a detached container').asserted).toBe(false);
+    expect(byName('options local without a container').asserted).toBe(true);
+  });
+
+  it('runs predicates given to satisfy matchers', () => {
+    const byName = inventory(`${header}
+      it('chai satisfy', () => { expect('hi').to.satisfy((text: string) => label(text) === 'HI'); });
+      it('jest-extended toSatisfy', () => { expect('hi').toSatisfy((text: string) => label(text) === 'HI'); });
+      it('function compared by equality', () => { expect('hi').toEqual(() => label('hi')); });
+    `);
+
+    expect(byName('chai satisfy').asserted).toBe(true);
+    expect(byName('jest-extended toSatisfy').asserted).toBe(true);
+    expect(byName('function compared by equality').asserted).toBe(false);
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}
