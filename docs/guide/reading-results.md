@@ -83,6 +83,18 @@ veritas explain <finding-id>
 
 The outcome summarizes the evidence vector below; it is not a grade.
 
+### What counts as checking project code
+
+A test checks project code when an assertion looks at what project code produced. For a plain function that is its return value, an object it changed, or how it called a callback or a `vi.fn()` mock the test handed to it.
+
+Component and hook tests are read the same way. Rendering a project component as JSX counts as calling it, whether the test writes `render(<Dialog />)` itself, calls a local helper such as `renderDialog()` that does, or renders a local wrapper component. A project hook called inside `renderHook` counts too. After that, these assertions count as checking the component or hook:
+
+- a Testing Library query of the page (`screen.getByText`, `within(...)`, the queries returned by `render`), or a read of the global `document`, after a project component rendered
+- `result.current` from `renderHook`
+- `toHaveBeenCalled*` or `.mock.calls` on a mock that was handed to the component or hook, either directly as a prop or argument, inside a props object (`render(<Dialog {...props} />)` with `props.onSave` checked), or through a local helper or factory that passes or returns it
+
+Some assertions still do not count. A mock that was never handed to project code does not count, and neither does a value of a props object that the test set itself. A page query counts only when something from the project rendered, so a test that renders only third-party components is still reported. Veritas also does not yet link a module mocked with `vi.mock` that project code calls internally, or a spy on a global object, to the code under test. Tests that check only those are still reported as `tautological_or_disconnected`, so read them before acting on the finding.
+
 ## Evidence vector
 
 Each assessment in `assessments.json` has these fields and no combined score:
