@@ -488,7 +488,10 @@ async function runInContext(
       return {
         status: 'succeeded',
         output: inventory,
-        messages: [`${inventory.tests.length} test(s), ${inventory.edges.length} symbol edge(s)`],
+        messages: [
+          // Counted as written in the test files, so Vitest, which counts each case of a loop or .each, may report more.
+          `${inventory.tests.length} test registration(s) (a loop or .each counts once), ${inventory.edges.length} symbol edge(s)`,
+        ],
       };
     },
   });
