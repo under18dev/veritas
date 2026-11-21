@@ -13,6 +13,8 @@ import {
   type StageName,
   sha256,
   stableId,
+  type TestRunnerProvider,
+  type TestRunResult,
   type VeritasConfig,
   VeritasError,
 } from '@under18dev/veritas-core';
@@ -24,7 +26,6 @@ import { renderTestFile } from './render.js';
 import { ImprovementApproval, type PlanDocument } from './schema.js';
 import { approvalTokenFor, assertPlanId, attemptCount, readPlan, writePlanArtifact } from './store.js';
 import { validatePatch } from './validate.js';
-import { runVitest, type VitestRun } from './vitest.js';
 import {
   createWorkspace,
   diffSnapshots,
@@ -75,7 +76,12 @@ function sameToken(a: string, b: string): boolean {
 }
 
 /** Problems that make an approved plan unsafe even with a valid token. */
-function planProblems(root: string, doc: PlanDocument, config: VeritasConfig): string[] {
+function planProblems(
+  root: string,
+  doc: PlanDocument,
+  config: VeritasConfig,
+  testRunner: TestRunnerProvider,
+): string[] {
   const problems = validatePatch(root, doc.files, {
     testInclude: config.analysis.testInclude,
     maxPatchFiles: Math.min(doc.budget.maxPatchFiles, config.improvement.maxPatchFiles),
@@ -124,7 +130,11 @@ function planProblems(root: string, doc: PlanDocument, config: VeritasConfig): s
     const propertyId = /veritas-(.+)\.test\.[jt]s$/.exec(f.path)?.[1];
     const tests = doc.tests.filter((t) => t.propertyId === propertyId);
 
-    if (!propertyId || tests.length === 0 || renderTestFile(f.path, propertyId, tests) !== f.content) {
+    if (
+      !propertyId ||
+      tests.length === 0 ||
+      renderTestFile(f.path, propertyId, tests, testRunner.templates) !== f.content
+    ) {
       problems.push(`${f.path}: content differs from the rendering of the planned tests`);
     }
   }
@@ -133,7 +143,7 @@ function planProblems(root: string, doc: PlanDocument, config: VeritasConfig): s
 }
 
 function snapshot(
-  tests: VitestRun & { status: 'ok' },
+  tests: TestRunResult & { status: 'ok' },
   mutation: MutationRunResult,
   claimStatuses: Record<string, string>,
 ): MeasurementSnapshot {
@@ -448,7 +458,8 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
       rolledBack: false,
     });
   }
-  const problems = planProblems(root, doc, config);
+  const testRunner = testRunnerFor(config);
+  const problems = planProblems(root, doc, config, testRunner);
 
   if (problems.length > 0) {
     return end('blocked', ['the plan fails the safety checks; nothing was written', ...problems], {
@@ -459,15 +470,14 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
   const deadline = Date.now() + doc.budget.timeBudgetMs;
   const remaining = () => Math.max(1, deadline - Date.now());
   const workspace = createWorkspace(root);
-  const testRunner = testRunnerFor(config);
   let written: WriteRecord | null = null;
 
   try {
-    const measureTests = async (label: string): Promise<VitestRun> => {
-      let run: VitestRun = { status: 'error', detail: 'not run' };
+    const measureTests = async (label: string): Promise<TestRunResult> => {
+      let run: TestRunResult = { status: 'error', detail: 'not run' };
 
       for (let i = 0; i <= doc.budget.maxTestRetries; i++) {
-        run = await runVitest(workspace, {
+        run = await testRunner.execution.run(workspace, {
           timeoutMs: remaining(),
           label: `${label}-${i}`,
           ...(options.signal ? { signal: options.signal } : {}),
