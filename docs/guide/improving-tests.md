@@ -87,20 +87,20 @@ During `--apply`, Veritas:
 2. runs the tests and mutation testing on the copy;
 3. adds the new test files to the copy and runs the tests and mutation testing again, on every mutant;
 4. re-evaluates the formal and property-based results on the copy with the stages and options of the run the plan came from, offline;
-5. writes the new files into the project only if every test passes, more mutants are killed, and the re-evaluation completes without an error. Every proof or counterexample, whether about the implementation itself or about a mutant, must be produced again and stay decided. The one exception is a mutant that survived before the patch and that one of the new tests kills: its results may be absent. A passed property-based test must stay decided when it is produced again, and results that were already undecided may stay `unknown` or `timeout`; the attempt records them. Otherwise it discards the copy and your project is unchanged.
+5. writes the new files into the project only if every test passes, more mutants are killed, at least one of the new tests kills a mutant that survived before the patch, both mutation runs are complete (mutator's time budget did not run out and no source file was left out), and the re-evaluation completes without an error. Every proof or counterexample, whether about the implementation itself or about a mutant, must be produced again and stay decided. The one exception is a mutant that survived before the patch and that one of the new tests kills: its results may be absent. A passed property-based test must stay decided when it is produced again, and results that were already undecided may stay `unknown` or `timeout`; the attempt records them. Otherwise it discards the copy and your project is unchanged.
 
 Each attempt is recorded as `.veritas/improvements/<plan-id>/attempt-<n>.json`, and each approval as `approval-<n>.json` with the approver, time, entry point and a hash of the token.
 
 ## Outcomes and exit codes
 
-| Outcome               | Exit code | Meaning                                                                                                                        |
-| --------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `planned`, `improved` | `0`       | A plan is ready, or an applied plan improved the results                                                                       |
-| `no_safe_improvement` | `4`       | No test with a specification-derived expected value could be built, or the applied tests failed or killed no additional mutant |
-| `needs_spec_decision` | `4`       | You must decide on the specification first                                                                                     |
-| `blocked`             | `1`       | The patch fails the safety checks, or the plan's attempts are used up                                                          |
-| (error message)       | `2`       | Wrong approval token, or `--apply` in CI                                                                                       |
-| `error`               | `3`       | A tool failed                                                                                                                  |
+| Outcome               | Exit code | Meaning                                                                                                                                                                                                                                                            |
+| --------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `planned`, `improved` | `0`       | A plan is ready, or an applied plan improved the results                                                                                                                                                                                                           |
+| `no_safe_improvement` | `4`       | No test with a specification-derived expected value could be built; the applied tests failed or no new test killed an additional mutant; or a mutation run was incomplete (its time budget ran out or a file was left out), so before and after cannot be compared |
+| `needs_spec_decision` | `4`       | You must decide on the specification first                                                                                                                                                                                                                         |
+| `blocked`             | `1`       | The patch fails the safety checks, or the plan's attempts are used up                                                                                                                                                                                              |
+| (error message)       | `2`       | Wrong approval token, or `--apply` in CI                                                                                                                                                                                                                           |
+| `error`               | `3`       | A tool failed                                                                                                                                                                                                                                                      |
 
 ## When a decision is needed
 
