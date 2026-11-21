@@ -5697,8 +5697,19 @@ function mockRoutes(
 
   if (imported !== undefined) modules.add(imported);
   const source = root.identifier.getSourceFile();
-  // A spy on a global object or prototype (`vi.spyOn(Element.prototype, 'scrollIntoView')`), kept in a local.
   const declaration = root.symbol.valueDeclaration;
+  // A local naming an export of a mocked module (`const render = vi.mocked(mermaid.render)`, `const send = api.send`).
+  let alias =
+    variableInitializer(declaration) && unwrapExpression(variableInitializer(declaration) as ts.Expression);
+
+  if (alias && ts.isCallExpression(alias) && mockCall(alias, checker) !== undefined && alias.arguments[0])
+    alias = unwrapExpression(alias.arguments[0]);
+
+  while (alias && ts.isPropertyAccessExpression(alias)) alias = unwrapExpression(alias.expression);
+  const aliased = alias && ts.isIdentifier(alias) ? mockedModuleOf(alias, ctx) : undefined;
+
+  if (aliased !== undefined) modules.add(aliased);
+  // A spy on a global object or prototype (`vi.spyOn(Element.prototype, 'scrollIntoView')`), kept in a local.
   const values = [
     ...(variableInitializer(declaration) ? [variableInitializer(declaration) as ts.Expression] : []),
     ...assignmentsTo(root.symbol, source, checker),

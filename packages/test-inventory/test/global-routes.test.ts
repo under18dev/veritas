@@ -189,6 +189,20 @@ describe('links through globals and mocked modules', () => {
         vi.mock('../src/tabs.js', () => ({ useTabs: () => ({ removeTabs: h.removeTabs }) }));
         const mockStore = { set: vi.fn() };
         beforeEach(() => { vi.mocked(load).mockResolvedValue(mockStore as never); });
+        const mockLoad = vi.mocked(load);
+        it('alias of a mocked export', async () => {
+          await save('x');
+          expect(mockLoad).toHaveBeenCalled();
+        });
+        const plainAlias = load;
+        it('plain alias of a mocked export', async () => {
+          await save('x');
+          expect(plainAlias).toHaveBeenCalled();
+        });
+        it('alias, code not loading the module', () => {
+          idle();
+          expect(plainAlias).not.toHaveBeenCalled();
+        });
         it('returned object', async () => {
           await save('x');
           expect(mockStore.set).toHaveBeenCalledWith('k', 'x');
@@ -208,6 +222,9 @@ describe('links through globals and mocked modules', () => {
       `,
     );
 
+    expect(byName('alias of a mocked export')).toBe(true);
+    expect(byName('plain alias of a mocked export')).toBe(true);
+    expect(byName('alias, code not loading the module')).toBe(false);
     expect(byName('returned object')).toBe(true);
     expect(byName('returned object, code not loading the module')).toBe(false);
     expect(byName('factory')).toBe(true);
