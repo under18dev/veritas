@@ -44,7 +44,9 @@ function listTests(root: string, config: string): string[] {
   expect(listed.status, listed.stderr).toBe(0);
 
   return (JSON.parse(listed.stdout.slice(listed.stdout.indexOf('['))) as string[])
-    .map((file) => path.relative(root, file).split(path.sep).join('/'))
+    .map((file) =>
+      path.relative(realpathSync.native(root), realpathSync.native(file)).split(path.sep).join('/'),
+    )
     .sort();
 }
 

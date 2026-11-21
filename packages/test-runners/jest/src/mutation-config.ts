@@ -73,6 +73,32 @@ export function mutationUnsupportedReason(root: string): string | null {
 }
 
 /**
+ * The part of a generated config that limits Jest to `files`. Jest matches `testRegex` against each test's real path
+ * in the platform's form, so every file is matched in the form given and in its real long form (on Windows a short
+ * 8.3 name may stand for it), with either separator and either case of the drive letter.
+ */
+const SELECT_TESTS = String.raw`if (files !== null) {
+  const escape = (s) => s.replace(/[.*+?^{}$()|[\]\\]/g, '\\$&');
+  const real = (f) => {
+    try {
+      return realpathSync.native(f);
+    } catch {
+      return f;
+    }
+  };
+  const drive = (part) => '[' + part[0].toUpperCase() + part[0].toLowerCase() + ']:';
+  const pattern = (f) =>
+    '^' +
+    f
+      .split(/[\\/]/)
+      .map((part, i) => (i === 0 && /^[A-Za-z]:$/.test(part) ? drive(part) : escape(part)))
+      .join('[\\\\/]') +
+    '$';
+  delete config.testMatch;
+  config.testRegex = [...new Set(files.flatMap((f) => [f, real(f)]))].map(pattern);
+}`;
+
+/**
  * Write a Jest config for one mutation run that is the project's own (its config file, or the `jest` key of
  * package.json), with `rootDir` made absolute because the file lives outside the project root, and, with `testFiles`
  * (POSIX, relative to `root`), limited to those tests: mutator runs its baseline and every mutant with the tests this
@@ -90,7 +116,7 @@ export function writeMutationJestConfig(options: {
   const lines = [
     '// Written by Veritas for one mutation run: the project Jest config, limited to the tests that',
     '// import the mutated code. Safe to delete.',
-    "import { readFileSync } from 'node:fs';",
+    "import { readFileSync, realpathSync } from 'node:fs';",
     "import path from 'node:path';",
     `const projectDir = ${JSON.stringify(root)};`,
     `const baseFile = ${JSON.stringify(base)};`,
@@ -108,11 +134,7 @@ export function writeMutationJestConfig(options: {
     'base = (await base) ?? {};',
     'const baseDir = baseFile === null ? projectDir : path.dirname(baseFile);',
     'const config = { ...base, rootDir: base.rootDir ? path.resolve(baseDir, base.rootDir) : baseDir };',
-    'if (files !== null) {',
-    "  const escape = (s) => s.replace(/[.*+?^{}$()|[\\]\\\\]/g, '\\\\$&');",
-    '  delete config.testMatch;',
-    '  config.testRegex = files.map((f) => "^" + escape(f) + "$");',
-    '}',
+    SELECT_TESTS,
     'export default config;',
     '',
   ];
