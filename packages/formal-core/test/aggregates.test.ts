@@ -120,7 +120,10 @@ describe('records and arrays in the formal subset', () => {
         /outside the supported subset/,
       ],
       ['export function f(o: { a?: number }): number { return 1; }', /optional property/],
-      ['export function f(o: { a: string }): number { return 1; }', /number or boolean/],
+      [
+        'export function f(o: { a: string | null }): number { return 1; }',
+        /^property a of parameter o must be annotated as number or boolean \(declared string \| null\)$/,
+      ],
       ['export function f(xs: number[]): number { return xs[5]; }', /beyond the 3 element slot/],
       ['export function f(o: { a: number }): number { const p = o; return p.a; }', /can only be read/],
     ];

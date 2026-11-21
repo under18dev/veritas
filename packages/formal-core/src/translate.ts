@@ -76,7 +76,8 @@ function sortOfType(node: ts.TypeNode | undefined, what: string, owner: ts.Node)
   if (node?.kind === ts.SyntaxKind.NumberKeyword) return 'int';
 
   if (node?.kind === ts.SyntaxKind.BooleanKeyword) return 'bool';
-  throw new Unsupported(node ?? owner, 'type', `${what} must be annotated as number or boolean`);
+  const declared = node ? ` (declared ${node.getText()})` : '';
+  throw new Unsupported(node ?? owner, 'type', `${what} must be annotated as number or boolean${declared}`);
 }
 
 type ParamShape =
@@ -100,7 +101,7 @@ function recordFields(
     if (!/^[A-Za-z_$][\w$]*$/.test(m.name.text))
       throw new Unsupported(m, 'record', `${what}: property name ${m.name.text} is not a plain identifier`);
 
-    return { key: m.name.text, sort: sortOfType(m.type, `${what}.${m.name.text}`, m) };
+    return { key: m.name.text, sort: sortOfType(m.type, `property ${m.name.text} of ${what}`, m) };
   });
 
   if (fields.length === 0) throw new Unsupported(owner, 'record', `${what} has no properties`);
