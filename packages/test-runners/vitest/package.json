@@ -1,0 +1,27 @@
+{
+  "name": "@under18dev/veritas-test-runner-vitest",
+  "version": "0.2.1",
+  "description": "Vitest provider for the Veritas test runner interface",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/under18dev/veritas.git",
+    "directory": "packages/test-runners/vitest"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@under18dev/veritas-core": "workspace:*"
+  }
+}

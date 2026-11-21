@@ -1,5 +1,5 @@
 // Lists the workspace package directories under packages/ from the globs in pnpm-workspace.yaml
-// (`packages/*`, `packages/llm-providers/*`, ...). Fixtures are not packages to publish.
+// (`packages/*`, `packages/llm-providers/*`, `packages/test-runners/*`, ...). Fixtures are not packages to publish.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 

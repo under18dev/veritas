@@ -65,6 +65,9 @@
       "path": "packages/llm-providers/openai"
     },
     {
+      "path": "packages/test-runners/vitest"
+    },
+    {
       "path": "packages/solver-lean"
     },
     {

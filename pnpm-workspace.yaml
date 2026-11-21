@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - packages/llm-providers/*
+  - packages/test-runners/*
   - fixtures/*
 allowBuilds:
   esbuild: false
