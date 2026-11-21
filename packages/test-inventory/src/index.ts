@@ -462,6 +462,27 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
         sourcesOf([node.expression]),
       );
 
+    // `acquire().then(() => { values.push(3); })`: a continuation runs with the result of the call it follows,
+    // so what it writes and the value it receives are outputs of that call.
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      CONTINUATIONS.has(node.expression.name.text)
+    ) {
+      const sources = sourcesOf([node.expression.expression]);
+
+      for (const argument of sources.length > 0 ? node.arguments : []) {
+        const continuation = skipParens(argument);
+
+        if (!isFunctionLike(continuation)) continue;
+        bind(writtenOuterIdentifiers(continuation, checker), sources, true);
+        bind(
+          continuation.parameters.flatMap((parameter) => bindingIdentifiers(parameter.name)),
+          sources,
+        );
+      }
+    }
+
     if (!isInvocation(node)) continue;
 
     if (record(node)) bindCallOutputs(node);
@@ -505,6 +526,9 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
   }
   return { calls, assertions, asserted, unresolvedImports, helperAsserts, opaque, returned };
 }
+
+/** Promise methods whose callbacks run with the settled result of what they are called on. */
+const CONTINUATIONS = new Set(['then', 'catch', 'finally']);
 
 /**
  * The project symbols a call reaches: directly, through a function defined in test code, or as a method of a

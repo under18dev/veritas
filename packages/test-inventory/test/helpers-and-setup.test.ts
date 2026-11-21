@@ -402,6 +402,46 @@ export function debounce(options: { delay?: number }, f: () => void): () => void
     expect(get('proxy never handed over').asserted).toBe(false);
   });
 
+  it('links what a continuation of a project call writes or receives', () => {
+    const get = inventory(
+      `${header}
+      import { Gate, load } from '../src/gate.js';
+      it('then writes', async () => {
+        const values: number[] = [];
+        const gate = new Gate();
+        gate.acquire().then(() => { values.push(3); });
+        await gate.flush();
+        expect(values).toEqual([3]);
+      });
+      it('then receives', async () => {
+        await load().then((value) => { expect(value).toBe(1); });
+      });
+      it('catch on a stored promise', async () => {
+        let failed = false;
+        const pending = load();
+        await pending.catch(() => { failed = true; });
+        expect(failed).toBe(false);
+      });
+      it('continuation of something else', async () => {
+        const values: number[] = [];
+        load();
+        await Promise.resolve().then(() => { values.push(1); });
+        expect(values).toEqual([1]);
+      });
+    `,
+      {
+        'src/gate.ts': `
+export class Gate { async acquire(): Promise<void> {} async flush(): Promise<void> {} }
+export async function load(): Promise<number> { return 1; }
+`,
+      },
+    );
+    expect(get('then writes').asserted).toBe(true);
+    expect(get('then receives').asserted).toBe(true);
+    expect(get('catch on a stored promise').asserted).toBe(true);
+    expect(get('continuation of something else').asserted).toBe(false);
+  });
+
   it('links counters a callback increments and locals that store project results', () => {
     const extra = {
       'src/fns.ts': `export function each(items: number[], cb: () => void) { for (const _ of items) cb(); }
