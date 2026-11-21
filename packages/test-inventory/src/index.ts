@@ -5932,6 +5932,14 @@ function testSideReach(body: ts.Node | undefined, ctx: Ctx): Reach {
   return reach;
 }
 
+/** A module file for reports: relative to the root, or from the package name for a dependency. */
+function moduleLabel(file: string, ctx: Ctx): string {
+  const relative = toPosixRelative(ctx.root, file);
+  const index = relative.lastIndexOf('node_modules/');
+
+  return index < 0 ? relative : relative.slice(index + 'node_modules/'.length);
+}
+
 /**
  * How project code could reach a mock the test checks without being handed it: through a module the file mocks (an
  * import from it, its mock factory or a mocked function's result holding the mock), a global holding it
@@ -5942,7 +5950,7 @@ function mockRoutes(root: MockReference & { identifier: ts.Identifier }, ctx: Ct
   const routes: Route[] = [];
   const moduleRoute = (file: string) => {
     if (!routes.some((route) => route.kind === 'module' && route.file === file))
-      routes.push({ kind: 'module', file, label: `mocked module ${toPosixRelative(ctx.root, file)}` });
+      routes.push({ kind: 'module', file, label: `mocked module ${moduleLabel(file, ctx)}` });
   };
   const imported = mockedModuleOf(root.identifier, ctx);
 
