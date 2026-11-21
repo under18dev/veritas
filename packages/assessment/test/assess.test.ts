@@ -248,6 +248,13 @@ describe('assessTest', () => {
     expect(a.rationale.join(' ')).toMatch(/checks only TypeScript types/);
   });
 
+  it('is inconclusive when the test is expected to fail, whatever its kills', () => {
+    const t = testCase({ id: 'T-a', targetCalls: [call(['1000'])], modifiers: ['expected_failure'] });
+    const a = assessTest(t, input({ mutants: [mutant('M-1', 'killed', ['T-a'], ['T-a'])] }));
+    expect(a.outcome).toBe('inconclusive');
+    expect(a.rationale.join(' ')).toMatch(/expected to fail/);
+  });
+
   it('still calls a constant assertion tautological when an import is also unresolved', () => {
     const t = testCase({
       id: 'T-a',

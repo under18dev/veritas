@@ -34,6 +34,12 @@ export interface FeatureStatus {
   feature: string;
   state: 'enabled' | 'degraded' | 'disabled';
   missing: CapabilityName[];
+  /**
+   * Required capabilities that work only in part and make the feature degraded although nothing is missing; only the
+   * mutator is such a capability, when mutation with the project's test runner is experimental (Jest). Absent when
+   * empty.
+   */
+  partial?: CapabilityName[];
 }
 
 export interface DoctorReport {
@@ -167,18 +173,26 @@ export async function runDoctor(
   );
 
   const mutator = packageVersion(root, '@mizchi/mutator', bundled);
-  const { minMajor, mutatorRunner } = runner.mutation;
+  const { minMajor, mutatorRunner, experimental } = runner.mutation;
   const tooOld = minMajor !== null && (majorVersion(runnerVersion) ?? minMajor) < minMajor;
+  const unsupported =
+    mutator.version && mutatorRunner !== null && !tooOld ? runner.mutation.unsupportedReason(root) : null;
   add(
     'mutator',
-    mutator.version && mutatorRunner !== null && !tooOld ? 'available' : 'unavailable',
+    !mutator.version || mutatorRunner === null || tooOld || unsupported !== null
+      ? 'unavailable'
+      : experimental !== null
+        ? 'degraded'
+        : 'available',
     !mutator.version
       ? '@mizchi/mutator not installed'
       : mutatorRunner === null
         ? `@mizchi/mutator cannot run ${runner.displayName} tests`
         : tooOld
           ? `@mizchi/mutator needs ${runner.displayName} ${minMajor} or later; the project has ${runner.displayName} ${runnerVersion}`
-          : `@mizchi/mutator resolved from ${mutator.from}`,
+          : unsupported !== null
+            ? unsupported
+            : `@mizchi/mutator resolved from ${mutator.from}${experimental !== null ? `; experimental: ${experimental}` : ''}`,
     mutator.version,
   );
 
@@ -250,11 +264,19 @@ export async function runDoctor(
   const statuses: FeatureStatus[] = Object.entries(features).map(([feature, deps]) => {
     const missingRequired = deps.required.filter((n) => !usable(n));
     const missingOptional = deps.optional.filter((n) => stateOf.get(n) !== 'available');
+    // An experimental mutator (mutation with Jest) works only in part, so the features that need it are degraded.
+    // Other required capabilities that are degraded keep counting as usable, as they always have.
+    const partial = deps.required.filter((n) => n === 'mutator' && stateOf.get(n) === 'degraded');
 
     return {
       feature,
-      state: missingRequired.length ? 'disabled' : missingOptional.length ? 'degraded' : 'enabled',
+      state: missingRequired.length
+        ? 'disabled'
+        : missingOptional.length || partial.length
+          ? 'degraded'
+          : 'enabled',
       missing: [...missingRequired, ...missingOptional],
+      ...(partial.length > 0 && missingRequired.length === 0 ? { partial } : {}),
     };
   });
 

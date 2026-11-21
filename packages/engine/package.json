@@ -39,6 +39,7 @@
     "@under18dev/veritas-solver-z3": "workspace:*",
     "@under18dev/veritas-spec-discovery": "workspace:*",
     "@under18dev/veritas-test-inventory": "workspace:*",
+    "@under18dev/veritas-test-runner-jest": "workspace:*",
     "@under18dev/veritas-test-runner-vitest": "workspace:*",
     "zod": "4.6.7"
   }

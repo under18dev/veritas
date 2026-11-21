@@ -59,7 +59,8 @@
           "only",
           "todo",
           "concurrent",
-          "each"
+          "each",
+          "expected_failure"
         ]
       }
     },

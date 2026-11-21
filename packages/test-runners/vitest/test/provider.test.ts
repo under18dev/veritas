@@ -11,14 +11,16 @@ describe('vitestTestRunner', () => {
   });
 
   it('writes the imports and assertions of generated tests', () => {
-    expect(vitestTestRunner.templates.imports(['it', 'describe'])).toEqual([
+    expect(vitestTestRunner.templates(process.cwd()).imports(['it', 'describe'])).toEqual([
       "import { describe, it } from 'vitest';",
     ]);
-    expect(vitestTestRunner.templates.imports(['it', 'expect', 'it'])).toEqual([
+    expect(vitestTestRunner.templates(process.cwd()).imports(['it', 'expect', 'it'])).toEqual([
       "import { expect, it } from 'vitest';",
     ]);
-    expect(vitestTestRunner.templates.imports([])).toEqual([]);
-    expect(vitestTestRunner.templates.expectToBe('f(1n)', '2n')).toBe('expect(f(1n)).toBe(2n);');
+    expect(vitestTestRunner.templates(process.cwd()).imports([])).toEqual([]);
+    expect(vitestTestRunner.templates(process.cwd()).expectToBe('f(1n)', '2n')).toBe(
+      'expect(f(1n)).toBe(2n);',
+    );
   });
 
   it('refuses test file filters that read as options or leave the directory', async () => {

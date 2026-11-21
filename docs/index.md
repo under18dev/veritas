@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Veritas
   text: What does your test actually guarantee?
-  tagline: Specification-aware test verification for TypeScript and Vitest. It answers with mutants, counterexamples and proofs instead of a score.
+  tagline: Specification-aware test verification for TypeScript with Vitest or Jest. It answers with mutants, counterexamples and proofs instead of a score.
   actions:
     - theme: brand
       text: Get started

@@ -520,7 +520,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
     files.push({
       operation: 'add',
       path: file,
-      content: renderTestFile(file, propertyId, group, testRunner.templates),
+      content: renderTestFile(file, propertyId, group, testRunner.templates(root)),
     });
 
     for (const t of group) fileByTest.set(t.id, file);

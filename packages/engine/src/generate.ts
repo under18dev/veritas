@@ -36,7 +36,7 @@ export async function generateTests(
       'run `veritas spec show <id>` to see why',
     );
   }
-  const { templates } = testRunnerFor(config);
+  const templates = testRunnerFor(config).templates(root);
   const outDir = path.join('.veritas', 'generated-tests');
   const generated = selected.map((p) => {
     const { file, name } = parseSymbolId(p.targetSymbols[0] as string);

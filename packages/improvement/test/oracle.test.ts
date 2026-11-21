@@ -126,7 +126,7 @@ describe('rendering', () => {
           derivation: 'x',
         },
       ],
-      vitest.templates,
+      vitest.templates(process.cwd()),
     );
     expect(content).toContain('import { isSenior } from "../src/age.js";');
     expect(content).toContain('expect(isSenior(65)).toBe(true);');
@@ -154,7 +154,7 @@ describe('rendering', () => {
             derivation: 'x',
           },
         ],
-        vitest.templates,
+        vitest.templates(process.cwd()),
       ),
     ).toThrow();
   });

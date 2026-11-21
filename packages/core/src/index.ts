@@ -13,6 +13,7 @@ export * from './project/detect.js';
 export * from './project/doctor.js';
 export * from './project/init.js';
 export * from './project/llm.js';
+export * from './project/test-runner-detect.js';
 export * from './redact.js';
 export * from './run-context.js';
 export * from './sandbox.js';

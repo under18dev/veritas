@@ -43,11 +43,11 @@ jobs:
 
 - `permissions: contents: read` と `persist-credentials: false` により、ジョブのトークンは読み取り専用になり、チェックアウトにも保存されません。このジョブではプルリクエストのコードが動くので、push や秘密情報の読み取りができないようにしておく必要があります。
 - `fetch-depth: 0` で履歴を取得し、プルリクエストのベースのコミットを使えるようにします。Action は `git diff <since>...HEAD` で変更されたファイルを列挙し、mutation testing の対象を変更に絞ります。
-- `pnpm/action-setup` と `pnpm install` で、プロジェクトの依存パッケージをインストールします。mutation testing はプロジェクト自身の Vitest のテストを実行するためです。ほかのパッケージマネージャーを使う場合は、そのインストールコマンドに置き換えてください。
+- `pnpm/action-setup` と `pnpm install` で、プロジェクトの依存パッケージをインストールします。mutation testing はプロジェクト自身のテストをそのテストランナーで実行するためです。ほかのパッケージマネージャーを使う場合は、そのインストールコマンドに置き換えてください。
 - `actions/setup-node` で、Action が使う Node.js を用意します（後述）。Node.js 25 以上を使ってください（例では 26）。
 - `upload-artifact` に `if: always()` を付けると、Veritas のステップが失敗しても `.veritas/runs` が残り、失敗した実行の根拠を確かめたり、手元で再実行したりできます。保存期間も指定してください。
 
-解析には、コミット済みの `.veritas/config.json` が必要です（`veritas init` で作ります）。設定がないまま解析まで進むと、Action は `CONFIG_MISSING`（終了コード 2）で失敗します。ドキュメントだけの変更は、設定を読む前に終わります。解析できないプロジェクト（`package.json` がない、または Vitest がない）でも設定は必須ではなく、有効な設定があれば `policy.inconclusiveBehavior` だけを使います。
+解析には、コミット済みの `.veritas/config.json` が必要です（`veritas init` で作ります）。設定がないまま解析まで進むと、Action は `CONFIG_MISSING`（終了コード 2）で失敗します。ドキュメントだけの変更は、設定を読む前に終わります。解析できないプロジェクト（`package.json` がない、またはテストランナーがない）でも設定は必須ではなく、有効な設定があれば `policy.inconclusiveBehavior` だけを使います。
 
 ## バージョンと Node.js
 
@@ -67,7 +67,7 @@ composite action なので、Action に同梱したランタイムではなく�
 
 実行は常にオフラインで、設定にかかわらず GitHub や Web のソースも LLM も使いません。`inconclusive` の効き方は次のとおりです。
 
-- 分析を実行できないとき（`package.json` がない、Vitest が使えない）は、この値だけで決まります。`fail` なら終了コード 4、`warn` と `ignore` なら 0 です。
+- 分析を実行できないとき（`package.json` がない、テストランナーが使えない）は、この値だけで決まります。`fail` なら終了コード 4、`warn` と `ignore` なら 0 です。
 - 分析を実行したあとは、`fail` なら判定できない結果が 1 つでもあれば verdict を `inconclusive`（終了コード 4）にします。
 - `warn` や `ignore` で設定を緩めることはできません。設定が `policy.inconclusiveBehavior: "fail"` なら、判定できない結果は終了コード 4 になります。
 
@@ -123,7 +123,7 @@ verdict は CLI と同じです（[CLI リファレンス](/ja/reference/cli#ver
 
 変更されたファイルがすべて Markdown、`docs/` の下のファイル、画像（`png`、`jpg`、`jpeg`、`gif`、`svg`、`webp`、`bmp`、`ico`）のいずれかなら、Action は分析を省略します。`verdict` は `skipped`、終了コードは `0` です。
 
-プロジェクトに `package.json` がないとき、または Vitest が使えないときは、Action は実行せずに `verdict: inconclusive` を報告します。終了コードは `warn` と `ignore` では `0`、`fail` では `4` です。理由はステップの要約に書きます。
+プロジェクトに `package.json` がないとき、またはテストランナーが使えないときは、Action は実行せずに `verdict: inconclusive` を報告します。終了コードは `warn` と `ignore` では `0`、`fail` では `4` です。理由はステップの要約に書きます。
 
 ## ステップの要約
 

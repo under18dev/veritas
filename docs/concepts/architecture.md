@@ -27,32 +27,33 @@ Evidence collectors  Code intelligence  Test inventory
 
 ## Packages
 
-| Package                    | Responsibility                                                                                                                                                                   |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `core`                     | Domain schemas, Property IR, artifact store, cache, IDs, policy, exit codes, process runner, path safety, redaction, project detection, `init`/`doctor`                          |
-| `cli`                      | `veritas` and `veritas-mcp` executables, published as `@under18dev/veritas`; parses arguments and calls package APIs                                                             |
-| `engine`                   | Orchestrator and Node API: runs stages, persists run artifacts, reports, `explain`, spec helpers; shared by the CLI, MCP server and GitHub Action                                |
-| `spec-discovery`           | Evidence collectors (local, GitHub, web), provenance graph, normative statement extraction                                                                                       |
-| `code-intelligence`        | TypeScript analysis: exports, signatures, branches, boundaries, side effects                                                                                                     |
-| `property-engine`          | Property registry, review state machine, conflicts, approvals                                                                                                                    |
-| `test-inventory`           | Test discovery, assertion analysis, test-symbol-property graph, using the test API names of the test runner                                                                      |
-| `mutation-adapter`         | Runs the mutation backend and normalizes results                                                                                                                                 |
-| `property-testing`         | fast-check generators, seeds, shrinking, replay                                                                                                                                  |
-| `formal-core`              | TypeScript subset to Property IR, claims, semantic validation                                                                                                                    |
-| `solver-z3`, `solver-lean` | Solver backends                                                                                                                                                                  |
-| `assessment`               | Evidence vectors and test outcomes                                                                                                                                               |
-| `improvement`              | Plans, approved patches in isolated workspaces, rollback                                                                                                                         |
-| `llm`, `llm-providers/*`   | Provider-neutral LLM interface and one adapter per provider: `llm-providers/claude` (Anthropic API), `claude-code` (Claude Code CLI), `openai` (OpenAI API), `codex` (Codex CLI) |
-| `test-runners/*`           | One provider per test runner, implementing `TestRunnerProvider` from `core`: detection, test API names, test runs, mutation glue, generated-test syntax (now `vitest`)           |
-| `reports`                  | Text, JSON, Markdown, HTML, SARIF                                                                                                                                                |
-| `mcp`                      | MCP server                                                                                                                                                                       |
-| `github-action`            | CI integration                                                                                                                                                                   |
+| Package                    | Responsibility                                                                                                                                                                                                                            |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core`                     | Domain schemas, Property IR, artifact store, cache, IDs, policy, exit codes, process runner, path safety, redaction, project detection, `init`/`doctor`                                                                                   |
+| `cli`                      | `veritas` and `veritas-mcp` executables, published as `@under18dev/veritas`; parses arguments and calls package APIs                                                                                                                      |
+| `engine`                   | Orchestrator and Node API: runs stages, persists run artifacts, reports, `explain`, spec helpers; shared by the CLI, MCP server and GitHub Action                                                                                         |
+| `spec-discovery`           | Evidence collectors (local, GitHub, web), provenance graph, normative statement extraction                                                                                                                                                |
+| `code-intelligence`        | TypeScript analysis: exports, signatures, branches, boundaries, side effects                                                                                                                                                              |
+| `property-engine`          | Property registry, review state machine, conflicts, approvals                                                                                                                                                                             |
+| `test-inventory`           | Test discovery, assertion analysis, test-symbol-property graph, using the test API names of the test runner                                                                                                                               |
+| `mutation-adapter`         | Runs the mutation backend and normalizes results                                                                                                                                                                                          |
+| `property-testing`         | fast-check generators, seeds, shrinking, replay                                                                                                                                                                                           |
+| `formal-core`              | TypeScript subset to Property IR, claims, semantic validation                                                                                                                                                                             |
+| `solver-z3`, `solver-lean` | Solver backends                                                                                                                                                                                                                           |
+| `assessment`               | Evidence vectors and test outcomes                                                                                                                                                                                                        |
+| `improvement`              | Plans, approved patches in isolated workspaces, rollback                                                                                                                                                                                  |
+| `llm`, `llm-providers/*`   | Provider-neutral LLM interface and one adapter per provider: `llm-providers/claude` (Anthropic API), `claude-code` (Claude Code CLI), `openai` (OpenAI API), `codex` (Codex CLI)                                                          |
+| `test-runners/*`           | One provider per test runner, implementing `TestRunnerProvider` from `core`: detection, test API names, how a test's full name is written, test runs, mutation glue, generated-test syntax. `test-runners/vitest` and `test-runners/jest` |
+| `reports`                  | Text, JSON, Markdown, HTML, SARIF                                                                                                                                                                                                         |
+| `mcp`                      | MCP server                                                                                                                                                                                                                                |
+| `github-action`            | CI integration                                                                                                                                                                                                                            |
 
 What each part supports is listed in the [support matrix](/concepts/support-matrix).
 
 ## How the pieces fit
 
 - The CLI, the Node API, the MCP server and the GitHub Action call the same package functions. A command and its API function or MCP tool run the same stages and write the same files; for example, `veritas analyze`, `analyze()` and the `analyze_tests` tool.
+- The test runner is chosen once per run, from `analysis.testFramework` (or, before `init`, from what detection finds), and every runner-specific step goes through its provider: test-inventory reads tests with its API names, mutation runs mutator with its runner and config, `improve` runs the tests with it, and generated tests use its syntax. Code outside `test-runners/*` does not name a runner.
 - Each stage reports its own result. A stage that throws ends as `error`, stages that depend on a failed stage are `skipped`, and no stage reports success for another one.
 
 ## Storage

@@ -357,17 +357,23 @@ async function runInContext(
     return changedSince;
   };
   const testRunner = testRunnerFor(config);
-  const mutationTestFiles = (mapped: TestInventory | undefined): string[] | undefined => {
+  /** The test inventory the map stage made, or one made now when it has not run; undefined when it cannot be made. */
+  const mutationInventory = (mapped: TestInventory | undefined): TestInventory | undefined => {
+    try {
+      return mapped ?? inventoryTests({ root, config, recognition: testRunner.recognitionFor(root) });
+    } catch {
+      return undefined;
+    }
+  };
+  const mutationTestFiles = (inventory: TestInventory | undefined): string[] | undefined => {
     // With --since, mutator only mutates what changed, so only tests that reach a changed file can kill a mutant.
     const changed = changedSinceFiles();
     const scope = options.scope?.length ? options.scope : changed?.length ? changed : undefined;
 
+    if (!inventory) return undefined;
+
     try {
-      return selectMutationTestFiles(
-        mapped ?? inventoryTests({ root, config, recognition: testRunner.recognition }),
-        config,
-        scope,
-      );
+      return selectMutationTestFiles(inventory, config, scope);
     } catch {
       return undefined;
     }
@@ -449,6 +455,7 @@ async function runInContext(
         testFiles: selection.testFiles,
         killMatrix: true,
         mutantsPerLine: CONFIRMATION_MUTANTS_PER_LINE,
+        tests: inventory.tests,
       }));
 
     if (!cached && cache && cacheKey && cacheableMutationResult(run)) cache.set('mutation', cacheKey, run);
@@ -668,7 +675,7 @@ async function runInContext(
     name: 'map',
     dependsOn: [],
     run: async () => {
-      const inventory = inventoryTests({ root, config, recognition: testRunner.recognition });
+      const inventory = inventoryTests({ root, config, recognition: testRunner.recognitionFor(root) });
 
       return {
         status: 'succeeded',
@@ -706,8 +713,8 @@ async function runInContext(
         };
       }
       const started = Date.now();
-      const mapped = ctx.outputs.get('map') as TestInventory | undefined;
-      const testFiles = mutationTestFiles(mapped);
+      const inventory = mutationInventory(ctx.outputs.get('map') as TestInventory | undefined);
+      const testFiles = mutationTestFiles(inventory);
       const cacheKey = cache
         ? mutationCacheKey(cache, root, {
             configHash,
@@ -727,8 +734,8 @@ async function runInContext(
         !options.killMatrix &&
         !cached &&
         config.mutation.timeoutMs * (1 - MAIN_RUN_BUDGET_SHARE) >= MIN_CONFIRMATION_MS * 2 &&
-        mapped !== undefined &&
-        selectConfirmation(mapped, [], config, options.scope).testIds.length > 0;
+        inventory !== undefined &&
+        selectConfirmation(inventory, [], config, options.scope).testIds.length > 0;
       const result =
         cached ??
         (await runMutation({
@@ -744,6 +751,7 @@ async function runInContext(
           ...(options.scope ? { scope: options.scope } : {}),
           ...(options.killMatrix ? { killMatrix: true } : {}),
           ...(testFiles ? { testFiles } : {}),
+          ...(inventory ? { tests: inventory.tests } : {}),
         }));
 
       // Only a complete mutation run is reused; a failed or unsupported one, or one that left files out, is run again.
@@ -768,7 +776,7 @@ async function runInContext(
       const external = cached ? [] : store.recordExternal('mutation');
       const confirmed = await confirmDisconnected(
         result,
-        mapped,
+        inventory,
         config.mutation.timeoutMs - (Date.now() - started),
       );
 

@@ -1,8 +1,11 @@
 import { z } from 'zod';
 import { IntLiteral } from '../schema/ir.js';
 
+/** The test runners Veritas supports; each one has a test runner provider (see `TestRunnerProvider`). */
+export const TEST_FRAMEWORKS = ['vitest', 'jest'] as const;
+
 /** The test runner a project uses; each one has a test runner provider (see `TestRunnerProvider`). */
-export const TestFramework = z.literal('vitest');
+export const TestFramework = z.enum(TEST_FRAMEWORKS);
 export type TestFramework = z.infer<typeof TestFramework>;
 
 const Domain = z.string().regex(/^[a-z0-9.-]+$/i, 'expected a bare domain name such as docs.example.com');
@@ -142,7 +145,9 @@ export const VeritasConfig = z
           .array(z.string())
           .default(['**/*.{test,spec}.{ts,tsx,js,mjs}'])
           .describe('Glob patterns of the test files.'),
-        testFramework: TestFramework.default('vitest').describe('Test framework; only Vitest is supported.'),
+        testFramework: TestFramework.default('vitest').describe(
+          'Test runner of the project, which runs its tests, names their API and drives mutation testing. `veritas init` sets it from what it detects; without it, Vitest is assumed.',
+        ),
         inferSpecsFromCode: z
           .boolean()
           .default(true)

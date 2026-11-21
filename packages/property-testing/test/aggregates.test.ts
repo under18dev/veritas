@@ -136,7 +136,7 @@ describe('property-based tests over records and arrays', () => {
         seed: 7,
         numRuns: 300,
         experimental: false,
-        templates: vitest.templates,
+        templates: vitest.templates(process.cwd()),
       });
 
       if (exportName === 'discount')

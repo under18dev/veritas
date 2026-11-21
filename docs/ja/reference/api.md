@@ -129,11 +129,11 @@ const markdown = renderReport(buildReportInput('/path/to/project'), 'markdown');
 
 ## Property-based テスト
 
-| エクスポート                                                              | 対応する CLI            | 用途                                                                                        |
-| ------------------------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------- |
-| `generateTests(root, { propertyId?, dryRun?, force?, allowCodeConfig? })` | `veritas test generate` | `.veritas/generated-tests/` に Vitest と fast-check のファイルを生成し、そのファイルを返す  |
-| `replayPbt(root, pbtId, { runId?, signal? })`                             | `veritas test replay`   | 記録された property-based テストを再実行する。`reproduced` は記録どおりの結果が出たかを示す |
-| `defaultSeed(propertyId)`                                                 | なし                    | `pbt.seed` を指定しないときに Property に使う seed                                          |
+| エクスポート                                                              | 対応する CLI            | 用途                                                                                                           |
+| ------------------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `generateTests(root, { propertyId?, dryRun?, force?, allowCodeConfig? })` | `veritas test generate` | `.veritas/generated-tests/` に fast-check のテストファイルをテストランナーの書き方で生成し、そのファイルを返す |
+| `replayPbt(root, pbtId, { runId?, signal? })`                             | `veritas test replay`   | 記録された property-based テストを再実行する。`reproduced` は記録どおりの結果が出たかを示す                    |
+| `defaultSeed(propertyId)`                                                 | なし                    | `pbt.seed` を指定しないときに Property に使う seed                                                             |
 
 ## テストの改善
 
