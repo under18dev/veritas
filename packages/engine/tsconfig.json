@@ -53,6 +53,9 @@
     },
     {
       "path": "../solver-lean"
+    },
+    {
+      "path": "../test-runners/vitest"
     }
   ]
 }

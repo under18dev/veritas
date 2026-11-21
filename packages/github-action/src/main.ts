@@ -2,16 +2,16 @@
 import { appendFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitCodeFor, loadConfig, redact, resolveInsideRoot, runCommand } from '@under18dev/veritas-core';
 import {
+  bundledTools,
   detectProject,
-  exitCodeFor,
-  loadConfig,
-  redact,
-  resolveInsideRoot,
-  runCommand,
+  PROFILE_STAGES,
+  type Profile,
   runDoctor,
-} from '@under18dev/veritas-core';
-import { bundledTools, PROFILE_STAGES, type Profile, runVeritas } from '@under18dev/veritas-engine';
+  runVeritas,
+  testRunnerFor,
+} from '@under18dev/veritas-engine';
 import { planFromEvent, type RunPlan } from './event.js';
 
 const input = (name: string, fallback: string): string =>
@@ -102,17 +102,18 @@ export async function main(): Promise<number> {
 
     return 0;
   }
-  const project = detectProject(root);
   // An explicit input wins; an empty one (the default) uses the configured policy, then 'warn'.
   const configured = await loadConfig(root).catch(() => null);
+  const project = detectProject(root, configured?.config ?? null);
+  const runner = testRunnerFor(configured?.config);
   const behaviorInput =
     process.env.INPUT_INCONCLUSIVE || (configured?.config.policy.inconclusiveBehavior ?? 'warn');
 
   if (!project.hasPackageJson) return degraded('no package.json found', behaviorInput, event.fromFork);
   const doctor = await runDoctor(root, null, process.env, bundledTools());
 
-  if (!doctor.capabilities.some((cap) => cap.name === 'vitest' && cap.state !== 'unavailable'))
-    return degraded('Vitest is unavailable', behaviorInput, event.fromFork);
+  if (!doctor.capabilities.some((cap) => cap.name === runner.name && cap.state !== 'unavailable'))
+    return degraded(`${runner.displayName} is unavailable`, behaviorInput, event.fromFork);
   const profile = input('profile', 'standard') as Profile;
 
   if (!PROFILE_STAGES[profile]) throw new Error(`unsupported profile: ${profile}`);

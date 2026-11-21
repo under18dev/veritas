@@ -1,9 +1,8 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { initProject } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
-import { buildReportInput, runVeritas } from '../src/index.js';
+import { buildReportInput, initProject, runVeritas } from '../src/index.js';
 
 function project(): string {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-engine-report-')));

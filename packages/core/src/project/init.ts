@@ -4,6 +4,7 @@ import { CODE_CONFIGS, JSON_CONFIG } from '../config/load.js';
 import { VeritasConfig as ConfigSchema, type VeritasConfig } from '../config/schema.js';
 import { VeritasError } from '../exit-codes.js';
 import { resolveInsideRoot } from '../paths.js';
+import type { TestRunnerProvider } from '../test-runner.js';
 import { detectProject, type ProjectInfo } from './detect.js';
 
 export interface InitOptions {
@@ -31,8 +32,8 @@ export function proposeConfig(project: ProjectInfo): VeritasConfig {
 }
 
 /** Detect the project and write `.veritas/config.json`. Never overwrites without `force`. */
-export function initProject(root: string, options: InitOptions = {}): InitResult {
-  const project = detectProject(root);
+export function initProject(root: string, runner: TestRunnerProvider, options: InitOptions = {}): InitResult {
+  const project = detectProject(root, runner);
 
   if (!project.hasPackageJson) {
     throw new VeritasError(
@@ -43,12 +44,12 @@ export function initProject(root: string, options: InitOptions = {}): InitResult
     );
   }
 
-  if (!project.vitest.declared && !project.vitest.installedVersion) {
+  if (!project.testRunner.declared && !project.testRunner.installedVersion) {
     throw new VeritasError(
       'user',
-      'VITEST_NOT_FOUND',
-      'Vitest is not declared in package.json and not installed; Veritas currently supports Vitest projects only',
-      `install it with \`${project.packageManager === 'unknown' ? 'npm' : project.packageManager} add -D vitest\` and rerun \`veritas init\``,
+      `${runner.name.toUpperCase()}_NOT_FOUND`,
+      `${runner.displayName} is not declared in package.json and not installed; Veritas currently supports ${runner.displayName} projects only`,
+      `install it with \`${project.packageManager === 'unknown' ? 'npm' : project.packageManager} add -D ${runner.detection.packageName}\` and rerun \`veritas init\``,
     );
   }
   // Refuse a `.veritas` (or config.json) symlink that points outside the project instead of writing through it.
@@ -76,7 +77,8 @@ export function initProject(root: string, options: InitOptions = {}): InitResult
   const config = options.config ? ConfigSchema.parse(options.config) : proposeConfig(project);
   const nextSteps = ['veritas doctor', 'veritas discover --offline', 'veritas run --profile quick --offline'];
 
-  if (!project.vitest.installedVersion) nextSteps.unshift('install dependencies so Vitest can be resolved');
+  if (!project.testRunner.installedVersion)
+    nextSteps.unshift(`install dependencies so ${runner.displayName} can be resolved`);
 
   if (!project.git) nextSteps.push('initialise git to enable --since and reproducible run metadata');
 
