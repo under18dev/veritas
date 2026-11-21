@@ -759,11 +759,11 @@ async function runInContext(
         cache.set('mutation', cacheKey, result);
 
       if (cached) result.rawReportPath = null;
-      // Tests were chosen by the changed files, so mutator calls a mutant of an unchanged file "no coverage". It
-      // was outside --since and not run: pending, as without the narrower test selection.
       // The mutants mutator itself left unrun, before --since relabels others as pending.
       const budgetBefore = result.timeBudgetExhausted?.notRun;
       const unrun = result.mutants.filter((m) => m.status === 'pending').map((m) => m.id);
+      // Tests were chosen by the changed files, so mutator calls a mutant of an unchanged file "no coverage". It
+      // was outside --since and not run: pending, as without the narrower test selection.
       const changed = testFiles ? changedSinceFiles() : undefined;
 
       if (changed?.length) {
