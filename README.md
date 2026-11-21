@@ -4,7 +4,7 @@ Veritas checks what your tests actually guarantee. It reads the specification yo
 
 It does not claim that code is correct. Every result states what was checked, under which model and bounds, and what remains unknown.
 
-**Documentation: [under18dev.github.io/veritas](https://under18dev.github.io/veritas/)** ([日本語](https://under18dev.github.io/veritas/ja/))
+**Documentation: [veritas.under18.dev](https://veritas.under18.dev/)** ([日本語](https://veritas.under18.dev/ja/))
 
 ## What it finds
 
@@ -24,11 +24,11 @@ F-99e71509e3c4  [suspected low] test "pricing works" does not check project beha
 
 ## Requirements
 
-- Node.js 24 or later. Property tests and counterexample replay run project code only under Node.js 25+, which can block its network access, unless `sandbox.allowNetworkWithoutIsolation` is set (26 LTS recommended). The project's code is trusted code: analyse untrusted repositories in a container ([guide](https://under18dev.github.io/veritas/guide/untrusted-repositories)).
+- Node.js 24 or later. Property tests and counterexample replay run project code only under Node.js 25+, which can block its network access, unless `sandbox.allowNetworkWithoutIsolation` is set (26 LTS recommended). The project's code is trusted code: analyse untrusted repositories in a container ([guide](https://veritas.under18.dev/guide/untrusted-repositories)).
 - A TypeScript/JavaScript project tested with Vitest
 - Optional: [Lean 4](https://lean-lang.org/) for kernel-checked proofs
 
-Z3 runs from the `z3-solver` package (WebAssembly); no separate install is needed. See the [support matrix](https://under18dev.github.io/veritas/concepts/support-matrix).
+Z3 runs from the `z3-solver` package (WebAssembly); no separate install is needed. See the [support matrix](https://veritas.under18.dev/concepts/support-matrix).
 
 ## Quick start
 
@@ -41,9 +41,9 @@ npx veritas report
 npx veritas explain <finding-id>
 ```
 
-The [tutorial](https://under18dev.github.io/veritas/guide/tutorial) walks through a complete example.
+The [tutorial](https://veritas.under18.dev/guide/tutorial) walks through a complete example.
 
-To use Veritas interactively, install it globally and run `veritas` without arguments in your project. It opens a [terminal UI](https://under18dev.github.io/veritas/guide/tui) for results, specifications, runs, test improvement and settings:
+To use Veritas interactively, install it globally and run `veritas` without arguments in your project. It opens a [terminal UI](https://veritas.under18.dev/guide/tui) for results, specifications, runs, test improvement and settings:
 
 ```bash
 npm install -g @under18dev/veritas
@@ -71,15 +71,15 @@ veritas
 
 `mutate --import <report.json>` normalizes an existing mutation-testing-elements report (for example from Stryker) instead of running mutator. `discover --allow-domain <domain>` and `--max-pages <n>` add to and override `sources.web` for one run; web discovery still has to be enabled in the configuration.
 
-Global options: `--json`, `-C <dir>`, `--debug` (child processes, stages and cache on stderr; also `VERITAS_DEBUG=1`), `--log-format text|json`; every run also keeps a trace in `.veritas/runs/<run-id>/trace.jsonl` (see [troubleshooting](https://under18dev.github.io/veritas/guide/troubleshooting)).
+Global options: `--json`, `-C <dir>`, `--debug` (child processes, stages and cache on stderr; also `VERITAS_DEBUG=1`), `--log-format text|json`; every run also keeps a trace in `.veritas/runs/<run-id>/trace.jsonl` (see [troubleshooting](https://veritas.under18.dev/guide/troubleshooting)).
 
 Exit codes: `0` success, `1` confirmed policy failure, `2` invalid configuration or usage, `3` tool or infrastructure error, `4` inconclusive under the configured policy. With `--json`, stdout contains only JSON, usage errors included; `report --json` cannot be combined with another `--format`.
 
-The [CLI reference](https://under18dev.github.io/veritas/reference/cli) lists every option.
+The [CLI reference](https://veritas.under18.dev/reference/cli) lists every option.
 
 ## How to read results
 
-- `proven_within_model` means no counterexample exists within the stated integer domain and assumptions. It is not a proof that the code is correct; see [semantics](https://under18dev.github.io/veritas/concepts/semantics).
+- `proven_within_model` means no counterexample exists within the stated integer domain and assumptions. It is not a proof that the code is correct; see [semantics](https://veritas.under18.dev/concepts/semantics).
 - `unknown`, `timeout`, `unsupported` and `semantic_mismatch` are never counted as success.
 - Properties inferred from code are hypotheses. Only a person can accept a specification (`veritas spec accept <id> --reason "..."`).
 - A surviving mutant is a test gap candidate, not a bug.
@@ -87,13 +87,13 @@ The [CLI reference](https://under18dev.github.io/veritas/reference/cli) lists ev
 ## Agents and MCP
 
 - Agent Skill: [`skills/veritas/SKILL.md`](skills/veritas/SKILL.md)
-- MCP server: `veritas-mcp --root <project>` ([reference](https://under18dev.github.io/veritas/reference/mcp)) (read-only analysis tools; `--allow-write` adds the tool that applies an approved improvement plan). Each client session runs its own server process over stdio; each tool that runs analysis stages writes a new run directory, at most `--max-concurrent` long operations run at once (others wait or are cancelled), and applying a plan measures it in a fresh temporary copy that is deleted afterwards.
-- GitHub Action: [reference](https://under18dev.github.io/veritas/reference/github-action)
-- Node API: [reference](https://under18dev.github.io/veritas/reference/api) (`import { analyze } from '@under18dev/veritas'`)
+- MCP server: `veritas-mcp --root <project>` ([reference](https://veritas.under18.dev/reference/mcp)) (read-only analysis tools; `--allow-write` adds the tool that applies an approved improvement plan). Each client session runs its own server process over stdio; each tool that runs analysis stages writes a new run directory, at most `--max-concurrent` long operations run at once (others wait or are cancelled), and applying a plan measures it in a fresh temporary copy that is deleted afterwards.
+- GitHub Action: [reference](https://veritas.under18.dev/reference/github-action)
+- Node API: [reference](https://veritas.under18.dev/reference/api) (`import { analyze } from '@under18dev/veritas'`)
 
 ## Documentation
 
-The documentation site is at [under18dev.github.io/veritas](https://under18dev.github.io/veritas/), in English and [Japanese](https://under18dev.github.io/veritas/ja/): [guide](https://under18dev.github.io/veritas/guide/getting-started) · [reference](https://under18dev.github.io/veritas/reference/cli) · [concepts](https://under18dev.github.io/veritas/concepts/semantics) · [ADRs](docs/adr/README.md). Its sources are in [`docs/`](docs/) (`pnpm docs:dev`).
+The documentation site is at [veritas.under18.dev](https://veritas.under18.dev/), in English and [Japanese](https://veritas.under18.dev/ja/): [guide](https://veritas.under18.dev/guide/getting-started) · [reference](https://veritas.under18.dev/reference/cli) · [concepts](https://veritas.under18.dev/concepts/semantics) · [ADRs](docs/adr/README.md). Its sources are in [`docs/`](docs/) (`pnpm docs:dev`).
 
 ## Development
 

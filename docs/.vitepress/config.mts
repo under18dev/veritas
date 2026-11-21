@@ -117,7 +117,7 @@ export default defineConfig({
   title: 'Veritas',
   description:
     'What does your test actually guarantee? Evidence-backed test verification for TypeScript and Vitest.',
-  base: '/veritas/',
+  base: '/',
   cleanUrls: true,
   // The ADR index keeps its GitHub-friendly README.md name; the generated reference fragments are only included.
   rewrites: { 'adr/README.md': 'adr/index.md' },
@@ -133,7 +133,7 @@ export default defineConfig({
   ],
   lastUpdated: true,
   head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/veritas/logo.svg' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
     ['meta', { name: 'theme-color', content: '#0f766e' }],
   ],
   themeConfig: {

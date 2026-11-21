@@ -10,6 +10,6 @@ Part of [Veritas](https://github.com/under18dev/veritas), specification-aware te
     profile: standard
 ```
 
-The action runs this package's `veritas-github-action` command with the job's Node.js. See the [GitHub Action reference](https://under18dev.github.io/veritas/reference/github-action). Source: [`packages/github-action`](https://github.com/under18dev/veritas/tree/main/packages/github-action).
+The action runs this package's `veritas-github-action` command with the job's Node.js. See the [GitHub Action reference](https://veritas.under18.dev/reference/github-action). Source: [`packages/github-action`](https://github.com/under18dev/veritas/tree/main/packages/github-action).
 
 Licensed under Apache-2.0.
