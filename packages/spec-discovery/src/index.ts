@@ -417,9 +417,11 @@ async function collectLocal(
     const rel = path.relative(root, file).split(path.sep).join('/');
     const base = path.basename(file);
     const readme = /^README(?:\.|$)/i.test(base);
+    // CHANGELOG and RELEASE documents in Markdown or text, dots allowed (`RELEASE-1.2.3.md`, `CHANGELOG.en.md`), or
+    // without an extension; not other files whose name starts so (`release-linux.yml`, `release.config.js`).
     const docs =
       (rel.startsWith('docs/') && /\.md$/i.test(base)) ||
-      /^(?:CHANGELOG|RELEASE)[^.]*(?:\.(?:md|markdown|mdx|txt|rst))?$/i.test(base);
+      /^(?:CHANGELOG|RELEASE)(?:.*\.(?:md|markdown|mdx|txt|rst)|[^.]*)$/i.test(base);
     const schema =
       /(?:\.openapi|\.schema)\.(?:json|ya?ml)$/i.test(base) || /^openapi\.(?:json|ya?ml)$/i.test(base);
     const code =
