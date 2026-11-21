@@ -1,4 +1,10 @@
-import type { LlmAvailability, LlmProviderName, ProjectInfo, VeritasConfig } from '@under18dev/veritas-core';
+import type {
+  LlmAvailability,
+  LlmProviderName,
+  ProjectInfo,
+  TestFramework,
+  VeritasConfig,
+} from '@under18dev/veritas-core';
 
 /** How the wizard talks to the user. */
 export interface Prompter {
@@ -45,6 +51,11 @@ export interface WizardEnvironment {
   projectHasMutator: boolean;
   /** The mutator version Veritas runs, to add the same one to the project. */
   mutatorVersion: string | null;
+  /**
+   * Test runners detection found when it could not tell which one the project uses (more than one, and the test
+   * script runs neither or both); the wizard then asks. Absent or empty when detection decided.
+   */
+  ambiguousTestRunners?: { name: TestFramework; label: string }[];
 }
 
 /** Work the user agreed to, done only after they confirm writing the configuration. */
@@ -92,6 +103,22 @@ export async function runInitWizard(
 ): Promise<WizardResult> {
   const config = structuredClone(proposed);
   const actions: WizardAction[] = [];
+
+  // Test runner, only when detection could not decide; the default is the runner it chose.
+  const runners = env.ambiguousTestRunners ?? [];
+
+  if (runners.length > 1) {
+    const initial = Math.max(
+      0,
+      runners.findIndex((runner) => runner.name === config.analysis.testFramework),
+    );
+    const picked = await prompter.select(
+      'More than one test runner was found. Which one runs the tests of this project?',
+      runners.map((runner) => runner.label),
+      initial,
+    );
+    config.analysis.testFramework = runners[picked]?.name ?? config.analysis.testFramework;
+  }
 
   // LLM provider.
   const labels: string[] = [];

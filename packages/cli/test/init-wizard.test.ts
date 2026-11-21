@@ -82,6 +82,25 @@ describe('init wizard', () => {
     expect(VeritasConfig.parse(result.config)).toEqual(result.config);
   });
 
+  it('asks which test runner only when detection could not decide, defaulting to its choice', async () => {
+    const runners = [
+      { name: 'vitest' as const, label: 'Vitest (vitest in package.json)' },
+      { name: 'jest' as const, label: 'Jest (jest.config.mjs)' },
+    ];
+    const asked = scripted(['2']);
+    const picked = await runInitWizard(proposed, environment({ ambiguousTestRunners: runners }), asked);
+
+    expect(asked.lines[0]).toContain('More than one test runner was found');
+    expect(picked.config.analysis.testFramework).toBe('jest');
+    expect(
+      (await runInitWizard(proposed, environment({ ambiguousTestRunners: runners }), scripted([]))).config
+        .analysis.testFramework,
+    ).toBe('vitest');
+    const decided = scripted([]);
+    await runInitWizard(proposed, environment({ ambiguousTestRunners: [] }), decided);
+    expect(decided.lines.some((line) => line.includes('test runner'))).toBe(false);
+  });
+
   it('does not run codex to check it before the user allows its file reads', async () => {
     const probed: [string, boolean | undefined][] = [];
     const env = environment({
