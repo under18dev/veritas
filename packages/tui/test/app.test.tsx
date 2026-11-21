@@ -9,7 +9,19 @@ import { ago, duration } from '../src/components.js';
 import { abbreviateHome, nextSteps } from '../src/screens/Home.js';
 import { sortFindings } from '../src/screens/Results.js';
 import { appendLog, applyStageEvent, clock } from '../src/screens/Run.js';
-import { leaves, parseValue, setAt, validate } from '../src/screens/Settings.js';
+import {
+  diff,
+  fieldLabel,
+  getAt,
+  humanize,
+  parseText,
+  resetField,
+  SECTIONS,
+  setAt,
+  setField,
+  unsetAt,
+  validate,
+} from '../src/screens/Settings.js';
 
 const KEY = {
   up: '\u001B[A',
@@ -500,37 +512,200 @@ describe('the TUI', () => {
     await until(app, 'attempt PA-1: improved');
   });
 
-  it('saves a setting only when it is valid and confirmed', async () => {
+  it('groups the settings by section and shows each with its description, default and a changed mark', async () => {
+    const app = await open(fakeApi(), 5);
+    await until(app, 'Mutation testing');
+    const frame = app.lastFrame() ?? '';
+    for (const title of ['General', 'Project', 'Sources', 'Analysis', 'Property-based testing', 'LLM'])
+      expect(frame).toContain(title);
+    expect(frame).toMatch(/Mutation testing\s+3 settings\s+1 changed/);
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.down);
+    await until(app, 'Mutation testing with mutator.');
+    await press(app, KEY.enter, KEY.down, KEY.down, KEY.down);
+    await until(app, 'Time allowed for mutation testing, in');
+    const field = app.lastFrame() ?? '';
+    expect(field).toMatch(/Timeout \(ms\)\s+1000\s+changed/);
+    expect(field).toMatch(/now 1000\s+default 120000/);
+    expect(field).toContain('allowed: whole number, > 0');
+    // A value the file does not set shows its default, without a changed mark.
+    await press(app, KEY.up);
+    await until(app, 'diff mutates only the code changed');
+    expect(
+      app
+        .lastFrame()
+        ?.split('\n')
+        .find((l) => l.includes('Mode ')),
+    ).not.toContain('changed');
+    expect(app.lastFrame()).toMatch(/now diff \(default\)/);
+  });
+
+  it('refuses a value that is not a number or out of range at the field, and writes nothing', async () => {
     const api = fakeApi();
     const app = await open(api, 5);
-    await until(app, 'mutation.timeoutMs = 1000');
-    const edit = async (...keys: string[]) => {
+    await until(app, 'Mutation testing');
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.down, KEY.down);
+    await until(app, 'Timeout (ms)');
+    const type = async (...keys: string[]) => {
       await press(app, KEY.enter);
-      await until(app, 'New value for mutation.timeoutMs');
-      await press(app, '\u007F', '\u007F', '\u007F', '\u007F', '\u007F', ...keys, KEY.enter);
+      await until(app, 'New value:');
+      await press(
+        app,
+        KEY.backspace,
+        KEY.backspace,
+        KEY.backspace,
+        KEY.backspace,
+        KEY.backspace,
+        ...keys,
+        KEY.enter,
+      );
     };
-    // Not a number: refused before validation.
-    await edit('x');
-    await until(app, 'not valid JSON');
+    await type('x');
+    await until(app, 'Enter a whole number');
     await press(app, KEY.escape);
-    await until(app, 'mutation.timeoutMs = 1000');
-    await edit('-', '5');
-    await until(app, 'mutation.timeoutMs:');
+    await type('-', '5');
+    await until(app, 'mutation.timeoutMs: Too small');
+    // The editor stays open with the error until the value is fixed or the edit cancelled.
+    expect(app.lastFrame()).toContain('New value:');
+    await press(app, KEY.escape, 's');
+    await until(app, 'No unsaved changes.');
     expect(api.writeConfig).not.toHaveBeenCalled();
-    await press(app, KEY.escape);
-    await until(app, 'mutation.timeoutMs = 1000');
-    await edit('5', '0', '0', '0');
-    await until(app, '+ 5000');
+  });
+
+  it('shows the changes before saving and saves only after y', async () => {
+    const api = fakeApi();
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    await press(
+      app,
+      KEY.down,
+      KEY.down,
+      KEY.down,
+      KEY.down,
+      KEY.enter,
+      KEY.down,
+      KEY.down,
+      KEY.down,
+      KEY.enter,
+    );
+    await until(app, 'New value:');
+    await press(
+      app,
+      KEY.backspace,
+      KEY.backspace,
+      KEY.backspace,
+      KEY.backspace,
+      '5',
+      '0',
+      '0',
+      '0',
+      KEY.enter,
+    );
+    await until(app, '1 unsaved');
+    expect(app.lastFrame()).toMatch(/\* Timeout \(ms\)\s+5000/);
+    expect(api.writeConfig).not.toHaveBeenCalled();
+    await press(app, 's');
+    await until(app, 'Review changes to .veritas/config.json');
+    expect(app.lastFrame()).toContain('- 1000');
+    expect(app.lastFrame()).toContain('+ 5000');
+    await press(app, 'n');
+    await until(app, '1 unsaved');
+    expect(api.writeConfig).not.toHaveBeenCalled();
+    await press(app, 's');
+    await until(app, 'Save these changes?');
     await press(app, 'y');
     expect(api.writeConfig).toHaveBeenCalledWith({ mutation: { timeoutMs: 5000 } });
+    await until(app, 'Saved 1 change to .veritas/config.json.');
+  });
+
+  it('toggles a switch, picks from the allowed values and resets to the default', async () => {
+    const api = fakeApi();
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    // Sources > Local: Enter and Space toggle it.
+    await press(app, KEY.down, KEY.down, KEY.enter, KEY.down);
+    await until(app, 'Read specifications from documents');
+    await press(app, ' ');
+    await until(app, '1 unsaved');
+    expect(app.lastFrame()).toMatch(/\* Local\s+off\s+changed/);
+    await press(app, KEY.enter);
+    await tick();
+    expect(app.lastFrame()).not.toContain('unsaved');
+    // Network sources are marked and explained.
+    await press(app, KEY.down);
+    await until(app, 'Network: Reads issues and pull requests from GitHub');
+    expect(app.lastFrame()).toMatch(/GitHub: enabled\s+off\s+network/);
+    // Mutation > Mode: a picker with every allowed value.
+    await press(app, KEY.left, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.down, KEY.enter);
+    await until(app, 'Choose a value:');
+    expect(app.lastFrame()).toMatch(/diff \(now\) \(default\)/);
+    expect(app.lastFrame()).toContain('full');
+    await press(app, KEY.down, KEY.enter);
+    await until(app, '1 unsaved');
+    expect(app.lastFrame()).toMatch(/\* Mode\s+full\s+changed/);
+    // r resets Timeout to its default by removing it from the file.
+    await press(app, KEY.down, 'r');
+    await until(app, '2 unsaved');
+    expect(app.lastFrame()).toMatch(/now 120000 \(default\)/);
+    await press(app, 's');
+    await until(app, 'Review changes');
+    expect(app.lastFrame()).toContain('+ (unset, default 120000)');
+    await press(app, 'y');
+    expect(api.writeConfig).toHaveBeenCalledWith({ mutation: { mode: 'full' } });
+  });
+
+  it('edits a list entry by entry and refuses an invalid entry', async () => {
+    const api = fakeApi();
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    // Sources > Web: allow domains.
+    await press(app, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.down, KEY.down, KEY.down, KEY.down);
+    await until(app, 'Domains web pages may be fetched from');
+    await press(app, KEY.enter);
+    await until(app, 'press a to add an entry');
+    await press(app, 'a', 'b', 'a', 'd', ' ', 'x', KEY.enter);
+    await until(app, 'expected a bare domain name');
+    await press(app, KEY.escape, 'a', ...'docs.example.com', KEY.enter);
+    await until(app, '1 unsaved');
+    await press(app, 'a', ...'shop.example.com', KEY.enter);
+    await until(app, 'docs.example.com, shop.example.com');
+    await press(app, KEY.up, 'd');
+    await until(app, '› shop.example.com');
+    await press(app, KEY.escape, 's');
+    await until(app, 'Review changes');
+    await press(app, 'y');
+    expect(api.writeConfig).toHaveBeenCalledWith({
+      mutation: { timeoutMs: 1000 },
+      sources: { web: { allowDomains: ['shop.example.com'] } },
+    });
+  });
+
+  it('marks the LLM provider and asks before leaving with unsaved changes', async () => {
+    const api = fakeApi();
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    await press(app, ...Array(7).fill(KEY.down), KEY.enter, KEY.down);
+    await until(app, 'LLM: Sends specification text to this provider');
+    await press(app, KEY.enter);
+    await until(app, 'Choose a value:');
+    expect(app.lastFrame()).toContain('claude uses LLM');
+    await press(app, KEY.down, KEY.enter);
+    await until(app, '1 unsaved');
+    await press(app, KEY.escape);
+    await until(app, 'Discard 1 unsaved change and leave?');
+    await press(app, 'n');
+    await until(app, '1 unsaved');
+    await press(app, KEY.escape, 'y');
+    await until(app, 'jump');
+    expect(api.writeConfig).not.toHaveBeenCalled();
   });
 
   it('does not edit a code configuration', async () => {
-    const app = await open(
-      fakeApi({ readConfig: () => ({ kind: 'code', file: '/p/veritas.config.ts' }) }),
-      5,
-    );
+    const api = fakeApi({ readConfig: () => ({ kind: 'code', file: '/p/veritas.config.ts' }) });
+    const app = await open(api, 5);
     await until(app, 'is a code configuration');
+    expect(app.lastFrame()).toContain('read-only');
+    await press(app, KEY.enter, ' ', 's', 'y');
+    expect(api.writeConfig).not.toHaveBeenCalled();
   });
 
   it('shows the code and hint of an error', async () => {
@@ -546,18 +721,6 @@ describe('the TUI', () => {
 });
 
 describe('helpers', () => {
-  it('edits nested configuration values', () => {
-    const raw = { a: { b: 1, c: [1, 2] }, d: 'x' };
-    expect(leaves(raw).map((l) => l.path.join('.'))).toEqual(['a.b', 'a.c', 'd']);
-    expect(setAt(raw, ['a', 'b'], 2)).toEqual({ a: { b: 2, c: [1, 2] }, d: 'x' });
-    expect(raw.a.b).toBe(1);
-    expect(parseValue('true', false)).toBe(true);
-    expect(parseValue('hello', 'x')).toBe('hello');
-    expect(typeof parseValue('hello', 3)).toBe('symbol');
-    expect(validate({ mutation: { timeoutMs: -5 } })[0]).toMatch(/^mutation\.timeoutMs:/);
-    expect(validate({})).toEqual([]);
-  });
-
   it('tracks stage progress from run events', () => {
     let lines = applyStageEvent([], {
       time: '',
@@ -607,6 +770,44 @@ describe('helpers', () => {
     expect(appendLog(log, [])).toBe(log);
     expect(clock(0)).toBe('0:00');
     expect(clock(65_400)).toBe('1:05');
+  });
+
+  it('edits nested configuration values', () => {
+    const raw = { a: { b: 1, c: [1, 2] }, d: 'x' };
+    expect(getAt(raw, ['a', 'c'])).toEqual([1, 2]);
+    expect(getAt(raw, ['a', 'x', 'y'])).toBeUndefined();
+    expect(setAt(raw, ['a', 'b'], 2)).toEqual({ a: { b: 2, c: [1, 2] }, d: 'x' });
+    expect(raw.a.b).toBe(1);
+    // Removing the last value of an object removes the object too.
+    expect(unsetAt({ a: { b: 1 }, d: 'x' }, ['a', 'b'])).toEqual({ d: 'x' });
+    expect(unsetAt(raw, ['a', 'b'])).toEqual({ a: { c: [1, 2] }, d: 'x' });
+    expect(validate({ mutation: { timeoutMs: -5 } })[0]).toMatch(/^mutation\.timeoutMs:/);
+    expect(validate({})).toEqual([]);
+  });
+
+  it('reads settings, labels and typed values from the schema', () => {
+    const field = (k: string) =>
+      SECTIONS.flatMap((s) => s.fields).find((f) => f.path.join('.') === k) ?? expect.fail(k);
+    expect(humanize('maxDurationMs')).toBe('Max duration (ms)');
+    expect(humanize('sendFullTextToLlm')).toBe('Send full text to LLM');
+    expect(fieldLabel(field('sources.web.maxPages'))).toBe('Web: max pages');
+    expect(fieldLabel(field('limits.memoryMb'))).toBe('Memory (MiB)');
+    expect(parseText('5000', field('mutation.timeoutMs'))).toEqual({ value: 5000 });
+    expect(parseText('1.5', field('mutation.timeoutMs'))).toHaveProperty('error');
+    expect(parseText('0.5', field('policy.minPropertyCoverage'))).toEqual({ value: 0.5 });
+    expect(parseText('', field('project.tsconfig'))).toEqual({ value: null });
+    expect(parseText('', field('pbt.seed'))).toEqual({ value: expect.any(Symbol) });
+    // A required field brings its required siblings, so the object stays valid.
+    const min = field('formal.integerDomain.min');
+    expect(setField({}, min, '-5')).toEqual({ formal: { integerDomain: { min: '-5', max: '10000' } } });
+    expect(resetField({ formal: { integerDomain: { min: '-5', max: '7' } } }, min)).toEqual({
+      formal: { integerDomain: { min: '-10000', max: '7' } },
+    });
+    expect(resetField({ mutation: { timeoutMs: 5 } }, field('mutation.timeoutMs'))).toEqual({});
+    expect(diff({ mutation: { timeoutMs: 5 } }, { mutation: { mode: 'full' } }).map((c) => c.path)).toEqual([
+      'mutation.mode',
+      'mutation.timeoutMs',
+    ]);
   });
 
   it('sorts findings by severity, then certainty', () => {

@@ -1,18 +1,30 @@
 import path from 'node:path';
-import { VeritasConfig } from '@under18dev/veritas-core';
-import { Box, Text, useInput } from 'ink';
-import { useState } from 'react';
-import { Confirm, ErrorView, SelectList, TextInput, Title, useLoad } from '../components.js';
+import {
+  type ConfigField,
+  type ConfigSection,
+  configSections,
+  VeritasConfig,
+} from '@under18dev/veritas-core';
+import { Box, type DOMElement, Text, useBoxMetrics, useInput } from 'ink';
+import { useEffect, useRef, useState } from 'react';
+import { Badge, Card, Confirm, ErrorView, type Hints, TextInput, useLoad } from '../components.js';
 import type { ScreenProps } from '../screen.js';
 
 type Path = (string | number)[];
 
-/** Every editable value of a configuration: objects are walked, anything else (including arrays) is one value. */
-export function leaves(value: unknown, prefix: Path = []): { path: Path; value: unknown }[] {
-  if (value !== null && typeof value === 'object' && !Array.isArray(value))
-    return Object.entries(value).flatMap(([k, v]) => leaves(v, [...prefix, k]));
+/** Every setting of the configuration schema, grouped by section, with its description and default. */
+export const SECTIONS: ConfigSection[] = configSections();
+const FIELDS = SECTIONS.flatMap((s) => s.fields);
 
-  return [{ path: prefix, value }];
+export function getAt(root: unknown, path: Path): unknown {
+  let value = root;
+
+  for (const key of path) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    value = (value as Record<string, unknown>)[key as string];
+  }
+
+  return value;
 }
 
 export function setAt(root: unknown, path: Path, value: unknown): unknown {
@@ -26,13 +38,19 @@ export function setAt(root: unknown, path: Path, value: unknown): unknown {
   return { ...base, [head]: setAt(base[head], rest, value) };
 }
 
-/** Read an edited value: JSON when it parses (numbers, booleans, arrays), otherwise the text itself. */
-export function parseValue(text: string, previous: unknown): unknown {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return typeof previous === 'string' || previous === undefined ? text : Symbol.for('invalid');
-  }
+/** Remove a value, and the objects that it leaves empty, so the default applies again. */
+export function unsetAt(root: unknown, path: Path): unknown {
+  if (root === null || typeof root !== 'object' || Array.isArray(root) || path.length === 0) return root;
+  const [head, ...rest] = path as [string, ...Path];
+  const { [head]: child, ...others } = root as Record<string, unknown>;
+
+  if (child === undefined) return root;
+  if (rest.length === 0) return others;
+  const next = unsetAt(child, rest);
+  const empty =
+    next !== null && typeof next === 'object' && !Array.isArray(next) && Object.keys(next).length === 0;
+
+  return empty ? others : { ...others, [head]: next };
 }
 
 /** Check a candidate configuration with the schema the CLI uses; returns `path: message` lines. */
@@ -44,115 +62,898 @@ export function validate(raw: unknown): string[] {
     : result.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
 }
 
-const show = (v: unknown) => (v === undefined ? '(unset)' : JSON.stringify(v));
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const key = (field: ConfigField) => field.path.join('.');
 
-type View =
-  | { kind: 'list' }
-  | { kind: 'edit'; path: Path; value: unknown }
-  | { kind: 'confirm'; path: Path; before: unknown; after: unknown; next: unknown };
+/** The value in effect: the one written in the file, or the default. */
+export function effective(raw: unknown, field: ConfigField): unknown {
+  const value = getAt(raw, field.path);
 
-export function Settings({ api, active, onBack, onChange, height, version }: ScreenProps) {
+  return value === undefined ? field.default : value;
+}
+
+/** Whether the value in effect differs from the default. */
+export function changed(raw: unknown, field: ConfigField): boolean {
+  return !same(effective(raw, field), field.default);
+}
+
+/**
+ * Write a value. A field that must be present once its object exists (such as `formal.integerDomain.min`) gets its
+ * required siblings filled with their defaults, so changing one of them does not leave the object incomplete.
+ */
+export function setField(raw: unknown, field: ConfigField, value: unknown): unknown {
+  const parent = field.path.slice(0, -1);
+  let next = raw;
+
+  if (field.required && getAt(raw, parent) === undefined)
+    for (const sibling of FIELDS)
+      if (sibling.required && same(sibling.path.slice(0, -1), parent))
+        next = setAt(next, sibling.path, sibling.default);
+
+  return setAt(next, field.path, value);
+}
+
+/** Reset to the default: remove the value, or write the default where the value must be present. */
+export function resetField(raw: unknown, field: ConfigField): unknown {
+  return field.required ? setAt(raw, field.path, field.default) : unsetAt(raw, field.path);
+}
+
+export interface Change {
+  path: string;
+  before: unknown;
+  after: unknown;
+  field: ConfigField;
+}
+
+/** The settings whose written value differs between the saved file and the edited one. */
+export function diff(saved: unknown, draft: unknown): Change[] {
+  return FIELDS.filter((f) => !same(getAt(saved, f.path), getAt(draft, f.path))).map((f) => ({
+    path: key(f),
+    before: getAt(saved, f.path),
+    after: getAt(draft, f.path),
+    field: f,
+  }));
+}
+
+const UNSET = Symbol('unset');
+
+/** Read typed text as a value of the field's type, or say why it is not one. */
+export function parseText(text: string, field: ConfigField): { value: unknown } | { error: string } {
+  const t = text.trim();
+
+  if (t === '' && field.nullable) return { value: null };
+  if (t === '' && field.default === undefined) return { value: UNSET };
+  if (field.type === 'integer')
+    return /^-?\d+$/.test(t) ? { value: Number(t) } : { error: 'Enter a whole number, such as 5000.' };
+  if (field.type === 'number')
+    return t !== '' && Number.isFinite(Number(t))
+      ? { value: Number(t) }
+      : { error: 'Enter a number, such as 0.5.' };
+
+  return { value: text };
+}
+
+const WORDS: Record<string, string> = {
+  github: 'GitHub',
+  llm: 'LLM',
+  pbt: 'PBT',
+  ms: '(ms)',
+  mb: '(MiB)',
+  smt: 'SMT',
+  tsconfig: 'tsconfig',
+  $schema: '$schema',
+};
+
+/** A readable name for a key, such as `maxDurationMs` -> `Max duration (ms)`. */
+export function humanize(name: string): string {
+  if (WORDS[name]) return WORDS[name];
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(' ')
+    .map((w) => WORDS[w.toLowerCase()] ?? w.toLowerCase());
+  const text = words.join(' ');
+
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** The label of a field inside its section: nested keys become a prefix, such as `Web: max pages`. */
+export function fieldLabel(field: ConfigField): string {
+  const inner = field.path.length > 1 ? field.path.slice(1) : field.path;
+  const last = humanize(inner.at(-1) ?? '');
+
+  if (inner.length === 1) return last;
+
+  return `${inner.slice(0, -1).map(humanize).join(' ')}: ${last.charAt(0).toLowerCase()}${last.slice(1)}`;
+}
+
+const SECTION_TITLE: Record<string, string> = {
+  '': 'General',
+  pbt: 'Property-based testing',
+  formal: 'Formal verification',
+  mutation: 'Mutation testing',
+  improvement: 'Test improvement',
+};
+
+export function sectionTitle(section: ConfigSection): string {
+  return SECTION_TITLE[section.key] ?? humanize(section.key);
+}
+
+/**
+ * Settings that let Veritas use the network or an LLM, which are off by default, and what turning them on does.
+ * `on` says whether a value turns the effect on.
+ */
+export const EFFECTS: Record<
+  string,
+  { tag: 'network' | 'LLM'; on: (value: unknown) => boolean; note: string }
+> = {
+  'sources.github.enabled': {
+    tag: 'network',
+    on: (v) => v === true,
+    note: 'Reads issues and pull requests from GitHub over the network in runs that are not offline.',
+  },
+  'sources.web.enabled': {
+    tag: 'network',
+    on: (v) => v === true,
+    note: 'Fetches pages from the allowed domains over the network in runs that are not offline.',
+  },
+  'sandbox.allowNetworkWithoutIsolation': {
+    tag: 'network',
+    on: (v) => v === true,
+    note: 'Project code runs even where its network access cannot be blocked.',
+  },
+  'llm.provider': {
+    tag: 'LLM',
+    on: (v) => v !== 'none',
+    note: 'Sends specification text to this provider in runs that are not offline.',
+  },
+  'sources.sendFullTextToLlm': {
+    tag: 'LLM',
+    on: (v) => v === true,
+    note: 'Sends whole documents to the LLM instead of the relevant excerpts.',
+  },
+  'llm.allowCodexFileReads': {
+    tag: 'LLM',
+    on: (v) => v === true,
+    note: 'Lets the codex provider, whose shell can read local files, be used.',
+  },
+};
+
+/** A value as it is shown in the list. */
+export function show(value: unknown, field?: ConfigField): string {
+  if (value === undefined) return '(unset)';
+  if (value === null) return '(none)';
+  if (field?.type === 'boolean' || typeof value === 'boolean') return value ? 'on' : 'off';
+  if (Array.isArray(value)) return value.length === 0 ? '(empty)' : value.join(', ');
+  if (typeof value === 'string') return value;
+
+  return JSON.stringify(value);
+}
+
+/** A value as it is shown in the change review: JSON, so that the type is visible. */
+const json = (value: unknown) => (value === undefined ? '(unset)' : JSON.stringify(value));
+
+function allowed(field: ConfigField): string {
+  if (field.type === 'fixed') return `fixed to ${json(field.fixed)}`;
+  if (field.options) return `one of ${field.options.join(', ')}`;
+  if (field.items?.options) return `any of ${field.items.options.join(', ')}`;
+  const parts = [
+    field.type === 'integer' ? 'whole number' : field.type === 'number' ? 'number' : '',
+    field.exclusiveMinimum !== undefined ? `> ${field.exclusiveMinimum}` : '',
+    field.minimum !== undefined ? `>= ${field.minimum}` : '',
+    field.maximum !== undefined ? `<= ${field.maximum}` : '',
+    field.type === 'array' ? `list of text${field.minItems ? `, at least ${field.minItems}` : ''}` : '',
+    field.nullable ? 'empty for none' : '',
+    field.default === undefined && field.type !== 'array' ? 'empty to unset' : '',
+  ];
+
+  return parts.filter(Boolean).join(', ');
+}
+
+type Row = { kind: 'section'; section: ConfigSection } | { kind: 'field'; field: ConfigField };
+
+type Mode =
+  | { kind: 'browse' }
+  | { kind: 'text'; field: ConfigField }
+  | { kind: 'pick'; field: ConfigField; index: number }
+  | { kind: 'list'; field: ConfigField; index: number; input: 'none' | 'add' | 'edit' }
+  | { kind: 'review' }
+  | { kind: 'discard' };
+
+export function Settings({ api, active, onBack, onChange, height, width, version, setHints }: ScreenProps) {
   const config = useLoad(() => api.readConfig(), [version]);
-  const [view, setView] = useState<View>({ kind: 'list' });
-  const [problems, setProblems] = useState<string[]>([]);
+  const data = config.data;
+  const saved = data?.kind === 'json' ? data.raw : undefined;
+  const [draft, setDraft] = useState<unknown>(saved);
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [cursor, setCursor] = useState(0);
+  const [mode, setMode] = useState<Mode>({ kind: 'browse' });
+  const [errors, setErrors] = useState<{ path: string; messages: string[] } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<unknown>(null);
+  const [saveError, setSaveError] = useState<unknown>(null);
+  const listBox = useRef<DOMElement>(null);
+  const listRows = Math.max(1, useBoxMetrics(listBox).height);
+
+  // A reload (after saving, or a change elsewhere) starts again from the file.
+  useEffect(() => {
+    setDraft(saved);
+    setErrors(null);
+  }, [saved]);
+
+  const rows: Row[] = SECTIONS.flatMap((section) => [
+    { kind: 'section' as const, section },
+    ...(open.has(section.key) ? section.fields.map((field) => ({ kind: 'field' as const, field })) : []),
+  ]);
+  const at = Math.min(cursor, rows.length - 1);
+  const row = rows[at];
+  const changes = data?.kind === 'json' ? diff(saved, draft) : [];
+
+  const hints: Hints =
+    mode.kind === 'text'
+      ? [
+          ['Enter', 'apply'],
+          ['Esc', 'cancel'],
+        ]
+      : mode.kind === 'pick'
+        ? [
+            ['↑↓', 'choose'],
+            ['Enter', 'apply'],
+            ['Esc', 'cancel'],
+          ]
+        : mode.kind === 'list'
+          ? mode.field.items?.type === 'enum'
+            ? [
+                ['↑↓', 'move'],
+                ['Space', 'turn on/off'],
+                ['Esc', 'done'],
+              ]
+            : [
+                ['↑↓', 'move'],
+                ['a', 'add'],
+                ['Enter', 'edit'],
+                ['d', 'delete'],
+                ['Esc', 'done'],
+              ]
+          : mode.kind === 'review' || mode.kind === 'discard'
+            ? [
+                ['y', 'yes'],
+                ['n', 'no'],
+              ]
+            : row?.kind === 'section'
+              ? [
+                  ['↑↓', 'move'],
+                  ['Enter', open.has(row.section.key) ? 'close' : 'open'],
+                  ['s', 'review & save'],
+                  ['Esc', 'back'],
+                ]
+              : [
+                  ['↑↓', 'move'],
+                  ['Enter', 'change'],
+                  ['r', 'reset'],
+                  ['s', 'review & save'],
+                  ['Esc', 'back'],
+                ];
+  const hintKey = JSON.stringify(hints);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the hints are compared by their text
+  useEffect(() => {
+    if (active) setHints(hints);
+  }, [active, hintKey, setHints]);
+
+  /** Apply an edit to the draft when the whole configuration stays valid; otherwise show why at the field. */
+  const apply = (field: ConfigField, edited: unknown): boolean => {
+    // Changing a value back to what the file had leaves the file as it was, instead of writing the default out.
+    const next =
+      !field.required &&
+      getAt(saved, field.path) === undefined &&
+      same(getAt(edited, field.path), field.default)
+        ? unsetAt(edited, field.path)
+        : edited;
+    const issues = validate(next);
+
+    if (issues.length) {
+      // The problems of this field first; others only when it has none (the file had them already).
+      const own = issues.filter((i) => i.startsWith(`${key(field)}`));
+
+      setErrors({ path: key(field), messages: own.length ? own : issues });
+
+      return false;
+    }
+    setErrors(null);
+    setMessage(null);
+    setDraft(next);
+
+    return true;
+  };
+
+  const change = (field: ConfigField) => {
+    setErrors(null);
+    setMessage(null);
+    if (field.type === 'fixed')
+      setMessage(`${key(field)} is fixed to ${json(field.fixed)} and cannot be changed.`);
+    else if (field.type === 'boolean') apply(field, setField(draft, field, !effective(draft, field)));
+    else if (field.type === 'enum')
+      setMode({
+        kind: 'pick',
+        field,
+        index: Math.max(0, field.options?.indexOf(String(effective(draft, field))) ?? 0),
+      });
+    else if (field.type === 'array') setMode({ kind: 'list', field, index: 0, input: 'none' });
+    else setMode({ kind: 'text', field });
+  };
+
+  const leave = () => {
+    if (changes.length) setMode({ kind: 'discard' });
+    else onBack();
+  };
 
   useInput(
-    (_input, key) => {
-      if (key.escape) onBack();
+    (input, k) => {
+      if (!row) return;
+      if (k.upArrow || input === 'k') setCursor(Math.max(0, at - 1));
+      else if (k.downArrow || input === 'j') setCursor(Math.min(rows.length - 1, at + 1));
+      else if (k.escape) leave();
+      else if (input === 's') {
+        if (changes.length) setMode({ kind: 'review' });
+        else setMessage('No unsaved changes.');
+      } else if (row.kind === 'section') {
+        const isOpen = open.has(row.section.key);
+        const toggle = (on: boolean) =>
+          setOpen((o) => {
+            const next = new Set(o);
+            if (on) next.add(row.section.key);
+            else next.delete(row.section.key);
+            return next;
+          });
+
+        if (k.return || input === ' ') toggle(!isOpen);
+        else if (k.rightArrow) toggle(true);
+        else if (k.leftArrow) toggle(false);
+      } else {
+        const field = row.field;
+
+        if (k.return) change(field);
+        else if (input === ' ' && field.type === 'boolean') change(field);
+        else if (input === 'r') {
+          if (getAt(draft, field.path) === undefined && !changed(draft, field))
+            setMessage(`${key(field)} already uses its default.`);
+          else apply(field, resetField(draft, field));
+        } else if (k.leftArrow) {
+          // Back to the section header, closing the section.
+          const header = rows.findIndex((r) => r.kind === 'section' && r.section.key === sectionOf(field));
+          setOpen((o) => {
+            const next = new Set(o);
+            next.delete(sectionOf(field));
+            return next;
+          });
+          setCursor(Math.max(0, header));
+        }
+      }
     },
-    { isActive: active && view.kind === 'list' },
+    { isActive: active && mode.kind === 'browse' && data?.kind === 'json' },
   );
 
-  const data = config.data;
+  useInput(
+    (_input, k) => {
+      if (k.escape) onBack();
+    },
+    { isActive: active && data !== undefined && data.kind !== 'json' },
+  );
+
   if (config.error) return <ErrorView error={config.error} />;
   if (!data) return <Text dimColor>loading…</Text>;
   if (data.kind === 'none')
     return (
-      <Box flexDirection="column">
-        <Title>Settings</Title>
-        <Text>No configuration yet. Create one from Home.</Text>
-      </Box>
+      <Card title="Settings">
+        <Text>No configuration yet. Create one from Home (press Esc, then 1).</Text>
+      </Card>
     );
-  if (data.kind === 'code')
+  if (data.kind === 'code') {
+    const file = path.relative(api.root, data.file) || data.file;
+
     return (
-      <Box flexDirection="column">
-        <Title>Settings</Title>
-        <Text>{path.relative(api.root, data.file) || data.file} is a code configuration.</Text>
-        <Text dimColor>
-          It executes project code, so it is not loaded or edited here. Edit the file directly.
+      <Card title="Settings" right={<Badge color="yellow">read-only</Badge>} color="yellow">
+        <Text>{file} is a code configuration.</Text>
+        <Text wrap="wrap">
+          Loading it would run project code, so the TUI neither reads nor changes it. Edit {file} in your
+          editor; veritas uses it as before.
         </Text>
-      </Box>
+        <Text dimColor wrap="wrap">
+          Only .veritas/config.json can be edited here. The TUI never writes a code configuration.
+        </Text>
+      </Card>
+    );
+  }
+
+  const file = path.relative(api.root, data.file) || data.file;
+  const fileProblems = validate(saved);
+
+  if (mode.kind === 'review')
+    return (
+      <Review
+        file={file}
+        changes={changes}
+        active={active}
+        height={height}
+        onNo={() => setMode({ kind: 'browse' })}
+        onYes={() => {
+          try {
+            api.writeConfig(draft);
+            setMessage(`Saved ${changes.length} change${changes.length === 1 ? '' : 's'} to ${file}.`);
+            setSaveError(null);
+            onChange();
+          } catch (e) {
+            setSaveError(e);
+          }
+          setMode({ kind: 'browse' });
+        }}
+      />
     );
 
-  const raw = data.raw;
+  const start = Math.max(0, Math.min(at - Math.floor(listRows / 2), rows.length - listRows));
+  const visible = rows.slice(start, start + listRows);
 
   return (
-    <Box flexDirection="column">
-      <Title>{`Settings (${path.relative(api.root, data.file) || data.file})`}</Title>
-      {view.kind === 'list' ? (
-        <SelectList
-          active={active}
-          height={height - 5}
-          items={leaves(raw).map((l) => ({ label: `${l.path.join('.')} = ${show(l.value)}`, value: l }))}
-          onSelect={(item) => {
-            setMessage(null);
-            setProblems([]);
-            setView({ kind: 'edit', path: item.value.path, value: item.value.value });
-          }}
-        />
+    <Box flexDirection="column" height={height} overflow="hidden">
+      <Box flexShrink={0}>
+        <Text bold>Settings </Text>
+        <Text dimColor wrap="truncate-start">
+          {file}
+        </Text>
+        {changes.length ? (
+          <Box marginLeft={1} flexShrink={0}>
+            <Badge color="magenta">{`${changes.length} unsaved`}</Badge>
+          </Box>
+        ) : null}
+      </Box>
+      {fileProblems.length ? (
+        <Text color="yellow" wrap="truncate-end">
+          The file does not pass the schema: {fileProblems[0]}
+        </Text>
       ) : null}
-      {view.kind === 'edit' ? (
+      <Box ref={listBox} flexDirection="column" flexGrow={1} flexShrink={1} minHeight={1} overflow="hidden">
+        {visible.map((r, i) => (
+          <RowView
+            key={r.kind === 'section' ? `s-${r.section.key}` : `f-${key(r.field)}`}
+            row={r}
+            selected={start + i === at}
+            open={r.kind === 'section' && open.has(r.section.key)}
+            saved={saved}
+            draft={draft}
+            labelWidth={Math.max(14, Math.min(34, Math.floor((width - 4) * 0.45)))}
+          />
+        ))}
+      </Box>
+      <Box flexShrink={0} flexDirection="column">
+        {mode.kind === 'discard' ? (
+          <Card title="Unsaved changes" color="magenta">
+            <Confirm
+              active={active}
+              question={`Discard ${changes.length} unsaved change${changes.length === 1 ? '' : 's'} and leave?`}
+              onYes={() => {
+                setDraft(saved);
+                setErrors(null);
+                setMode({ kind: 'browse' });
+                onBack();
+              }}
+              onNo={() => setMode({ kind: 'browse' })}
+            />
+          </Card>
+        ) : row?.kind === 'field' ? (
+          <FieldPanel
+            field={row.field}
+            draft={draft}
+            saved={saved}
+            mode={mode}
+            active={active}
+            errors={errors?.path === key(row.field) ? errors.messages : []}
+            onCancel={() => {
+              setErrors(null);
+              setMode({ kind: 'browse' });
+            }}
+            onApply={(next) => apply(row.field, next)}
+            onError={(messages) => setErrors({ path: key(row.field), messages })}
+            onMode={setMode}
+          />
+        ) : row?.kind === 'section' ? (
+          <Card title={sectionTitle(row.section)}>
+            <Text wrap="wrap">{row.section.description}</Text>
+            <Text dimColor>
+              {row.section.fields.length} setting{row.section.fields.length === 1 ? '' : 's'},{' '}
+              {row.section.fields.filter((f) => changed(draft, f)).length} not at the default
+            </Text>
+          </Card>
+        ) : null}
+        {message ? (
+          <Text color={message.startsWith('Saved') ? 'green' : 'yellow'} wrap="truncate-end">
+            {message}
+          </Text>
+        ) : null}
+        {saveError ? <ErrorView error={saveError} /> : null}
+      </Box>
+    </Box>
+  );
+}
+
+function sectionOf(field: ConfigField): string {
+  return field.path.length > 1 ? (field.path[0] ?? '') : '';
+}
+
+function EffectTag({ field, value }: { field: ConfigField; value: unknown }) {
+  const effect = EFFECTS[key(field)];
+
+  if (!effect) return null;
+
+  return (
+    <Box flexShrink={0} marginLeft={1}>
+      <Badge color={effect.on(value) ? 'yellow' : 'gray'}>{effect.tag}</Badge>
+    </Box>
+  );
+}
+
+function RowView({
+  row,
+  selected,
+  open,
+  saved,
+  draft,
+  labelWidth,
+}: {
+  row: Row;
+  selected: boolean;
+  open: boolean;
+  saved: unknown;
+  draft: unknown;
+  labelWidth: number;
+}) {
+  const pointer = (
+    <Box flexShrink={0} width={2}>
+      <Text color="cyan">{selected ? '›' : ' '}</Text>
+    </Box>
+  );
+
+  if (row.kind === 'section') {
+    const s = row.section;
+    const differs = s.fields.filter((f) => changed(draft, f)).length;
+    const unsaved = s.fields.filter((f) => !same(getAt(saved, f.path), getAt(draft, f.path))).length;
+    const effects = s.fields.filter((f) => EFFECTS[key(f)]?.on(effective(draft, f)));
+
+    return (
+      <Box height={1} overflow="hidden">
+        {pointer}
+        <Box flexShrink={0}>
+          <Text bold {...(selected ? { color: 'cyan' } : {})}>
+            {open ? '▾' : '▸'} {sectionTitle(s)}
+          </Text>
+        </Box>
+        <Text dimColor wrap="truncate-end">
+          {'  '}
+          {s.fields.length} setting{s.fields.length === 1 ? '' : 's'}
+          {differs ? <Text color="yellow"> {differs} changed</Text> : null}
+          {unsaved ? <Text color="magenta"> {unsaved} unsaved</Text> : null}
+          {effects.length ? (
+            <Text color="yellow"> {effects.map((f) => EFFECTS[key(f)]?.tag).join(', ')} on</Text>
+          ) : null}
+        </Text>
+      </Box>
+    );
+  }
+  const f = row.field;
+  const value = effective(draft, f);
+  const differs = changed(draft, f);
+  const unsaved = !same(getAt(saved, f.path), getAt(draft, f.path));
+
+  return (
+    <Box height={1} overflow="hidden">
+      {pointer}
+      <Box flexShrink={0} width={2}>
+        <Text color="magenta">{unsaved ? '*' : ' '}</Text>
+      </Box>
+      <Box width={labelWidth} flexShrink={0} overflow="hidden" marginRight={1}>
+        <Text wrap="truncate-end" {...(selected ? { color: 'cyan' } : {})}>
+          {fieldLabel(f)}
+        </Text>
+      </Box>
+      <Box flexGrow={1} flexBasis={0} overflow="hidden">
+        <Text
+          wrap="truncate-end"
+          {...(f.type === 'fixed' || getAt(draft, f.path) === undefined ? { dimColor: true } : {})}
+          {...(differs ? { color: 'yellow' } : {})}
+        >
+          {show(value, f)}
+        </Text>
+      </Box>
+      <EffectTag field={f} value={value} />
+      <Box flexShrink={0} width={8} marginLeft={1}>
+        {differs ? (
+          <Text color="yellow">changed</Text>
+        ) : f.type === 'fixed' ? (
+          <Text dimColor>fixed</Text>
+        ) : null}
+      </Box>
+    </Box>
+  );
+}
+
+function FieldPanel({
+  field,
+  draft,
+  saved,
+  mode,
+  active,
+  errors,
+  onCancel,
+  onApply,
+  onError,
+  onMode,
+}: {
+  field: ConfigField;
+  draft: unknown;
+  saved: unknown;
+  mode: Mode;
+  active: boolean;
+  errors: string[];
+  onCancel: () => void;
+  onError: (messages: string[]) => void;
+  onApply: (next: unknown) => boolean;
+  onMode: (mode: Mode) => void;
+}) {
+  const value = effective(draft, field);
+  const written = getAt(draft, field.path);
+  const effect = EFFECTS[key(field)];
+  const unsaved = !same(getAt(saved, field.path), written);
+  const editing = mode.kind !== 'browse' && 'field' in mode && key(mode.field) === key(field);
+
+  return (
+    <Card
+      title={fieldLabel(field)}
+      color={editing ? 'cyan' : errors.length ? 'red' : 'gray'}
+      right={
+        <Text dimColor wrap="truncate-start">
+          {key(field)}
+        </Text>
+      }
+    >
+      {/* While a value is typed, the description keeps to one line to leave room for the editor. */}
+      <Text wrap={editing && mode.kind !== 'pick' ? 'truncate-end' : 'wrap'}>{field.description}</Text>
+      <Text wrap="truncate-end">
+        <Text dimColor>now </Text>
+        <Text {...(changed(draft, field) ? { color: 'yellow' } : {})}>{show(value, field)}</Text>
+        {written === undefined && field.default !== undefined ? <Text dimColor> (default)</Text> : null}
+        <Text dimColor>{'   default '}</Text>
+        {show(field.default, field)}
+        {unsaved ? <Text color="magenta">{'   unsaved'}</Text> : null}
+      </Text>
+      {allowed(field) ? (
+        <Text dimColor wrap="truncate-end">
+          allowed: {allowed(field)}
+        </Text>
+      ) : null}
+      {effect ? (
+        <Text color="yellow" wrap="wrap">
+          {effect.tag === 'network' ? 'Network: ' : 'LLM: '}
+          {effect.note} Off by default.
+        </Text>
+      ) : null}
+      {editing && mode.kind === 'text' ? (
         <TextInput
           active={active}
-          label={`New value for ${view.path.join('.')} (JSON for numbers, booleans and lists):`}
-          initial={typeof view.value === 'string' ? view.value : JSON.stringify(view.value)}
-          onCancel={() => setView({ kind: 'list' })}
+          label="New value:"
+          initial={written === undefined || written === null ? '' : String(written)}
+          errors={errors}
+          hint="Enter to apply, Esc to cancel"
+          onCancel={onCancel}
           onSubmit={(text) => {
-            const value = parseValue(text, view.value);
-            if (typeof value === 'symbol') {
-              setProblems([`${view.path.join('.')}: not valid JSON`]);
+            const parsed = parseText(text, field);
+
+            if ('error' in parsed) {
+              onError([parsed.error]);
+
               return;
             }
-            const next = setAt(raw, view.path, value);
-            const issues = validate(next);
-            setProblems(issues);
-            if (issues.length === 0)
-              setView({ kind: 'confirm', path: view.path, before: view.value, after: value, next });
+            const next =
+              parsed.value === UNSET ? unsetAt(draft, field.path) : setField(draft, field, parsed.value);
+
+            if (onApply(next)) onMode({ kind: 'browse' });
           }}
         />
       ) : null}
-      {view.kind === 'confirm' ? (
-        <Box flexDirection="column">
-          <Text>{view.path.join('.')}</Text>
-          <Text color="red">- {show(view.before)}</Text>
-          <Text color="green">+ {show(view.after)}</Text>
-          <Confirm
-            active={active}
-            question="Save this change to the configuration?"
-            onNo={() => setView({ kind: 'list' })}
-            onYes={() => {
-              try {
-                api.writeConfig(view.next);
-                setMessage(`Saved ${view.path.join('.')}.`);
-                setError(null);
-                onChange();
-              } catch (e) {
-                setError(e);
-              }
-              setView({ kind: 'list' });
-            }}
-          />
-        </Box>
+      {editing && mode.kind === 'pick' ? (
+        <Picker
+          field={field}
+          index={mode.index}
+          active={active}
+          draft={draft}
+          onApply={onApply}
+          onMode={onMode}
+        />
       ) : null}
-      {problems.map((p) => (
-        <Text key={p} color="yellow">
-          {p}
+      {editing && mode.kind === 'list' ? (
+        <ListEditor
+          field={field}
+          mode={mode}
+          active={active}
+          draft={draft}
+          errors={errors}
+          onApply={onApply}
+          onMode={onMode}
+        />
+      ) : null}
+      {!editing || mode.kind === 'pick' || (mode.kind === 'list' && mode.input === 'none')
+        ? errors.map((e) => (
+            <Text key={e} color="red" wrap="wrap">
+              {e}
+            </Text>
+          ))
+        : null}
+    </Card>
+  );
+}
+
+function Picker({
+  field,
+  index,
+  active,
+  draft,
+  onApply,
+  onMode,
+}: {
+  field: ConfigField;
+  index: number;
+  active: boolean;
+  draft: unknown;
+  onApply: (next: unknown) => boolean;
+  onMode: (mode: Mode) => void;
+}) {
+  const options = field.options ?? [];
+  const current = effective(draft, field);
+
+  useInput(
+    (input, k) => {
+      if (k.escape) onMode({ kind: 'browse' });
+      else if (k.upArrow || input === 'k') onMode({ kind: 'pick', field, index: Math.max(0, index - 1) });
+      else if (k.downArrow || input === 'j')
+        onMode({ kind: 'pick', field, index: Math.min(options.length - 1, index + 1) });
+      else if (k.return || input === ' ') {
+        const choice = options[index];
+
+        if (choice !== undefined && onApply(setField(draft, field, choice))) onMode({ kind: 'browse' });
+      }
+    },
+    { isActive: active },
+  );
+
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text>Choose a value:</Text>
+      {options.map((o, i) => (
+        <Text key={o} {...(i === index ? { color: 'cyan' } : {})}>
+          {i === index ? '› ' : '  '}
+          {o}
+          {o === current ? <Text dimColor> (now)</Text> : null}
+          {o === field.default ? <Text dimColor> (default)</Text> : null}
+          {EFFECTS[key(field)]?.on(o) ? <Text color="yellow"> uses {EFFECTS[key(field)]?.tag}</Text> : null}
         </Text>
       ))}
-      {message ? <Text color="green">{message}</Text> : null}
-      {error ? <ErrorView error={error} /> : null}
+    </Box>
+  );
+}
+
+function ListEditor({
+  field,
+  mode,
+  active,
+  draft,
+  errors,
+  onApply,
+  onMode,
+}: {
+  field: ConfigField;
+  mode: Extract<Mode, { kind: 'list' }>;
+  active: boolean;
+  draft: unknown;
+  errors: string[];
+  onApply: (next: unknown) => boolean;
+  onMode: (mode: Mode) => void;
+}) {
+  const choices = field.items?.type === 'enum' ? (field.items.options ?? []) : null;
+  const value = effective(draft, field);
+  const items = Array.isArray(value) ? value.map(String) : [];
+  const rows = choices ?? items;
+  const index = Math.min(mode.index, Math.max(0, rows.length - 1));
+  const write = (next: string[]) => onApply(setField(draft, field, next));
+
+  useInput(
+    (input, k) => {
+      if (k.escape) onMode({ kind: 'browse' });
+      else if (k.upArrow || input === 'k') onMode({ ...mode, index: Math.max(0, index - 1) });
+      else if (k.downArrow || input === 'j') onMode({ ...mode, index: Math.min(rows.length - 1, index + 1) });
+      else if (choices) {
+        const choice = choices[index];
+
+        if ((input === ' ' || k.return) && choice !== undefined)
+          write(items.includes(choice) ? items.filter((i) => i !== choice) : [...items, choice]);
+      } else if (input === 'a') onMode({ ...mode, input: 'add' });
+      else if (k.return && items.length) onMode({ ...mode, input: 'edit' });
+      else if ((input === 'd' || k.delete || k.backspace) && items.length)
+        write(items.filter((_, i) => i !== index));
+    },
+    { isActive: active && mode.input === 'none' },
+  );
+
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {rows.length === 0 ? <Text dimColor>(empty: press a to add an entry)</Text> : null}
+      {rows.map((r, i) => (
+        <Text key={r} wrap="truncate-end" {...(i === index ? { color: 'cyan' } : {})}>
+          {i === index ? '› ' : '  '}
+          {choices ? (items.includes(r) ? '[x] ' : '[ ] ') : ''}
+          {r}
+        </Text>
+      ))}
+      {mode.input !== 'none' ? (
+        <TextInput
+          active={active}
+          label={mode.input === 'add' ? 'New entry:' : 'Change the entry:'}
+          initial={mode.input === 'edit' ? (items[index] ?? '') : ''}
+          errors={errors}
+          onCancel={() => onMode({ ...mode, input: 'none' })}
+          onSubmit={(text) => {
+            const entry = text.trim();
+            const next =
+              mode.input === 'add' ? [...items, entry] : items.map((item, i) => (i === index ? entry : item));
+
+            if (entry && write(next))
+              onMode({ ...mode, input: 'none', index: mode.input === 'add' ? next.length - 1 : index });
+          }}
+        />
+      ) : null}
+    </Box>
+  );
+}
+
+function Review({
+  file,
+  changes,
+  active,
+  height,
+  onYes,
+  onNo,
+}: {
+  file: string;
+  changes: Change[];
+  active: boolean;
+  height: number;
+  onYes: () => void;
+  onNo: () => void;
+}) {
+  const side = (value: unknown, field: ConfigField) =>
+    value === undefined ? `(unset, default ${json(field.default)})` : json(value);
+
+  return (
+    <Box flexDirection="column" height={height}>
+      <Text bold>Review changes to {file}</Text>
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden" marginTop={1}>
+        {changes.map((c) => (
+          <Box key={c.path} flexDirection="column" flexShrink={0}>
+            <Text>
+              {c.path}
+              <Text dimColor> {fieldLabel(c.field)}</Text>
+            </Text>
+            <Text color="red" wrap="truncate-end">
+              {'  - '}
+              {side(c.before, c.field)}
+            </Text>
+            <Text color="green" wrap="truncate-end">
+              {'  + '}
+              {side(c.after, c.field)}
+            </Text>
+          </Box>
+        ))}
+      </Box>
+      <Box flexShrink={0} flexDirection="column">
+        <Text dimColor>Only {file} is written. It is checked against the schema again before writing.</Text>
+        <Confirm active={active} question="Save these changes?" onYes={onYes} onNo={onNo} />
+      </Box>
     </Box>
   );
 }
