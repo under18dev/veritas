@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { killedByNewTests, lostResults, requiredClaimIds } from '../src/apply.js';
+import { incompleteMutationRun, killedByNewTests, lostResults, requiredClaimIds } from '../src/apply.js';
 
 describe('lostResults', () => {
   it('lists results that were decided before the patch and are undecided after it', () => {
@@ -83,5 +83,37 @@ describe('lostResults', () => {
       m('M-2', 'killed', ['T-new']),
     ];
     expect([...killedByNewTests(before, after)]).toEqual(['M-2']);
+  });
+});
+
+describe('incompleteMutationRun', () => {
+  it('accepts a run that ran every mutant in scope', () => {
+    expect(incompleteMutationRun({})).toBeNull();
+    expect(incompleteMutationRun({ excludedFiles: [] })).toBeNull();
+    expect(incompleteMutationRun({ timeBudgetExhausted: { seconds: 45, notRun: 0 } })).toBeNull();
+  });
+
+  it('names what an exhausted time budget or a left-out file kept from running', () => {
+    expect(incompleteMutationRun({ timeBudgetExhausted: { seconds: 45, notRun: 7 } })).toMatch(
+      /time budget ran out and 7 mutant\(s\) were not run/,
+    );
+    expect(incompleteMutationRun({ excludedFiles: ['src/a.ts'] })).toMatch(
+      /1 source file\(s\) were left out \(src\/a\.ts\)/,
+    );
+  });
+});
+
+describe('killedByNewTests with a budget-limited baseline', () => {
+  it('does not credit the new tests for a mutant the baseline never ran', () => {
+    const m = (id: string, status: string, killedBy: string[] = [], coveredBy: string[] = []) => ({
+      id,
+      status,
+      killedBy,
+      coveredBy,
+    });
+    // M-1 was pending before (over the budget); an existing test kills it once it runs.
+    const before = [m('M-0', 'killed', ['T-old']), m('M-1', 'pending', [], ['T-old'])];
+    const after = [m('M-0', 'killed', ['T-old']), m('M-1', 'killed', ['T-old'])];
+    expect(killedByNewTests(before, after).size).toBe(0);
   });
 });
