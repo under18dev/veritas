@@ -1149,8 +1149,18 @@ function analyzeBody(
     for (const root of reached.mockRoots) {
       if (isSelfCalled(root)) continue;
       const results = new Set(trackedCalls(root.identifier));
-      // An export of a module the file mocks (`vi.mock('./api')`; `expect(api.save).toHaveBeenCalled()`).
-      const mockedModule = mockedModuleOf(root.identifier, ctx);
+      // How project code can reach the mock other than by being handed it: through a module the file mocks, or
+      // through a global (see `mockRoutes`).
+      const routes = mockRoutes(root, ctx);
+      // A spied global API the test calls itself (\`document.body.scrollIntoView()\`) may have made the calls.
+      const calledInBody = (name: string) =>
+        routes.spied.has(name) &&
+        descendants(body).some(
+          (node) =>
+            ts.isCallExpression(node) &&
+            ts.isPropertyAccessExpression(node.expression) &&
+            node.expression.name.text === name,
+        );
 
       for (const entry of calls)
         if (
@@ -1161,17 +1171,23 @@ function analyzeBody(
             (entry.target.returnsMocks &&
               results.has(entry.node) &&
               keysMatch(keysRead(root.identifier, entry.node), entry.target)) ||
-            // Project code that loads the mocked module calls the mock itself, so how it was called is what the
-            // project call did. Code that does not load it cannot have called it.
-            (mockedModule !== undefined && loadsModule(entry.target.symbol, mockedModule, ctx)))
+            // Project code that loads the mocked module, or uses the global the mock sits in, calls the mock itself,
+            // so how it was called is what the project call did. Code that does neither cannot have called it.
+            [...routes.modules].some((file) => loadsModule(entry.target.symbol, file, ctx)) ||
+            [...routes.names].some(
+              (name) => !calledInBody(name) && reachesName(entry.target.symbol, name, ctx),
+            ))
         )
           observed.add(entry);
     }
   }
 
+  // A read of the page after a project call whose code uses the global `document` may read what that call wrote
+  // (`applyTheme('dark'); expect(document.documentElement.dataset.theme)…`); what the test wrote itself is left out.
   for (const entry of calls)
     if (
-      entry.target.rendered &&
+      (entry.target.rendered ||
+        (!entry.target.deferred && reachesName(entry.target.symbol, 'document', ctx))) &&
       !entry.target.passThrough &&
       documentChecks.some((position) => executedAt(entry.node) < position)
     )
@@ -5448,6 +5464,317 @@ function loadsModule(symbol: string, moduleFile: string, ctx: Ctx): boolean {
 
 /** Per project file, the module files it and the local files it loads import. */
 const loadedModulesCache = new WeakMap<ts.SourceFile, Set<string>>();
+
+/** Globals a test can put a mock into: `window.x = mock`, `globalThis.x = mock`. */
+const GLOBAL_HOLDERS = new Set(['window', 'globalThis', 'global', 'self']);
+/** Configuration of a mock's result: the value it returns or resolves to, or an implementation returning it. */
+const MOCK_RESULT = /^mock(?:Resolved|Rejected)?(?:Return)?Value(?:Once)?$|^mockImplementation(?:Once)?$/;
+
+/** Whether an identifier names a global of the environment (declared only in declaration files, not imported). */
+function isGlobalIdentifier(identifier: ts.Identifier, checker: ts.TypeChecker): boolean {
+  const declarations = checker.getSymbolAtLocation(identifier)?.declarations ?? [];
+
+  return declarations.length > 0 && declarations.every((item) => item.getSourceFile().isDeclarationFile);
+}
+
+function unwrapExpression(expression: ts.Expression): ts.Expression {
+  let current = skipParens(expression);
+
+  while (
+    ts.isAsExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isTypeAssertionExpression(current)
+  )
+    current = skipParens(current.expression);
+
+  return current;
+}
+
+/** The global member a write targets (`window.monaco = …` gives `monaco`), or undefined. */
+function globalMemberWritten(left: ts.Expression, checker: ts.TypeChecker): string | undefined {
+  const target = unwrapExpression(left);
+
+  if (!ts.isPropertyAccessExpression(target)) return undefined;
+  const holder = unwrapExpression(target.expression);
+
+  return ts.isIdentifier(holder) && GLOBAL_HOLDERS.has(holder.text) && isGlobalIdentifier(holder, checker)
+    ? target.name.text
+    : undefined;
+}
+
+/** A value a test file hands to a mocked module or a global, and where project code would meet it. */
+type MockHolder = { value: ts.Node; module?: string; global?: string };
+
+/**
+ * Per function, the globals it assigns one of its parameters to, or a value built from it, by parameter index
+ * (`(m) => { window.monaco = { ...m } }`).
+ */
+const globalSettersCache = new WeakMap<ts.Node, Map<number, string>>();
+
+function globalSetter(
+  fn: ts.SignatureDeclaration & { body?: ts.Node },
+  checker: ts.TypeChecker,
+): Map<number, string> {
+  const cached = globalSettersCache.get(fn);
+
+  if (cached) return cached;
+  const found = new Map<number, string>();
+  const parameters = fn.parameters.map((parameter) =>
+    ts.isIdentifier(parameter.name) ? checker.getSymbolAtLocation(parameter.name) : undefined,
+  );
+
+  for (const node of fn.body ? descendants(fn.body) : []) {
+    if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) continue;
+    const name = globalMemberWritten(node.left, checker);
+
+    if (name === undefined) continue;
+
+    // The parameter itself or a value built from it (`window.monaco = { KeyMod, ...extra }`).
+    for (const item of [node.right, ...descendants(node.right)]) {
+      const index = ts.isIdentifier(item) ? parameters.indexOf(checker.getSymbolAtLocation(item)) : -1;
+
+      if (index >= 0) found.set(index, name);
+    }
+  }
+  globalSettersCache.set(fn, found);
+
+  return found;
+}
+
+/**
+ * Where a test file hands values to code it does not call itself: module mock factories (`vi.mock('./api', () =>
+ * …)`), the result configured for a mock of a mocked module (`vi.mocked(load).mockResolvedValue(store)`), and
+ * globals (`window.monaco = mock`, `vi.stubGlobal('monaco', mock)`, a helper that assigns its argument to a global).
+ */
+const fileMockHoldersCache = new WeakMap<ts.SourceFile, MockHolder[]>();
+
+function fileMockHolders(source: ts.SourceFile, ctx: Ctx): MockHolder[] {
+  const cached = fileMockHoldersCache.get(source);
+
+  if (cached) return cached;
+  const { checker } = ctx;
+  const holders: MockHolder[] = [];
+  const specifierFile = (argument: ts.Expression | undefined): string | undefined => {
+    const node = argument && skipParens(argument);
+    const target =
+      node && ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword
+        ? node.arguments[0]
+        : node;
+    const name = literalString(target);
+
+    return name === undefined ? undefined : resolvedModuleFile(name, source.fileName, ctx);
+  };
+
+  for (const node of descendants(source)) {
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const name = globalMemberWritten(node.left, checker);
+
+      if (name !== undefined) holders.push({ value: node.right, global: name });
+      continue;
+    }
+
+    if (!ts.isCallExpression(node)) continue;
+    const role = mockCall(node, checker);
+
+    if (role === 'module_hoisted') {
+      const file = specifierFile(node.arguments[0]);
+
+      if (file !== undefined && node.arguments[1]) holders.push({ value: node.arguments[1], module: file });
+      continue;
+    }
+
+    if (role === 'stub_global') {
+      const name = literalString(node.arguments[0]);
+
+      if (name !== undefined && node.arguments[1]) holders.push({ value: node.arguments[1], global: name });
+      continue;
+    }
+    const callee = skipParens(node.expression);
+
+    // `<mock>.mockResolvedValue(value)` on an export of a mocked module, directly or through `vi.mocked(...)`.
+    if (ts.isPropertyAccessExpression(callee) && MOCK_RESULT.test(callee.name.text) && node.arguments[0]) {
+      let receiver = unwrapExpression(callee.expression);
+
+      if (ts.isCallExpression(receiver) && mockCall(receiver, checker) !== undefined && receiver.arguments[0])
+        receiver = unwrapExpression(receiver.arguments[0]);
+
+      while (ts.isPropertyAccessExpression(receiver)) receiver = unwrapExpression(receiver.expression);
+      const file = ts.isIdentifier(receiver) ? mockedModuleOf(receiver, ctx) : undefined;
+
+      if (file !== undefined) holders.push({ value: node.arguments[0], module: file });
+      continue;
+    }
+
+    // A helper that assigns an argument to a global (`setWindowMonaco(mock)`), wherever it is declared.
+    let symbol = ts.isIdentifier(callee) ? checker.getSymbolAtLocation(callee) : undefined;
+
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    const declaration = symbol?.valueDeclaration;
+    const fn =
+      declaration && ts.isFunctionDeclaration(declaration)
+        ? declaration
+        : declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+          ? skipParens(declaration.initializer)
+          : undefined;
+
+    if (
+      fn &&
+      (ts.isFunctionDeclaration(fn) || ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) &&
+      !fn.getSourceFile().isDeclarationFile
+    )
+      for (const [index, name] of globalSetter(fn, checker)) {
+        const argument = node.arguments[index];
+
+        if (argument) holders.push({ value: argument, global: name });
+      }
+  }
+  fileMockHoldersCache.set(source, holders);
+
+  return holders;
+}
+
+/** The member path below an identifier where it is used (`h.removeTabs.mock` gives `['removeTabs', 'mock']`). */
+function usedPath(identifier: ts.Identifier): string[] {
+  const path: string[] = [];
+  let current: ts.Node = identifier;
+
+  while (ts.isPropertyAccessExpression(current.parent) && current.parent.expression === current) {
+    path.push(current.parent.name.text);
+    current = current.parent;
+  }
+
+  return path;
+}
+
+/**
+ * Whether a value holds the mock `root`: names it (on a compatible member path, so `{ save: h.save }` holds
+ * `h.save` but not `h.load`), or names a local of the same file whose value does.
+ */
+function holdsMockRoot(value: ts.Node, root: MockReference, checker: ts.TypeChecker, depth = 0): boolean {
+  for (const item of [value, ...descendants(value)]) {
+    if (!ts.isIdentifier(item)) continue;
+    const symbol = valueSymbol(item, checker);
+
+    if (!symbol) continue;
+
+    if (symbol === root.symbol) {
+      const used = usedPath(item);
+      const shorter = Math.min(used.length, root.path.length);
+
+      if (used.slice(0, shorter).join('.') === root.path.slice(0, shorter).join('.')) return true;
+      continue;
+    }
+    const initializer = variableInitializer(symbol.valueDeclaration);
+
+    if (
+      depth < 4 &&
+      initializer &&
+      initializer.getSourceFile() === value.getSourceFile() &&
+      !contains(initializer, value) &&
+      holdsMockRoot(initializer, root, checker, depth + 1)
+    )
+      return true;
+  }
+
+  return false;
+}
+
+/**
+ * How project code can reach a mock the test checks without being handed it: the files of modules it reaches it
+ * through (an import from a mocked module, a module mock factory or a mocked function's result holding it), and the
+ * names of globals or global APIs (`window.monaco` holding it, a spy on `Element.prototype.scrollIntoView`).
+ */
+function mockRoutes(
+  root: MockReference & { identifier: ts.Identifier },
+  ctx: Ctx,
+): { modules: Set<string>; names: Set<string>; spied: Set<string> } {
+  const { checker } = ctx;
+  const modules = new Set<string>();
+  const names = new Set<string>();
+  // The global API methods among the names, which a spy watches whoever calls them.
+  const spied = new Set<string>();
+  const imported = mockedModuleOf(root.identifier, ctx);
+
+  if (imported !== undefined) modules.add(imported);
+  const source = root.identifier.getSourceFile();
+  // A spy on a global object or prototype (`vi.spyOn(Element.prototype, 'scrollIntoView')`), kept in a local.
+  const declaration = root.symbol.valueDeclaration;
+  const values = [
+    ...(variableInitializer(declaration) ? [variableInitializer(declaration) as ts.Expression] : []),
+    ...assignmentsTo(root.symbol, source, checker),
+  ];
+
+  for (const value of values) {
+    let call = unwrapExpression(value);
+
+    // `vi.spyOn(...).mockImplementation(...)` configures the spy and returns it.
+    while (
+      ts.isCallExpression(call) &&
+      ts.isPropertyAccessExpression(call.expression) &&
+      mockCall(call, checker) === undefined &&
+      ts.isCallExpression(unwrapExpression(call.expression.expression))
+    )
+      call = unwrapExpression(call.expression.expression);
+
+    if (!ts.isCallExpression(call) || mockCall(call, checker) !== 'spy') continue;
+    const [object, nameNode] = call.arguments;
+    const name = literalString(nameNode);
+    let base = object && unwrapExpression(object);
+
+    while (base && ts.isPropertyAccessExpression(base)) base = unwrapExpression(base.expression);
+
+    if (name !== undefined && base && ts.isIdentifier(base) && isGlobalIdentifier(base, checker)) {
+      names.add(name);
+      spied.add(name);
+    }
+  }
+
+  for (const holder of fileMockHolders(source, ctx))
+    if (holdsMockRoot(holder.value, root, checker)) {
+      if (holder.module !== undefined) modules.add(holder.module);
+
+      if (holder.global !== undefined) names.add(holder.global);
+    }
+
+  return { modules, names, spied };
+}
+
+/** Per project file, the identifier and property names it and the local files it loads use. */
+const reachedNamesCache = new WeakMap<ts.SourceFile, Set<string>>();
+const ownNamesCache = new WeakMap<ts.SourceFile, Set<string>>();
+
+/**
+ * Whether the file declaring a project symbol, or a local file it loads, uses a name (`document`, `monaco`,
+ * `scrollIntoView`): code that never names a global or an API cannot use it.
+ */
+function reachesName(symbol: string, name: string, ctx: Ctx): boolean {
+  const index = symbol.lastIndexOf('#');
+  const start =
+    index > 0 ? ctx.program.getSourceFile(path.resolve(ctx.root, symbol.slice(0, index))) : undefined;
+
+  if (!start) return false;
+  let names = reachedNamesCache.get(start);
+
+  if (!names) {
+    names = new Set();
+
+    for (const source of [start, ...loadedFiles(start, ctx.checker, ctx.root)]) {
+      let own = ownNamesCache.get(source);
+
+      if (!own) {
+        own = new Set();
+
+        for (const node of descendants(source)) if (ts.isIdentifier(node)) own.add(node.text);
+        ownNamesCache.set(source, own);
+      }
+
+      for (const item of own) names.add(item);
+    }
+    reachedNamesCache.set(start, names);
+  }
+
+  return names.has(name);
+}
 
 /** Project symbols exported by the module a `vi.mock(specifier)` call replaces. */
 function moduleExports(argument: ts.Expression | undefined, ctx: Ctx): string[] {
