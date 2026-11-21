@@ -203,10 +203,11 @@ const TERMINATORS = '。！？.!?';
 const CLOSERS = '」』）】)]"\'”’';
 
 /**
- * Splits text into sentences: at a line break, after `。`, `！` or `？`, and after `.`, `!` or `?` that a space or the
- * end of the text follows. A dot inside a word or a number (`3.2.4`, `libwebkit2gtk-4.1`, `Node.js`, a URL) does not
- * end a sentence, nor does the dot of an abbreviation (`e.g.`). A piece without a letter (`1.` of a numbered list,
- * a `---` rule) is joined to the text after it on the same line, or dropped at the end of the line.
+ * Splits text into sentences: after `。`, `！` or `？`, and after `.`, `!` or `?` that a space or the end of the text
+ * follows. A dot inside a word or a number (`3.2.4`, `libwebkit2gtk-4.1`, `Node.js`, a URL) does not end a sentence,
+ * nor does the dot of an abbreviation (`e.g.`). A sentence never spans a line break, and text left at the end of a
+ * line without ending a sentence is dropped (the last line of the text excepted). A piece without a letter (`1.` of
+ * a numbered list, a `---` rule) is joined to the text after it on the same line, or dropped.
  */
 export function splitSentences(text: string): Array<{ text: string; start: number }> {
   const output: Array<{ text: string; start: number }> = [];
@@ -224,7 +225,8 @@ export function splitSentences(text: string): Array<{ text: string; start: numbe
     const ch = text.charAt(i);
 
     if (ch === '\n') {
-      cut(i, true);
+      // Text that runs to a line break without ending a sentence (a heading, a line of code under a JSDoc block,
+      // one line of a wrapped paragraph) is not a statement on its own.
       start = i + 1;
       continue;
     }

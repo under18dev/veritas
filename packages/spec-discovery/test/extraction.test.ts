@@ -185,6 +185,11 @@ describe('sentence splitting', () => {
 
   it('drops pieces without a letter', () => {
     expect(quotes('2.\n---\n55. 4.\n| 1 | 2 |\nreal text')).toEqual(['real text']);
+    // Nor is text that runs to a line break without ending a sentence, as before.
+    expect(quotes('## 5. Search\nmain: "#1976d2",\nThe limit is 3. Then\nend')).toEqual([
+      'The limit is 3.',
+      'end',
+    ]);
   });
 
   it('reads CHANGELOG and RELEASE documents, not files that only start with those names', async () => {
