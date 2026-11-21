@@ -43,7 +43,7 @@ What each part is for:
 
 - `permissions: contents: read` and `persist-credentials: false` leave the job with a read-only token that is not stored in the checkout. Code from the pull request runs in this job, so it must not be able to push or read secrets.
 - `fetch-depth: 0` fetches the history, so that the base commit of the pull request is available. The action lists the changed files with `git diff <since>...HEAD` and limits mutation testing to the change.
-- `pnpm/action-setup` and `pnpm install` install the project's dependencies: mutation testing runs the project's own Vitest suite. With another package manager, use its install command instead.
+- `pnpm/action-setup` and `pnpm install` install the project's dependencies: mutation testing runs the project's own test suite with its test runner. With another package manager, use its install command instead.
 - `actions/setup-node` provides the Node.js the action runs with (see below). Use Node.js 25 or later (the example uses 26).
 - `upload-artifact` with `if: always()` keeps `.veritas/runs` even when the Veritas step fails, so that the evidence of a failing run can be inspected and the run replayed locally. Set a retention period.
 
@@ -67,7 +67,7 @@ Because the action is a composite action, it runs on the Node.js that the job se
 
 The run is always offline: no GitHub or web sources and no LLM, whatever the configuration says. How `inconclusive` applies:
 
-- When the action cannot run the analysis (no `package.json`, or Vitest unavailable), it decides alone: `fail` gives exit code 4, `warn` and `ignore` give 0.
+- When the action cannot run the analysis (no `package.json`, or the test runner unavailable), it decides alone: `fail` gives exit code 4, `warn` and `ignore` give 0.
 - After an analysis, `fail` turns any inconclusive result into the verdict `inconclusive` (exit code 4).
 - `warn` or `ignore` cannot relax the configuration: with `policy.inconclusiveBehavior: "fail"` in the configuration, inconclusive results still end with exit code 4.
 
@@ -123,7 +123,7 @@ The changed files are listed with `git diff <since>...HEAD`, so the base commit 
 
 When every changed file is Markdown, under `docs/`, or an image (`png`, `jpg`, `jpeg`, `gif`, `svg`, `webp`, `bmp`, `ico`), the action skips the analysis: `verdict` is `skipped` and the exit code is `0`.
 
-When the project has no `package.json`, or Vitest is unavailable, the action does not run and reports `verdict: inconclusive` with exit code `0` under `warn` or `ignore`, and `4` under `fail`. The step summary says why.
+When the project has no `package.json`, or its test runner is unavailable, the action does not run and reports `verdict: inconclusive` with exit code `0` under `warn` or `ignore`, and `4` under `fail`. The step summary says why.
 
 ## Step summary
 

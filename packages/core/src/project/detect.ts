@@ -27,7 +27,8 @@ const LOCKFILES: [string, PackageManager][] = [
   ['package-lock.json', 'npm'],
 ];
 
-function readPackageJson(root: string): Record<string, unknown> | null {
+/** The parsed package.json at `root`, or null when there is none or it cannot be read. */
+export function readPackageJson(root: string): Record<string, unknown> | null {
   try {
     return JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as Record<string, unknown>;
   } catch {
@@ -235,10 +236,17 @@ function importsModule(text: string, modules: readonly string[]): boolean {
   return new RegExp(`(?:from\\s+|import\\s+|require\\(\\s*)['"](?:${names})['"]`).test(text);
 }
 
+/** Whether source text calls one of `names` as a global (`describe(`, `it.each(...)(`), as a runner with globals has them. */
+function callsGlobal(text: string, names: readonly string[]): boolean {
+  if (names.length === 0) return false;
+  const alternatives = names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+
+  return new RegExp(`(?:^|[^.\\w$])(?:${alternatives})(?:\\.\\w+)*\\s*\\(`, 'm').test(text);
+}
+
 /** Inspect a project, and how it has the test runner `runner`, without running any of its code. */
 export function detectProject(root: string, runner: TestRunnerProvider): ProjectInfo {
   const pkg = readPackageJson(root);
-  const deps = { ...((pkg?.dependencies as object) ?? {}), ...((pkg?.devDependencies as object) ?? {}) };
   const packageManager = detectPackageManager(root, pkg);
   const sourceDir = ['src', 'lib'].find((d) => isDir(path.join(root, d)));
   // Source of the workspace packages too, so a test that calls a package of the same repository reaches analysed code.
@@ -258,7 +266,13 @@ export function detectProject(root: string, runner: TestRunnerProvider): Project
   // a test.
   const usesRunner = (name: string, parent: string) => {
     try {
-      return importsModule(readFileSync(path.join(parent, name), 'utf8'), runner.recognition.modules);
+      const text = readFileSync(path.join(parent, name), 'utf8');
+
+      return (
+        importsModule(text, runner.recognition.modules) ||
+        (runner.recognition.globals &&
+          callsGlobal(text, [...runner.recognition.tests, ...runner.recognition.suites]))
+      );
     } catch {
       return false;
     }
@@ -286,12 +300,7 @@ export function detectProject(root: string, runner: TestRunnerProvider): Project
     hasPackageJson: pkg !== null,
     packageManager: ['pnpm', 'npm', 'yarn', 'bun'].includes(packageManager) ? packageManager : 'unknown',
     tsconfig: existsSync(path.join(root, 'tsconfig.json')) ? 'tsconfig.json' : null,
-    testRunner: {
-      name: runner.name,
-      declared: runner.detection.packageName in deps,
-      installedVersion: resolvePackageVersion(root, runner.detection.packageName),
-      configFile: runner.detection.configFiles.find((f) => existsSync(path.join(root, f))) ?? null,
-    },
+    testRunner: runner.detection.detect(root, pkg),
     git: findUp(root, '.git'),
     plugAndPlay: ['.pnp.cjs', '.pnp.js'].some((f) => findUp(root, f)),
     sourceGlobs,

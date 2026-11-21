@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { CODE_CONFIGS, JSON_CONFIG } from '../config/load.js';
-import { VeritasConfig as ConfigSchema, type VeritasConfig } from '../config/schema.js';
+import { VeritasConfig as ConfigSchema, type TestFramework, type VeritasConfig } from '../config/schema.js';
 import { VeritasError } from '../exit-codes.js';
 import { resolveInsideRoot } from '../paths.js';
 import type { TestRunnerProvider } from '../test-runner.js';
@@ -13,10 +13,23 @@ export interface InitOptions {
   dryRun?: boolean;
   /** Write this configuration (validated) instead of the proposed one, e.g. after the user's answers. */
   config?: VeritasConfig;
+  /** The user picked `config`'s test runner when asked (detection found several); it is no longer ambiguous. */
+  testRunnerConfirmed?: boolean;
+}
+
+/** The test runner `init` configures, and why. */
+export interface TestRunnerSelection {
+  provider: TestRunnerProvider;
+  /** Why this runner: what detection found, or that the given configuration names it. */
+  reason: string;
+  /** Detection found several runners and could not tell which one the project uses (see `chooseTestRunner`). */
+  ambiguous: boolean;
 }
 
 export interface InitResult {
   project: ProjectInfo;
+  /** The test runner written to `analysis.testFramework`, and why it was chosen. */
+  testRunner: { name: TestFramework; reason: string; ambiguous: boolean };
   config: VeritasConfig;
   file: string;
   written: boolean;
@@ -27,12 +40,21 @@ export function proposeConfig(project: ProjectInfo): VeritasConfig {
   return ConfigSchema.parse({
     $schema: 'https://veritas.invalid/schemas/config.json',
     project: { packageManager: project.packageManager, tsconfig: project.tsconfig },
-    analysis: { include: project.sourceGlobs, testInclude: project.testGlobs },
+    analysis: {
+      include: project.sourceGlobs,
+      testInclude: project.testGlobs,
+      testFramework: project.testRunner.name,
+    },
   });
 }
 
 /** Detect the project and write `.veritas/config.json`. Never overwrites without `force`. */
-export function initProject(root: string, runner: TestRunnerProvider, options: InitOptions = {}): InitResult {
+export function initProject(
+  root: string,
+  selection: TestRunnerSelection,
+  options: InitOptions = {},
+): InitResult {
+  const runner = selection.provider;
   const project = detectProject(root, runner);
 
   if (!project.hasPackageJson) {
@@ -48,7 +70,7 @@ export function initProject(root: string, runner: TestRunnerProvider, options: I
     throw new VeritasError(
       'user',
       `${runner.name.toUpperCase()}_NOT_FOUND`,
-      `${runner.displayName} is not declared in package.json and not installed; Veritas currently supports ${runner.displayName} projects only`,
+      `${runner.displayName} is not declared in package.json and not installed; ${selection.reason}`,
       `install it with \`${project.packageManager === 'unknown' ? 'npm' : project.packageManager} add -D ${runner.detection.packageName}\` and rerun \`veritas init\``,
     );
   }
@@ -82,9 +104,16 @@ export function initProject(root: string, runner: TestRunnerProvider, options: I
 
   if (!project.git) nextSteps.push('initialise git to enable --since and reproducible run metadata');
 
-  if (options.dryRun) return { project, config, file, written: false, nextSteps };
+  const testRunner = { name: runner.name, reason: selection.reason, ambiguous: selection.ambiguous };
+
+  if (selection.ambiguous)
+    nextSteps.unshift(
+      `check analysis.testFramework in ${JSON_CONFIG}: ${runner.displayName} was chosen, but more than one test runner was found`,
+    );
+
+  if (options.dryRun) return { project, testRunner, config, file, written: false, nextSteps };
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(resolveInsideRoot(root, JSON_CONFIG), `${JSON.stringify(config, null, 2)}\n`);
 
-  return { project, config, file, written: true, nextSteps };
+  return { project, testRunner, config, file, written: true, nextSteps };
 }

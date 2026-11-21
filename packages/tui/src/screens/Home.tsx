@@ -200,7 +200,12 @@ export function Home({
         active={active}
         onYes={() => {
           try {
-            setInitialized(api.init().nextSteps);
+            const result = api.init();
+            // The questions of the command line are not asked here: say which runner was chosen and why.
+            setInitialized([
+              `test runner: ${result.testRunner.name} (${result.testRunner.reason})`,
+              ...result.nextSteps,
+            ]);
             onChange();
           } catch (error) {
             setInitError(error);

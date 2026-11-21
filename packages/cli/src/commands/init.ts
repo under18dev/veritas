@@ -8,10 +8,16 @@ import {
   llmAvailability,
   resolveCommand,
   resolvePackageVersion,
-  type VeritasConfig,
+  VeritasConfig,
   VeritasError,
 } from '@under18dev/veritas-core';
-import { bundledTools, detectProject, initProject, runDoctor } from '@under18dev/veritas-engine';
+import {
+  bundledTools,
+  detectProject,
+  detectTestRunner,
+  initProject,
+  runDoctor,
+} from '@under18dev/veritas-engine';
 import { isCi } from '@under18dev/veritas-improvement';
 import { emitJson, emitText, type GlobalOptions, log } from '../output.js';
 import { runInitWizard, type WizardAction, type WizardEnvironment } from './init-wizard.js';
@@ -94,6 +100,23 @@ async function installLean(root: string): Promise<boolean> {
   }
 }
 
+/** The runners detection could not tell apart, as choices for the wizard: `Jest (jest.config.mjs, ...)`. */
+function ambiguousRunners(root: string): NonNullable<WizardEnvironment['ambiguousTestRunners']> {
+  const choice = detectTestRunner(root);
+
+  return choice.candidates.map((runner) => {
+    const installation = choice.installations.find((candidate) => candidate.name === runner.name);
+    const found = [
+      ...(installation?.evidence ?? []),
+      ...(installation?.installedVersion
+        ? [`${runner.detection.packageName} ${installation.installedVersion} installed`]
+        : []),
+    ];
+
+    return { name: runner.name, label: `${runner.displayName} (${found.join(', ') || 'nothing found'})` };
+  });
+}
+
 /** Whether `init` asks its questions: only for a person at a terminal, never with --json or in CI. */
 export function asksQuestions(json: boolean | undefined, env: NodeJS.ProcessEnv): boolean {
   return !json && !isCi(env);
@@ -152,6 +175,7 @@ export async function initCommand(
   }
   let config = preview.config;
   let actions: WizardAction[] = [];
+  const asked = { testRunner: false };
 
   if (!opts.yes) {
     if (!process.stdin.isTTY) {
@@ -175,8 +199,13 @@ export async function initCommand(
           githubRepo: () => githubRepoFromRemote(gitOutput(opts.root, ['remote', 'get-url', 'origin'])),
           projectHasMutator: resolvePackageVersion(opts.root, '@mizchi/mutator') !== null,
           mutatorVersion: bundledTools()['@mizchi/mutator'] ?? null,
+          ambiguousTestRunners: preview.testRunner.ambiguous ? ambiguousRunners(opts.root) : [],
+          testGlobsFor: (framework) =>
+            detectProject(opts.root, VeritasConfig.parse({ analysis: { testFramework: framework } }))
+              .testGlobs,
         };
         ({ config, actions } = await runInitWizard(preview.config, env, prompter));
+        asked.testRunner = (env.ambiguousTestRunners?.length ?? 0) > 1;
       }
       log(JSON.stringify(config, null, 2));
 
@@ -199,7 +228,11 @@ export async function initCommand(
     }
     config = await perform(actions, config, opts.root);
   }
-  const result = initProject(opts.root, { force: opts.force, config });
+  const result = initProject(opts.root, {
+    force: opts.force,
+    config,
+    testRunnerConfirmed: asked.testRunner,
+  });
 
   if (opts.json) {
     emitJson({ status: 'written', ...result });
@@ -207,6 +240,9 @@ export async function initCommand(
     emitText(`wrote ${result.file}`);
     emitText(
       `detected: package manager=${result.project.packageManager}, tsconfig=${result.project.tsconfig ?? 'none'}, ${result.project.testRunner.name}=${result.project.testRunner.installedVersion ?? 'declared, not installed'}, git=${result.project.git}`,
+    );
+    emitText(
+      `test runner: ${result.testRunner.name} (${result.testRunner.reason})${result.testRunner.ambiguous ? '; check analysis.testFramework' : ''}`,
     );
     emitText(`next:\n${result.nextSteps.map((s) => `  ${s}`).join('\n')}`);
   }

@@ -82,7 +82,9 @@ describe('config', () => {
       JSON.stringify({ name: 'p', devDependencies: { vitest: '5.1.1' } }),
     );
     symlinkSync(outside, path.join(root, '.veritas'), process.platform === 'win32' ? 'junction' : 'dir');
-    expect(() => initProject(root, vitest, { force: true })).toThrow(/escapes the project root/);
+    expect(() =>
+      initProject(root, { provider: vitest, reason: 'test', ambiguous: false }, { force: true }),
+    ).toThrow(/escapes the project root/);
     expect(existsSync(path.join(outside, 'config.json'))).toBe(false);
     writeFileSync(path.join(outside, 'config.json'), 'secret-token-value');
     await expect(loadConfig(root)).rejects.toThrow(/escapes the project root/);

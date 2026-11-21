@@ -1,6 +1,6 @@
 # Veritas
 
-Veritas checks what your tests actually guarantee. It reads the specification you already have (README, docs, JSDoc, OpenAPI/JSON Schema, git history, exported issues), relates it to your TypeScript code and Vitest tests, runs mutation testing and bounded formal checks, and reports each finding with the evidence behind it: the quoted source line, the property, the tests, the mutants and the solver result.
+Veritas checks what your tests actually guarantee. It reads the specification you already have (README, docs, JSDoc, OpenAPI/JSON Schema, git history, exported issues), relates it to your TypeScript code and Vitest or Jest tests, runs mutation testing and bounded formal checks, and reports each finding with the evidence behind it: the quoted source line, the property, the tests, the mutants and the solver result.
 
 It does not claim that code is correct. Every result states what was checked, under which model and bounds, and what remains unknown.
 
@@ -25,7 +25,7 @@ F-99e71509e3c4  [suspected low] test "pricing works" does not check project beha
 ## Requirements
 
 - Node.js 24 or later. Property tests and counterexample replay run project code only under Node.js 25+, which can block its network access, unless `sandbox.allowNetworkWithoutIsolation` is set (26 LTS recommended). The project's code is trusted code: analyse untrusted repositories in a container ([guide](https://veritas.under18.dev/guide/untrusted-repositories)).
-- A TypeScript/JavaScript project tested with Vitest
+- A TypeScript/JavaScript project tested with Vitest or Jest (mutation testing with Jest is experimental)
 - Optional: [Lean 4](https://lean-lang.org/) for kernel-checked proofs
 
 Z3 runs from the `z3-solver` package (WebAssembly); no separate install is needed. See the [support matrix](https://veritas.under18.dev/concepts/support-matrix).

@@ -82,6 +82,54 @@ describe('init wizard', () => {
     expect(VeritasConfig.parse(result.config)).toEqual(result.config);
   });
 
+  it('asks which test runner only when detection could not decide, defaulting to its choice', async () => {
+    const runners = [
+      { name: 'vitest' as const, label: 'Vitest (vitest in package.json)' },
+      { name: 'jest' as const, label: 'Jest (jest.config.mjs)' },
+    ];
+    const asked = scripted(['2']);
+    const picked = await runInitWizard(proposed, environment({ ambiguousTestRunners: runners }), asked);
+
+    expect(asked.lines[0]).toContain('More than one test runner was found');
+    expect(picked.config.analysis.testFramework).toBe('jest');
+    expect(
+      (await runInitWizard(proposed, environment({ ambiguousTestRunners: runners }), scripted([]))).config
+        .analysis.testFramework,
+    ).toBe('vitest');
+    const decided = scripted([]);
+    await runInitWizard(proposed, environment({ ambiguousTestRunners: [] }), decided);
+    expect(decided.lines.some((line) => line.includes('test runner'))).toBe(false);
+  });
+
+  it("replaces the proposed test globs with the picked runner's", async () => {
+    const runners = [
+      { name: 'vitest' as const, label: 'Vitest' },
+      { name: 'jest' as const, label: 'Jest' },
+    ];
+    const asked: string[] = [];
+    const testGlobsFor = (framework: 'vitest' | 'jest') => {
+      asked.push(framework);
+
+      return framework === 'jest' ? ['**/*.test.ts', '**/__tests__/**/*.ts'] : ['**/*.test.ts'];
+    };
+    const picked = await runInitWizard(
+      proposed,
+      environment({ ambiguousTestRunners: runners, testGlobsFor }),
+      scripted(['2']),
+    );
+
+    expect(picked.config.analysis.testInclude).toEqual(['**/*.test.ts', '**/__tests__/**/*.ts']);
+    // Keeping the proposed runner keeps the proposed globs.
+    const kept = await runInitWizard(
+      proposed,
+      environment({ ambiguousTestRunners: runners, testGlobsFor }),
+      scripted(['1']),
+    );
+
+    expect(kept.config.analysis.testInclude).toEqual(proposed.analysis.testInclude);
+    expect(asked).toEqual(['jest']);
+  });
+
   it('does not run codex to check it before the user allows its file reads', async () => {
     const probed: [string, boolean | undefined][] = [];
     const env = environment({

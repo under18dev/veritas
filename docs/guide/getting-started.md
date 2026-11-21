@@ -8,7 +8,7 @@ Install Veritas in your project, check the environment and run the pipeline once
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Node.js                       | 24 or later                                                                                                                           |
 | Node.js for your project code | 25 or later (26 recommended) for property-based tests and counterexample replay, which run your functions with network access blocked |
-| Test runner                   | Vitest, installed in the project                                                                                                      |
+| Test runner                   | Vitest or Jest, installed in the project                                                                                              |
 | Language                      | TypeScript or JavaScript (ESM)                                                                                                        |
 | OS                            | Linux, macOS or Windows                                                                                                               |
 | Optional                      | git, for `--since` and commit metadata; Lean 4 and Lake through [elan](https://github.com/leanprover/elan), for `prove --engine lean` |
@@ -47,7 +47,7 @@ To use Veritas without adding it to each project, install it globally:
 npm install -g @under18dev/veritas
 ```
 
-This puts `veritas` and `veritas-mcp` on your `PATH`. When you run it in a project, Vitest, `@mizchi/mutator` and fast-check are taken from the project if it has them installed. The copy of `@mizchi/mutator` that comes with Veritas runs the project's Vitest, but loads some of its own files from where Veritas is installed. If mutation testing reports that your tests fail without mutants while they pass on their own, add `@mizchi/mutator` to the project too (`npm install -D @mizchi/mutator`).
+This puts `veritas` and `veritas-mcp` on your `PATH`. When you run it in a project, the test runner, `@mizchi/mutator` and fast-check are taken from the project if it has them installed. The copy of `@mizchi/mutator` that comes with Veritas runs the project's test runner, but loads some of its own files from where Veritas is installed. If mutation testing reports that your tests fail without mutants while they pass on their own, add `@mizchi/mutator` to the project too (`npm install -D @mizchi/mutator`).
 
 ## Create the configuration
 
@@ -58,6 +58,7 @@ npx veritas init --yes
 ```text
 wrote /path/to/project/.veritas/config.json
 detected: package manager=npm, tsconfig=none, vitest=5.1.1, git=true
+test runner: vitest (Vitest is the only test runner found (vitest.config.ts, vitest in package.json))
 next:
   veritas doctor
   veritas discover --offline
@@ -70,7 +71,7 @@ next:
 | `--force`   | Overwrite an existing `.veritas/config.json` |
 | `--dry-run` | Print the configuration without writing it   |
 
-`init` stops with `VITEST_NOT_FOUND` if the project does not use Vitest. The default configuration turns network sources and LLMs off and uses the integer domain `[-10000, 10000]` for formal checks. Every setting is listed in the [configuration reference](/reference/configuration).
+`init` finds the project's test runner and writes it to `analysis.testFramework`: Vitest or Jest, from their config files, package.json and the `test` script. It prints which one it chose and why. An installed runner wins over one that is only configured. If both are installed and the `test` script runs only one of them, that one is chosen; otherwise `init` chooses Vitest and asks you to check the setting (in a terminal it asks which one to use, and the TUI shows its choice and the reason). The rules are in the [support matrix](/concepts/support-matrix#test-runners). It stops with `VITEST_NOT_FOUND` when it finds neither, and with `JEST_NOT_FOUND` when the configuration you give names Jest but the project does not have it. The default configuration turns network sources and LLMs off and uses the integer domain `[-10000, 10000]` for formal checks. Every setting is listed in the [configuration reference](/reference/configuration).
 
 ### Answer the questions in a terminal
 
@@ -78,6 +79,7 @@ Without `--yes`, `init` run in a terminal asks about the settings it cannot dete
 
 | Question                                                       | What a yes does                                                                                                                                                                                                           |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Test runner (only when `init` found both and could not decide) | Sets `analysis.testFramework` to the runner you pick                                                                                                                                                                      |
 | LLM provider                                                   | Sets `llm.provider` (`claude`, `claude-code`, `codex` or `openai`); each is marked as available or not set up. `codex` also needs your permission for its read-only shell to read local files (`llm.allowCodexFileReads`) |
 | GitHub issues and pull requests                                | Turns on `sources.github` for the repository (the `origin` remote is offered); read only in runs without `--offline`                                                                                                      |
 | Web pages                                                      | Turns on `sources.web` for the domains you list; fetched only in runs without `--offline`                                                                                                                                 |

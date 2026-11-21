@@ -161,7 +161,13 @@ function fakeApi(overrides: Partial<TuiApi> = {}): TuiApi {
         { feature: 'improve', state: 'degraded', missing: ['llm'] },
       ],
     }),
-    init: vi.fn(() => ({ nextSteps: ['veritas run'] }) as never),
+    init: vi.fn(
+      () =>
+        ({
+          nextSteps: ['veritas run'],
+          testRunner: { name: 'jest', reason: 'Jest is the only test runner found', ambiguous: false },
+        }) as never,
+    ),
     properties: () => [PROPERTY],
     property: () => ({ property: PROPERTY, approvals: [] }),
     decide: vi.fn(
@@ -318,6 +324,8 @@ describe('the TUI', { timeout: 20_000 }, () => {
     await press(app, 'y');
     await until(app, 'Created the configuration');
     expect(api.init).toHaveBeenCalled();
+    // The questions of `veritas init` are not asked here, so the chosen runner and the reason are shown.
+    expect(app.lastFrame()).toContain('test runner: jest (Jest is the only test runner found)');
   });
 
   it('keeps a long project path on one line, cut at the start, with the home directory as ~', async () => {

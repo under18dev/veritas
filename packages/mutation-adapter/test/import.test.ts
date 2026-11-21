@@ -2,7 +2,13 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { Mutant, stableId } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
-import { importMutationReport, mutatorTestId, mutatorTestRef, shellQuote } from '../src/index.js';
+import {
+  importMutationReport,
+  mutatorTestId,
+  mutatorTestRef,
+  shellQuote,
+  testIdsByFullName,
+} from '../src/index.js';
 import { tempDir } from './helpers.js';
 
 const SOURCE =
@@ -300,5 +306,76 @@ describe('mutatorTestRef', () => {
     expect(mutatorTestId('test/a.test.ts#s > n')).toBe(
       stableId('T', { file: 'test/a.test.ts', suitePath: ['s'], name: 'n' }),
     );
+  });
+});
+
+describe('mutator test names of a runner that joins titles with a space (Jest)', () => {
+  const entry = (suitePath: string[], name: string) => ({
+    id: stableId('T', { file: 'test/s.test.ts', suitePath, name }),
+    file: 'test/s.test.ts',
+    suitePath,
+    name,
+  });
+  const tests = [
+    entry(['shippingFee', 'at the threshold'], 'ships free'),
+    entry(['a b'], 'c'),
+    entry(['a'], 'b c'),
+  ];
+  const ids = testIdsByFullName(tests, ' ');
+
+  it('resolves a full name to the inventoried test exactly', () => {
+    expect(mutatorTestId('test/s.test.ts#shippingFee at the threshold ships free', ' ', ids)).toBe(
+      tests[0]?.id,
+    );
+  });
+
+  it('credits no test when two inventoried tests share the full name', () => {
+    expect(ids.get('test/s.test.ts#a b c')).toBeNull();
+    expect(tests.map((t) => t.id)).not.toContain(mutatorTestId('test/s.test.ts#a b c', ' ', ids));
+  });
+
+  it('splits names the inventory does not know with the separator', () => {
+    expect(mutatorTestId('test/s.test.ts#row 1', ' ', ids)).toBe(
+      stableId('T', { file: 'test/s.test.ts', suitePath: ['row'], name: '1' }),
+    );
+    expect(mutatorTestRef('test/s.test.ts#suite case', ' ')).toEqual({
+      file: 'test/s.test.ts',
+      suitePath: ['suite'],
+      name: 'case',
+    });
+  });
+
+  it('keeps a leading bracketed label as part of a Jest title, and tries a Vitest name as written first', () => {
+    const labelled = entry([], '[slow] behavior');
+    const plain = entry([], 'behavior');
+    const both = testIdsByFullName([labelled, plain], ' ');
+
+    expect(mutatorTestId('test/s.test.ts#[slow] behavior', ' ', both, false)).toBe(labelled.id);
+    expect(
+      mutatorTestId('test/s.test.ts#[slow] behavior', ' ', testIdsByFullName([plain], ' '), false),
+    ).not.toBe(plain.id);
+    // Vitest: the literal title wins; a project prefix is dropped only when nothing has the name as written.
+    expect(
+      mutatorTestId('test/s.test.ts#[slow] behavior', ' > ', testIdsByFullName([labelled, plain], ' > ')),
+    ).toBe(labelled.id);
+    expect(mutatorTestId('test/s.test.ts#[unit] behavior', ' > ', testIdsByFullName([plain], ' > '))).toBe(
+      plain.id,
+    );
+    expect(mutatorTestRef('test/s.test.ts#[slow] behavior', ' ', false)).toEqual({
+      file: 'test/s.test.ts',
+      suitePath: ['[slow]'],
+      name: 'behavior',
+    });
+  });
+
+  it('imports killedBy with the runner separator and the inventoried ids', () => {
+    const [m] = importMutationReport(
+      report([
+        mutant('j1', 'Killed', { killedBy: ['test/s.test.ts#shippingFee at the threshold ships free'] }),
+      ]),
+      { root, source: 'mutator', fullNameSeparator: ' ', testIds: ids },
+    );
+
+    expect(m?.killedBy).toEqual([tests[0]?.id]);
   });
 });

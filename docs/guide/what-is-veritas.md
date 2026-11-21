@@ -1,6 +1,6 @@
 # What is Veritas?
 
-Veritas checks what the Vitest tests of a TypeScript or JavaScript project actually guarantee. It reads the rules your project already documents (README, `docs/`, JSDoc, OpenAPI and JSON Schema, git history, exported issues), links them to your code and tests, runs mutation testing, property-based tests and bounded formal checks, and reports each finding together with its evidence.
+Veritas checks what the Vitest or Jest tests of a TypeScript or JavaScript project actually guarantee. It reads the rules your project already documents (README, `docs/`, JSDoc, OpenAPI and JSON Schema, git history, exported issues), links them to your code and tests, runs mutation testing, property-based tests and bounded formal checks, and reports each finding together with its evidence.
 
 ## The problem it addresses
 
@@ -57,7 +57,7 @@ Evidence collectors  Code intelligence  Test inventory
 
 1. Veritas collects sources and keeps the file and line of every statement.
 2. It turns statements such as "Orders with a total of 1000 or more receive a flat discount of 100" into properties of one function and one parameter. It also infers candidate properties from the code; those are hypotheses, not specifications.
-3. It finds your Vitest tests and what they call and assert.
+3. It finds your tests (Vitest or Jest) and what they call and assert.
 4. Mutation testing, property-based tests and Z3 or Lean produce evidence about each property.
 5. The assessment engine produces per-test evidence vectors, findings, a verdict and an exit code.
 6. On request, the improvement planner proposes new test files whose expected values come from accepted properties.

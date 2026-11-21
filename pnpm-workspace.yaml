@@ -4,6 +4,7 @@ packages:
   - packages/test-runners/*
   - fixtures/*
 allowBuilds:
+  "@parcel/watcher": false
   esbuild: false
 minimumReleaseAgeExclude:
   - "@mizchi/mutator-core@0.4.5"

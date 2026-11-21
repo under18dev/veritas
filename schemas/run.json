@@ -269,6 +269,7 @@
               "package_manager",
               "typescript",
               "vitest",
+              "jest",
               "mutator",
               "fast_check",
               "z3",

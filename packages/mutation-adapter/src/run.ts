@@ -24,7 +24,7 @@ import {
   transformErrorLine,
   withoutDebug,
 } from './diagnose.js';
-import { importMutationReport } from './import.js';
+import { importMutationReport, testIdsByFullName } from './import.js';
 import { countMutants, emptyCounts, type MutationRunResult, type MutationRunStatus } from './schema.js';
 
 export interface RunMutationOptions {
@@ -60,6 +60,11 @@ export interface RunMutationOptions {
   noTypecheck?: boolean;
   /** Source files (relative to the root, no glob characters) passed as `--exclude`. */
   exclude?: string[];
+  /**
+   * The project's inventoried tests, to resolve the test names in mutator's report to their ids exactly. Without
+   * them, names are split with the runner's full-name separator.
+   */
+  tests?: readonly { id: string; file: string; suitePath: readonly string[]; name: string }[];
 }
 
 const MUTANT_KEY = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
@@ -83,7 +88,7 @@ export function timeBudgetSeconds(timeoutMs: number): number {
 
 /** Build the mutator argv (without the Node executable and script). Throws on unsafe input. */
 export function buildMutatorArgs(
-  options: Omit<RunMutationOptions, 'testRunner'> & { runner?: string },
+  options: Omit<RunMutationOptions, 'testRunner' | 'tests'> & { runner?: string; configFlag?: string },
 ): string[] {
   const args = ['--root', path.resolve(options.root), '--reporter', 'json', '--reporter', 'agent'];
 
@@ -113,7 +118,7 @@ export function buildMutatorArgs(
     args.push('--exclude', file);
   }
 
-  if (options.configPath !== undefined) args.push('--config', options.configPath);
+  if (options.configPath !== undefined) args.push(options.configFlag ?? '--config', options.configPath);
 
   if (options.noTypecheck) args.push('--no-typecheck');
 
@@ -250,10 +255,16 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     );
 
   const runner = options.testRunner;
-  const { minMajor, declaredMajor, mutatorRunner } = runner.mutation;
+  const { minMajor, declaredMajor, mutatorRunner, configFlag, experimental } = runner.mutation;
 
   if (mutatorRunner === null)
     return result('unsupported', { detail: `@mizchi/mutator cannot run ${runner.displayName} tests` });
+  const unsupported = runner.mutation.unsupportedReason(options.root);
+
+  if (unsupported !== null) return result('unsupported', { detail: unsupported });
+
+  if (experimental !== null)
+    warnings.push(`mutation testing with ${runner.displayName} is experimental: ${experimental}`);
   const runnerVersion = resolvePackageVersion(options.root, runner.detection.packageName);
   const major = majorVersion(runnerVersion);
 
@@ -275,7 +286,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   let args: string[];
 
   try {
-    args = buildMutatorArgs({ ...options, reportDir, noTypecheck, runner: mutatorRunner });
+    args = buildMutatorArgs({ ...options, reportDir, noTypecheck, runner: mutatorRunner, configFlag });
   } catch (error) {
     return result('error', { detail: (error as Error).message });
   }
@@ -314,7 +325,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     (options.exclude?.length ?? 0) > 0 && '--exclude',
     options.killMatrix && '--kill-matrix',
     (options.only?.length ?? 0) > 0 && '--only',
-    writesConfig && '--config',
+    writesConfig && configFlag,
     mutatorRunner !== DEFAULT_MUTATOR_RUNNER && '--runner',
     noTypecheck && '--[no-]typecheck',
     '--time-budget',
@@ -356,6 +367,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       reportDir,
       noTypecheck,
       runner: mutatorRunner,
+      configFlag,
       ...(configPath === undefined ? {} : { configPath }),
       // The caller's own exclusions stay, and the files diagnosed here are added to them.
       ...(exclude.length > 0 ? { exclude: [...new Set([...(options.exclude ?? []), ...exclude])] } : {}),
@@ -514,7 +526,16 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
 
   try {
     const json: unknown = JSON.parse(readFileSync(rawReportPath, 'utf8'));
-    mutants = importMutationReport(json, { root: options.root, source: 'mutator', childProcessKeys });
+    mutants = importMutationReport(json, {
+      root: options.root,
+      source: 'mutator',
+      childProcessKeys,
+      fullNameSeparator: runner.fullNameSeparator,
+      projectPrefix: runner.mutation.projectPrefix,
+      ...(options.tests === undefined
+        ? {}
+        : { testIds: testIdsByFullName(options.tests, runner.fullNameSeparator) }),
+    });
   } catch (error) {
     return result('error', {
       ...common,

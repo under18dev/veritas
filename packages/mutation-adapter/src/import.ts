@@ -58,23 +58,78 @@ const STATUS_MAP: Record<string, MutantStatus> = {
 export const CHILD_PROCESS_MARKER = 'possibly reached in a child process';
 
 /**
- * Split a mutator test id (`<file>#<vitest fullName>`) into the parts test-inventory hashes.
- * Vitest joins suite names with ` > `, so a test or suite name that itself contains ` > ` is split too;
- * a multi-project prefix (`[name] `) is dropped.
+ * Split a mutator test id (`<file>#<full name>`) into the parts test-inventory hashes. The runner joins suite titles
+ * and the test title with `separator` (Vitest's ` > `, the default), so a title that itself contains the separator is
+ * split too. With `projectPrefix` (Vitest, whose multi-project runs prefix names with `[name] `) a leading bracketed
+ * label is dropped. Jest joins titles with a space, which makes this split a guess for any title with a space:
+ * `ImportOptions.testIds` resolves such names exactly instead.
  */
-export function mutatorTestRef(name: string): { file: string; suitePath: string[]; name: string } {
-  const hash = name.indexOf('#');
-  const file = hash < 0 ? '' : name.slice(0, hash).replaceAll('\\', '/');
-  const full = (hash < 0 ? name : name.slice(hash + 1)).replace(/^\[[^\]]*\] /, '');
-  const parts = full.split(' > ');
+export function mutatorTestRef(
+  name: string,
+  separator = ' > ',
+  projectPrefix = true,
+): { file: string; suitePath: string[]; name: string } {
+  const { file, full } = mutatorTestName(name, projectPrefix);
+  const parts = full.split(separator);
   const testName = parts.pop() ?? '';
 
   return { file, suitePath: parts, name: testName };
 }
 
-/** The test id test-inventory assigns to the test behind a mutator test name. */
-export function mutatorTestId(name: string): string {
-  return stableId('T', mutatorTestRef(name));
+/**
+ * The file and the full test name of a mutator test id (`<file>#<full name>`); with `projectPrefix`, without a
+ * leading `[project] ` label.
+ */
+export function mutatorTestName(name: string, projectPrefix = true): { file: string; full: string } {
+  const hash = name.indexOf('#');
+  const file = hash < 0 ? '' : name.slice(0, hash).replaceAll('\\', '/');
+  const literal = hash < 0 ? name : name.slice(hash + 1);
+
+  return { file, full: projectPrefix ? literal.replace(/^\[[^\]]*\] /, '') : literal };
+}
+
+/**
+ * The test id test-inventory assigns to the test behind a mutator test name: looked up in `testIds` (keyed by
+ * `<file>#<full name>`) when given, the name as written first and, with `projectPrefix`, then without a leading
+ * `[project] ` label (so a title that starts with brackets is not cut); otherwise from the name split with
+ * `separator`. A name `testIds` maps to null belongs to more than one inventoried test; it gets an id of its own that
+ * matches none of them, so no kill is credited to a test that may not have run.
+ */
+export function mutatorTestId(
+  name: string,
+  separator = ' > ',
+  testIds?: ReadonlyMap<string, string | null>,
+  projectPrefix = true,
+): string {
+  if (testIds !== undefined) {
+    for (const strip of projectPrefix ? [false, true] : [false]) {
+      const { file, full } = mutatorTestName(name, strip);
+      const known = testIds.get(`${file}#${full}`);
+
+      if (known !== undefined) return known ?? stableId('T', { file, ambiguous: full });
+    }
+  }
+
+  return stableId('T', mutatorTestRef(name, separator, projectPrefix));
+}
+
+/**
+ * The lookup `mutatorTestId` resolves names with: each test's id by `<file>#<full name>`, the full name joined with
+ * `separator`, and null for a full name that more than one test has.
+ */
+export function testIdsByFullName(
+  tests: readonly { id: string; file: string; suitePath: readonly string[]; name: string }[],
+  separator: string,
+): Map<string, string | null> {
+  const ids = new Map<string, string | null>();
+
+  for (const test of tests) {
+    const key = `${test.file}#${[...test.suitePath, test.name].join(separator)}`;
+    const seen = ids.get(key);
+    ids.set(key, seen === undefined || seen === test.id ? test.id : null);
+  }
+
+  return ids;
 }
 
 export interface ImportOptions {
@@ -82,6 +137,15 @@ export interface ImportOptions {
   source: ReportSource;
   /** Keys of mutants mutator flags as reachable only from a child process (agent report `childProcess`). */
   childProcessKeys?: ReadonlySet<string>;
+  /** What the test runner puts between suite titles and the test title in a full name (default Vitest's ` > `). */
+  fullNameSeparator?: string;
+  /** mutator may prefix test names with a `[project] ` label for this runner (default true, as for Vitest). */
+  projectPrefix?: boolean;
+  /**
+   * Test ids of the inventoried tests by `<file>#<full name>`, to resolve mutator test names exactly; null for a full
+   * name more than one test has (see `testIdsByFullName`).
+   */
+  testIds?: ReadonlyMap<string, string | null>;
 }
 
 /**
@@ -108,7 +172,8 @@ export function importMutationReport(json: unknown, options: ImportOptions): Mut
     for (const t of tests) testNames.set(t.id, options.source === 'mutator' ? t.id : `${file}#${t.name}`);
   }
   const testRef = (id: string): string => {
-    if (options.source === 'mutator') return mutatorTestId(id);
+    if (options.source === 'mutator')
+      return mutatorTestId(id, options.fullNameSeparator, options.testIds, options.projectPrefix ?? true);
     const raw = testNames.get(id) ?? id;
 
     // Raw refs are exposed as-is, so redact them; long ones are hashed (the hash reveals nothing).

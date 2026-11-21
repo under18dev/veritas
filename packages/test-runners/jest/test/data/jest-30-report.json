@@ -1,0 +1,136 @@
+{
+  "numFailedTests": 1,
+  "numPassedTests": 9,
+  "numPendingTests": 1,
+  "numTodoTests": 1,
+  "success": false,
+  "testResults": [
+    {
+      "name": "<ROOT>/test/broken.test.ts",
+      "status": "failed",
+      "message": "  ● Test suite failed to run\n\n    Configuration error:\n\n    Could not locate module ./missing.js mapped as:\n    $1.\n\n    Please check your configuration for these entries:\n    {\n      \"moduleNameMapper\": {\n        \"/^(\\.{1,2}\\/.*)\\.js$/\": \"$1\"\n      },\n      \"resolver\": undefined\n    }\n\n      at createNoMappedModuleFoundError (../../../../../../../Users/tanahiro2010/dev/cli/veritas/.claude/worktre",
+      "assertionResults": []
+    },
+    {
+      "name": "<ROOT>/test/tautological.test.ts",
+      "status": "passed",
+      "message": "",
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "pricing works",
+          "status": "passed",
+          "title": "pricing works",
+          "failureMessages": []
+        }
+      ]
+    },
+    {
+      "name": "<ROOT>/test/checkout-mocks.test.ts",
+      "status": "passed",
+      "message": "",
+      "assertionResults": [
+        {
+          "ancestorTitles": ["checkout"],
+          "fullName": "checkout logs the order",
+          "status": "passed",
+          "title": "logs the order",
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": ["checkout"],
+          "fullName": "checkout returns what is due on a large order",
+          "status": "passed",
+          "title": "returns what is due on a large order",
+          "failureMessages": []
+        }
+      ]
+    },
+    {
+      "name": "<ROOT>/test/shipping-boundary.test.ts",
+      "status": "focused",
+      "message": "",
+      "assertionResults": [
+        {
+          "ancestorTitles": ["shippingFee", "at the free shipping threshold"],
+          "fullName": "shippingFee at the free shipping threshold charges shipping just below the threshold",
+          "status": "passed",
+          "title": "charges shipping just below the threshold",
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": ["shippingFee", "at the free shipping threshold"],
+          "fullName": "shippingFee at the free shipping threshold ships free exactly at the threshold",
+          "status": "passed",
+          "title": "ships free exactly at the threshold",
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": ["shippingFee"],
+          "fullName": "shippingFee shippingFee(10) is 500",
+          "status": "passed",
+          "title": "shippingFee(10) is 500",
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": ["shippingFee"],
+          "fullName": "shippingFee shippingFee(9000) is 0",
+          "status": "passed",
+          "title": "shippingFee(9000) is 0",
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": ["shippingFee"],
+          "fullName": "shippingFee is skipped",
+          "status": "pending",
+          "title": "is skipped",
+          "failureMessages": []
+        }
+      ]
+    },
+    {
+      "name": "<ROOT>/test/failing.test.ts",
+      "status": "failed",
+      "message": "  ● fails\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: 3\n    Received: 2\n\n      1 | test('fails', () => {\n    > 2 |   expect(1 + 1).toBe(3);\n        |                 ^\n      3 | });\n      4 | test.todo('later');\n      5 |\n\n      at Object.<anonymous> (test/failing.test.ts:2:17)\n",
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "fails",
+          "status": "failed",
+          "title": "fails",
+          "failureMessages": [
+            "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 3\nReceived: 2\n    at Object.<anonymous> (<ROOT>/test/failing.test.ts:2:17)\n    at Promise.finally.completed (/Users/tanahiro2010/dev/cli/veritas/.claude/worktrees/agent-ac1620dcd46ddc846/node_modules/.pnpm/jest-circus@30.5.2_supports-color@7.2.0/node_modules/jest-circus/build/jestAdapterInit.js:1834:28)"
+          ]
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "later",
+          "status": "todo",
+          "title": "later",
+          "failureMessages": []
+        }
+      ]
+    },
+    {
+      "name": "<ROOT>/test/discount-weak.test.ts",
+      "status": "passed",
+      "message": "",
+      "assertionResults": [
+        {
+          "ancestorTitles": ["discountAmount"],
+          "fullName": "discountAmount gives a discount on large orders",
+          "status": "passed",
+          "title": "gives a discount on large orders",
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": ["discountAmount"],
+          "fullName": "discountAmount gives no discount on small orders",
+          "status": "passed",
+          "title": "gives no discount on small orders",
+          "failureMessages": []
+        }
+      ]
+    }
+  ]
+}

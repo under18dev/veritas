@@ -18,7 +18,7 @@ function generated(root: string, file: string, experimental: boolean, importPath
     seed: SEED,
     numRuns: 200,
     experimental,
-    templates: vitestTestRunner.templates,
+    templates: vitestTestRunner.templates(process.cwd()),
   });
 }
 
@@ -91,7 +91,7 @@ describe('generateTestFile', () => {
         seed: 1,
         numRuns: 1,
         experimental: false,
-        templates: vitestTestRunner.templates,
+        templates: vitestTestRunner.templates(process.cwd()),
       }),
     ).toThrow(/not a valid identifier/);
     const source = generateTestFile({
@@ -103,7 +103,7 @@ describe('generateTestFile', () => {
       seed: 1,
       numRuns: 1,
       experimental: false,
-      templates: vitestTestRunner.templates,
+      templates: vitestTestRunner.templates(process.cwd()),
     });
     expect(source.split('\n').some((l) => l.startsWith('process.exit'))).toBe(false);
   });
