@@ -764,8 +764,15 @@ function analyzeBody(
       written = node.expression.expression;
     }
     const chain = written && documentChain(written, checker);
+    // `document.body.appendChild(anchor)` with `anchor = document.createElement('button')` the test never fills: an
+    // empty element no text query can find, though a query by role or structure can.
+    const empty =
+      content &&
+      ts.isCallExpression(node) &&
+      node.arguments.length === 1 &&
+      emptyElement(node.arguments[0], body, checker);
 
-    if (chain) documentWrites.push({ chain, end: node.getEnd(), content });
+    if (chain) documentWrites.push({ chain, end: node.getEnd(), content, empty });
   }
 
   const reaches = new Map(
@@ -1024,7 +1031,7 @@ function assertionReach(
         const written = documentWrites.some(
           (write) =>
             write.end < at &&
-            (write.content ||
+            ((write.content && !(write.empty && isTextQuery(item))) ||
               (chain !== undefined && (chain === write.chain || chain.startsWith(`${write.chain}.`)))),
         );
 
@@ -1155,6 +1162,60 @@ interface DocumentWrite {
   chain: string;
   end: number;
   content: boolean;
+  /** The content is an element the test created and left empty. */
+  empty?: boolean;
+}
+
+/** Testing Library queries that match an element by its text or attributes, which an empty element has none of. */
+const TEXT_QUERY = /By(?:Text|LabelText|PlaceholderText|DisplayValue|AltText|Title|TestId)$/;
+
+function isTextQuery(node: ts.Node): boolean {
+  return (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    TEXT_QUERY.test(node.expression.name.text)
+  );
+}
+
+/**
+ * Whether a value is a local made by `document.createElement(...)` that the body never fills: no member of it is
+ * assigned and no method is called on it.
+ */
+function emptyElement(value: ts.Expression | undefined, body: ts.Node, checker: ts.TypeChecker): boolean {
+  const local = value && skipParens(value);
+
+  if (!local || !ts.isIdentifier(local)) return false;
+  const symbol = checker.getSymbolAtLocation(local);
+  const initializer = variableInitializer(symbol?.valueDeclaration);
+  const created =
+    initializer &&
+    ts.isCallExpression(initializer) &&
+    ts.isPropertyAccessExpression(initializer.expression) &&
+    initializer.expression.name.text === 'createElement' &&
+    ts.isIdentifier(initializer.expression.expression) &&
+    initializer.expression.expression.text === 'document';
+
+  if (!created) return false;
+
+  return !descendants(body).some((item) => {
+    if (!ts.isIdentifier(item) || checker.getSymbolAtLocation(item) !== symbol) return false;
+    const access = item.parent;
+
+    if (
+      !(ts.isPropertyAccessExpression(access) || ts.isElementAccessExpression(access)) ||
+      access.expression !== item
+    )
+      return false;
+    const outer = access.parent;
+
+    return (
+      (ts.isCallExpression(outer) && outer.expression === access) ||
+      (ts.isBinaryExpression(outer) &&
+        outer.left === access &&
+        outer.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        outer.operatorToken.kind <= ts.SyntaxKind.LastAssignment)
+    );
+  });
 }
 
 /** Properties whose assignment replaces the content of an element. */

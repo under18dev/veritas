@@ -631,6 +631,18 @@ describe('links that are not there, third pass', () => {
         render(<Dialog open />);
         expect(screen.getByText('Hi')).toBeInTheDocument();
       });
+      it('text query after an empty anchor', () => {
+        const anchor = document.createElement('button');
+        document.body.appendChild(anchor);
+        render(<Dialog open title="Hi" />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('role query after an empty anchor', () => {
+        const anchor = document.createElement('button');
+        document.body.appendChild(anchor);
+        render(<Dialog open title="Hi" />);
+        expect(screen.getByRole('button')).toBeInTheDocument();
+      });
       it('query selector after inner HTML', () => {
         document.documentElement.innerHTML = '<p class="x">Hi</p>';
         render(<Dialog open />);
@@ -640,6 +652,9 @@ describe('links that are not there, third pass', () => {
 
     expect(byName('screen after appended content').asserted).toBe(false);
     expect(byName('query selector after inner HTML').asserted).toBe(false);
+    // An element the test created and left empty: no text query can find it, a role query can.
+    expect(byName('text query after an empty anchor').asserted).toBe(true);
+    expect(byName('role query after an empty anchor').asserted).toBe(false);
   });
 
   it('leaves calls that do not reach a helper result out of the keys it carries', () => {
