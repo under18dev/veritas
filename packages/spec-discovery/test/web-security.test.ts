@@ -200,6 +200,44 @@ describe('web crawl limits', () => {
     });
   });
 
+  it('says why a URL was refused and how to allow a domain, without allowing the repository on GitHub', async () => {
+    const root = tempProject('web-refusal-reasons');
+    seed(
+      root,
+      'https://github.com/acme/widgets/compare/v1.0.0...v1.1.0 https://semver.org/ ftp://docs.example.test/f https://127.0.0.1/a',
+    );
+    const requested: string[] = [];
+    const result = await discoverEvidence({
+      root,
+      lookup: publicLookup,
+      sources: ['local', 'web'],
+      config: config({
+        web: { enabled: true, allowDomains: ['docs.example.test'] },
+        github: { enabled: true, repo: 'acme/widgets' },
+      }),
+      fetch: async (input) => {
+        requested.push(String(input));
+
+        return new Response('');
+      },
+    });
+    expect(requested).toEqual([]);
+    expect(result.skipped.filter((s) => s.source !== 'git')).toEqual([
+      {
+        source: 'https://github.com/acme/widgets/compare/v1.0.0...v1.1.0',
+        reason:
+          'URL refused: github.com is not in sources.web.allowDomains; add it there, or pass --allow-domain github.com for one run, to fetch it (issues and pull requests of sources.github.repo are read through the GitHub source)',
+      },
+      {
+        source: 'https://semver.org/',
+        reason:
+          'URL refused: semver.org is not in sources.web.allowDomains; add it there, or pass --allow-domain semver.org for one run, to fetch it',
+      },
+      { source: 'ftp://docs.example.test/f', reason: 'URL refused: only http and https URLs are fetched' },
+      { source: 'https://127.0.0.1/a', reason: 'URL refused: private, loopback, or reserved address' },
+    ]);
+  });
+
   it('reads only text documents and follows no links to stylesheets, scripts, images or fonts', async () => {
     const root = tempProject('web-content-type');
     seed(

@@ -669,9 +669,33 @@ export function isUnsafeHost(host: string): boolean {
   return false;
 }
 
+const UNSAFE_HOST = 'URL refused: private, loopback, or reserved address';
+
+/**
+ * Why a URL is not fetched, or null when its scheme, host and domain are allowed. Only the domains in
+ * `sources.web.allowDomains` (or `--allow-domain`) are fetched. GitHub URLs of `sources.github.repo` are not allowed
+ * implicitly: enabling the GitHub source consents to its API, not to crawling github.com pages (diffs, file views),
+ * so the reason says how to allow the domain instead.
+ */
+function refuseUrl(url: URL, config: VeritasConfig): string | null {
+  if (!['http:', 'https:'].includes(url.protocol)) return 'URL refused: only http and https URLs are fetched';
+
+  if (isUnsafeHost(url.hostname)) return UNSAFE_HOST;
+
+  if (hostAllowed(url.hostname, config.sources.web.allowDomains)) return null;
+  const host = url.hostname.toLowerCase();
+  const repo = config.sources.github.enabled ? config.sources.github.repo?.toLowerCase() : undefined;
+  const ofRepo =
+    repo !== undefined && host === 'github.com' && `${url.pathname.toLowerCase()}/`.startsWith(`/${repo}/`);
+
+  return `URL refused: ${host} is not in sources.web.allowDomains; add it there, or pass --allow-domain ${host} for one run, to fetch it${
+    ofRepo ? ' (issues and pull requests of sources.github.repo are read through the GitHub source)' : ''
+  }`;
+}
+
 /** Resolves `host` and returns a refusal reason, or null when every address is public. */
 async function refuseByDns(host: string, lookup: HostLookup): Promise<string | null> {
-  if (isUnsafeHost(host)) return 'URL refused by protocol, SSRF, or allowlist policy';
+  if (isUnsafeHost(host)) return UNSAFE_HOST;
   const bare = host.replace(/^\[(.*)\]$/, '$1');
 
   if (isIP(bare)) return null;
@@ -762,12 +786,10 @@ async function collectWeb(
       continue;
     }
 
-    if (
-      !['http:', 'https:'].includes(url.protocol) ||
-      isUnsafeHost(url.hostname) ||
-      !hostAllowed(url.hostname, config.sources.web.allowDomains)
-    ) {
-      skipped.push({ source: next.url, reason: 'URL refused by protocol, SSRF, or allowlist policy' });
+    const refusal = refuseUrl(url, config);
+
+    if (refusal) {
+      skipped.push({ source: next.url, reason: refusal });
       continue;
     }
 

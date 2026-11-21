@@ -25,6 +25,8 @@ veritas discover --sources local,web --allow-domain docs.example.com --max-pages
 
 `--allow-domain` と `--max-pages` はその実行にだけ効き、これだけでは Web の収集は有効になりません。GitHub の出典は、`GITHUB_TOKEN` が設定されていればそれを送ります。
 
+許可していないドメインの URL はスキップし、その理由として、ドメイン名と許可する方法を示します。`sources.github.repo` のリポジトリを指す `github.com` のリンクも同じ扱いです。GitHub の出典を有効にすると、そのリポジトリの Issue とプルリクエストを GitHub API で読みますが、github.com のページをたどるわけではありません。そうしたページの大半は差分やファイルの表示です。これらのページも取得したいときは、`sources.web.allowDomains` に `github.com` を加えてください。
+
 Web の収集で読むのは、HTML、プレーンテキスト、Markdown のテキスト文書だけです。スタイルシート、スクリプト、画像、フォントなど、ほかの種類の応答は `not a text document (<type>)` という理由でスキップし、本文も読みません。リンクをたどるときは `<a href>` のリンクだけを使い、そうしたファイル（`.css`、`.js`、画像、フォントなど）へのリンクはたどりません。
 
 読んだテキストは、信頼しないデータとして保存します。README や Issue や Web ページの中に指示が書かれていても、引用するだけで従いません。

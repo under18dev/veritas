@@ -125,9 +125,10 @@ describe('discoverEvidence', () => {
     );
     expect(result.sources.every((s) => !s.summary.includes('ghp_'))).toBe(true);
     expect(result.statements.every((s) => !s.quote.includes('ghp_'))).toBe(true);
-    expect(result.skipped.some((s) => s.reason.includes('SSRF') || s.reason.includes('allowlist'))).toBe(
-      true,
-    );
+    expect(result.skipped).toContainEqual({
+      source: 'https://127.0.0.1/private',
+      reason: 'URL refused: private, loopback, or reserved address',
+    });
   });
 
   it('makes no fetch calls when web is disabled or offline, including explicit source selection', async () => {
