@@ -81,6 +81,7 @@ import { inventoryTests, isTestSupportPath, type TestInventory } from '@under18d
 import { ARTIFACTS } from './artifacts.js';
 import {
   CONFIRMATION_MUTANTS_PER_LINE,
+  MAIN_RUN_BUDGET_SHARE,
   MIN_CONFIRMATION_MS,
   mergeConfirmation,
   selectConfirmation,
@@ -704,12 +705,20 @@ async function runInContext(
           })
         : null;
       const cached = cache && cacheKey ? cache.get('mutation', cacheKey, MutationRunResult) : undefined;
+      // With tests to check after it, the main run stops starting mutants earlier, to leave the check some time.
+      const reserve =
+        config.mutation.confirmDisconnected &&
+        mapped !== undefined &&
+        selectConfirmation(mapped, [], config, options.scope).testIds.length > 0;
       const result =
         cached ??
         (await runMutation({
           root,
           config,
           testRunner,
+          ...(reserve
+            ? { timeBudgetSeconds: (config.mutation.timeoutMs * MAIN_RUN_BUDGET_SHARE) / 1000 }
+            : {}),
           reportDir: store.pathFor('mutation'),
           signal,
           ...(options.since ? { since: options.since } : {}),

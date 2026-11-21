@@ -5,6 +5,11 @@ import { isTestSupportPath, type TestInventory } from '@under18dev/veritas-test-
 
 /** Mutants per source line the confirmation runs: one is enough to show a test observes the line. */
 export const CONFIRMATION_MUTANTS_PER_LINE = 1;
+/**
+ * Share of mutation.timeoutMs after which the main run starts no new mutant when there are tests to check, instead of
+ * mutator's usual 75%: what the main run leaves over is the check's time.
+ */
+export const MAIN_RUN_BUDGET_SHARE = 0.55;
 /** The confirmation needs at least this much of mutation.timeoutMs left to start. */
 export const MIN_CONFIRMATION_MS = 30_000;
 

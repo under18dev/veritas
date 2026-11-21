@@ -62,6 +62,11 @@ export interface RunMutationOptions {
   exclude?: string[];
   /** Run at most this many mutants per source line (`--mutants-per-line`); the rest stay `pending`. */
   mutantsPerLine?: number;
+  /**
+   * Seconds after which mutator starts no new mutant, when that is earlier than 75% of the timeout (the default), to
+   * leave time for work after this run.
+   */
+  timeBudgetSeconds?: number;
 }
 
 const MUTANT_KEY = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
@@ -131,7 +136,15 @@ export function buildMutatorArgs(
     if (!MUTANT_KEY.test(key)) throw new TypeError(`invalid mutant key for --only: ${JSON.stringify(key)}`);
     args.push('--only', key);
   }
-  args.push('--time-budget', String(timeBudgetSeconds(options.config.mutation.timeoutMs)));
+  const budget = timeBudgetSeconds(options.config.mutation.timeoutMs);
+  args.push(
+    '--time-budget',
+    String(
+      options.timeBudgetSeconds === undefined
+        ? budget
+        : Math.max(1, Math.min(budget, Math.floor(options.timeBudgetSeconds))),
+    ),
+  );
 
   return args;
 }
@@ -541,7 +554,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
 
   if (budget !== null) {
     warnings.push(
-      `mutator's time budget of ${budget.seconds}s ran out (75% of mutation.timeoutMs, or of what was left of it when mutator ran a second time): ${budget.notRun} mutant(s) were not run, so the results cover only part of the code in scope and mutation results are partial. Narrow the run with --since <ref>, or raise mutation.timeoutMs`,
+      `mutator's time budget of ${budget.seconds}s ran out (${options.timeBudgetSeconds === undefined ? '75% of mutation.timeoutMs' : 'set below 75% of mutation.timeoutMs to leave time for the work after this run'}, or of what was left of it when mutator ran a second time): ${budget.notRun} mutant(s) were not run, so the results cover only part of the code in scope and mutation results are partial. Narrow the run with --since <ref>, or raise mutation.timeoutMs`,
     );
   } else if (counts.pending > 0) {
     warnings.push(

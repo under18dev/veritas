@@ -73,6 +73,13 @@ describe('buildMutatorArgs', () => {
     }
   });
 
+  it('starts no new mutant earlier when asked, never later than 75% of the timeout', () => {
+    const budget = (args: string[]) => args[args.indexOf('--time-budget') + 1];
+    expect(budget(buildMutatorArgs({ ...base, timeBudgetSeconds: 30 }))).toBe('30');
+    expect(budget(buildMutatorArgs({ ...base, timeBudgetSeconds: 600 }))).toBe('45');
+    expect(budget(buildMutatorArgs({ ...base, timeBudgetSeconds: 0 }))).toBe('1');
+  });
+
   it('rejects option injection and scopes outside the root', () => {
     expect(() => buildMutatorArgs({ ...base, since: '--output=/tmp/x' })).toThrow(/invalid git ref/);
     expect(() => buildMutatorArgs({ ...base, since: '' })).toThrow(/invalid git ref/);
