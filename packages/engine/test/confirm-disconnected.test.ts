@@ -28,6 +28,7 @@ const inventory = {
     test('T-constant', 'src/a.test.ts', { suspicions: ['tautological_assertion'] }),
     test('T-opaque', 'src/a.test.ts', { suspicions: ['opaque_call'] }),
     test('T-skipped', 'src/a.test.ts', { modifiers: ['skip'] }),
+    test('T-expected-failure', 'src/a.test.ts', { modifiers: ['expected_failure'] }),
     test('T-killer', 'src/b.test.ts'),
     test('T-no-source', 'src/c.test.ts'),
   ],
@@ -38,7 +39,8 @@ describe('selectConfirmation', () => {
 
   it('selects the unlinked tests the main run credited with no kill, with the sources their files import', () => {
     const selection = selectConfirmation(inventory, [mutant('M-1', 'killed', ['T-killer'], [])], config);
-    // A constant assertion, an opaque call, a linked or skipped test, a kill or no project source: not selected.
+    // A constant assertion, an opaque call, a linked, skipped or expected-failure test, a kill or no project source:
+    // not selected.
     expect(selection).toEqual({
       testIds: ['T-unlinked'],
       testFiles: ['src/a.test.ts'],

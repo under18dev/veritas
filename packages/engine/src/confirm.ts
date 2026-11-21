@@ -60,6 +60,8 @@ export function selectConfirmation(
       unlinkedByInference(t) &&
       !t.modifiers.includes('skip') &&
       !t.modifiers.includes('todo') &&
+      // An expected failure is inconclusive whatever it kills, so checking it would only take time from the main run.
+      !t.modifiers.includes('expected_failure') &&
       !killers.has(t.id) &&
       sourcesFor(t).length > 0,
   );
