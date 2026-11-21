@@ -3418,7 +3418,7 @@ function isMockCreation(expression: ts.Expression, checker: ts.TypeChecker): boo
 }
 
 /**
- * The local variables an invocation is given that hold Vitest mocks: mocks themselves, named anywhere in its
+ * The local variables an invocation is given that hold mocks of the test runner: mocks themselves, named anywhere in its
  * arguments, and objects holding mocks (`const props = { onSave: vi.fn() }; render(<Dialog {...props} />)`). What a
  * local function called there returns (`render(<Tabs {...defaultProps()} />)`, `useShortcuts(params())`) and what an
  * object it is given holds (`editorRef = { current: mockEditor }`) are followed.
@@ -3837,7 +3837,7 @@ function valuesOf(declaration: ts.VariableDeclaration, checker: ts.TypeChecker):
   return symbol ? assignmentsTo(symbol, declaration.getSourceFile(), checker) : [];
 }
 
-/** Whether a variable holds a Vitest mock (see `mockHolding`). */
+/** Whether a variable holds a mock of the test runner (see `mockHolding`). */
 function holdsMock(declaration: ts.VariableDeclaration, checker: ts.TypeChecker): boolean {
   return mockHolding(declaration, checker) === 'mock';
 }
@@ -3847,7 +3847,7 @@ const deciding = new Set<ts.VariableDeclaration>();
 let cycleSeen = false;
 
 /**
- * What a variable holds: a Vitest mock (`const onSave = vi.fn()`, or a `let` only ever assigned mocks in a hook), an
+ * What a variable holds: a mock of the test runner (`const onSave = vi.fn()`, or a `let` only ever assigned mocks in a hook), an
  * object or array holding mocks (`{ onSave: vi.fn() }`, what a local `createProps()` returns), or neither.
  */
 function mockHolding(
@@ -3883,7 +3883,7 @@ function mockHolding(
   return result;
 }
 
-/** Whether an expression makes a Vitest mock, or an object or array holding one (see `mockHolding`). */
+/** Whether an expression makes a mock of the test runner, or an object or array holding one (see `mockHolding`). */
 function mockValue(
   expression: ts.Expression,
   checker: ts.TypeChecker,

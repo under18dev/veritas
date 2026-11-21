@@ -35,7 +35,7 @@ Evidence collectors  Code intelligence  Test inventory
 | `spec-discovery`           | Evidence collectors (local, GitHub, web), provenance graph, normative statement extraction                                                                                       |
 | `code-intelligence`        | TypeScript analysis: exports, signatures, branches, boundaries, side effects                                                                                                     |
 | `property-engine`          | Property registry, review state machine, conflicts, approvals                                                                                                                    |
-| `test-inventory`           | Vitest test discovery, assertion analysis, test-symbol-property graph                                                                                                            |
+| `test-inventory`           | Test discovery, assertion analysis, test-symbol-property graph, using the test API names of the test runner                                                                      |
 | `mutation-adapter`         | Runs the mutation backend and normalizes results                                                                                                                                 |
 | `property-testing`         | fast-check generators, seeds, shrinking, replay                                                                                                                                  |
 | `formal-core`              | TypeScript subset to Property IR, claims, semantic validation                                                                                                                    |
@@ -43,6 +43,7 @@ Evidence collectors  Code intelligence  Test inventory
 | `assessment`               | Evidence vectors and test outcomes                                                                                                                                               |
 | `improvement`              | Plans, approved patches in isolated workspaces, rollback                                                                                                                         |
 | `llm`, `llm-providers/*`   | Provider-neutral LLM interface and one adapter per provider: `llm-providers/claude` (Anthropic API), `claude-code` (Claude Code CLI), `openai` (OpenAI API), `codex` (Codex CLI) |
+| `test-runners/*`           | One provider per test runner, implementing `TestRunnerProvider` from `core`: detection, test API names, test runs, mutation glue, generated-test syntax (now `vitest`)           |
 | `reports`                  | Text, JSON, Markdown, HTML, SARIF                                                                                                                                                |
 | `mcp`                      | MCP server                                                                                                                                                                       |
 | `github-action`            | CI integration                                                                                                                                                                   |
