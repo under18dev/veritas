@@ -88,10 +88,10 @@ function lineRange(text: string, start: number, end: number): SourceRange {
   return { start: line(start), end: line(end) };
 }
 
-// Set per discovery run, so secret environment values are read once rather than for every statement.
-let redactText: (text: string) => string = (text) => redact(text);
+type Redact = (text: string) => string;
 
-function cleanQuote(text: string): string {
+/** Collapsed and redacted; `redactText` is made once per discovery run, so secrets are read once, not per statement. */
+function cleanQuote(text: string, redactText: Redact = (t) => redact(t)): string {
   return redactText(text.replace(/\s+/g, ' ').trim()).slice(0, 300);
 }
 
@@ -182,7 +182,7 @@ export function withoutCodeBlocks(text: string): string {
     .join('\n');
 }
 
-function extract(text: string, sourceId: string, stale: boolean): NormativeStatement[] {
+function extract(text: string, sourceId: string, stale: boolean, redactText: Redact): NormativeStatement[] {
   const output: NormativeStatement[] = [];
   const releaseOf = versionAt(text);
 
@@ -190,7 +190,7 @@ function extract(text: string, sourceId: string, stale: boolean): NormativeState
     const raw = match[0].trim();
 
     if (!raw) continue;
-    const quote = cleanQuote(raw);
+    const quote = cleanQuote(raw, redactText);
     const flags: string[] = [];
 
     if (
@@ -296,7 +296,7 @@ function exportedDocs(text: string): string {
   return output.join('\n');
 }
 
-function sourceFrom(input: SourceInput, capturedAt: string): EvidenceSource {
+function sourceFrom(input: SourceInput, capturedAt: string, redactText: Redact): EvidenceSource {
   const contentHash = sha256(input.text);
   // The id depends on what the source says, not on the commit it was read at: a commit that leaves the text
   // unchanged must keep source, statement and property ids (and the approvals recorded against them).
@@ -315,7 +315,7 @@ function sourceFrom(input: SourceInput, capturedAt: string): EvidenceSource {
     capturedAt,
     contentHash,
     derivedFrom: [],
-    summary: redact(cleanQuote(input.text)),
+    summary: cleanQuote(input.text, redactText),
     trust: 'untrusted_data',
   });
 }
@@ -424,7 +424,7 @@ async function collectLocal(
   return inputs;
 }
 
-function schemaStatements(text: string, sourceId: string): NormativeStatement[] {
+function schemaStatements(text: string, sourceId: string, redactText: Redact): NormativeStatement[] {
   const out: NormativeStatement[] = [];
   const re = /["']?(exclusiveMinimum|exclusiveMaximum|minimum|maximum)["']?\s*:\s*(true|false|-?\d[\d,]*)/gi;
 
@@ -435,7 +435,7 @@ function schemaStatements(text: string, sourceId: string): NormativeStatement[] 
     if (!key || !value || value === 'true' || value === 'false') continue;
     const operator: '<' | '<=' | '>' | '>=' =
       key === 'minimum' ? '>=' : key === 'maximum' ? '<=' : key === 'exclusiveminimum' ? '>' : '<';
-    const quote = cleanQuote(match[0]);
+    const quote = cleanQuote(match[0], redactText);
     const range = lineRange(text, match.index ?? 0, (match.index ?? 0) + match[0].length);
     const relation = {
       kind: 'threshold' as const,
@@ -904,7 +904,8 @@ export async function discoverEvidence(options: {
    */
   gitRoot?: string;
 }): Promise<DiscoveryResult> {
-  redactText = createRedactor();
+  // One redactor per run: secret environment values are read once, and concurrent runs never share it.
+  const redactText = createRedactor();
   const capturedAt = (options.now ?? (() => new Date()))().toISOString();
   const selected = options.sources ?? [
     'local',
@@ -972,7 +973,7 @@ export async function discoverEvidence(options: {
   const sourceByInput = new Map<SourceInput, EvidenceSource>();
 
   for (const input of inputs) {
-    const source = sourceFrom(input, capturedAt);
+    const source = sourceFrom(input, capturedAt, redactText);
     sources.push(source);
     sourceByInput.set(input, source);
   }
@@ -995,13 +996,14 @@ export async function discoverEvidence(options: {
     const stale = /(?:^|\/)v1(?:\/|$)|deprecated|(?:^|\/)old(?:\/|$)/i.test(input.locator);
     statements.push(
       ...(input.kind === 'standard'
-        ? schemaStatements(input.text, source.id)
+        ? schemaStatements(input.text, source.id, redactText)
         : extract(
             /\.mdx?$/i.test(input.locator) || input.kind === 'issue' || input.kind === 'pr'
               ? withoutCodeBlocks(input.text)
               : input.text,
             source.id,
             stale,
+            redactText,
           )),
     );
   }
