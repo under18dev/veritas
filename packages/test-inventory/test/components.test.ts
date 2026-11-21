@@ -1653,6 +1653,66 @@ describe('helper calls that run and pass-through render results', () => {
   });
 });
 
+describe('evaluated names, helper write positions and per-call factories', () => {
+  it('follows a local only when the assertion evaluates it', () => {
+    const byName = inventory(`${header}
+      it('local in a compared function', () => {
+        render(<Dialog open title="Hi" />);
+        const value = screen.queryByText('Hi');
+        expect(() => value).toBeTruthy();
+      });
+      it('local compared', () => {
+        render(<Dialog open title="Hi" />);
+        const value = screen.queryByText('Hi');
+        expect(value).toBeTruthy();
+      });
+    `);
+
+    expect(byName('local in a compared function').asserted).toBe(false);
+    expect(byName('local compared').asserted).toBe(true);
+  });
+
+  it('places a write in a local helper where the helper is called', () => {
+    const byName = inventory(`${header}
+      it('helper write after the read', () => {
+        function reset() { document.body.innerHTML = ''; }
+        render(<Dialog open title="Hi" />);
+        expect(screen.getByText('Hi')).toBeTruthy();
+        reset();
+      });
+      it('helper write before the read', () => {
+        function fill() { document.body.innerHTML = '<p>Hi</p>'; }
+        render(<Dialog open />);
+        fill();
+        expect(screen.getByText('Hi')).toBeTruthy();
+      });
+    `);
+
+    expect(byName('helper write after the read').asserted).toBe(true);
+    expect(byName('helper write before the read').asserted).toBe(false);
+  });
+
+  it('decides per call whether what a factory returns is mounted', () => {
+    const byName = inventory(`${header}
+      function make() { return <Dialog open title="Hi" />; }
+      it('factory result rendered', () => {
+        render(make());
+        expect(screen.getByText('Hi')).toBeTruthy();
+      });
+      it('factory called, result not rendered', () => {
+        make();
+        expect(screen.queryByText('Hi')).toBeNull();
+      });
+    `);
+
+    expect(byName('factory result rendered')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: true,
+    });
+    expect(byName('factory called, result not rendered')).toMatchObject({ symbols: [], asserted: false });
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}

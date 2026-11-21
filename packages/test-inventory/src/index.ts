@@ -277,6 +277,11 @@ interface Target {
   /** A component rendered as JSX (directly, or by a helper or local component): its output is in the document. */
   rendered?: boolean;
   /**
+   * A component a helper returns as JSX (`function make() { return <Dialog />; }`): rendered only where the result
+   * of a call to the helper is mounted, which each call decides.
+   */
+  deferred?: boolean;
+  /**
    * Mocks (or objects holding mocks) declared outside the helper that the helper handed to this project call (`const
    * renderDialog = () => render(<Dialog onSave={onSave} />)`): asserting on how they were called checks what the
    * call did with them.
@@ -356,6 +361,8 @@ function analyzeBody(
   contextAssertion: (node: ts.CallExpression) => boolean = () => false,
   setupRenders: Invocation[] = [],
   setupWrites: DocumentWrite[] = [],
+  // A helper keeps the components it returns for its callers to judge; a test body has no caller to mount them.
+  keepDeferred = true,
 ): BodyAnalysis {
   const { checker } = ctx;
   // Components rendered by shared setup that runs before the body (`beforeEach(() => render(<Dialog />))`).
@@ -382,14 +389,14 @@ function analyzeBody(
     if (!recorded.has(node)) {
       recorded.add(node);
 
-      for (const target of info.targets) calls.push({ node, target });
+      for (const target of info.targets) if (keepDeferred || !target.deferred) calls.push({ node, target });
       helperAsserts ||= info.helperAsserts;
       opaque ||= info.opaque;
 
       if (info.observesDocument) documentChecks.push(node.getEnd());
     }
 
-    return info.targets.length > 0;
+    return info.targets.some((target) => keepDeferred || !target.deferred);
   };
   // `const ui = <Dialog />` holds the element's description, not what the component renders: reading `ui.props` reads
   // what the test wrote. The element still runs where it is mounted.
@@ -425,7 +432,7 @@ function analyzeBody(
               ? variableInitializer(checker.getSymbolAtLocation(value)?.valueDeclaration)
               : undefined;
 
-            if (!initializer || !mountedExpression(value, ctx, 0)) continue;
+            if (!initializer || !isMounted(mountedExpression(value, ctx, 0))) continue;
 
             for (const element of [initializer, ...descendants(initializer)])
               if (
@@ -708,7 +715,8 @@ function analyzeBody(
           ? variableInitializer(checker.getSymbolAtLocation(value)?.valueDeclaration)
           : undefined;
 
-        if (!initializer || contains(body, initializer) || !mountedExpression(value, ctx, 0)) continue;
+        if (!initializer || contains(body, initializer) || !isMounted(mountedExpression(value, ctx, 0)))
+          continue;
 
         for (const element of [initializer, ...descendants(initializer)])
           if (
@@ -828,7 +836,11 @@ function analyzeBody(
     if (!writeRuns(node, body, checker)) continue;
     const write = documentWriteOf(node, body, checker);
 
-    if (write) documentWrites.push(write);
+    // A write in a local function happens where the function is called (`render(…); expect(…); reset();`).
+    if (write)
+      documentWrites.push(
+        inNestedFunction(node, body) ? { ...write, end: invokedAt(node, body, checker) } : write,
+      );
   }
 
   const reaches = new Map(
@@ -994,7 +1006,9 @@ function analyzeBody(
       return node.getStart();
     const symbol = checker.getSymbolAtLocation(holder.name);
     const mounts = (symbol ? referencesOf(symbol, source, checker) : [])
-      .filter((item) => item !== holder.name && contains(body, item) && mountedExpression(item, ctx, 0))
+      .filter(
+        (item) => item !== holder.name && contains(body, item) && isMounted(mountedExpression(item, ctx, 0)),
+      )
       .map((item) => item.getStart());
 
     return mounts.length > 0 ? Math.min(...mounts) : Number.POSITIVE_INFINITY;
@@ -1180,6 +1194,10 @@ function assertionReach(
       }
 
       if (!ts.isIdentifier(item)) continue;
+      const evaluatedIn = item === node ? undefined : enclosingFunction(item, node);
+
+      // A name in a function the assertion never runs (`expect(() => value)`) is not read.
+      if (evaluatedIn && !runsFunction(evaluatedIn, assertion, executed)) continue;
       const symbol = valueSymbol(item, checker);
 
       if (!symbol || seen.has(symbol)) continue;
@@ -2020,13 +2038,22 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
     return none;
   }
   const rendered = mount === 'document';
+  const deferred = mount === 'returned';
   const passThrough = rendered && isJsxInvocation(node) && suppliesOnlyForeignChildren(node, ctx);
 
   if (direct)
     info = {
       ...none,
       targets: [
-        { symbol: direct, ownArgs: true, assertedInside: false, flowsToResult: true, rendered, passThrough },
+        {
+          symbol: direct,
+          ownArgs: true,
+          assertedInside: false,
+          flowsToResult: true,
+          rendered,
+          passThrough,
+          ...(deferred ? { deferred } : {}),
+        },
       ],
     };
   else {
@@ -2040,8 +2067,29 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
       if (mount)
         info = {
           ...info,
-          targets: info.targets.map((target) => ({ ...target, rendered: rendered && target.flowsToResult })),
+          targets: info.targets.map((target) => ({
+            ...target,
+            rendered: rendered && target.flowsToResult,
+            deferred: deferred && target.flowsToResult,
+          })),
         };
+      // A call of a factory (`make()`): what it returns as JSX is rendered only if this call's result is mounted.
+      else if (info.targets.some((target) => target.deferred)) {
+        const result = mountedExpression(node, ctx, 0);
+
+        info = {
+          ...info,
+          targets: info.targets.flatMap((target) =>
+            !target.deferred
+              ? [target]
+              : !result
+                ? []
+                : result === 'returned'
+                  ? [target]
+                  : [{ ...target, deferred: false, rendered: result === 'document' }],
+          ),
+        };
+      }
     } else if (receiver)
       info = {
         ...none,
@@ -2247,7 +2295,26 @@ const STRING_RENDERING_FUNCTIONS = new Set([
  * How a JSX element is mounted: into the document, into the returned output of a renderer (`'string'`: server
  * rendering, a test renderer), or not at all.
  */
-type Mount = 'document' | 'string' | undefined;
+type Mount = 'document' | 'string' | 'returned' | undefined;
+
+/**
+ * The strongest of several ways an element may be mounted. `'returned'`: a function returns it, so it is mounted
+ * wherever the result of each call of that function is, decided per call.
+ */
+function combineMounts(mounts: Mount[]): Mount {
+  return mounts.includes('document')
+    ? 'document'
+    : mounts.includes('string')
+      ? 'string'
+      : mounts.includes('returned')
+        ? 'returned'
+        : undefined;
+}
+
+/** Whether an element is mounted by a renderer, as opposed to only returned or not at all. */
+function isMounted(mount: Mount): boolean {
+  return mount === 'document' || mount === 'string';
+}
 
 /**
  * Whether a JSX element is mounted: it (or the JSX tree it sits in) is given to a function that mounts it, to a
@@ -2256,44 +2323,6 @@ type Mount = 'document' | 'string' | undefined;
  */
 function mountedJsx(node: ts.JsxSelfClosingElement | ts.JsxOpeningElement, ctx: Ctx): Mount {
   return mountedExpression(ts.isJsxOpeningElement(node) ? node.parent : node, ctx, 0);
-}
-
-/**
- * How what a function returns is mounted: at each call (`render(make())`), or as a component rendered under its
- * name (`<Harness />`), whichever reaches a renderer. A function given to another call, or a method, is not
- * followed.
- */
-function resultMount(fn: ts.Node, ctx: Ctx, depth: number): Mount {
-  if (depth > 5) return undefined;
-  let current: ts.Node = fn;
-
-  while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
-  const holder = current.parent;
-  const mountOf = (node: ts.Node): Mount => {
-    const parent = node.parent;
-
-    if (ts.isCallExpression(parent) && parent.expression === node)
-      return mountedExpression(parent, ctx, depth + 1);
-
-    if ((ts.isJsxOpeningElement(parent) || ts.isJsxSelfClosingElement(parent)) && parent.tagName === node)
-      return mountedExpression(ts.isJsxOpeningElement(parent) ? parent.parent : parent, ctx, depth + 1);
-
-    return undefined;
-  };
-  const direct = mountOf(current);
-
-  if (direct) return direct;
-  const name = ts.isFunctionDeclaration(fn)
-    ? fn.name
-    : ts.isVariableDeclaration(holder) && holder.initializer === current && ts.isIdentifier(holder.name)
-      ? holder.name
-      : undefined;
-  const symbol = name && ctx.checker.getSymbolAtLocation(name);
-  const mounts = (symbol ? referencesOf(symbol, fn.getSourceFile(), ctx.checker) : [])
-    .filter((item) => item !== name)
-    .map(mountOf);
-
-  return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
 }
 
 /**
@@ -2326,8 +2355,10 @@ function argumentMount(
   const mounts = descendants(fn.body)
     .filter((item) => ts.isIdentifier(item) && ctx.checker.getSymbolAtLocation(item) === target)
     .map((item) => mountedExpression(item, ctx, depth + 1, returns, new Set(running).add(fn)));
+  const mount = combineMounts(mounts);
 
-  return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
+  // `wrap(<Dialog />)` with `wrap = (ui) => ui`: mounted where this call's result is.
+  return mount === 'returned' ? mountedExpression(call, ctx, depth + 1, returns, running) : mount;
 }
 
 /** The function a JSX tag names when its code is visible (test code or project code), not a declaration. */
@@ -2412,7 +2443,7 @@ function propMount(
     mountedExpression(read, ctx, depth + 1, inner, new Set(running).add(fn)),
   );
 
-  return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
+  return combineMounts(mounts);
 }
 
 /** The outermost expression of the JSX tree an element sits in, through conditionals, arrays and parentheses. */
@@ -2486,7 +2517,8 @@ function mountedExpression(
 
     if (!fn) return undefined;
 
-    return returns.has(fn) ? returns.get(fn) : resultMount(fn, ctx, depth);
+    // Mounted where each call's result is: decided at the call (`render(make())`), not by other calls in the file.
+    return returns.has(fn) ? returns.get(fn) : 'returned';
   }
 
   if (
@@ -2533,7 +2565,7 @@ function mountedExpression(
       .filter((item) => item !== parent.name)
       .map((item) => mountedExpression(item, ctx, depth + 1, returns, running));
 
-    return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
+    return combineMounts(mounts);
   }
 
   return undefined;
@@ -2782,6 +2814,7 @@ function helperInfo(body: ts.Node, ctx: Ctx): CallInfo {
       assertedInside: assertedInside || previous?.assertedInside === true,
       flowsToResult: flowsToResult || previous?.flowsToResult === true,
       rendered: target.rendered === true || previous?.rendered === true,
+      deferred: (target.deferred === true && flowsToResult) || previous?.deferred === true,
       // Pass-through only if every rendering of it in the helper is.
       passThrough: target.passThrough === true && (previous === undefined || previous.passThrough === true),
       returnsMocks: returnedMocks.has(node) || previous?.returnsMocks === true,
@@ -3847,6 +3880,7 @@ function analyzeTest(
           .map((node) => documentWriteOf(node, source, checker))
           .filter((write): write is DocumentWrite => write !== undefined)
           .map((write) => ({ ...write, end: Number.NEGATIVE_INFINITY })),
+        false,
       )
     : undefined;
   const assertions = analysis?.assertions ?? [];
