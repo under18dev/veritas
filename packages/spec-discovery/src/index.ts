@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import path from 'node:path';
 import {
+  createRedactor,
   EvidenceSource,
   redact,
   resolveInsideRoot,
@@ -87,8 +88,11 @@ function lineRange(text: string, start: number, end: number): SourceRange {
   return { start: line(start), end: line(end) };
 }
 
+// Set per discovery run, so secret environment values are read once rather than for every statement.
+let redactText: (text: string) => string = (text) => redact(text);
+
 function cleanQuote(text: string): string {
-  return redact(text.replace(/\s+/g, ' ').trim()).slice(0, 300);
+  return redactText(text.replace(/\s+/g, ' ').trim()).slice(0, 300);
 }
 
 function subjects(text: string): string[] {
@@ -821,8 +825,9 @@ function derivedAndSuperseded(
     'web',
     'runtime',
   ];
+  const byId = new Map(sources.map((s) => [s.id, s]));
   const rank = (id: string) => {
-    const source = sources.find((s) => s.id === id);
+    const source = byId.get(id);
 
     return [order.indexOf(source?.kind ?? 'runtime'), source?.locator ?? id] as const;
   };
@@ -845,23 +850,38 @@ function derivedAndSuperseded(
     if (original) for (const copy of copies) add({ from: copy, to: original, relation: 'derived_from' });
   }
 
-  for (const input of inputs) {
+  // Only a text that says outdated/obsolete/superseded/supersedes/replaces can supersede another source, so the
+  // others are not compared with every source (which is quadratic in the number of sources).
+  const candidates = inputs.filter((input) =>
+    /\b(?:outdated|obsolete|superseded|supersedes|replaces)\b/i.test(input.text),
+  );
+  const patterns =
+    candidates.length === 0
+      ? []
+      : sources.flatMap((other) => {
+          const name = escapeRegExp(path.posix.basename(other.locator).replace(/\.(md|markdown|txt)$/i, ''));
+
+          return name.length < 3
+            ? []
+            : [
+                {
+                  other,
+                  mentions: new RegExp(
+                    `\\b${name}(?:\\.\\w+)?\\b[^.\\n]{0,40}\\b(?:is|are)\\s+(?:outdated|obsolete|superseded)\\b|\\b(?:supersedes|replaces)\\s+(?:the\\s+)?\\S*${name}\\b`,
+                    'i',
+                  ),
+                },
+              ];
+        });
+
+  for (const input of candidates) {
     const source = sourceByInput.get(input);
 
     if (!source) continue;
 
-    for (const other of sources) {
-      if (other.id === source.id) continue;
-      const name = escapeRegExp(path.posix.basename(other.locator).replace(/\.(md|markdown|txt)$/i, ''));
-
-      if (name.length < 3) continue;
-      const mentions = new RegExp(
-        `\\b${name}(?:\\.\\w+)?\\b[^.\\n]{0,40}\\b(?:is|are)\\s+(?:outdated|obsolete|superseded)\\b|\\b(?:supersedes|replaces)\\s+(?:the\\s+)?\\S*${name}\\b`,
-        'i',
-      );
-
-      if (mentions.test(input.text)) add({ from: source.id, to: other.id, relation: 'supersedes' });
-    }
+    for (const { other, mentions } of patterns)
+      if (other.id !== source.id && mentions.test(input.text))
+        add({ from: source.id, to: other.id, relation: 'supersedes' });
   }
 
   return [...edges.values()];
@@ -884,6 +904,7 @@ export async function discoverEvidence(options: {
    */
   gitRoot?: string;
 }): Promise<DiscoveryResult> {
+  redactText = createRedactor();
   const capturedAt = (options.now ?? (() => new Date()))().toISOString();
   const selected = options.sources ?? [
     'local',

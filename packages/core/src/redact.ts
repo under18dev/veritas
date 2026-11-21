@@ -66,6 +66,16 @@ export function redact(text: string, env: NodeJS.ProcessEnv = process.env): stri
   return redactWith(text, secretValues(env));
 }
 
+/**
+ * `redact` with the secret environment values collected once, for code that redacts many strings in one go
+ * (reading environment variables on every call is the slow part).
+ */
+export function createRedactor(env: NodeJS.ProcessEnv = process.env): (text: string) => string {
+  const secrets = secretValues(env);
+
+  return (text) => redactWith(text, secrets);
+}
+
 /** Redact every string inside a JSON-like value. Secret environment values are collected once per call. */
 export function redactDeep<T>(value: T, env: NodeJS.ProcessEnv = process.env): T {
   const secrets = secretValues(env);
