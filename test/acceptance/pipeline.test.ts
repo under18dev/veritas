@@ -426,6 +426,15 @@ describe('changes since a git ref', () => {
       path.join(dir, 'src/other.ts'),
       'export function twice(n: number): number {\n  return n + n;\n}\n',
     );
+    // A new file git does not track yet, and its test.
+    writeFileSync(
+      path.join(dir, 'src/fresh.ts'),
+      'export function half(n: number): number {\n  return n / 2;\n}\n',
+    );
+    writeFileSync(
+      path.join(dir, 'test/fresh.test.ts'),
+      "import { expect, it } from 'vitest';\nimport { half } from '../src/fresh';\nit('halves', () => { expect(half(4)).toBe(2); });\n",
+    );
     const result = runCli(['mutate', '--since', 'HEAD', '--json'], dir);
     expect([0, 1, 4], result.stderr).toContain(result.status);
     const runId = json<RunJson>(result).runId;
@@ -436,6 +445,7 @@ describe('changes since a git ref', () => {
     const files = JSON.parse(/const files = (\[.*\]);/.exec(config)?.[1] ?? '[]') as string[];
     const names = files.map((f) => path.basename(f));
     expect(names).toContain('other.test.ts');
+    expect(names).toContain('fresh.test.ts');
     // The tests of the unchanged src/pricing.ts are left out. (A test that imports no project file is kept, since
     // what it runs is not known.)
     expect(names).not.toContain('discount-weak.test.ts');

@@ -306,22 +306,31 @@ async function runInContext(
   // Project-relative files changed since --since (committed or not), when the run selects mutation tests by them.
   let changedSince: string[] | undefined | null = null;
   const changedSinceFiles = (): string[] | undefined => {
-    if (changedSince === null)
-      changedSince =
+    if (changedSince === null) {
+      const lines = (output: string | null) =>
+        output
+          ?.split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
+      // Changed since the ref (committed or not), plus new files git does not track yet.
+      const diff =
         !options.scope?.length && options.since
-          ? gitOutput(root, [
-              'diff',
-              '--name-only',
-              '--relative',
-              '--no-color',
-              '--no-ext-diff',
-              options.since,
-              '--',
-            ])
-              ?.split('\n')
-              .map((line) => line.trim())
-              .filter(Boolean)
+          ? lines(
+              gitOutput(root, [
+                'diff',
+                '--name-only',
+                '--relative',
+                '--no-color',
+                '--no-ext-diff',
+                options.since,
+                '--',
+              ]),
+            )
           : undefined;
+      changedSince = diff
+        ? [...diff, ...(lines(gitOutput(root, ['ls-files', '--others', '--exclude-standard'])) ?? [])]
+        : undefined;
+    }
 
     return changedSince;
   };
