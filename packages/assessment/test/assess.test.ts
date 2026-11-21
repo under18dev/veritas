@@ -89,6 +89,41 @@ describe('assessTest', () => {
     expect(a.rationale.join(' ')).toMatch(/no assertion checks the result/);
   });
 
+  it('does not call a test static analysis could not link disconnected when it killed a mutant', () => {
+    // An assertion static analysis cannot trace to project code (a mock's calls, a global's state).
+    const t = testCase({ id: 'T-a', targetCalls: [call(['1'], false)] });
+    const disconnected = assessTest(t, input({ mutants: [mutant('M-1', 'survived', [], ['T-a'])] }));
+    expect(disconnected.outcome).toBe('tautological_or_disconnected');
+
+    const unlinked = { ...input({ mutants: [mutant('M-1', 'killed', ['T-a'], ['T-a'])] }), edges: [] };
+    const a = assessTest(t, unlinked);
+    expect(a.outcome).toBe('inconclusive');
+    expect(a.rationale[0]).toMatch(
+      /static analysis could not link an assertion to project code, but it killed 1 mutant\(s\), so it does observe project behaviour; which specification it checks is not known/,
+    );
+    expect(a.killedMutantIds).toEqual(['M-1']);
+
+    // The same holds for a test static analysis thinks never calls its target.
+    const notCalled = testCase({ id: 'T-a', suspicions: ['target_not_called'] });
+    expect(assessTest(notCalled, unlinked).outcome).toBe('inconclusive');
+    expect(assessTest(notCalled, unlinked).rationale[0]).toMatch(/\(target_not_called\), but it killed 1/);
+  });
+
+  it('follows the evidence for a killing test static analysis could not link, without calling it meaningful on a missed boundary', () => {
+    const t = testCase({ id: 'T-a', targetCalls: [call(['1'], false)] });
+    const a = assessTest(t, input({ mutants: [mutant('M-1', 'killed', ['T-a'], ['T-a'])] }));
+    // No asserted input sits on the linked threshold, so the boundary is not exercised.
+    expect(a.outcome).toBe('weak_or_incomplete');
+    expect(a.rationale.join(' ')).toMatch(/killed 1 mutant\(s\)/);
+    expect(a.rationale.join(' ')).toMatch(/boundary not exercised/);
+  });
+
+  it('keeps a test with no assertion disconnected even when it killed a mutant', () => {
+    const t = testCase({ id: 'T-a', suspicions: ['no_assertion'], assertionCount: 0 });
+    const a = assessTest(t, input({ mutants: [mutant('M-1', 'killed', ['T-a'], ['T-a'])] }));
+    expect(a.outcome).toBe('tautological_or_disconnected');
+  });
+
   it('says a disconnected test killed no mutant only when it ran mutants, not when it was outside the scope', () => {
     const t = testCase({ id: 'T-a', suspicions: ['no_assertion'], assertionCount: 0 });
     const ran = assessTest(t, input({ mutants: [mutant('M-1', 'survived', [], ['T-a', 'T-b'])] }));

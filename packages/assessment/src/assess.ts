@@ -40,7 +40,8 @@ export interface AssessInput {
 
 /**
  * Assess each test from an evidence vector. Outcomes:
- * - tautological_or_disconnected: no assertion on a project call (constant assertions, no call, no assertion);
+ * - tautological_or_disconnected: no assertion on a project call (constant assertions, no call, no assertion). A
+ *   test static analysis could not link but that killed a mutant is not: the kill shows it observes project code;
  * - spec_conflict: a linked property is conflicted;
  * - weak_or_incomplete: a relevant mutant it covers survived, or a decisive boundary is not exercised;
  * - meaningful_with_evidence: asserts a project call, kills relevant mutants, no relevant survivors it covers,
@@ -187,12 +188,15 @@ export function assessTest(
   const rationale: string[] = [];
   let outcome: TestAssessment['outcome'];
   const typeLevelOnly = test.suspicions.includes('type_level_only');
-  const disconnected =
-    !typeLevelOnly &&
-    (test.suspicions.includes('tautological_assertion') ||
-      test.suspicions.includes('target_not_called') ||
-      test.suspicions.includes('no_assertion') ||
-      (!assertedCall && !linkUnknown));
+  // Static analysis is certain about these: the test asserts nothing, or only constants. A mutant such a test kills
+  // can only fail it by making the code it runs throw, so a kill does not make it check a result.
+  const assertsNothing =
+    test.suspicions.includes('tautological_assertion') || test.suspicions.includes('no_assertion');
+  // Static analysis found no link from an assertion to project code. That is an inference, and a killed mutant
+  // is evidence against it: the test failed when project code changed, so it does observe project behaviour.
+  const unlinked = test.suspicions.includes('target_not_called') || (!assertedCall && !linkUnknown);
+  const killEvidence = !typeLevelOnly && !assertsNothing && unlinked && killed.length > 0;
+  const disconnected = !typeLevelOnly && (assertsNothing || (unlinked && !killEvidence));
 
   if (typeLevelOnly) {
     // A type check is a real check of the project, but of its types: no run, mutant or solver here evaluates it.
@@ -210,7 +214,7 @@ export function assessTest(
     // Only a test that ran mutants can be said to have missed them; others were outside the mutation scope.
     if (input.mutationAvailable && covered.length > 0 && killed.length === 0)
       rationale.push(`killed none of the ${covered.length} mutant(s) it runs`);
-  } else if (!assertedCall) {
+  } else if (!assertedCall && !killEvidence) {
     // Only reachable when the link is unknown: the asserted value may come from project code, so do not judge it.
     outcome = 'inconclusive';
 
@@ -233,6 +237,9 @@ export function assessTest(
       rationale.push(
         "registered inside a shared or parameterized suite: what it calls comes from the suite's caller, which static analysis does not follow",
       );
+  } else if (killEvidence && properties.length === 0) {
+    // Which specification the kills bear on is not known without a linked property.
+    outcome = 'inconclusive';
   } else if (properties.some((p) => p.status === 'conflicted')) {
     outcome = 'spec_conflict';
     rationale.push(
@@ -265,10 +272,14 @@ export function assessTest(
     }
   } else if (!input.mutationAvailable) {
     outcome = 'inconclusive';
-    rationale.push('asserts a project result, but detection power was not measured (no mutation results)');
+    rationale.push(
+      `${assertedCall ? 'asserts a project result' : 'kills mutants'}, but detection power was not measured (no mutation results)`,
+    );
   } else if (properties.length === 0) {
     outcome = 'inconclusive';
-    rationale.push('asserts a project result, but no property is linked to the functions it calls');
+    rationale.push(
+      `${assertedCall ? 'asserts a project result' : 'kills mutants'}, but no property is linked to the functions it calls`,
+    );
   } else if (
     linkUnknown &&
     relevantKilled.length > 0 &&
@@ -296,6 +307,11 @@ export function assessTest(
         : 'linked to properties, but it ran no mutant of this run (outside the mutation scope, or coverage not reported)',
     );
   }
+
+  if (killEvidence)
+    rationale.unshift(
+      `static analysis could not link an assertion to project code${test.suspicions.length ? ` (${test.suspicions.join(', ')})` : ''}, but it killed ${killed.length} mutant(s), so it does observe project behaviour${properties.length === 0 ? '; which specification it checks is not known, since no property is linked to it' : ''}`,
+    );
 
   const limitations = [...unknowns];
 
