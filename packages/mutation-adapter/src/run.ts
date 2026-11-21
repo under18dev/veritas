@@ -60,6 +60,8 @@ export interface RunMutationOptions {
   noTypecheck?: boolean;
   /** Source files (relative to the root, no glob characters) passed as `--exclude`. */
   exclude?: string[];
+  /** Run at most this many mutants per source line (`--mutants-per-line`); the rest stay `pending`. */
+  mutantsPerLine?: number;
 }
 
 const MUTANT_KEY = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
@@ -118,6 +120,12 @@ export function buildMutatorArgs(
   if (options.noTypecheck) args.push('--no-typecheck');
 
   if (options.killMatrix) args.push('--kill-matrix');
+
+  if (options.mutantsPerLine !== undefined) {
+    if (!Number.isInteger(options.mutantsPerLine) || options.mutantsPerLine < 1)
+      throw new TypeError(`invalid --mutants-per-line: ${options.mutantsPerLine}`);
+    args.push('--mutants-per-line', String(options.mutantsPerLine));
+  }
 
   for (const key of options.only ?? []) {
     if (!MUTANT_KEY.test(key)) throw new TypeError(`invalid mutant key for --only: ${JSON.stringify(key)}`);
@@ -313,6 +321,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     (options.scope?.length ?? 0) > 0 && '--include',
     (options.exclude?.length ?? 0) > 0 && '--exclude',
     options.killMatrix && '--kill-matrix',
+    options.mutantsPerLine !== undefined && '--mutants-per-line',
     (options.only?.length ?? 0) > 0 && '--only',
     writesConfig && '--config',
     mutatorRunner !== DEFAULT_MUTATOR_RUNNER && '--runner',

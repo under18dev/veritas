@@ -62,6 +62,17 @@ describe('buildMutatorArgs', () => {
     ]);
   });
 
+  it('caps the mutants per line only when asked, with a positive integer', () => {
+    expect(buildMutatorArgs(base)).not.toContain('--mutants-per-line');
+    expect(buildMutatorArgs({ ...base, mutantsPerLine: 2 })).toEqual(
+      expect.arrayContaining(['--mutants-per-line', '2']),
+    );
+
+    for (const n of [0, -1, 1.5]) {
+      expect(() => buildMutatorArgs({ ...base, mutantsPerLine: n })).toThrow(/invalid --mutants-per-line/);
+    }
+  });
+
   it('rejects option injection and scopes outside the root', () => {
     expect(() => buildMutatorArgs({ ...base, since: '--output=/tmp/x' })).toThrow(/invalid git ref/);
     expect(() => buildMutatorArgs({ ...base, since: '' })).toThrow(/invalid git ref/);

@@ -20,6 +20,7 @@ export const OPTIONAL_CAPABILITIES = [
   '--config',
   '--[no-]typecheck',
   '--time-budget',
+  '--mutants-per-line',
   'agent',
   'json',
 ] as const;
