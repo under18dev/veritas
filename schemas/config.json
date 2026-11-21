@@ -187,9 +187,12 @@
         },
         "testFramework": {
           "default": "vitest",
-          "description": "Test framework; only Vitest is supported.",
+          "description": "Test runner of the project, which runs its tests, names their API and drives mutation testing. `veritas init` sets it from what it detects; without it, Vitest is assumed.",
           "type": "string",
-          "const": "vitest"
+          "enum": [
+            "vitest",
+            "jest"
+          ]
         },
         "inferSpecsFromCode": {
           "default": true,
