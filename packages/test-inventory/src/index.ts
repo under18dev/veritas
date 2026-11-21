@@ -343,19 +343,44 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
           bind([value], [call], true);
     }
 
-    for (const argument of argumentsOf(call))
+    // Callbacks the project function itself receives and may call: what it passes them is its output.
+    const called = new Set<ts.Node>();
+    const projectCalls =
+      callInfo(call, ctx).targets.some((target) => target.ownArgs) ||
+      projectReceiver(call, ctx) !== undefined;
+
+    for (const [index, argument] of argumentsOf(call).entries()) {
+      const receives = projectCalls && mayCallArgument(call, index, checker);
+
       for (const item of [argument, ...descendants(argument)]) {
-        if (isFunctionLike(item) && handedOver(item, argument)) callbacks.add(item);
+        if (isFunctionLike(item) && handedOver(item, argument)) {
+          callbacks.add(item);
+
+          if (receives) called.add(item);
+        }
 
         if (!ts.isIdentifier(item)) continue;
         const declaration = checker.getSymbolAtLocation(item)?.valueDeclaration;
 
         if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer)
           for (const inner of [declaration.initializer, ...descendants(declaration.initializer)])
-            if (isFunctionLike(inner) && handedOver(inner, declaration.initializer)) callbacks.add(inner);
+            if (isFunctionLike(inner) && handedOver(inner, declaration.initializer)) {
+              callbacks.add(inner);
+
+              if (receives && handedOver(item, argument)) called.add(inner);
+            }
       }
+    }
 
     for (const callback of callbacks) bind(writtenOuterIdentifiers(callback, checker), [call], true);
+
+    // `mapKeys(obj, (key) => { expect(key).toBe('a'); })` checks what mapKeys passes to the callback.
+    for (const callback of called)
+      if (isFunctionLike(callback))
+        bind(
+          callback.parameters.flatMap((parameter) => bindingIdentifiers(parameter.name)),
+          [call],
+        );
   };
 
   // The variable at the root of `a.b[c]`, when it is declared in this file.

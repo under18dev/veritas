@@ -285,6 +285,36 @@ it('really constant', () => { const expected = [1]; expect([1]).toEqual(expected
     expect(byName('really constant').suspicions).toContain('tautological_assertion');
   });
 
+  it('links what project code passes to a callback the test asserts on', () => {
+    const get = inventory(
+      `${header}
+      import { mapKeys, register } from '../src/keys.js';
+      it('inline callback', () => {
+        mapKeys({ a: 1 }, (key, value) => { expect(key).toBe('a'); expect(value).toBe(1); return key; });
+      });
+      it('callback in a variable', () => {
+        const mapper = (key: string) => { expect(key).toBe('a'); return key; };
+        mapKeys({ a: 1 }, mapper);
+      });
+      it('built-in callback', () => { fn(1); [1].forEach((x) => { expect(x).toBe(1); }); });
+      it('stored, never called', () => { register((x: number) => { expect(x).toBe(1); }); });
+    `,
+      {
+        'src/keys.ts': `
+export function mapKeys(o: Record<string, number>, f: (k: string, v: number) => string) {
+  return Object.fromEntries(Object.entries(o).map(([k, v]) => [f(k, v), v]));
+}
+const handlers: unknown[] = [];
+export function register(handler: (x: number) => void): void { handlers.push(handler); }
+`,
+      },
+    );
+    expect(get('inline callback').asserted).toBe(true);
+    expect(get('callback in a variable').asserted).toBe(true);
+    expect(get('built-in callback').asserted).toBe(false);
+    expect(get('stored, never called').asserted).toBe(false);
+  });
+
   it('links counters a callback increments and locals that store project results', () => {
     const extra = {
       'src/fns.ts': `export function each(items: number[], cb: () => void) { for (const _ of items) cb(); }
