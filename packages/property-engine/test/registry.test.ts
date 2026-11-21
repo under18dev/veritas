@@ -567,7 +567,7 @@ export function promptLevelGate(state: State): boolean { return state.level >= 2
     const mapping = registry.mapping.find((m) => m.statementId === 'ST-a');
     expect(mapping?.status).toBe('unmapped');
     expect(mapping?.reason).toMatch(
-      /promptLevelGate\(state\.daysUsed\) fits as well as promptLevelGate\(state\.level\)/,
+      /quantity "days used" names promptLevelGate\(state\.daysUsed\), which promptLevelGate does not compare/,
     );
   });
 
@@ -595,6 +595,39 @@ export function freeShipping(account: Account): boolean { return account.items >
     expect(param('ST-tier')).toBe('account.tier');
     expect(param('ST-total')).toBe('account.total');
     expect(param('ST-items')).toBe('account.items');
+  });
+
+  it.each([
+    [
+      'a number parameter it pays out',
+      'export function discountAmount(total: number, discount: number): number { return total >= 1000 ? discount : 0; }',
+      'Orders with a total of 1000 or more receive a discount.',
+      'total',
+      false,
+    ],
+    [
+      'an uncompared record field named after the reward',
+      'export interface Order { total: number; discount: number }\nexport function discountAmount(order: Order): number { return order.total >= 1000 ? order.discount : 0; }',
+      'Orders with a total of 1000 or more receive a discount.',
+      'order.total',
+      false,
+    ],
+    [
+      'an uncompared record field right after the value',
+      'export interface Order { total: number; discount: number }\nexport function discountAmount(order: Order): number { return order.total >= 1000 ? order.discount : 0; }',
+      'Orders with a total of 1000 or more get discount 100.',
+      'order.total',
+      true,
+    ],
+  ])('binds the compared threshold rather than %s', (_, code, quote, param, ambiguous) => {
+    const registry = promptRegistry(
+      [threshold('ST-a', 'S-changelog', 1, quote, 'total', '>=', '1000', quote)],
+      code,
+    );
+    const property = registry.properties.find((p) => p.statementIds.includes('ST-a'));
+    expect(property?.predicate).toMatchObject({ param, operator: '>=', value: '1000' });
+    // Only a field named right after the value ("get discount 100") is worth mentioning as another reading.
+    expect(property?.assumptions.some((a) => a.startsWith(AMBIGUOUS_BINDING))).toBe(ambiguous);
   });
 
   it('does not call a binding ambiguous because an unrelated function has a parameter of the same name', () => {

@@ -96,15 +96,26 @@ const label = (t: Target) => `${t.fn.name}(${t.param})`;
  * "distinct", "day"; "5 failed login attempts" -> "failed", "login", "attempt"). They outweigh other words of the
  * sentence, which may describe a different number.
  */
+const UNIT_STOP = new Set(
+  'a an the of to for in within per after before and or with than on at by from is are was be'.split(' '),
+);
+
 function unitWords(quote: string, value: string): string[] {
   const digits = value.replace(/^-/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(
     `(?<![\\d.,])${digits}(?![\\d]|[.,]\\d)\\s*(?:\\+\\s*)?(?:(?:or|and)\\s+(?:more|fewer|less|greater|above|over|up|below|under)\\s+)?((?:[A-Za-z][\\w-]*\\s+){0,2}[A-Za-z][\\w-]*)`,
     'i',
   );
-  const hit = re.exec(quote)?.[1];
+  const hit = re.exec(quote)?.[1] ?? '';
+  // "receive a discount" is not a unit: stop at the first function word.
+  const kept: string[] = [];
 
-  return hit ? words(hit) : [];
+  for (const token of hit.split(/\s+/)) {
+    if (UNIT_STOP.has(token.toLowerCase())) break;
+    kept.push(token);
+  }
+
+  return words(kept.join(' '));
 }
 
 /**
@@ -193,7 +204,14 @@ function fieldNumeric(field: {
   return field.numeric ?? numberOnly(field.type);
 }
 
-type Scored = Target & { paramHit: boolean };
+type Scored = Target & {
+  /** The parameter's own name matches the quantity or a word of the statement. */
+  paramHit: boolean;
+  /** The parameter's name matches the quantity the statement names. */
+  quantityHit: boolean;
+  /** The parameter's name matches the words right after the value. */
+  unitHit: boolean;
+};
 
 /** "a, b, c" or "a, b, c and 2 more". */
 function listed(items: string[], max = 3): string {
@@ -265,11 +283,15 @@ function mapStatement(
             : fields.filter((f) => f.startsWith(`${p.name}.`)).length),
       0,
     );
-    const hits = (paramWords: string[]) => ({
-      paramHit:
-        quantityWords.some((w) => paramWords.includes(w)) || paramWords.some((w) => quoteWords.has(w)),
-      unitHit: units.some((w) => paramWords.includes(w)),
-    });
+    const hits = (paramWords: string[]) => {
+      const quantityHit = quantityWords.some((w) => paramWords.includes(w));
+
+      return {
+        quantityHit,
+        paramHit: quantityHit || paramWords.some((w) => quoteWords.has(w)),
+        unitHit: units.some((w) => paramWords.includes(w)),
+      };
+    };
 
     for (const p of numeric) {
       // An array's length only when the statement talks about a count ("3 or more items", "the item count"),
@@ -279,25 +301,27 @@ function mapStatement(
 
         if (!lengthStatement(statement.quote, arrayWords)) continue;
       }
-      const { paramHit: wordHit, unitHit } = hits(p.words);
+      const { paramHit: wordHit, quantityHit, unitHit } = hits(p.words);
       const paramHit = p.name.endsWith('.length') || wordHit;
       const compared = comparedNames.has(p.name);
+      // The words after the value only weigh for a parameter the function compares: "receive a discount" must not
+      // pull a threshold onto the discount it pays out.
       const score =
         (paramHit ? 2 : 0) +
-        (unitHit ? 2 : 0) +
+        (unitHit && compared ? 2 : 0) +
         nameHits * 2 +
         (compared ? 1 : 0) +
         (numeric.length === 1 && inputs <= 1 && nameHits > 0 ? 1 : 0);
 
-      if (paramHit || nameHits > 0) scored.push({ fn, param: p.name, score, paramHit });
+      if (paramHit || nameHits > 0) scored.push({ fn, param: p.name, score, paramHit, quantityHit, unitHit });
     }
 
     for (const p of shadows) {
-      const { paramHit, unitHit } = hits(p.words);
+      const { paramHit, quantityHit, unitHit } = hits(p.words);
 
       if (paramHit || unitHit) {
-        const score = (paramHit ? 2 : 0) + (unitHit ? 2 : 0) + nameHits * 2;
-        uncompared.push({ fn, param: p.name, score, paramHit });
+        const score = (paramHit ? 2 : 0) + nameHits * 2;
+        uncompared.push({ fn, param: p.name, score, paramHit, quantityHit, unitHit });
       }
     }
   }
@@ -324,27 +348,34 @@ function mapStatement(
       reason: `ambiguous: ${listed(tied)} match equally; not bound${skipped}`,
     };
   }
-  // A number field of the same function that fits at least as well but is not compared: binding to the compared
-  // field would only be a guess.
+  // A number field of the same function that the statement's quantity names while the chosen, compared one matches
+  // neither the quantity nor the words after the value: binding to the compared field would only be a guess. A
+  // compared field otherwise outranks one the function never compares.
   const rivals = uncompared.filter((t) => t.fn === best.fn).sort((a, b) => b.score - a.score);
-  const rival = rivals[0];
+  const rival = rivals.find((t) => t.quantityHit && !best.quantityHit && !best.unitHit);
 
-  if (rival && rival.score >= best.score) {
+  if (rival) {
     return {
       target: null,
       alternatives: [],
-      reason: `ambiguous: ${label(rival)} fits as well as ${label(best)} but ${best.fn.name} does not compare it; not bound${skipped}`,
+      reason: `ambiguous: the statement's quantity "${relation.quantity}" names ${label(rival)}, which ${best.fn.name} does not compare, not ${label(best)}; not bound${skipped}`,
     };
   }
   // Close readings: near ties anywhere, other fields of the same function that the wording names, and uncompared
-  // number fields of the same function that come close.
+  // number fields of the same function that come close. When the chosen parameter is the quantity the statement
+  // names, a reading that matches neither that quantity nor the words after the value is not a real alternative.
+  const contender = (t: Scored) => !best.quantityHit || t.quantityHit || t.unitHit;
   const alternatives = [
     ...new Set([
       ...scored
         .slice(1)
         .filter((t) => t.score >= best.score - 1 || (t.fn === best.fn && t.paramHit && t.score >= 3))
+        .filter(contender)
         .map(label),
-      ...rivals.filter((t) => t.score >= best.score - 1).map((t) => `${label(t)}, not compared`),
+      ...rivals
+        .filter((t) => t.score >= best.score - 1 && (t.paramHit || t.unitHit))
+        .filter(contender)
+        .map((t) => `${label(t)}, not compared`),
     ]),
   ].slice(0, 3);
 
