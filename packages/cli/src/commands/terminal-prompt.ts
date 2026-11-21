@@ -95,8 +95,10 @@ export function terminalPrompter(
         else if (key?.name === 'down' || key?.name === 'j' || key?.name === 'tab')
           index = (index + 1) % choices.length;
         else if (digit >= 0 && digit < choices.length) index = digit;
-        else if (shortcut !== undefined || key?.name === 'return' || key?.name === 'enter') {
-          const chosen = shortcut ?? index;
+        // A shortcut only moves the highlight, so the Enter that follows it does not answer the next question.
+        else if (shortcut !== undefined) index = shortcut;
+        else if (key?.name === 'return' || key?.name === 'enter') {
+          const chosen = index;
           finish();
           output.write(`${paint('32', '✔')} ${question} ${paint('36', choices[chosen] ?? '')}\n`);
           resolve(chosen);
