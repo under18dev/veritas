@@ -12,7 +12,13 @@ interface Mutation {
   status: string;
   warnings: string[];
   command: string[];
-  mutants: { status: string; location: { file: string }; original: string; killedBy: string[] }[];
+  mutants: {
+    status: string;
+    location: { file: string };
+    original: string;
+    killedBy: string[];
+    coveredBy: string[];
+  }[];
 }
 
 describe('a Jest project (jest-app)', () => {
@@ -34,14 +40,18 @@ describe('a Jest project (jest-app)', () => {
     expect(doctor.status, doctor.stderr).toBe(0);
     const report = json<{
       capabilities: { name: string; state: string; detail: string; version?: string }[];
-      features: { feature: string; state: string }[];
+      features: { feature: string; state: string; missing: string[]; partial?: string[] }[];
     }>(doctor);
     const capability = (name: string) => report.capabilities.find((c) => c.name === name);
     expect(capability('jest')).toMatchObject({ state: 'available', version: '30.5.2' });
     expect(capability('vitest')).toBeUndefined();
     expect(capability('mutator')?.state).toBe('degraded');
     expect(capability('mutator')?.detail).toContain('experimental');
-    expect(report.features.find((f) => f.feature === 'mutate')?.state).toBe('degraded');
+    expect(report.features.find((f) => f.feature === 'mutate')).toMatchObject({
+      state: 'degraded',
+      missing: [],
+      partial: ['mutator'],
+    });
   });
 
   it('inventories Jest tests in the quick profile without running project code', () => {
@@ -92,6 +102,10 @@ describe('a Jest project (jest-app)', () => {
     const killers = new Set(mutation.mutants.flatMap((m) => m.killedBy));
     const boundary = tests.find((t) => t.name === 'ships free exactly at the threshold');
     expect(killers.has(boundary?.id as string)).toBe(true);
+    // The tests of the file that uses Jest's globals without an import are credited with the mutants they run.
+    const covering = new Set(mutation.mutants.flatMap((m) => m.coveredBy));
+    for (const name of ['gives a discount on large orders', 'gives no discount on small orders'])
+      expect(covering.has(tests.find((t) => t.name === name)?.id as string), name).toBe(true);
     // Names with spaces in nested suites resolve to inventoried tests; only table rows may stay unresolved.
     expect([...killers].filter((id) => ids.has(id)).length).toBeGreaterThanOrEqual(3);
     expect(run.findings.some((f) => f.kind === 'survived_mutant')).toBe(true);
