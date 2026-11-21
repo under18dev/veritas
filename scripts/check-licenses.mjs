@@ -23,6 +23,11 @@ const ALLOWED = new Set([
   'MPL-2.0',
 ]);
 
+// Single packages allowed under another license, with why. caniuse-lite is a data table (browser support) under
+// CC-BY-4.0, reached only through the Babel that Jest installs (for the jest-app fixture, and as mutator's optional
+// Jest peer); Veritas never bundles or ships it.
+const ALLOWED_PACKAGES = new Map([['caniuse-lite', 'CC-BY-4.0']]);
+
 /** Accepts an SPDX expression when every AND term has at least one allowed OR alternative. */
 function isAllowed(expression) {
   const clean = expression.replace(/[()]/g, '').trim();
@@ -55,7 +60,10 @@ for (const args of [[], ['-r', '--prod']]) {
 }
 
 for (const [pkg, license] of seen) {
-  if (!isAllowed(license)) problems.push(`${pkg}: license "${license}" is not on the allowlist`);
+  const name = pkg.slice(0, pkg.lastIndexOf('@'));
+
+  if (!isAllowed(license) && ALLOWED_PACKAGES.get(name) !== license)
+    problems.push(`${pkg}: license "${license}" is not on the allowlist`);
 }
 
 const rootLicense = readFileSync(path.join(repo, 'LICENSE'), 'utf8');
