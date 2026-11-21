@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { discoverEvidence, withoutCodeBlocks } from '../src/index.js';
+import { discoverEvidence, splitSentences, withoutCodeBlocks } from '../src/index.js';
 import { config, tempProject, writeProjectFile } from './helpers.js';
 
 describe('statement extraction', () => {
@@ -135,5 +135,76 @@ describe('age and ordering phrases', () => {
     writeProjectFile(root, 'README.md', `# x\n\n${text}\n`);
     const result = await discoverEvidence({ root, config: config(), offline: true });
     expect(result.statements[0]?.relation).toMatchObject({ kind: 'threshold', operator, value });
+  });
+});
+
+describe('sentence splitting', () => {
+  const quotes = (text: string) => splitSentences(text).map((s) => s.text.trim());
+
+  it('does not cut at a dot between digits, in a name or in a URL', () => {
+    expect(
+      quotes(
+        'Requires dompurify 3.2.4 or later. Install libwebkit2gtk-4.1 first. Pi is 3.14, see https://keepachangelog.com/en/1.1.0/ and Node.js docs.',
+      ),
+    ).toEqual([
+      'Requires dompurify 3.2.4 or later.',
+      'Install libwebkit2gtk-4.1 first.',
+      'Pi is 3.14, see https://keepachangelog.com/en/1.1.0/ and Node.js docs.',
+    ]);
+    expect(quotes('Compare v1.2.0...v1.2.1 for the diff. Done!')).toEqual([
+      'Compare v1.2.0...v1.2.1 for the diff.',
+      'Done!',
+    ]);
+  });
+
+  it('ends a sentence at a dot before a space, but not after an abbreviation or a list number', () => {
+    expect(quotes('The limit is 10. Users must log in, e.g. with a token.')).toEqual([
+      'The limit is 10.',
+      'Users must log in, e.g. with a token.',
+    ]);
+    expect(quotes('1. Install the app.\n2. The count must be at most 5.\n- 3. item')).toEqual([
+      '1. Install the app.',
+      '2. The count must be at most 5.',
+      '- 3. item',
+    ]);
+    expect(quotes('if (a !== b) it fails? Then x?.y is read.')).toEqual([
+      'if (a !== b) it fails?',
+      'Then x?.y is read.',
+    ]);
+  });
+
+  it('splits Japanese at 。 and keeps a closing bracket with its sentence', () => {
+    expect(quotes('バージョン 2.1.0 以降が必要です。「設定は必須です。」次に進みます！本当？はい')).toEqual([
+      'バージョン 2.1.0 以降が必要です。',
+      '「設定は必須です。」',
+      '次に進みます！',
+      '本当？',
+      'はい',
+    ]);
+  });
+
+  it('drops pieces without a letter', () => {
+    expect(quotes('2.\n---\n55. 4.\n| 1 | 2 |\nreal text')).toEqual(['real text']);
+  });
+
+  it('extracts no fragment statements from version-heavy documents', async () => {
+    const root = tempProject('versions');
+    writeProjectFile(
+      root,
+      'docs/ja/SECURITY.md',
+      [
+        '# セキュリティ',
+        '',
+        '- dompurify 3.2.4 以上を使います。',
+        '- 依存関係: 4.0.0 → 11.2.1、55.0.1 に更新しました。',
+        '1. Upgrade to 2.0.0 or later.',
+      ].join('\n'),
+    );
+    const result = await discoverEvidence({ root, config: config(), offline: true });
+    expect(result.statements.map((s) => s.quote)).toEqual([
+      '- dompurify 3.2.4 以上を使います。',
+      '- 依存関係: 4.0.0 → 11.2.1、55.0.1 に更新しました。',
+      '1. Upgrade to 2.0.0 or later.',
+    ]);
   });
 });

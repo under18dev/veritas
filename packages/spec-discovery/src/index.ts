@@ -182,12 +182,86 @@ export function withoutCodeBlocks(text: string): string {
     .join('\n');
 }
 
+/** Words whose dot is part of the word, not the end of a sentence (`e.g. with a token`). */
+const ABBREVIATIONS = new Set([
+  'e.g',
+  'i.e',
+  'eg',
+  'ie',
+  'vs',
+  'cf',
+  'approx',
+  'incl',
+  'fig',
+  'mr',
+  'mrs',
+  'ms',
+  'dr',
+]);
+const TERMINATORS = '。！？.!?';
+/** Closing brackets and quotes that stay with the sentence they close (`「設定は必須です。」`). */
+const CLOSERS = '」』）】)]"\'”’';
+
+/**
+ * Splits text into sentences: at a line break, after `。`, `！` or `？`, and after `.`, `!` or `?` that a space or the
+ * end of the text follows. A dot inside a word or a number (`3.2.4`, `libwebkit2gtk-4.1`, `Node.js`, a URL) does not
+ * end a sentence, nor does the dot of an abbreviation (`e.g.`). A piece without a letter (`1.` of a numbered list,
+ * a `---` rule) is joined to the text after it on the same line, or dropped at the end of the line.
+ */
+export function splitSentences(text: string): Array<{ text: string; start: number }> {
+  const output: Array<{ text: string; start: number }> = [];
+  let start = 0;
+  /** Ends the current piece at `end`; `force` drops a piece without a letter instead of keeping it for the next one. */
+  const cut = (end: number, force: boolean) => {
+    const piece = text.slice(start, end);
+
+    if (/\p{L}/u.test(piece)) output.push({ text: piece, start });
+    else if (!force) return;
+    start = end;
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charAt(i);
+
+    if (ch === '\n') {
+      cut(i, true);
+      start = i + 1;
+      continue;
+    }
+
+    if (!TERMINATORS.includes(ch)) continue;
+    let end = i + 1;
+
+    while (end < text.length && TERMINATORS.includes(text.charAt(end))) end++;
+
+    while (end < text.length && CLOSERS.includes(text.charAt(end))) end++;
+    const run = text.slice(i, end);
+    const next = text.charAt(end);
+
+    if (!/[。！？]/.test(run)) {
+      if (next !== '' && !/\s/.test(next)) {
+        i = end - 1;
+        continue;
+      }
+      // The last few characters are enough for the longest abbreviation, and keep long pieces linear.
+      const word = /([A-Za-z.]+)$/.exec(text.slice(Math.max(start, i - 8), i))?.[1]?.toLowerCase();
+
+      if (run === '.' && word && ABBREVIATIONS.has(word)) continue;
+    }
+    cut(end, false);
+    i = end - 1;
+  }
+  cut(text.length, true);
+
+  return output;
+}
+
 function extract(text: string, sourceId: string, stale: boolean, redactText: Redact): NormativeStatement[] {
   const output: NormativeStatement[] = [];
   const releaseOf = versionAt(text);
 
-  for (const match of text.matchAll(/[^。.!?\n]+(?:[。.!?]+|$)/g)) {
-    const raw = match[0].trim();
+  for (const sentence of splitSentences(text)) {
+    const raw = sentence.text.trim();
 
     if (!raw) continue;
     const quote = cleanQuote(raw, redactText);
@@ -230,8 +304,8 @@ function extract(text: string, sourceId: string, stale: boolean, redactText: Red
       !/\d/.test(raw)
     )
       continue;
-    const start = match.index ?? 0;
-    const range = lineRange(text, start, start + match[0].length);
+    const start = sentence.start;
+    const range = lineRange(text, start, start + sentence.text.length);
     const version = releaseOf(start);
     output.push({
       id: stableId('stmt', { sourceId, range, quote, relation }),
