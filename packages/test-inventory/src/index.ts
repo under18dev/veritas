@@ -483,7 +483,11 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
         ...none,
         targets: [{ symbol: receiver, ownArgs: false, assertedInside: false, flowsToResult: true }],
       };
-    else info = { ...none, opaque: ts.isCallExpression(node) && isOpaqueCall(node, ctx.checker) };
+    else
+      info = {
+        ...none,
+        opaque: !ts.isTaggedTemplateExpression(node) && isOpaqueCall(node, ctx.checker),
+      };
   }
   const known = new Set(info.targets.map((t) => t.symbol));
   // Built-ins such as `map` and test helpers call the functions they are given. Project code is followed into:
@@ -526,38 +530,36 @@ function projectReceiver(node: Invocation, ctx: Ctx): string | undefined {
   return projectSymbolId(symbol, ctx.checker, ctx.projectSet, ctx.root);
 }
 
-const CHILD_PROCESS_FUNCTIONS = new Set([
-  'spawn',
-  'spawnSync',
-  'exec',
-  'execSync',
-  'execFile',
-  'execFileSync',
-  'fork',
-]);
+/**
+ * Node.js functions that run code static analysis cannot see, by module: other processes, and source text that
+ * `node:vm` compiles at run time (`runInNewContext('f(1)', { f })`).
+ */
+const OPAQUE_FUNCTIONS: Record<string, Set<string>> = {
+  child_process: new Set(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']),
+  vm: new Set([
+    'runInNewContext',
+    'runInContext',
+    'runInThisContext',
+    'compileFunction',
+    'Script',
+    'SourceTextModule',
+  ]),
+};
 
-/** A dynamic `import()` or a Node.js child_process call: what runs there is invisible to static analysis. */
-function isOpaqueCall(node: ts.CallExpression, checker: ts.TypeChecker): boolean {
-  if (node.expression.kind === ts.SyntaxKind.ImportKeyword) return true;
-  // `require(...)` and `createRequire(...)` load modules at run time, which static imports do not show.
-  if (ts.isIdentifier(node.expression) && ['require', 'createRequire'].includes(node.expression.text))
-    return true;
-  // A loader made by `createRequire` (`const load = createRequire(import.meta.url); load('./x')`).
-  if (ts.isIdentifier(node.expression)) {
-    const declaration = checker.getSymbolAtLocation(node.expression)?.valueDeclaration;
-    const initializer =
-      declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
-        ? skipParens(declaration.initializer)
-        : undefined;
-    if (
-      initializer &&
-      ts.isCallExpression(initializer) &&
-      ts.isIdentifier(initializer.expression) &&
-      initializer.expression.text === 'createRequire'
-    )
-      return true;
-  }
-  // By import source, which works without @types/node: `spawnSync(...)` or `cp.spawnSync(...)`.
+/** The `OPAQUE_FUNCTIONS` module a specifier names (`vm`, `node:vm`), if any. */
+function opaqueModule(specifier: string): string | undefined {
+  const name = specifier.replace(/^node:/, '');
+
+  return Object.hasOwn(OPAQUE_FUNCTIONS, name) ? name : undefined;
+}
+
+/**
+ * A dynamic `import()`, a Node.js child_process call, or code compiled by `node:vm`: what runs there is invisible
+ * to static analysis.
+ */
+function isOpaqueCall(node: ts.CallExpression | ts.NewExpression, checker: ts.TypeChecker): boolean {
+  if (ts.isCallExpression(node) && isRuntimeLoad(node, checker)) return true;
+  // By import source, which works without @types/node: `spawnSync(...)`, `cp.spawnSync(...)`, `new vm.Script(...)`.
   const callee = skipParens(node.expression);
   const local = ts.isPropertyAccessExpression(callee) ? skipParens(callee.expression) : callee;
   const name = ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
@@ -576,23 +578,44 @@ function isOpaqueCall(node: ts.CallExpression, checker: ts.TypeChecker): boolean
             : undefined;
       const specifier = imported?.from.moduleSpecifier;
 
-      if (
-        specifier &&
-        ts.isStringLiteral(specifier) &&
-        (specifier.text === 'child_process' || specifier.text === 'node:child_process') &&
-        imported?.name !== undefined &&
-        CHILD_PROCESS_FUNCTIONS.has(imported.name)
-      )
-        return true;
+      const module = specifier && ts.isStringLiteral(specifier) ? opaqueModule(specifier.text) : undefined;
+
+      if (module && imported?.name !== undefined && OPAQUE_FUNCTIONS[module]?.has(imported.name)) return true;
     }
   let symbol = checker.getSymbolAtLocation(node.expression);
 
   if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
 
-  if (!symbol || !CHILD_PROCESS_FUNCTIONS.has(symbol.getName())) return false;
+  if (!symbol) return false;
+  const symbolName = symbol.getName();
 
-  return (symbol.declarations ?? []).some((declaration) =>
-    /[\\/]child_process\.d\.ts$/.test(declaration.getSourceFile().fileName),
+  // Through the types of @types/node, for the forms the import source does not show.
+  return (symbol.declarations ?? []).some((declaration) => {
+    const module = /[\\/](child_process|vm)\.d\.ts$/.exec(declaration.getSourceFile().fileName)?.[1];
+
+    return module !== undefined && OPAQUE_FUNCTIONS[module]?.has(symbolName) === true;
+  });
+}
+
+/** `import()`, `require(...)`, `createRequire(...)`, or a loader made by `createRequire`: modules loaded at run time. */
+function isRuntimeLoad(node: ts.CallExpression, checker: ts.TypeChecker): boolean {
+  if (node.expression.kind === ts.SyntaxKind.ImportKeyword) return true;
+  // `require(...)` and `createRequire(...)` load modules at run time, which static imports do not show.
+  if (ts.isIdentifier(node.expression) && ['require', 'createRequire'].includes(node.expression.text))
+    return true;
+  // A loader made by `createRequire` (`const load = createRequire(import.meta.url); load('./x')`).
+  if (!ts.isIdentifier(node.expression)) return false;
+  const declaration = checker.getSymbolAtLocation(node.expression)?.valueDeclaration;
+  const initializer =
+    declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+      ? skipParens(declaration.initializer)
+      : undefined;
+
+  return (
+    initializer !== undefined &&
+    ts.isCallExpression(initializer) &&
+    ts.isIdentifier(initializer.expression) &&
+    initializer.expression.text === 'createRequire'
   );
 }
 
@@ -1356,7 +1379,7 @@ function moduleLoadReach(
       const invoked = ts.isCallExpression(outer) && skipParens(outer.expression) === node;
       if (!invoked) return;
     }
-    if (ts.isCallExpression(node) && isOpaqueCall(node, checker)) opaque = true;
+    if ((ts.isCallExpression(node) || ts.isNewExpression(node)) && isOpaqueCall(node, checker)) opaque = true;
     const specifier =
       ts.isImportDeclaration(node) || ts.isExportDeclaration(node) ? node.moduleSpecifier : undefined;
     if (
@@ -1380,7 +1403,7 @@ function moduleLoadReach(
  */
 function hasUnseenReach(source: ts.SourceFile, checker: ts.TypeChecker): boolean {
   return descendants(source).some((node) => {
-    if (ts.isCallExpression(node)) return isOpaqueCall(node, checker);
+    if (ts.isCallExpression(node) || ts.isNewExpression(node)) return isOpaqueCall(node, checker);
     const specifier =
       ts.isImportDeclaration(node) || ts.isExportDeclaration(node) ? node.moduleSpecifier : undefined;
 

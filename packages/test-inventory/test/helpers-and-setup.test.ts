@@ -389,4 +389,19 @@ describe('code static analysis cannot follow', () => {
     expect(byName('child process').suspicions).toEqual(['opaque_call']);
     expect(byName('dynamic import').suspicions).toEqual(['opaque_call']);
   });
+
+  it('marks code compiled by node:vm as opaque, and leaves other vm functions alone', () => {
+    const byName = inventory(`${header}
+      import vm, { runInNewContext } from 'node:vm';
+      import * as nodeVm from 'vm';
+      it('runInNewContext', () => { expect(runInNewContext('fn(1)', { fn })).toBe(2); });
+      it('script', () => { expect(new vm.Script('fn(1)').runInNewContext({ fn })).toBe(2); });
+      it('namespace', () => { expect(nodeVm.runInThisContext('1')).toBe(1); });
+      it('isContext', () => { expect(vm.isContext({})).toBe(false); });
+    `);
+
+    for (const name of ['runInNewContext', 'script', 'namespace'])
+      expect(byName(name).suspicions, name).toContain('opaque_call');
+    expect(byName('isContext').suspicions).not.toContain('opaque_call');
+  });
 });
