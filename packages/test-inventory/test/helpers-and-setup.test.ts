@@ -759,6 +759,21 @@ vIt('local value', () => { const later = () => matches('a', 'a'); expect(later).
     expect(byName('compiles').suspicions).toEqual(['type_level_only']);
   });
 
+  it('treats JSX rendered with a JSX runtime of the project as a call it cannot follow', () => {
+    const root = tempProject({
+      'src/math.ts': math,
+      'src/jsx-runtime.ts': 'export function jsx(tag: string) { return "<" + tag + "/>"; }\n',
+      'test/render.test.tsx': `/** @jsxImportSource ../src */
+import { expect, it } from 'vitest';
+it('renders', () => { const element = <hr />; expect(String(element)).toBe('<hr/>'); });
+`,
+    });
+    const test = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests.find(
+      (t) => t.name === 'renders',
+    );
+    expect(test?.suspicions).toEqual(['opaque_call']);
+  });
+
   it('links the expected side of an assertion and the state of an object a project method ran on', () => {
     const byName = inventory(`${header}
       it('reversed', () => { expect([2, 3]).toContain(fn(1)); });

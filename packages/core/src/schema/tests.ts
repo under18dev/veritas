@@ -25,7 +25,8 @@ export const TestCase = z.object({
   nondeterminism: z.array(z.string()),
   /**
    * `unresolved_import`: a call goes through a relative import TypeScript could not resolve.
-   * `opaque_call`: the test runs code in a child process or through a dynamic import.
+   * `opaque_call`: the test runs code in a child process or through a dynamic import, or renders JSX with a JSX
+   * runtime of the project (an `@jsxImportSource` pragma with a relative path).
    * Either way, what the test reaches is unknown rather than absent.
    * `type_level_only`: every assertion checks TypeScript types (`expectTypeOf`, `assertType`), which no run evaluates.
    * `progress_only`: the test awaits a project call and asserts only on constants it records after the await, so it

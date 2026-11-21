@@ -501,6 +501,14 @@ function analyzeBody(
       }
     }
 
+    // JSX rendered with a JSX runtime of the project (`/** @jsxImportSource ./ */`) calls project code that the
+    // element syntax does not show.
+    if (
+      (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node) || ts.isJsxFragment(node)) &&
+      projectJsxRuntime(source)
+    )
+      opaque = true;
+
     if (!isInvocation(node)) continue;
 
     if (record(node)) bindCallOutputs(node);
@@ -2600,6 +2608,11 @@ function matcherNames(assertion: ts.CallExpression): string[] {
     else if (ts.isAwaitExpression(parent)) current = parent;
     else return names;
   }
+}
+
+/** Whether a file renders JSX with a runtime inside the project: an `@jsxImportSource` pragma with a relative path. */
+function projectJsxRuntime(source: ts.SourceFile): boolean {
+  return /@jsxImportSource\s+\.{1,2}(?:[\\/]\S*)?(?:\s|\*)/.test(source.text.slice(0, 2000));
 }
 
 /** The function a local `const name = () => ...` (or `function name() {}`) of this file holds. */
