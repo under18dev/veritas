@@ -46,6 +46,11 @@ export const MutationRunResult = z.object({
   agentReport: z.unknown().nullable(),
   killMatrix: z.unknown().nullable(),
   warnings: z.array(z.string()),
+  /**
+   * Source files (project-relative) left out of the run because the bundler could not parse their instrumented
+   * copy. Their mutants were not run, so the results do not cover them.
+   */
+  excludedFiles: z.array(z.string()).optional(),
 });
 export type MutationRunResult = z.infer<typeof MutationRunResult>;
 

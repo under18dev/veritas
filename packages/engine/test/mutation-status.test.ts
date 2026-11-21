@@ -1,6 +1,6 @@
 import type { Mutant } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
-import { literalInput, mutationStageStatus } from '../src/index.js';
+import { cacheableMutationResult, literalInput, mutationStageStatus } from '../src/index.js';
 
 const mutant = (status: Mutant['status']) => ({ status }) as Mutant;
 
@@ -49,6 +49,13 @@ describe('mutationStageStatus', () => {
     ).toEqual({ status: 'partial', undecided: 1, empty: false });
   });
 
+  it('is partial when source files were left out of the run, even an incremental one', () => {
+    const run = { status: 'succeeded' as const, mutants: [mutant('killed')], excludedFiles: ['src/a.ts'] };
+    expect(mutationStageStatus(run).status).toBe('partial');
+    expect(mutationStageStatus(run, { incremental: true }).status).toBe('partial');
+    expect(mutationStageStatus({ ...run, status: 'failed' }).status).toBe('failed');
+  });
+
   it('is partial when a complete run has no mutant at all, except in an incremental run', () => {
     expect(mutationStageStatus({ status: 'succeeded', mutants: [] })).toEqual({
       status: 'partial',
@@ -58,6 +65,15 @@ describe('mutationStageStatus', () => {
     expect(mutationStageStatus({ status: 'succeeded', mutants: [] }, { incremental: true }).status).toBe(
       'succeeded',
     );
+  });
+});
+
+describe('cacheableMutationResult', () => {
+  it('reuses only a succeeded run that left no file out', () => {
+    expect(cacheableMutationResult({ status: 'succeeded' })).toBe(true);
+    expect(cacheableMutationResult({ status: 'succeeded', excludedFiles: [] })).toBe(true);
+    expect(cacheableMutationResult({ status: 'succeeded', excludedFiles: ['src/a.ts'] })).toBe(false);
+    expect(cacheableMutationResult({ status: 'failed' })).toBe(false);
   });
 });
 

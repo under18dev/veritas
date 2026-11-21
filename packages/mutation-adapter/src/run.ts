@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import {
   MUTATOR_DECLARED_VITEST_MAJOR,
@@ -14,6 +14,15 @@ import {
   vitestMajor,
 } from '@under18dev/veritas-core';
 import { detectMutator, PINNED_MUTATOR_VERSION, summarize } from './detect.js';
+import {
+  baselineFailure,
+  errorExcerpt,
+  instrumentationFailures,
+  isRelativeGlob,
+  listSome,
+  transformErrorLine,
+  withoutDebug,
+} from './diagnose.js';
 import { importMutationReport } from './import.js';
 import { countMutants, emptyCounts, type MutationRunResult, type MutationRunStatus } from './schema.js';
 import { mutatorVitestDir, projectViteUrl, writeMutationVitestConfig } from './vitest-config.js';
@@ -44,6 +53,8 @@ export interface RunMutationOptions {
   configPath?: string;
   /** Pass `--no-typecheck`. */
   noTypecheck?: boolean;
+  /** Source files (relative to the root, no glob characters) passed as `--exclude`. */
+  exclude?: string[];
 }
 
 const MUTANT_KEY = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
@@ -52,6 +63,11 @@ const MUTANT_KEY = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
 const EXIT_BASELINE_FAILED = 4;
 /** Exit code for a quality gate configured in the project's mutator config. */
 const EXIT_GATE_FAILED = 2;
+/** At most this many files are left out to run mutator again; more points at something else than a parser bug. */
+const MAX_EXCLUDED_FILES = 5;
+/** The second run needs at least this much of mutation.timeoutMs left, and at least this share of it. */
+const MIN_RETRY_MS = 30_000;
+const MIN_RETRY_SHARE = 0.1;
 
 /** Seconds after which mutator starts no new mutant: leave a quarter of the hard timeout to finish. */
 export function timeBudgetSeconds(timeoutMs: number): number {
@@ -71,17 +87,17 @@ export function buildMutatorArgs(options: RunMutationOptions): string[] {
   }
 
   for (const glob of options.scope ?? []) {
-    if (
-      glob === '' ||
-      glob.startsWith('-') ||
-      glob.includes('\0') ||
-      path.isAbsolute(glob) ||
-      /^[A-Za-z]:/.test(glob) ||
-      glob.split(/[\\/]/).includes('..')
-    ) {
+    if (!isRelativeGlob(glob)) {
       throw new TypeError(`scope glob must be relative to the project root: ${JSON.stringify(glob)}`);
     }
     args.push('--include', glob);
+  }
+
+  for (const file of options.exclude ?? []) {
+    if (!isRelativeGlob(file)) {
+      throw new TypeError(`excluded file must be relative to the project root: ${JSON.stringify(file)}`);
+    }
+    args.push('--exclude', file);
   }
 
   if (options.configPath !== undefined) args.push('--config', options.configPath);
@@ -163,6 +179,8 @@ function confineReportDir(root: string, reportDir: string): string {
 export async function runMutation(options: RunMutationOptions): Promise<MutationRunResult> {
   const started = Date.now();
   const warnings: string[] = [];
+  /** Source files mutator was run again without, after their instrumented copy failed to parse. */
+  let excluded: string[] = [];
   const result = (
     status: MutationRunStatus,
     fields: Partial<MutationRunResult> & { detail: string | null },
@@ -178,6 +196,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     agentReport: null,
     killMatrix: null,
     warnings,
+    ...(excluded.length > 0 ? { excludedFiles: excluded } : {}),
     ...fields,
   });
 
@@ -250,6 +269,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   const needed = [
     options.since !== undefined && '--since',
     (options.scope?.length ?? 0) > 0 && '--include',
+    (options.exclude?.length ?? 0) > 0 && '--exclude',
     options.killMatrix && '--kill-matrix',
     (options.only?.length ?? 0) > 0 && '--only',
     writesConfig && '--config',
@@ -268,13 +288,16 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   }
 
   if (options.config.mutation.mode === 'diff' && options.since === undefined) {
-    warnings.push('mutation.mode is "diff" but no --since ref was given: all mutants in scope were run');
+    warnings.push(
+      'mutation.mode is "diff", but this run had no --since ref, so every mutant in scope was run; pass --since <ref> (for example --since origin/main) to mutate only the code changed since that ref',
+    );
   }
 
   mkdirSync(reportDir, { recursive: true });
+  let configPath: string | undefined;
 
   if (writesConfig) {
-    const configPath = writeMutationVitestConfig({
+    configPath = writeMutationVitestConfig({
       root: options.root,
       dir: reportDir,
       ...(options.testFiles === undefined ? {} : { testFiles: options.testFiles }),
@@ -282,23 +305,112 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
         ? {}
         : { fsAllow: { dirs: [fsAllowDir], viteUrl: projectViteUrl(options.root) } }),
     });
-    args = buildMutatorArgs({ ...options, reportDir, configPath, noTypecheck });
   }
-  const command = [process.execPath, detection.binPath, ...args];
-  const run = await runProjectTests(process.execPath, [detection.binPath, ...args], {
-    cwd: options.root,
-    timeoutMs: options.config.mutation.timeoutMs,
-    memoryMb: options.config.limits.memoryMb,
-    // mutator logs why a test file failed to load only to this debug channel, and only when one does.
-    env: { NODE_DEBUG: 'mutator' },
-    // A mutation run takes minutes; its progress lines show that it is working.
-    logOutput: true,
-    label: 'mutator',
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-  });
+  const binPath = detection.binPath;
+  const argsExcluding = (exclude: string[], timeoutMs = options.config.mutation.timeoutMs) =>
+    buildMutatorArgs({
+      ...options,
+      // The time budget of a second run is computed from what is left of the timeout.
+      config: { ...options.config, mutation: { ...options.config.mutation, timeoutMs } },
+      reportDir,
+      noTypecheck,
+      ...(configPath === undefined ? {} : { configPath }),
+      // The caller's own exclusions stay, and the files diagnosed here are added to them.
+      ...(exclude.length > 0 ? { exclude: [...new Set([...(options.exclude ?? []), ...exclude])] } : {}),
+    });
+  const spawn = (argv: string[], timeoutMs = options.config.mutation.timeoutMs) =>
+    runProjectTests(process.execPath, [binPath, ...argv], {
+      cwd: options.root,
+      timeoutMs,
+      memoryMb: options.config.limits.memoryMb,
+      // mutator logs why a test file failed to load only to this debug channel, and only when one does.
+      env: { NODE_DEBUG: 'mutator' },
+      // A mutation run takes minutes; its progress lines show that it is working.
+      logOutput: true,
+      label: 'mutator',
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
   const reportPath = path.join(reportDir, 'mutation.json');
-  const rawReportPath = existsSync(reportPath) ? reportPath : null;
-  const common = { backend, command, exitCode: run.exitCode, durationMs: run.durationMs, rawReportPath };
+  const ran = (run: Awaited<ReturnType<typeof spawn>>, argv: string[], durationMs: number) => ({
+    backend,
+    command: [process.execPath, binPath, ...argv],
+    exitCode: run.exitCode,
+    durationMs,
+    rawReportPath: existsSync(reportPath) ? reportPath : null,
+  });
+  const adapterHint = detection.origin === 'adapter' ? `; ${ownCopyHint}` : '';
+  args = argsExcluding([]);
+  let run = await spawn(args);
+  let durationMs = run.durationMs;
+
+  // A baseline can fail because the bundler cannot parse mutator's instrumented copy of a source file, which is
+  // not a test failure. Run once more without the files the error names, within what is left of the timeout. If
+  // that run passes the baseline, the instrumentation was at fault and a warning says so; otherwise the failure
+  // of that run is reported, never hidden.
+  if (run.exitCode === EXIT_BASELINE_FAILED && !run.timedOut && !options.signal?.aborted) {
+    const stderr = redact(run.stderr);
+    const detect = (text: string) =>
+      instrumentationFailures(text, options.root, {
+        testInclude: options.config.analysis.testInclude,
+        ...(options.testFiles === undefined ? {} : { testFiles: options.testFiles }),
+        include: options.scope?.length ? options.scope : options.config.analysis.include,
+        exclude: options.config.analysis.exclude,
+      });
+    const broken = detect(stderr);
+
+    if (broken.length > 0) {
+      const list = listSome(broken);
+      const parseError = transformErrorLine(stderr);
+      const diagnosis = `instrumentation failed: the project's bundler could not parse mutator's instrumented copy of ${list} (${parseError}). If the file loads in your own test run, this is usually a bug in the bundler's parser, and upgrading Vite (or rolldown and oxc) may fix it.\n${baselineFailure(stderr, options.root)}`;
+      const timeoutMs = options.config.mutation.timeoutMs;
+      const remainingMs = timeoutMs - run.durationMs;
+      const notRetried = !detection.capabilities.includes('--exclude')
+        ? `this mutator has no --exclude, so it was not run again without ${list}`
+        : broken.length > MAX_EXCLUDED_FILES
+          ? `${broken.length} files are named, more than the ${MAX_EXCLUDED_FILES} Veritas leaves out, so mutator was not run again`
+          : remainingMs < MIN_RETRY_MS || remainingMs < timeoutMs * MIN_RETRY_SHARE
+            ? `too little of mutation.timeoutMs (${timeoutMs} ms) was left to run mutator again without ${list}; raise mutation.timeoutMs or narrow the run with --since`
+            : null;
+
+      if (notRetried !== null) {
+        return result('error', { ...ran(run, args, durationMs), detail: `${diagnosis}\n${notRetried}` });
+      }
+      const retryArgs = argsExcluding(broken, remainingMs);
+      rmSync(reportPath, { force: true });
+      const retry = await spawn(retryArgs, remainingMs);
+      durationMs += retry.durationMs;
+      const retried = `mutator ran again without ${list}, because its instrumented copy did not parse (${parseError})`;
+      const retryFailed = !retry.timedOut && !retry.spawnError && !options.signal?.aborted;
+
+      if (retryFailed && retry.exitCode === EXIT_BASELINE_FAILED) {
+        const retryStderr = redact(retry.stderr);
+        const still = detect(retryStderr).filter((file) => broken.includes(file));
+
+        return result('failed', {
+          ...ran(retry, retryArgs, durationMs),
+          detail:
+            still.length > 0
+              ? `tests fail without mutants (baseline, exit 4): ${listSome(still)} does not parse even without instrumentation, so the source or the project's toolchain is at fault, not mutator (${transformErrorLine(retryStderr)}).\n${baselineFailure(retryStderr, options.root)}${adapterHint}`
+              : `tests fail without mutants (baseline, exit 4): ${baselineFailure(retryStderr, options.root)}${adapterHint}\n${retried}`,
+        });
+      }
+
+      if (retryFailed && retry.exitCode !== 0 && retry.exitCode !== EXIT_GATE_FAILED) {
+        return result('error', {
+          ...ran(retry, retryArgs, durationMs),
+          detail: `mutator exited with ${retry.exitCode ?? `signal ${retry.signal}`}: ${errorExcerpt(withoutDebug(redact(retry.stderr)))}\n${retried}`,
+        });
+      }
+      warnings.push(
+        `${list} ${broken.length === 1 ? 'was' : 'were'} left out of mutation, so none of ${broken.length === 1 ? 'its' : 'their'} mutants ran: the project's bundler could not parse mutator's instrumented copy (${parseError}), while the tests load the file itself. This is usually a bug in the bundler's parser, and upgrading Vite (or rolldown and oxc) may fix it`,
+      );
+      excluded = broken;
+      run = retry;
+      args = retryArgs;
+    }
+  }
+  const common = ran(run, args, durationMs);
+  const { rawReportPath } = common;
 
   if (run.spawnError)
     return result('error', { ...common, detail: `could not start mutator: ${run.spawnError}` });
@@ -320,14 +432,14 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   if (run.exitCode === EXIT_BASELINE_FAILED) {
     return result('failed', {
       ...common,
-      detail: `tests fail without mutants (baseline, exit 4): ${baselineFailure(redact(run.stderr), options.root)}${detection.origin === 'adapter' ? `; ${ownCopyHint}` : ''}`,
+      detail: `tests fail without mutants (baseline, exit 4): ${baselineFailure(redact(run.stderr), options.root)}${adapterHint}`,
     });
   }
 
   if (run.exitCode !== 0 && run.exitCode !== EXIT_GATE_FAILED) {
     return result('error', {
       ...common,
-      detail: `mutator exited with ${run.exitCode ?? `signal ${run.signal}`}: ${summarize(withoutDebug(redact(run.stderr)))}`,
+      detail: `mutator exited with ${run.exitCode ?? `signal ${run.signal}`}: ${errorExcerpt(withoutDebug(redact(run.stderr)))}`,
     });
   }
 
@@ -433,45 +545,4 @@ export function importMutationResult(options: { root: string; reportFile: string
       ...(counts.pending > 0 ? [`${counts.pending} mutant(s) in the report are pending`] : []),
     ],
   };
-}
-
-/** `MUTATOR 123: /abs/a.test.ts: message`, what NODE_DEBUG=mutator prints for a test file that failed to load. */
-const DEBUG_LINE = /^MUTATOR \d+: (.+?\.[cm]?[jt]sx?): (.*)$/;
-
-/** mutator's own output, without the debug lines and the stack traces that follow them. */
-function withoutDebug(stderr: string): string {
-  const kept: string[] = [];
-  let inDebug = false;
-
-  for (const line of stderr.split('\n')) {
-    if (/^MUTATOR \d+: /.test(line)) inDebug = true;
-    else if (inDebug && !/^(\s+at |Error: |\S*Error: )/.test(line)) inDebug = false;
-
-    if (!inDebug) kept.push(line);
-  }
-
-  return kept.join('\n');
-}
-
-/**
- * What a failed baseline says: mutator's summary (which tests fail), then the first reason a test file failed to
- * load, which mutator prints only on its debug channel and which is usually the cause (`Cannot find module …`).
- */
-export function baselineFailure(stderr: string, root: string): string {
-  const summary = summarize(withoutDebug(stderr));
-  const first = stderr
-    .split('\n')
-    .map((line) => DEBUG_LINE.exec(line))
-    .find((match) => match !== null);
-
-  if (!first) return summary;
-  // Project-relative with `/`, as the other paths in the detail.
-  const file = (
-    path.isAbsolute(first[1] as string) ? path.relative(root, first[1] as string) : (first[1] as string)
-  )
-    .split(path.sep)
-    .join('/');
-  const message = (first[2] as string).length > 300 ? `${(first[2] as string).slice(0, 300)}…` : first[2];
-
-  return `${summary}\nfirst error: ${file}: ${message}`;
 }

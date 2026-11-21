@@ -70,6 +70,13 @@ describe('buildMutatorArgs', () => {
       expect(() => buildMutatorArgs({ ...base, scope: [glob] })).toThrow(/relative to the project root/);
     }
 
+    for (const file of ['../x.ts', '/etc/x.ts', '--config=evil.js', '']) {
+      expect(() => buildMutatorArgs({ ...base, exclude: [file] })).toThrow(/relative to the project root/);
+    }
+    expect(buildMutatorArgs({ ...base, exclude: ['src/a.ts'] })).toEqual(
+      expect.arrayContaining(['--exclude', 'src/a.ts']),
+    );
+
     for (const key of ['--plugin', 'a b', 'x;rm', '']) {
       expect(() => buildMutatorArgs({ ...base, only: [key] })).toThrow(/invalid mutant key/);
     }
