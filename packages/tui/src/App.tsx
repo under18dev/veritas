@@ -2,7 +2,7 @@ import path from 'node:path';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { useCallback, useState } from 'react';
 import type { TuiApi } from './api.js';
-import { Badge, SelectList, useLoad, verdictColor } from './components.js';
+import { Badge, type Hints, ScrollView, SelectList, useLoad, verdictColor } from './components.js';
 import type { ScreenKey, ScreenProps } from './screen.js';
 import { Home } from './screens/Home.js';
 import { Improve } from './screens/Improve.js';
@@ -24,14 +24,17 @@ const MENU = SCREENS.map((s, i) => ({ label: `${i + 1} ${s.label}`, value: s.key
 
 const HELP = [
   'Menu: ↑/↓ or j/k to move, Enter or → to open, 1-6 to open a screen directly, q to quit, ? to close this help.',
-  'In a screen: ↑/↓ or j/k to move, Enter to choose, Esc to go back.',
-  'Results: Enter on a run lists its findings; Enter on a finding shows its evidence.',
+  'In a screen: ↑/↓ or j/k to move, Enter to choose, Esc to go back. The bar at the bottom lists the keys.',
+  'Home: the project, the latest run, the tools and what to do next; 2-6 open the screen a next step names.',
+  'Results: Enter on a run shows its stages and findings, most severe first; Enter on a finding shows its',
+  '  evidence and, separately, the suggested next actions.',
   'Specifications: f filters by status, d shows what changed since the previous run;',
   '  on a property, a accepts and r rejects (a reason is required).',
   'Run: choose the profile and options, then Start. The stages and a live activity log show it working;',
   '  Esc cancels a running run, and Enter on the result opens Results.',
   'Improve tests: create a plan (nothing is written), review it, then apply it.',
-  'Settings: Enter edits a value; it is checked and you confirm the change before it is saved.',
+  'Settings: Enter opens a section and changes a value (Enter or Space toggles a switch, a list of choices',
+  '  opens for others); r resets it to the default. s shows the changes and saves them after you confirm; p lists problems.',
 ];
 
 function Header({ api, version }: { api: TuiApi; version: number }) {
@@ -67,11 +70,11 @@ function Header({ api, version }: { api: TuiApi; version: number }) {
 }
 
 /** The keys that work here, each as a highlighted key and what it does. */
-function KeyHints({ keys }: { keys: [string, string][] }) {
+function KeyHints({ keys }: { keys: Hints }) {
   return (
-    <Box>
+    <Box height={1} overflow="hidden">
       {keys.map(([key, action]) => (
-        <Box key={key} marginRight={2}>
+        <Box key={key} marginRight={2} flexShrink={0}>
           <Text inverse> {key} </Text>
           <Text dimColor> {action}</Text>
         </Box>
@@ -87,8 +90,18 @@ export function App({ api }: { api: TuiApi }) {
   const [focus, setFocus] = useState<'menu' | 'screen'>('menu');
   const [help, setHelp] = useState(false);
   const [version, setVersion] = useState(0);
+  const [hints, setHintState] = useState<{ screen: ScreenKey; keys: Hints } | null>(null);
   const rows = (stdout as NodeJS.WriteStream).rows || 24;
-  const height = Math.max(5, rows - 9);
+  const columns = (stdout as NodeJS.WriteStream).columns || 80;
+  // The header (3 rows), the panel border (2), the key bar (1) and one spare row: ink redraws the whole terminal when
+  // its output is as tall as the terminal.
+  const height = Math.max(5, rows - 7);
+  // The menu (24 columns) and the screen panel's border and padding.
+  const width = Math.max(30, columns - 28);
+  const setHints = useCallback(
+    (keys: Hints | null) => setHintState(keys ? { screen, keys } : null),
+    [screen],
+  );
 
   const onBack = useCallback(() => setFocus('menu'), []);
   const onChange = useCallback(() => setVersion((v) => v + 1), []);
@@ -114,7 +127,17 @@ export function App({ api }: { api: TuiApi }) {
     { isActive: focus === 'menu' },
   );
 
-  const props: ScreenProps = { api, active: focus === 'screen', onBack, height, onChange, version, navigate };
+  const props: ScreenProps = {
+    api,
+    active: focus === 'screen',
+    onBack,
+    height,
+    width,
+    onChange,
+    version,
+    navigate,
+    setHints,
+  };
   const current = SCREENS.find((s) => s.key === screen);
   const border = (focused: boolean) => (focused ? 'cyan' : 'gray');
 
@@ -132,7 +155,7 @@ export function App({ api }: { api: TuiApi }) {
         >
           <SelectList
             items={MENU}
-            active={focus === 'menu'}
+            active={focus === 'menu' && !help}
             onHighlight={onHighlight}
             selected={SCREENS.findIndex((s) => s.key === screen)}
           />
@@ -151,7 +174,11 @@ export function App({ api }: { api: TuiApi }) {
           minHeight={height + 2}
         >
           {help ? (
-            HELP.map((line) => <Text key={line}>{line}</Text>)
+            <ScrollView active={focus === 'menu'} height={height}>
+              {HELP.map((line) => (
+                <Text key={line}>{line}</Text>
+              ))}
+            </ScrollView>
           ) : (
             <>
               {screen === 'home' && <Home {...props} />}
@@ -174,11 +201,13 @@ export function App({ api }: { api: TuiApi }) {
                 ['?', 'help'],
                 ['q', 'quit'],
               ]
-            : [
-                ['↑↓', 'move'],
-                ['Enter', 'choose'],
-                ['Esc', 'back'],
-              ]
+            : hints?.screen === screen
+              ? hints.keys
+              : [
+                  ['↑↓', 'move'],
+                  ['Enter', 'choose'],
+                  ['Esc', 'back'],
+                ]
         }
       />
     </Box>

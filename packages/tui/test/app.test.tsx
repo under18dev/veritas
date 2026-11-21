@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { Finding, Property, Run } from '@under18dev/veritas-core';
 import { VeritasError } from '@under18dev/veritas-core';
 import type { PlanResult } from '@under18dev/veritas-improvement';
@@ -5,11 +6,34 @@ import { render } from 'ink-testing-library';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App.js';
 import type { TuiApi } from '../src/api.js';
-import { abbreviateHome } from '../src/screens/Home.js';
+import { ago, duration, projectPath, statusColor } from '../src/components.js';
+import { abbreviateHome, nextSteps } from '../src/screens/Home.js';
+import { sortFindings } from '../src/screens/Results.js';
 import { appendLog, applyStageEvent, clock } from '../src/screens/Run.js';
-import { leaves, parseValue, setAt, validate } from '../src/screens/Settings.js';
+import {
+  diff,
+  fieldLabel,
+  getAt,
+  humanize,
+  listDiff,
+  parseText,
+  resetField,
+  SECTIONS,
+  setAt,
+  setField,
+  tidy,
+  unsetAt,
+  validate,
+} from '../src/screens/Settings.js';
 
-const KEY = { up: '\u001B[A', down: '\u001B[B', enter: '\r', escape: '\u001B' };
+const KEY = {
+  up: '\u001B[A',
+  down: '\u001B[B',
+  left: '\u001B[D',
+  enter: '\r',
+  escape: '\u001B',
+  backspace: '\u007F',
+};
 const tick = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const RUN = {
@@ -19,11 +43,16 @@ const RUN = {
   profile: 'quick',
   scope: { root: '/p', paths: [] },
   startedAt: '2026-11-20T00:00:00.000Z',
+  finishedAt: '2026-11-20T00:00:12.300Z',
   status: 'succeeded',
   exitCode: 4,
   verdict: 'inconclusive',
   policyReasons: ['1 test is weak'],
-  stages: [{ stage: 'index', status: 'succeeded' }],
+  stages: [
+    { stage: 'index', status: 'succeeded', durationMs: 4 },
+    { stage: 'mutate', status: 'partial', durationMs: 1600 },
+  ],
+  partial: false,
 } as unknown as Run;
 
 const FINDING = {
@@ -31,7 +60,7 @@ const FINDING = {
   kind: 'weak_test',
   title: 'boundary is not checked',
   severity: 'medium',
-  certainty: 'likely',
+  certainty: 'suspected',
   locations: [{ file: 'test/a.test.ts' }],
   propertyIds: [],
   sourceIds: [],
@@ -40,6 +69,15 @@ const FINDING = {
   claimIds: [],
   explanation: ['the test never uses 1000'],
   nextActions: ['add a test at 1000'],
+} as unknown as Finding;
+
+const HIGH = {
+  ...FINDING,
+  id: 'F-2',
+  kind: 'counterexample',
+  title: 'returns 0 for 1000',
+  severity: 'high',
+  certainty: 'confirmed',
 } as unknown as Finding;
 
 const PROPERTY = {
@@ -89,7 +127,19 @@ function fakeApi(overrides: Partial<TuiApi> = {}): TuiApi {
     root: '/projects/shop',
     runs: () => ['R-1'],
     readRun: () => RUN,
-    readFindings: () => [FINDING],
+    readFindings: () => [FINDING, HIGH],
+    readEvidence: () => ({
+      tests: [
+        ['meaningful_with_evidence', 2],
+        ['weak_or_incomplete', 1],
+      ],
+      mutants: [
+        ['killed', 5],
+        ['survived', 2],
+      ],
+      pbt: null,
+      claims: [['proven_within_model', 1]],
+    }),
     explain: () =>
       ({
         runId: 'R-1',
@@ -106,7 +156,10 @@ function fakeApi(overrides: Partial<TuiApi> = {}): TuiApi {
       root: '/p',
       os: { platform: 'darwin', arch: 'arm64', release: '1' },
       capabilities: [],
-      features: [{ feature: 'mutate', state: 'enabled', missing: [] }],
+      features: [
+        { feature: 'mutate', state: 'enabled', missing: [] },
+        { feature: 'improve', state: 'degraded', missing: ['llm'] },
+      ],
     }),
     init: vi.fn(() => ({ nextSteps: ['veritas run'] }) as never),
     properties: () => [PROPERTY],
@@ -131,7 +184,7 @@ function fakeApi(overrides: Partial<TuiApi> = {}): TuiApi {
     ),
     readConfig: () => ({
       kind: 'json',
-      file: '/p/.veritas/config.json',
+      file: '/projects/shop/.veritas/config.json',
       raw: { mutation: { timeoutMs: 1000 } },
     }),
     writeConfig: vi.fn(),
@@ -142,34 +195,55 @@ function fakeApi(overrides: Partial<TuiApi> = {}): TuiApi {
 let unmount: (() => void) | undefined;
 afterEach(() => unmount?.());
 
+/** Press ↓ until the screen shows `text`, as a user scrolls to it; fails when it never appears. */
+async function scrollUntil(app: ReturnType<typeof render>, text: string, limit = 40) {
+  for (let i = 0; i < limit && !app.lastFrame()?.includes(text); i++) await press(app, KEY.down);
+  await until(app, text);
+}
+
+/** Open the screen at menu position `screen` (0 is Home) with its number key, once the menu is drawn. */
 async function open(api: TuiApi, screen: number) {
   const app = render(<App api={api} />);
   unmount = app.unmount;
-  await tick();
-  for (let i = 0; i < screen; i++) app.stdin.write(KEY.down);
-  await tick();
-  app.stdin.write(KEY.enter);
-  await tick();
+  await until(app, '6 Settings');
+  await press(app, String(screen + 1));
 
   return app;
 }
 
+/** How long a wait for the screen may take: generous, for slow CI runners, and well inside the test timeout. */
+const WAIT_MS = 10_000;
+/** A key that changes nothing on the screen draws no frame; a press waits this long for one before going on. */
+const KEY_FRAME_MS = 1_000;
+
 /** Wait until the screen shows `text`; loads are asynchronous, so a key sent earlier would be lost. */
 async function until(app: ReturnType<typeof render>, text: string) {
-  for (let i = 0; i < 200 && !app.lastFrame()?.includes(text); i++) await tick(10);
+  const end = Date.now() + WAIT_MS;
+
+  while (!app.lastFrame()?.includes(text) && Date.now() < end) await tick(10);
   expect(app.lastFrame()).toContain(text);
   // Input handlers subscribe in effects, after the frame is drawn.
   await tick();
 }
 
+/**
+ * Press keys one at a time. Each key waits for the frame it causes, then for the effects that subscribe the next
+ * input handlers, so the next key is handled by a screen that has seen the previous one. A fixed sleep would race on
+ * a slow runner.
+ */
 async function press(app: ReturnType<typeof render>, ...keys: string[]) {
   for (const k of keys) {
+    const before = app.frames.length;
+    const end = Date.now() + KEY_FRAME_MS;
+
     app.stdin.write(k);
+    while (app.frames.length === before && Date.now() < end) await tick(5);
     await tick();
   }
 }
 
-describe('the TUI', () => {
+// Each test drives the TUI key by key and waits for frames; slow CI runners (Windows) need more than the default 5 s.
+describe('the TUI', { timeout: 20_000 }, () => {
   it('shows the latest run and the menu, and help on ?', async () => {
     const app = render(<App api={fakeApi()} />);
     unmount = app.unmount;
@@ -249,30 +323,204 @@ describe('the TUI', () => {
   it('keeps a long project path on one line, cut at the start, with the home directory as ~', async () => {
     const root = `/home/someone/${'very-long-directory-name/'.repeat(8)}shop`;
     const app = await open(fakeApi({ root }), 0);
-    await until(app, 'Project: …');
+    await until(app, '/shop');
     const line =
       app
         .lastFrame()
         ?.split('\n')
-        .find((l) => l.includes('Project: ')) ?? '';
-    expect(line).toMatch(/Project: …\S*\/shop /);
+        .find((l) => l.includes('path ')) ?? '';
+    expect(line).toMatch(/path\s+…\S*\/shop /);
     expect(app.lastFrame()).not.toMatch(/^\s*very-long-directory-name/m);
     expect(abbreviateHome('/home/someone/work/shop', '/home/someone')).toBe('~/work/shop');
     expect(abbreviateHome('/home/someone', '/home/someone')).toBe('~');
     expect(abbreviateHome('/home/someone2/shop', '/home/someone')).toBe('/home/someone2/shop');
   });
 
-  it('follows a run to a finding and its evidence', async () => {
+  it('shows the project, the latest run, the tools and the next steps as cards on Home', async () => {
+    const app = await open(fakeApi(), 0);
+    await until(app, 'Latest run');
+    const frame = app.lastFrame() ?? '';
+    expect(frame).toContain('Project');
+    expect(frame).toMatch(/Latest run\s+inconclusive/);
+    expect(frame).toContain('quick');
+    expect(frame).toContain('took 12.3 s');
+    expect(frame).toContain('exit 4');
+    // The stage strip marks a partial stage, never as a success.
+    expect(frame).toMatch(/✔ index/);
+    expect(frame).toMatch(/! mutate partial/);
+    expect(frame).toMatch(/2 findings:\s+1 high\s+1 medium/);
+    // The evidence vector, not a single score.
+    expect(frame).toContain('2 meaningful_with_evidence');
+    expect(frame).toContain('1 weak_or_incomplete');
+    expect(frame).toContain('2 survived');
+    // The cards scroll; the next steps and the tools are further down.
+    await scrollUntil(app, 'Review 1 proposed specification');
+    expect(app.lastFrame()).toContain('Next steps');
+    expect(app.lastFrame()).toContain('Read 2 findings of the latest run');
+    expect(app.lastFrame()).toContain('Review 1 proposed specification');
+    await scrollUntil(app, 'no llm limits improve');
+    expect(app.lastFrame()).toContain('Tools');
+    expect(app.lastFrame()).toContain('✔ mutate');
+    expect(app.lastFrame()).toContain('! improve');
+    expect(app.lastFrame()).toContain('no llm limits improve');
+    // A next step's key opens its screen.
+    await press(app, '3');
+    await until(app, 'discount above 1000');
+  });
+
+  it('points to the Run screen when there is no run yet', async () => {
+    const app = await open(fakeApi({ runs: () => [], properties: () => [] }), 0);
+    await until(app, 'No run yet: start one on Run');
+    await press(app, '4');
+    await until(app, 'Profile: quick');
+  });
+
+  it('lists runs with a verdict badge, finding count and time, and a run with sorted, colored findings', async () => {
+    const app = await open(fakeApi(), 1);
+    await until(app, ' inconclusive ');
+    expect(app.lastFrame()).toMatch(/inconclusive\s+2 findings\s+quick\s+\S+ ago\s+12\.3 s/);
+    await press(app, KEY.enter);
+    await until(app, 'boundary is not checked');
+    const frame = app.lastFrame() ?? '';
+    expect(frame).toMatch(/Run\s+inconclusive/);
+    expect(frame).toContain('1 test is weak');
+    expect(frame).toMatch(/✔ index 4 ms/);
+    expect(frame).toMatch(/! mutate partial 1\.6 s/);
+    expect(frame).toMatch(/1 counterexample\s+1 weak_test/);
+    // Most severe first, with the certainty.
+    const lines = frame.split('\n');
+    const high = lines.findIndex((l) => /HIGH\s+confirmed\s+returns 0 for 1000/.test(l));
+    const medium = lines.findIndex((l) => /MEDIUM\s+suspected\s+boundary is not checked/.test(l));
+    expect(high).toBeGreaterThan(-1);
+    expect(medium).toBeGreaterThan(high);
+    await press(app, 'e');
+    await until(app, 'counts per status');
+    expect(app.lastFrame()).toContain('1 proven_within_model');
+  });
+
+  it('marks a partial run in the run list before the fields a narrow terminal cuts', async () => {
+    const app = await open(fakeApi({ readRun: () => ({ ...RUN, partial: true }) as Run }), 1);
+    await until(app, ' partial ');
+    expect(app.lastFrame()).toMatch(/inconclusive\s+partial\s+2 findings/);
+  });
+
+  it('scrolls the evidence counts of a deep run instead of cutting them', async () => {
+    const stages = [
+      'index',
+      'discover',
+      'analyze',
+      'spec',
+      'map',
+      'mutate',
+      'pbt',
+      'prove',
+      'assess',
+      'improve',
+      'report',
+    ];
+    const api = fakeApi({
+      readRun: () =>
+        ({
+          ...RUN,
+          profile: 'deep',
+          policyReasons: ['1 test is weak', '2 mutants survived', 'formal check inconclusive'],
+          stages: stages.map((stage) => ({ stage, status: 'succeeded', durationMs: 12_345 })),
+        }) as unknown as Run,
+      readEvidence: () => ({
+        tests: [
+          ['meaningful_with_evidence', 3],
+          ['weak_or_incomplete', 2],
+          ['tautological_or_disconnected', 1],
+          ['spec_conflict', 1],
+          ['inconclusive', 1],
+        ],
+        mutants: [
+          ['killed', 16],
+          ['survived', 2],
+          ['timeout', 1],
+          ['no_coverage', 3],
+          ['suspected_equivalent', 1],
+          ['compile_error', 1],
+        ],
+        pbt: [
+          ['passed', 4],
+          ['counterexample', 1],
+          ['timeout', 1],
+          ['cancelled', 1],
+        ],
+        claims: [
+          ['proven_within_model', 2],
+          ['counterexample_found', 1],
+          ['unknown', 1],
+          ['unsupported', 1],
+          ['semantic_mismatch', 1],
+        ],
+      }),
+    });
+    const app = await open(api, 1);
+    await until(app, 'R-1');
+    await press(app, KEY.enter);
+    await until(app, 'boundary is not checked');
+    await press(app, 'e');
+    await until(app, 'counts per status');
+    // Not everything fits: the card scrolls, and the solver claims come into view.
+    expect(app.lastFrame()).toMatch(/rows 1-\d+ of \d+, ↑↓ to scroll/);
+    expect(app.lastFrame()).not.toContain('1 semantic_mismatch');
+    await scrollUntil(app, '1 semantic_mismatch');
+    expect(app.lastFrame()).toContain('1 unsupported');
+  });
+
+  it('keeps the finding under the cursor when the evidence counts are shown and hidden', async () => {
     const app = await open(fakeApi(), 1);
     await until(app, 'R-1');
     await press(app, KEY.enter);
     await until(app, 'boundary is not checked');
+    await press(app, KEY.down, 'e');
+    await until(app, 'counts per status');
+    await press(app, 'e');
+    await until(app, '› MEDIUM');
     await press(app, KEY.enter);
-    await until(app, 'next: add a test at 1000');
-    // The same lines as `veritas explain`, statements and assessments included.
-    expect(app.lastFrame()).toContain('quote   line 3: "orders over 1000 get a discount"');
-    expect(app.lastFrame()).toContain('assess  T-1: weak_or_incomplete - no boundary input');
-    expect(app.lastFrame()).toContain('property P-1 [proposed, docs] discount above 1000');
+    await until(app, 'Why it was reported');
+    expect(app.lastFrame()).toMatch(/MEDIUM\s+suspected\s+weak_test/);
+  });
+
+  it('follows a run to a finding, its evidence in sections, and the suggested next actions apart', async () => {
+    const app = await open(fakeApi(), 1);
+    await until(app, 'R-1');
+    await press(app, KEY.enter);
+    await until(app, 'boundary is not checked');
+    await press(app, KEY.down, KEY.enter);
+    await until(app, 'Why it was reported');
+    const frame = app.lastFrame() ?? '';
+    expect(frame).toMatch(/MEDIUM\s+suspected\s+weak_test/);
+    expect(frame).toContain('the test never uses 1000');
+    expect(frame).toContain('EVIDENCE recorded by the run');
+    expect(frame).toContain('Locations (1)');
+    expect(frame).toContain('test/a.test.ts');
+    // The rest is further down; the view scrolls.
+    await scrollUntil(app, '> add a test at 1000');
+    expect(app.lastFrame()).toContain('SUGGESTED next actions, not verified');
+    const end = app.lastFrame() ?? '';
+    expect(end).toContain('> add a test at 1000');
+    expect(end).toContain('T-1: weak_or_incomplete no boundary input');
+    expect(end).toContain('P-1 [proposed, docs] discount above 1000');
+  });
+
+  it('shows the finding and its IDs when the evidence of an older run cannot be read', async () => {
+    const app = await open(
+      fakeApi({
+        explain: () => {
+          throw new VeritasError('user', 'FINDING_NOT_FOUND', 'no finding F-1 in run R-2');
+        },
+      }),
+      1,
+    );
+    await until(app, 'R-1');
+    await press(app, KEY.enter);
+    await until(app, 'boundary is not checked');
+    await press(app, KEY.down, KEY.enter);
+    await until(app, 'The linked evidence could not be read');
+    expect(app.lastFrame()).toContain('FINDING_NOT_FOUND');
   });
 
   it('records a decision only with a reason', async () => {
@@ -374,37 +622,447 @@ describe('the TUI', () => {
     await until(app, 'attempt PA-1: improved');
   });
 
-  it('saves a setting only when it is valid and confirmed', async () => {
+  it('groups the settings by section and shows each with its description, default and a changed mark', async () => {
+    const app = await open(fakeApi(), 5);
+    await until(app, 'Mutation testing');
+    const frame = app.lastFrame() ?? '';
+    for (const title of ['General', 'Project', 'Sources', 'Analysis', 'Property-based testing', 'LLM'])
+      expect(frame).toContain(title);
+    expect(frame).toMatch(/Mutation testing\s+4 settings\s+1 changed/);
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.down);
+    await until(app, 'Mutation testing with mutator.');
+    await press(app, KEY.enter, KEY.down, KEY.down, KEY.down);
+    await until(app, 'Time allowed for mutation testing, in');
+    const field = app.lastFrame() ?? '';
+    expect(field).toMatch(/Timeout \(ms\)\s+1000\s+changed/);
+    expect(field).toMatch(/now 1000\s+default 120000/);
+    expect(field).toContain('allowed: whole number, > 0');
+    // A value the file does not set shows its default, without a changed mark.
+    await press(app, KEY.up);
+    await until(app, 'diff mutates only the code changed');
+    expect(
+      app
+        .lastFrame()
+        ?.split('\n')
+        .find((l) => l.includes('Mode ')),
+    ).not.toContain('changed');
+    expect(app.lastFrame()).toMatch(/now diff \(default\)/);
+  });
+
+  it('refuses a value that is not a number or out of range at the field, and writes nothing', async () => {
     const api = fakeApi();
     const app = await open(api, 5);
-    await until(app, 'mutation.timeoutMs = 1000');
-    const edit = async (...keys: string[]) => {
+    await until(app, 'Mutation testing');
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.down, KEY.down);
+    await until(app, 'Timeout (ms)');
+    const type = async (...keys: string[]) => {
       await press(app, KEY.enter);
-      await until(app, 'New value for mutation.timeoutMs');
-      await press(app, '\u007F', '\u007F', '\u007F', '\u007F', '\u007F', ...keys, KEY.enter);
+      await until(app, 'New value:');
+      await press(
+        app,
+        KEY.backspace,
+        KEY.backspace,
+        KEY.backspace,
+        KEY.backspace,
+        KEY.backspace,
+        ...keys,
+        KEY.enter,
+      );
     };
-    // Not a number: refused before validation.
-    await edit('x');
-    await until(app, 'not valid JSON');
+    await type('x');
+    await until(app, 'Enter a whole number');
     await press(app, KEY.escape);
-    await until(app, 'mutation.timeoutMs = 1000');
-    await edit('-', '5');
-    await until(app, 'mutation.timeoutMs:');
+    await type('-', '5');
+    await until(app, 'mutation.timeoutMs: Too small');
+    // The editor stays open with the error until the value is fixed or the edit cancelled.
+    expect(app.lastFrame()).toContain('New value:');
+    await press(app, KEY.escape, 's');
+    await until(app, 'No unsaved changes.');
     expect(api.writeConfig).not.toHaveBeenCalled();
-    await press(app, KEY.escape);
-    await until(app, 'mutation.timeoutMs = 1000');
-    await edit('5', '0', '0', '0');
-    await until(app, '+ 5000');
+  });
+
+  it('shows the changes before saving and saves only after y', async () => {
+    const api = fakeApi();
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    await press(
+      app,
+      KEY.down,
+      KEY.down,
+      KEY.down,
+      KEY.down,
+      KEY.enter,
+      KEY.down,
+      KEY.down,
+      KEY.down,
+      KEY.enter,
+    );
+    await until(app, 'New value:');
+    await press(
+      app,
+      KEY.backspace,
+      KEY.backspace,
+      KEY.backspace,
+      KEY.backspace,
+      '5',
+      '0',
+      '0',
+      '0',
+      KEY.enter,
+    );
+    await until(app, '1 unsaved');
+    expect(app.lastFrame()).toMatch(/\* Timeout \(ms\)\s+5000/);
+    expect(api.writeConfig).not.toHaveBeenCalled();
+    await press(app, 's');
+    await until(app, 'Review 1 change to .veritas/config.json');
+    expect(app.lastFrame()).toContain('- 1000');
+    expect(app.lastFrame()).toContain('+ 5000');
+    await press(app, 'n');
+    await until(app, '1 unsaved');
+    expect(api.writeConfig).not.toHaveBeenCalled();
+    await press(app, 's');
+    await until(app, 'Save this change?');
     await press(app, 'y');
     expect(api.writeConfig).toHaveBeenCalledWith({ mutation: { timeoutMs: 5000 } });
+    await until(app, 'Saved 1 change to .veritas/config.json.');
+  });
+
+  it('toggles a switch, picks from the allowed values and resets to the default', async () => {
+    const api = fakeApi();
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    // Sources > Local: Enter and Space toggle it.
+    await press(app, KEY.down, KEY.down, KEY.enter, KEY.down);
+    await until(app, 'Read specifications from documents');
+    await press(app, ' ');
+    await until(app, '1 unsaved');
+    expect(app.lastFrame()).toMatch(/\* Local\s+off\s+changed/);
+    await press(app, KEY.enter);
+    await until(app, 'now on (default)');
+    expect(app.lastFrame()).not.toContain('unsaved');
+    // Network sources are marked and explained.
+    await press(app, KEY.down);
+    await until(app, 'Network: Reads issues and pull requests from GitHub');
+    expect(app.lastFrame()).toMatch(/GitHub: enabled\s+off\s+network/);
+    // Mutation > Mode: a picker with every allowed value.
+    await press(app, KEY.left, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.down, KEY.enter);
+    await until(app, 'Choose a value:');
+    expect(app.lastFrame()).toMatch(/diff \(now\) \(default\)/);
+    expect(app.lastFrame()).toContain('full');
+    await press(app, KEY.down, KEY.enter);
+    await until(app, '1 unsaved');
+    expect(app.lastFrame()).toMatch(/\* Mode\s+full\s+changed/);
+    // r resets Timeout to its default by removing it from the file.
+    await press(app, KEY.down, 'r');
+    await until(app, '2 unsaved');
+    expect(app.lastFrame()).toMatch(/now 120000 \(default\)/);
+    await press(app, 's');
+    await until(app, 'Review 2 changes');
+    expect(app.lastFrame()).toContain('+ (unset, default 120000)');
+    await press(app, 'y');
+    expect(api.writeConfig).toHaveBeenCalledWith({ mutation: { mode: 'full' } });
+  });
+
+  it('edits a list entry by entry and refuses an invalid entry', async () => {
+    const api = fakeApi();
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    // Sources > Web: allow domains.
+    await press(app, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.down, KEY.down, KEY.down, KEY.down);
+    await until(app, 'Domains web pages may be fetched from');
+    await press(app, KEY.enter);
+    await until(app, 'press a to add an entry');
+    await press(app, 'a', 'b', 'a', 'd', ' ', 'x', KEY.enter);
+    await until(app, 'expected a bare domain name');
+    await press(app, KEY.escape, 'a', ...'docs.example.com', KEY.enter);
+    await until(app, '1 unsaved');
+    await press(app, 'a', ...'shop.example.com', KEY.enter);
+    await until(app, 'docs.example.com, shop.example.com');
+    await press(app, KEY.up, 'd');
+    await until(app, '› shop.example.com');
+    await press(app, KEY.escape, 's');
+    await until(app, 'Review 1 change');
+    await press(app, 'y');
+    expect(api.writeConfig).toHaveBeenCalledWith({
+      mutation: { timeoutMs: 1000 },
+      sources: { web: { allowDomains: ['shop.example.com'] } },
+    });
+  });
+
+  it('marks the LLM provider and asks before leaving with unsaved changes', async () => {
+    const api = fakeApi();
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    await press(app, ...Array(7).fill(KEY.down), KEY.enter, KEY.down);
+    await until(app, 'LLM: Sends specification text to this provider');
+    await press(app, KEY.enter);
+    await until(app, 'Choose a value:');
+    expect(app.lastFrame()).toContain('claude uses LLM');
+    await press(app, KEY.down, KEY.enter);
+    await until(app, '1 unsaved');
+    await press(app, KEY.escape);
+    await until(app, 'Discard 1 unsaved change and leave?');
+    await press(app, 'n');
+    await until(app, '1 unsaved');
+    await press(app, KEY.escape, 'y');
+    await until(app, 'jump');
+    expect(api.writeConfig).not.toHaveBeenCalled();
   });
 
   it('does not edit a code configuration', async () => {
-    const app = await open(
-      fakeApi({ readConfig: () => ({ kind: 'code', file: '/p/veritas.config.ts' }) }),
-      5,
-    );
+    const api = fakeApi({ readConfig: () => ({ kind: 'code', file: '/p/veritas.config.ts' }) });
+    const app = await open(api, 5);
     await until(app, 'is a code configuration');
+    expect(app.lastFrame()).toContain('read-only');
+    // Only the way back is offered.
+    expect(app.lastFrame()).toContain('Esc  back');
+    expect(app.lastFrame()).not.toContain('review & save');
+    await press(app, KEY.enter, ' ', 's', 'y');
+    expect(api.writeConfig).not.toHaveBeenCalled();
+    await press(app, KEY.escape);
+    await until(app, 'jump');
+  });
+
+  it('explains a configuration it cannot read and still lets you leave', async () => {
+    const api = fakeApi({
+      readConfig: () => {
+        throw new VeritasError('user', 'CONFIG_PARSE', 'cannot parse .veritas/config.json: Unexpected token');
+      },
+    });
+    const app = await open(api, 5);
+    await until(app, 'CONFIG_PARSE: cannot parse .veritas/config.json');
+    expect(app.lastFrame()).toContain('cannot read');
+    expect(app.lastFrame()).toContain('Esc  back');
+    await press(app, KEY.escape);
+    await until(app, 'jump');
+    expect(api.writeConfig).not.toHaveBeenCalled();
+  });
+
+  it('shows every change before saving when they do not all fit, and saves only after the last is seen', async () => {
+    const api = fakeApi({
+      readConfig: () => ({ kind: 'json', file: '/projects/shop/.veritas/config.json', raw: {} }),
+    });
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    const down = (n: number) => Array(n).fill(KEY.down);
+    // Sources: local, GitHub, web and full text to the LLM.
+    await press(app, ...down(2), KEY.enter, KEY.down, ' ', KEY.down, ' ', ...down(2), ' ', ...down(7), ' ');
+    await until(app, '4 unsaved');
+    // Sandbox and cache.
+    await press(app, ...down(9), KEY.enter, KEY.down, ' ', ...down(2), KEY.enter, KEY.down, ' ');
+    await until(app, '6 unsaved');
+    await press(app, 's');
+    await until(app, 'Review 6 changes to .veritas/config.json');
+    expect(app.lastFrame()).toMatch(/↑↓\s+scroll\s+y\s+yes/);
+    expect(app.lastFrame()).toMatch(/\d+ more rows? below \(↓\)/);
+    expect(app.lastFrame()).toContain('turns on network');
+    await press(app, 'y');
+    await until(app, 'Scroll to the last change');
+    expect(api.writeConfig).not.toHaveBeenCalled();
+    await scrollUntil(app, 'Save these 6 changes? [y/N]');
+    expect(app.lastFrame()).toContain('cache.enabled');
+    expect(app.lastFrame()).not.toContain('below (↓)');
+    await press(app, 'y');
+    expect(api.writeConfig).toHaveBeenCalledWith({
+      sources: { local: false, github: { enabled: true }, web: { enabled: true }, sendFullTextToLlm: true },
+      sandbox: { allowNetworkWithoutIsolation: true },
+      cache: { enabled: false },
+    });
+  });
+
+  it('says that keys the schema does not know must be removed in an editor, and does not save', async () => {
+    const api = fakeApi({
+      readConfig: () => ({
+        kind: 'json',
+        file: '/projects/shop/.veritas/config.json',
+        raw: { mutation: { timeoutMs: 1000 }, extra: true },
+      }),
+    });
+    const app = await open(api, 5);
+    await until(app, '1 problem to fix before saving');
+    await press(app, 'p');
+    await until(app, '1 problem to fix before saving');
+    expect(app.lastFrame()).toContain('Unrecognized key: "extra"');
+    // The note wraps; its words are on screen.
+    expect(app.lastFrame()).toContain('cannot be shown here');
+    expect(app.lastFrame()).toContain('them in your editor');
+    await press(app, KEY.escape, 's');
+    await until(app, 'Fix 1 problem before saving');
+    expect(api.writeConfig).not.toHaveBeenCalled();
+  });
+
+  it('scrolls a long list to the selected entry and keeps the entry field in view', async () => {
+    const include = Array.from({ length: 10 }, (_, i) => `src/part${i}/**/*.ts`);
+    const api = fakeApi({
+      readConfig: () => ({
+        kind: 'json',
+        file: '/projects/shop/.veritas/config.json',
+        raw: { analysis: { include } },
+      }),
+    });
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.enter);
+    await until(app, 'entries 1-7 of 10');
+    expect(app.lastFrame()).toContain('› src/part0/**/*.ts');
+    expect(app.lastFrame()).not.toContain('src/part9/**/*.ts');
+    expect(app.lastFrame()).not.toContain('src/part7/**/*.ts');
+    await press(app, ...Array(9).fill(KEY.down));
+    await until(app, 'entries 4-10 of 10');
+    expect(app.lastFrame()).toContain('› src/part9/**/*.ts');
+    // The entries above the window are no longer rows of the list (the value line still names some of them).
+    const row = (n: number) => new RegExp(`│\\s+src/part${n}/\\*\\*/\\*\\.ts\\s+│`);
+    expect(app.lastFrame()).toMatch(row(3));
+    expect(app.lastFrame()).not.toMatch(row(2));
+    // The entry field takes rows from the list, not from the screen below it.
+    await press(app, 'a');
+    await until(app, 'New entry:');
+    expect(app.lastFrame()).toContain('Enter to confirm, Esc to cancel');
+    expect(app.lastFrame()).toContain('› src/part9/**/*.ts');
+    expect(app.lastFrame()).toContain('entries 7-10 of 10');
+    await press(app, 'l', 'i', 'b', KEY.enter);
+    await until(app, 'entries 5-11 of 11');
+    expect(app.lastFrame()).toContain('› lib');
+  });
+
+  it('keeps the problems banner, the selected entry and the entry field apart in a long list', async () => {
+    const exclude = Array.from({ length: 15 }, (_, i) => `ex${i}/**`);
+    const api = fakeApi({
+      readConfig: () => ({
+        kind: 'json',
+        file: '/projects/shop/.veritas/config.json',
+        raw: { pbt: { numRuns: 0 }, extra: true, analysis: { exclude } },
+      }),
+    });
+    const app = await open(api, 5);
+    await until(app, '2 problems to fix before saving (p lists them)');
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.down, KEY.enter);
+    await until(app, 'entries 1-6 of 15');
+    const intact = (frame: string, selected: string) => {
+      const lines = frame.split('\n');
+      const banner = lines.findIndex((l) => l.includes('2 problems to fix before saving (p lists them):'));
+      const row = lines.findIndex((l) => l.includes(`› ${selected}`));
+      expect(banner).toBeGreaterThan(-1);
+      expect(row).toBeGreaterThan(banner);
+      // The panel's bottom border is drawn: nothing ran past the screen.
+      expect(lines.filter((l) => l.includes('╰')).length).toBeGreaterThanOrEqual(3);
+    };
+    intact(app.lastFrame() ?? '', 'ex0/**');
+    await press(app, ...Array(14).fill(KEY.down));
+    await until(app, 'entries 10-15 of 15');
+    intact(app.lastFrame() ?? '', 'ex14/**');
+    await press(app, 'a');
+    await until(app, 'New entry:');
+    expect(app.lastFrame()).toContain('Enter to confirm, Esc to cancel');
+    intact(app.lastFrame() ?? '', 'ex14/**');
+  });
+
+  // The longest interaction test: give it room on a slow runner.
+  it('shows a change deep in a long list and a long text in full before saving', {
+    timeout: 40_000,
+  }, async () => {
+    const include = Array.from(
+      { length: 10 },
+      (_, i) => `packages/some-long-package-name-${i}/src/**/*.{ts,tsx}`,
+    );
+    const api = fakeApi({
+      readConfig: () => ({
+        kind: 'json',
+        file: '/projects/shop/.veritas/config.json',
+        raw: { analysis: { include } },
+      }),
+    });
+    const app = await open(api, 5);
+    await until(app, 'Mutation testing');
+    // Analysis > Include: change the 8th entry.
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.enter);
+    await until(app, 'entries 1-7 of 10');
+    await press(app, ...Array(7).fill(KEY.down), KEY.enter);
+    await until(app, 'Change the entry:');
+    const edited = `${include[7]?.slice(0, -10)}X*.ts`;
+    await press(app, ...Array(10).fill(KEY.backspace), 'X*.ts', KEY.enter);
+    await until(app, '1 unsaved');
+    await press(app, KEY.escape);
+    // LLM > Model: a long text.
+    const model = `claude-${'very-long-model-name-'.repeat(14)}end`;
+    await press(app, ...Array(9).fill(KEY.down), KEY.enter, KEY.down, KEY.down);
+    await until(app, 'Model name for the provider');
+    await press(app, KEY.enter);
+    await until(app, 'New value:');
+    // Typed text arrives as one chunk, as a paste does.
+    await press(app, model, KEY.enter);
+    await until(app, '2 unsaved');
+    await press(app, 's');
+    await until(app, 'Review 2 changes');
+    // Only the 8th entry differs: it shows as removed and added, the others are left out.
+    expect(app.lastFrame()).toContain('- packages/some-long-package-name-7/src/**/*.{ts,tsx}');
+    expect(app.lastFrame()).toContain(`+ ${edited}`);
+    expect(app.lastFrame()).toContain('(6 unchanged entries)');
+    // The long text wraps; the end of it must be scrolled to before y is accepted.
+    expect(app.lastFrame()).toMatch(/\d+ more rows? below \(↓\)/);
+    await press(app, 'y');
+    await until(app, 'Scroll to the last change');
+    expect(api.writeConfig).not.toHaveBeenCalled();
+    await scrollUntil(app, 'Save these 2 changes? [y/N]');
+    expect(app.lastFrame()).toContain('end"');
+    await press(app, 'y');
+    expect(api.writeConfig).toHaveBeenCalledWith({
+      analysis: { include: include.map((e, i) => (i === 7 ? edited : e)) },
+      llm: { model },
+    });
+  });
+
+  it('diffs lists entry by entry', () => {
+    expect(listDiff(['a', 'b', 'c', 'd', 'e', 'f'], ['a', 'b', 'c', 'X', 'e', 'f'])).toEqual([
+      { kind: 'elided', count: 2 },
+      { kind: 'same', entry: 'c' },
+      { kind: 'removed', entry: 'd' },
+      { kind: 'added', entry: 'X' },
+      { kind: 'same', entry: 'e' },
+      { kind: 'elided', count: 1 },
+    ]);
+    expect(listDiff([], ['a'])).toEqual([{ kind: 'added', entry: 'a' }]);
+  });
+
+  it('fixes a file with problems one setting at a time and saves only once it is valid', async () => {
+    const api = fakeApi({
+      readConfig: () => ({
+        kind: 'json',
+        file: '/projects/shop/.veritas/config.json',
+        raw: { mutation: { timeoutMs: -1 }, pbt: { numRuns: 0 } },
+      }),
+    });
+    const app = await open(api, 5);
+    await until(app, '2 problems to fix before saving (p lists them)');
+    // p lists every problem, not only the first.
+    await press(app, 'p');
+    await until(app, 'Saving waits until there are none');
+    expect(app.lastFrame()).toContain('mutation.timeoutMs:');
+    expect(app.lastFrame()).toContain('pbt.numRuns:');
+    await press(app, KEY.escape);
+    await until(app, 'Mutation testing');
+    await press(app, ...Array(4).fill(KEY.down), KEY.enter, ...Array(3).fill(KEY.down), KEY.enter);
+    await until(app, 'New value:');
+    await press(app, KEY.backspace, KEY.backspace, '5', '0', '0', '0', KEY.enter);
+    await until(app, '1 problem to fix before saving (p lists them): pbt.numRuns');
+    await press(app, 's');
+    await until(app, 'Fix 1 problem before saving');
+    expect(api.writeConfig).not.toHaveBeenCalled();
+    // A change that adds a problem is still refused.
+    await press(app, KEY.enter);
+    await until(app, 'New value:');
+    await press(app, ...Array(4).fill(KEY.backspace), '0', KEY.enter);
+    await until(app, 'mutation.timeoutMs: Too small');
+    // Past mutation.typecheck to the property-based testing section, then its run count.
+    await press(app, KEY.escape, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.enter);
+    await until(app, 'New value:');
+    await press(app, KEY.backspace, '9', KEY.enter);
+    await until(app, '2 unsaved');
+    expect(app.lastFrame()).not.toContain('problem');
+    await press(app, 's');
+    await until(app, 'Review 2 changes');
+    await press(app, 'y');
+    expect(api.writeConfig).toHaveBeenCalledWith({ mutation: { timeoutMs: 5000 }, pbt: { numRuns: 9 } });
   });
 
   it('shows the code and hint of an error', async () => {
@@ -420,6 +1078,12 @@ describe('the TUI', () => {
 });
 
 describe('helpers', () => {
+  it('shows project paths with / on every platform', () => {
+    const root = path.join(path.sep, 'projects', 'shop');
+    expect(projectPath(root, path.join(root, '.veritas', 'config.json'))).toBe('.veritas/config.json');
+    expect(projectPath(root, root)).toBe(root.split(path.sep).join('/'));
+  });
+
   it('tracks stage progress from run events', () => {
     let lines = applyStageEvent([], {
       time: '',
@@ -473,13 +1137,93 @@ describe('helpers', () => {
 
   it('edits nested configuration values', () => {
     const raw = { a: { b: 1, c: [1, 2] }, d: 'x' };
-    expect(leaves(raw).map((l) => l.path.join('.'))).toEqual(['a.b', 'a.c', 'd']);
+    expect(getAt(raw, ['a', 'c'])).toEqual([1, 2]);
+    expect(getAt(raw, ['a', 'x', 'y'])).toBeUndefined();
     expect(setAt(raw, ['a', 'b'], 2)).toEqual({ a: { b: 2, c: [1, 2] }, d: 'x' });
     expect(raw.a.b).toBe(1);
-    expect(parseValue('true', false)).toBe(true);
-    expect(parseValue('hello', 'x')).toBe('hello');
-    expect(typeof parseValue('hello', 3)).toBe('symbol');
+    // Removing the last value of an object removes the object too.
+    expect(unsetAt({ a: { b: 1 }, d: 'x' }, ['a', 'b'])).toEqual({ d: 'x' });
+    expect(unsetAt(raw, ['a', 'b'])).toEqual({ a: { c: [1, 2] }, d: 'x' });
     expect(validate({ mutation: { timeoutMs: -5 } })[0]).toMatch(/^mutation\.timeoutMs:/);
     expect(validate({})).toEqual([]);
+  });
+
+  it('reads settings, labels and typed values from the schema', () => {
+    const field = (k: string) =>
+      SECTIONS.flatMap((s) => s.fields).find((f) => f.path.join('.') === k) ?? expect.fail(k);
+    expect(humanize('maxDurationMs')).toBe('Max duration (ms)');
+    expect(humanize('sendFullTextToLlm')).toBe('Send full text to LLM');
+    expect(fieldLabel(field('sources.web.maxPages'))).toBe('Web: max pages');
+    expect(fieldLabel(field('limits.memoryMb'))).toBe('Memory (MiB)');
+    expect(parseText('5000', field('mutation.timeoutMs'))).toEqual({ value: 5000 });
+    expect(parseText('1.5', field('mutation.timeoutMs'))).toHaveProperty('error');
+    expect(parseText('0.5', field('policy.minPropertyCoverage'))).toEqual({ value: 0.5 });
+    expect(parseText('', field('project.tsconfig'))).toEqual({ value: null });
+    expect(parseText('', field('pbt.seed'))).toEqual({ value: expect.any(Symbol) });
+    // A required field brings its required siblings, so the object stays valid.
+    const min = field('formal.integerDomain.min');
+    expect(setField({}, min, '-5')).toEqual({ formal: { integerDomain: { min: '-5', max: '10000' } } });
+    expect(resetField({ formal: { integerDomain: { min: '-5', max: '7' } } }, min)).toEqual({
+      formal: { integerDomain: { min: '-10000', max: '7' } },
+    });
+    expect(resetField({ mutation: { timeoutMs: 5 } }, field('mutation.timeoutMs'))).toEqual({});
+    expect(diff({ mutation: { timeoutMs: 5 } }, { mutation: { mode: 'full' } }).map((c) => c.path)).toEqual([
+      'mutation.mode',
+      'mutation.timeoutMs',
+    ]);
+  });
+
+  it('sorts findings by severity, then certainty', () => {
+    const f = (severity: string, certainty: string) => ({ ...FINDING, severity, certainty }) as Finding;
+    expect(
+      sortFindings([f('low', 'confirmed'), f('high', 'suspected'), f('high', 'confirmed')]).map(
+        (x) => `${x.severity}/${x.certainty}`,
+      ),
+    ).toEqual(['high/confirmed', 'high/suspected', 'low/confirmed']);
+  });
+
+  it('colors evidence statuses by what they mean', () => {
+    expect(statusColor('counterexample')).toBe('red');
+    expect(statusColor('passed')).toBe('green');
+    expect(statusColor('timeout')).toBe('yellow');
+    expect(statusColor('weak_or_incomplete')).toBe('yellow');
+    expect(statusColor('something new')).toBe('yellow');
+  });
+
+  it('removes defaults the user did not write', () => {
+    const field = (k: string) =>
+      SECTIONS.flatMap((s) => s.fields).find((f) => f.path.join('.') === k) ?? expect.fail(k);
+    const min = field('formal.integerDomain.min');
+    // A required field edited and reset leaves no integerDomain behind when the file had none.
+    expect(tidy({}, resetField(setField({}, min, '-5'), min), min)).toEqual({});
+    expect(tidy({}, setField({}, min, '-5'), min)).toEqual({
+      formal: { integerDomain: { min: '-5', max: '10000' } },
+    });
+    // A file that had the object keeps it.
+    const saved = { formal: { integerDomain: { min: '-5', max: '10000' } } };
+    expect(tidy(saved, resetField(saved, min), min)).toEqual({
+      formal: { integerDomain: { min: '-10000', max: '10000' } },
+    });
+    const timeout = field('mutation.timeoutMs');
+    expect(tidy({}, setField({}, timeout, 120_000), timeout)).toEqual({});
+  });
+
+  it('says what to do next, and formats durations and times', () => {
+    expect(nextSteps({ config: 'json', latest: null, proposed: 0, doctor: undefined })).toEqual([
+      { key: '4', text: 'No run yet: start one on Run' },
+    ]);
+    const evidence = { tests: null, mutants: null, pbt: null, claims: null };
+    expect(
+      nextSteps({
+        config: 'json',
+        latest: { run: RUN, findings: [], evidence },
+        proposed: 0,
+        doctor: undefined,
+      }),
+    ).toEqual([{ key: '2', text: 'See why the latest run did not pass' }]);
+    expect(duration(850)).toBe('850 ms');
+    expect(duration(12_345)).toBe('12.3 s');
+    expect(duration(245_000)).toBe('4m 05s');
+    expect(ago('2026-11-21T10:00:00Z', Date.parse('2026-11-21T12:30:00Z'))).toBe('2h ago');
   });
 });

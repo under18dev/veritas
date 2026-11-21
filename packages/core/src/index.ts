@@ -1,4 +1,5 @@
 export * from './artifacts/store.js';
+export * from './config/fields.js';
 export * from './config/load.js';
 export * from './config/schema.js';
 export * from './exit-codes.js';
