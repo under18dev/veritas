@@ -21,6 +21,7 @@ export function SelectList<T>({
   onSelect,
   onHighlight,
   initial = 0,
+  selected,
 }: {
   items: Item<T>[];
   active: boolean;
@@ -28,9 +29,15 @@ export function SelectList<T>({
   onSelect?: (item: Item<T>, index: number) => void;
   onHighlight?: (item: Item<T>, index: number) => void;
   initial?: number;
+  /** Move the highlight here when it changes, for a selection made elsewhere (a shortcut key). */
+  selected?: number;
 }) {
-  const [index, setIndex] = useState(Math.min(initial, Math.max(items.length - 1, 0)));
+  const [index, setIndex] = useState(Math.min(selected ?? initial, Math.max(items.length - 1, 0)));
   const current = Math.min(index, Math.max(items.length - 1, 0));
+
+  useEffect(() => {
+    if (selected !== undefined && selected >= 0) setIndex(selected);
+  }, [selected]);
 
   useEffect(() => {
     const item = items[current];
@@ -225,4 +232,36 @@ export function useLoad<T>(load: () => T | Promise<T>, deps: unknown[] = []) {
   }, [nonce, ...deps]);
 
   return { ...state, reload: () => setNonce((n) => n + 1) };
+}
+
+/** Spinner frames (braille, one column wide in every terminal). */
+export const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/** The color a run verdict is shown in. */
+export function verdictColor(verdict: string | undefined): string {
+  if (verdict === 'pass') return 'green';
+  if (verdict === 'policy_failure' || verdict === 'tool_error') return 'red';
+
+  return verdict ? 'yellow' : 'gray';
+}
+
+/** A short label on a colored background. */
+export function Badge({ color, children }: { color: string; children: string }) {
+  return (
+    <Text backgroundColor={color} color="black" bold>
+      {` ${children} `}
+    </Text>
+  );
+}
+
+/** A bar of colored blocks; spaces with a background, so it lines up in terminals that draw block characters wide. */
+export function ProgressBar({ done, total, width }: { done: number; total: number; width: number }) {
+  const filled = total > 0 ? Math.min(width, Math.round((done / total) * width)) : 0;
+
+  return (
+    <Text>
+      <Text backgroundColor="cyan">{' '.repeat(filled)}</Text>
+      <Text backgroundColor="gray">{' '.repeat(width - filled)}</Text>
+    </Text>
+  );
 }

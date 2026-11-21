@@ -6,6 +6,7 @@ import {
   type Prompter,
   runInitWizard,
   type WizardEnvironment,
+  withTypedChoices,
 } from '../src/commands/init-wizard.js';
 
 const proposed = VeritasConfig.parse({});
@@ -15,16 +16,18 @@ function scripted(answers: string[]): Prompter & { questions: string[]; lines: s
   const questions: string[] = [];
   const lines: string[] = [];
 
-  return {
+  return withTypedChoices({
     questions,
     lines,
-    ask: async (question) => {
+    ask: async (question: string) => {
       questions.push(question);
 
       return queue.shift() ?? '';
     },
-    say: (line) => lines.push(line),
-  };
+    say: (line: string) => {
+      lines.push(line);
+    },
+  });
 }
 
 function environment(overrides: Partial<WizardEnvironment> = {}): WizardEnvironment {
@@ -58,7 +61,7 @@ describe('init wizard', () => {
       'docs.example.com, bad domain!', // rejected
       'docs.example.com, api.example.com',
       'y', // install Lean
-      'y', // use Lean
+      'y', // also prove with Lean
       'y', // add mutator
     ]);
     const result = await runInitWizard(proposed, environment(), prompter);
@@ -68,7 +71,7 @@ describe('init wizard', () => {
       enabled: true,
       allowDomains: ['docs.example.com', 'api.example.com'],
     });
-    expect(result.config.formal.backend).toBe('lean');
+    expect(result.config.formal.backend).toBe('both');
     expect(result.actions).toEqual([
       { kind: 'install-lean' },
       { kind: 'add-mutator', command: ['pnpm', 'add', '-D', '@mizchi/mutator@0.4.5'] },
@@ -110,9 +113,18 @@ describe('init wizard', () => {
       prompter,
     );
     expect(prompter.questions.some((q) => q.includes('Install it with elan'))).toBe(false);
-    expect(prompter.questions.some((q) => q.includes('Use Lean instead of Z3'))).toBe(true);
+    expect(prompter.questions.some((q) => q.includes('Also prove properties with Lean'))).toBe(true);
     expect(prompter.questions.some((q) => q.includes('@mizchi/mutator'))).toBe(false);
     expect(result.config.formal.backend).toBe('z3');
+  });
+
+  it('proves with both Z3 and Lean by default once Lean is installed', async () => {
+    const result = await runInitWizard(
+      proposed,
+      environment({ leanAvailable: async () => true }),
+      scripted([]),
+    );
+    expect(result.config.formal.backend).toBe('both');
   });
 
   it('keeps GitHub off without a valid repository', async () => {

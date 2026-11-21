@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createInterface } from 'node:readline/promises';
 import {
   detectProject,
   ExitCode,
@@ -18,7 +17,8 @@ import {
 import { bundledTools } from '@under18dev/veritas-engine';
 import { isCi } from '@under18dev/veritas-improvement';
 import { emitJson, emitText, type GlobalOptions, log } from '../output.js';
-import { type Prompter, runInitWizard, type WizardAction, type WizardEnvironment } from './init-wizard.js';
+import { runInitWizard, type WizardAction, type WizardEnvironment } from './init-wizard.js';
+import { PromptAborted, terminalPrompter } from './terminal-prompt.js';
 
 /** `owner/name` of a GitHub `origin` remote (`git@github.com:o/n.git`, `https://github.com/o/n`). */
 export function githubRepoFromRemote(url: string | null): string | null {
@@ -97,12 +97,6 @@ async function installLean(root: string): Promise<boolean> {
   }
 }
 
-function readlinePrompter(): Prompter & { close(): void } {
-  const rl = createInterface({ input: process.stdin, output: process.stderr });
-
-  return { ask: (question) => rl.question(question), say: (line) => log(line), close: () => rl.close() };
-}
-
 /** Whether `init` asks its questions: only for a person at a terminal, never with --json or in CI. */
 export function asksQuestions(json: boolean | undefined, env: NodeJS.ProcessEnv): boolean {
   return !json && !isCi(env);
@@ -171,7 +165,7 @@ export async function initCommand(
         'pass --yes',
       );
     }
-    const prompter = readlinePrompter();
+    const prompter = terminalPrompter();
 
     try {
       // The questions are for a person at a terminal: never with --json or in CI.
@@ -195,15 +189,16 @@ export async function initCommand(
             ? 'then: install Lean 4 with elan'
             : `then: run ${action.command.join(' ')}`,
         );
-      const answer = await prompter.ask(`Write ${preview.file}? [y/N] `);
-
-      if (!/^y(es)?$/i.test(answer.trim())) {
+      if (!(await prompter.confirm(`Write ${preview.file}?`))) {
         log('aborted; nothing written or installed');
 
         return ExitCode.UserError;
       }
-    } finally {
-      prompter.close();
+    } catch (error) {
+      if (!(error instanceof PromptAborted)) throw error;
+      log('aborted; nothing written or installed');
+
+      return ExitCode.UserError;
     }
     config = await perform(actions, config, opts.root);
   }

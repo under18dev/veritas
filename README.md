@@ -62,7 +62,7 @@ veritas
 | `veritas mutate [--since <ref>] [--scope <glob>] [--kill-matrix]`      | Mutation testing with [`@mizchi/mutator`](https://github.com/mizchi/mutator) |
 | `veritas test generate [--property <id>] [--dry-run]`                  | Generate fast-check property tests                                           |
 | `veritas test replay <pbt-id>`                                         | Replay a recorded property-based test with its seed and shrink path          |
-| `veritas prove [--engine z3\|lean] [--property <id>]`                  | Bounded checks with Z3, or kernel-checked proofs with Lean 4                 |
+| `veritas prove [--engine z3\|lean\|both] [--property <id>]`            | Bounded checks with Z3, kernel-checked proofs with Lean 4, or both           |
 | `veritas run [--profile quick\|standard\|deep] [--offline]`            | The whole pipeline                                                           |
 | `veritas report [--format text\|json\|markdown\|html\|sarif]`          | Print the latest results                                                     |
 | `veritas explain <finding-id>`                                         | Evidence chain of a finding                                                  |

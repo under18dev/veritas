@@ -22,12 +22,13 @@ Otherwise `veritas` behaves as before: it prints the help on stderr and exits wi
 
 ## Layout and keys
 
-The screen has a header with the project name and the latest run (its verdict, exit code and start time), a menu on the left, the current screen on the right and a key hint at the bottom.
+The screen has a header with the project name and the latest run (its verdict as a colored label, exit code and start time), a menu on the left, the current screen on the right and the keys that work at the bottom. The panel that has the keyboard has a cyan border. Under the menu, a line says what the highlighted screen is for.
 
 | Where    | Key                | Action                                              |
 | -------- | ------------------ | --------------------------------------------------- |
 | Menu     | `↑` `↓` or `j` `k` | Move between screens                                |
 | Menu     | `Enter` or `→`     | Enter the screen                                    |
+| Menu     | `1` to `6`         | Open that screen directly                           |
 | Menu     | `?`                | Show or hide the key help                           |
 | Menu     | `q`                | Quit                                                |
 | Anywhere | `Ctrl+C`           | Quit                                                |
@@ -70,7 +71,17 @@ Choose the options, then **Start**:
 | Include proposed specifications | no            | `--include-proposed` |
 | Since                           | whole project | `--since <ref>`      |
 
-While the run is in progress, each stage is shown as it starts and ends. `Esc` cancels the run. When it finishes, the screen shows the verdict, exit code and number of findings; open **Results** to read them. Leaving the screen or quitting the TUI also cancels a run in progress.
+While the run is in progress, the screen shows:
+
+- the elapsed time and a progress bar of finished stages;
+- every stage of the profile, with the time each finished one took and a clock on the running one;
+- an activity log of what is happening: stages starting and ending, their results, processes such as mutator, Z3 and Vitest starting and ending, the output lines of mutator, and cache hits.
+
+The spinner and the clocks move even when no new event arrives, so a long stage such as mutation testing does not look frozen. `Esc` cancels the run.
+
+When the run finishes, the activity log is cleared and the screen shows the verdict, exit code, number of findings, total time, policy reasons and the stages as the run recorded them. `Enter` opens **Results** to read the findings.
+
+If you cancel the run, the screen says **Run cancelled** and shows the run id and the stages as the run recorded them (a stage stopped by the cancel is usually `cancelled`, but can be recorded as `error`), without a verdict: the results of a cancelled run are incomplete. `Enter` still opens **Results**, where the cancelled run is the newest one. If the run fails or is cancelled, the last lines of the activity log stay on the screen to show where it stopped. Leaving the screen or quitting the TUI also cancels a run in progress.
 
 ### Improve tests
 

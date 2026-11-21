@@ -81,7 +81,7 @@ Use what `doctor` reports instead of retrying:
 
 - mutation testing `disabled` (no mutator or Vitest): run `--profile quick`, or `mutate --import` an existing report, and say mutation evidence is missing;
 - `sandbox` unavailable (Node.js below 25): property tests and counterexample replay are not run; report the affected results as inconclusive, or ask the user for Node.js 25+ (`VERITAS_SANDBOX_NODE`);
-- `lean` unavailable: use the default Z3 engine; do not install Lean unless asked;
+- `lean` unavailable: pass `--engine z3` to `prove` (the configuration may say `lean` or `both`); do not install Lean unless asked;
 - no LLM configured: rule-based extraction still works; statements it cannot read stay unmapped, which is reported, not guessed;
 - a run is `partial` or `inconclusive`: report which stage and why (`veritas report`), then stop.
 

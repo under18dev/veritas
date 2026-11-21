@@ -12,6 +12,7 @@ import {
   LeanCheck,
   type LeanInstallation,
   leanProofStrategies,
+  leanTranslatable,
   parseAxioms,
   proveWithLean,
 } from '../src/index.js';
@@ -100,6 +101,8 @@ describe('irToLean', () => {
       whenTrue: '100',
     });
     expect(() => irToLean(ir, { theoremName: 'pay_rule' })).toThrow(/record or array/);
+    expect(leanTranslatable(ir)).toBe(false);
+    expect(leanTranslatable(discountIR('candidates/pricing-fixed.ts'))).toBe(true);
   });
 
   it('emits defs over Int/Bool, exact literals and the bounded theorem, deterministically', () => {

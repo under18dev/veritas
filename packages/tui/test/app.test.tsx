@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App.js';
 import type { TuiApi } from '../src/api.js';
 import { abbreviateHome } from '../src/screens/Home.js';
-import { applyStageEvent } from '../src/screens/Run.js';
+import { appendLog, applyStageEvent, clock } from '../src/screens/Run.js';
 import { leaves, parseValue, setAt, validate } from '../src/screens/Settings.js';
 
 const KEY = { up: '\u001B[A', down: '\u001B[B', enter: '\r', escape: '\u001B' };
@@ -173,10 +173,68 @@ describe('the TUI', () => {
   it('shows the latest run and the menu, and help on ?', async () => {
     const app = render(<App api={fakeApi()} />);
     unmount = app.unmount;
-    await until(app, 'latest R-1 · inconclusive · exit 4');
+    await until(app, 'latest R-1 · exit 4');
+    expect(app.lastFrame()).toContain(' inconclusive ');
     expect(app.lastFrame()).toContain('Specifications');
     await press(app, '?');
     await until(app, 'a accepts and r rejects');
+  });
+
+  it('opens a screen with its number key', async () => {
+    const app = render(<App api={fakeApi()} />);
+    unmount = app.unmount;
+    await press(app, '4');
+    await until(app, 'Profile: quick');
+    // The menu follows: Esc returns to it with Run highlighted.
+    await press(app, KEY.escape);
+    expect(app.lastFrame()).toContain('› 4 Run');
+  });
+
+  it('shows the stages and a live activity log while a run works, and a summary once it ends', async () => {
+    let finish: (summary: unknown) => void = () => {};
+    const api = fakeApi({
+      run: vi.fn((_request, _signal, onEvent) => {
+        onEvent({
+          time: '2026-11-21T10:00:01.000Z',
+          level: 'debug',
+          message: 'stage index started',
+          event: 'stage',
+          stage: 'index',
+          at: 'start',
+        });
+        onEvent({
+          time: '2026-11-21T10:00:02.000Z',
+          level: 'debug',
+          message: 'vitest started',
+          event: 'process-start',
+        });
+
+        return new Promise((resolve) => {
+          finish = resolve as never;
+        });
+      }) as TuiApi['run'],
+    });
+    const app = await open(api, 3);
+    await until(app, 'Profile: quick');
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.down, KEY.enter);
+    await until(app, '10:00:02 vitest started');
+    expect(app.lastFrame()).toMatch(/index\s+running/);
+    expect(app.lastFrame()).toMatch(/discover\s+waiting/);
+    expect(app.lastFrame()).toContain('0/6 stages');
+    finish({
+      runId: 'R-2',
+      dir: '',
+      run: { ...RUN, stages: [{ stage: 'index', status: 'succeeded', durationMs: 12 }] },
+      findings: [FINDING],
+      decision: { exitCode: 0, verdict: 'pass', reasons: [] },
+    });
+    await until(app, ' pass ');
+    // The activity log is gone; the summary and the recorded stages stay.
+    expect(app.lastFrame()).not.toContain('vitest started');
+    expect(app.lastFrame()).toContain('1 finding(s)');
+    expect(app.lastFrame()).toMatch(/index\s+succeeded 12 ms/);
+    await press(app, KEY.enter);
+    await until(app, 'R-1');
   });
 
   it('offers init on a project without configuration', async () => {
@@ -248,6 +306,53 @@ describe('the TUI', () => {
     await until(app, 'Esc cancels');
     await press(app, KEY.escape);
     expect(signal?.aborted).toBe(true);
+  });
+
+  it('shows a run cancelled with Esc as cancelled even when the run returns a summary', async () => {
+    let emit: (message: string) => void = () => {};
+    const api = fakeApi({
+      // The engine does not reject a cancelled run: it records the stages as cancelled and returns a summary.
+      run: vi.fn(
+        (_request, signal, onEvent) =>
+          new Promise((resolve) => {
+            emit = (message) =>
+              onEvent({ time: '2026-11-21T10:00:03.000Z', level: 'debug', message, event: 'process-start' });
+            emit('mutator started');
+            signal.addEventListener('abort', () => {
+              emit('mutator exited SIGKILL');
+              resolve({
+                runId: 'R-3',
+                dir: '',
+                run: {
+                  ...RUN,
+                  stages: [
+                    { stage: 'index', status: 'succeeded', durationMs: 5 },
+                    { stage: 'mutate', status: 'cancelled', durationMs: 7 },
+                  ],
+                },
+                findings: [],
+                decision: { exitCode: 0, verdict: 'pass_with_warnings', reasons: [] },
+              } as never);
+            });
+          }),
+      ) as TuiApi['run'],
+    });
+    const app = await open(api, 3);
+    await until(app, 'Profile: quick');
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.down, KEY.enter);
+    await until(app, 'mutator started');
+    await press(app, KEY.escape);
+    await until(app, 'Run cancelled.');
+    const frame = app.lastFrame() ?? '';
+    // No verdict claims the run passed; the log, the recorded stages and the run id stay.
+    expect(frame).not.toContain('pass_with_warnings');
+    expect(frame).toContain('R-3');
+    expect(frame).toMatch(/mutate\s+cancelled 7 ms/);
+    expect(frame).toContain('10:00:03 mutator started');
+    expect(frame).toContain('10:00:03 mutator exited SIGKILL');
+    expect(frame).toContain('Enter opens Results for this cancelled run');
+    await press(app, KEY.enter);
+    await until(app, 'R-1');
   });
 
   it('applies a plan only after it is confirmed, with the plan token', async () => {
@@ -347,6 +452,23 @@ describe('helpers', () => {
       { stage: 'spec', status: 'running' },
     ]);
     expect(applyStageEvent(lines, { time: '', level: 'info', message: 'hello' })).toBe(lines);
+  });
+
+  it('keeps the last activity lines with their time of day, and formats clocks', () => {
+    const events = Array.from({ length: 5 }, (_, i) => ({
+      time: `2026-11-21T10:00:0${i}.000Z`,
+      level: 'debug' as const,
+      message: `event\n ${i}`,
+    }));
+    const log = appendLog([], events, 3);
+    expect(log.map((l) => [l.id, l.time, l.text])).toEqual([
+      [3, '10:00:02', 'event 2'],
+      [4, '10:00:03', 'event 3'],
+      [5, '10:00:04', 'event 4'],
+    ]);
+    expect(appendLog(log, [])).toBe(log);
+    expect(clock(0)).toBe('0:00');
+    expect(clock(65_400)).toBe('1:05');
   });
 
   it('edits nested configuration values', () => {

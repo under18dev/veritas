@@ -74,7 +74,7 @@ next:
 
 ### Answer the questions in a terminal
 
-Without `--yes`, `init` run in a terminal asks about the settings it cannot detect. Pressing Enter keeps the default for each question, so nothing changes unless you say yes.
+Without `--yes`, `init` run in a terminal asks about the settings it cannot detect. Pick an answer with the arrow keys (or `j`/`k`, a number, `y`/`n`) and press Enter; Ctrl+C stops without writing anything. Pressing Enter right away keeps the default; only proving with Lean, once it is installed, defaults to yes.
 
 | Question                                                       | What a yes does                                                                                                                                                                                                           |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -82,7 +82,7 @@ Without `--yes`, `init` run in a terminal asks about the settings it cannot dete
 | GitHub issues and pull requests                                | Turns on `sources.github` for the repository (the `origin` remote is offered); read only in runs without `--offline`                                                                                                      |
 | Web pages                                                      | Turns on `sources.web` for the domains you list; fetched only in runs without `--offline`                                                                                                                                 |
 | Install Lean 4 (only when it is missing)                       | Downloads the official elan installer from GitHub and installs the stable Lean 4 toolchain into `~/.elan`, where `veritas doctor` looks                                                                                   |
-| Use Lean instead of Z3                                         | Sets `formal.backend` to `lean`. Lean covers integers and booleans only; Z3 also covers records and arrays                                                                                                                |
+| Also prove with Lean (yes by default)                          | Sets `formal.backend` to `both`: Z3 still checks every property against your code, and Lean adds kernel-checked proofs for properties over integers and booleans                                                          |
 | Add `@mizchi/mutator` to the project (only when it is missing) | Runs your package manager to add it as a dev dependency, so mutation testing loads all of mutator's files from the project instead of from where Veritas is installed                                                     |
 
 You then see the resulting configuration and confirm writing it. Installs run only after that confirmation; if Lean cannot be installed, proofs stay on Z3. With `--json` or in CI, these questions are skipped and nothing is installed; `init` still asks before writing the detected configuration. `--yes` writes it without asking, and is required without a terminal.

@@ -2,8 +2,8 @@ import path from 'node:path';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { useCallback, useState } from 'react';
 import type { TuiApi } from './api.js';
-import { SelectList, useLoad } from './components.js';
-import type { ScreenProps } from './screen.js';
+import { Badge, SelectList, useLoad, verdictColor } from './components.js';
+import type { ScreenKey, ScreenProps } from './screen.js';
 import { Home } from './screens/Home.js';
 import { Improve } from './screens/Improve.js';
 import { Results } from './screens/Results.js';
@@ -11,24 +11,25 @@ import { RunScreen } from './screens/Run.js';
 import { Settings } from './screens/Settings.js';
 import { Spec } from './screens/Spec.js';
 
-const SCREENS = [
-  { key: 'home', label: 'Home' },
-  { key: 'results', label: 'Results' },
-  { key: 'spec', label: 'Specifications' },
-  { key: 'run', label: 'Run' },
-  { key: 'improve', label: 'Improve tests' },
-  { key: 'settings', label: 'Settings' },
-] as const;
-
-type ScreenKey = (typeof SCREENS)[number]['key'];
+const SCREENS: { key: ScreenKey; label: string; about: string }[] = [
+  { key: 'home', label: 'Home', about: 'project, configuration and tools' },
+  { key: 'results', label: 'Results', about: 'past runs, findings and their evidence' },
+  { key: 'spec', label: 'Specifications', about: 'review and accept or reject properties' },
+  { key: 'run', label: 'Run', about: 'run Veritas and watch it work' },
+  { key: 'improve', label: 'Improve tests', about: 'plan and apply test-only changes' },
+  { key: 'settings', label: 'Settings', about: 'edit .veritas/config.json' },
+];
+// One array for every render, so the menu reports a highlight only when it moves.
+const MENU = SCREENS.map((s, i) => ({ label: `${i + 1} ${s.label}`, value: s.key }));
 
 const HELP = [
-  'Menu: ↑/↓ or j/k to move, Enter or → to open, q to quit, ? to close this help.',
+  'Menu: ↑/↓ or j/k to move, Enter or → to open, 1-6 to open a screen directly, q to quit, ? to close this help.',
   'In a screen: ↑/↓ or j/k to move, Enter to choose, Esc to go back.',
   'Results: Enter on a run lists its findings; Enter on a finding shows its evidence.',
   'Specifications: f filters by status, d shows what changed since the previous run;',
   '  on a property, a accepts and r rejects (a reason is required).',
-  'Run: choose the profile and options, then Start. Esc cancels a running run.',
+  'Run: choose the profile and options, then Start. The stages and a live activity log show it working;',
+  '  Esc cancels a running run, and Enter on the result opens Results.',
   'Improve tests: create a plan (nothing is written), review it, then apply it.',
   'Settings: Enter edits a value; it is checked and you confirm the change before it is saved.',
 ];
@@ -42,17 +43,39 @@ function Header({ api, version }: { api: TuiApi; version: number }) {
   const run = latest.data;
 
   return (
-    <Box borderStyle="single" paddingX={1} justifyContent="space-between">
+    <Box borderStyle="round" borderColor="gray" paddingX={1} justifyContent="space-between">
       <Box flexShrink={0} marginRight={2}>
-        <Text bold>veritas · {path.basename(api.root) || api.root}</Text>
+        <Text bold color="cyan">
+          veritas
+        </Text>
+        <Text bold> {path.basename(api.root) || api.root}</Text>
       </Box>
-      <Text dimColor wrap="truncate-end">
-        {run
-          ? `latest ${run.id} · ${run.verdict ?? run.status} · exit ${run.exitCode ?? '-'} · ${run.startedAt}`
-          : latest.loading
-            ? 'loading…'
-            : 'no run yet'}
-      </Text>
+      {run ? (
+        <Box>
+          <Box flexShrink={0} marginRight={1}>
+            <Badge color={verdictColor(run.verdict)}>{run.verdict ?? run.status}</Badge>
+          </Box>
+          <Text dimColor wrap="truncate-end">
+            {`latest ${run.id} · exit ${run.exitCode ?? '-'} · ${run.startedAt}`}
+          </Text>
+        </Box>
+      ) : (
+        <Text dimColor>{latest.loading ? 'loading…' : 'no run yet'}</Text>
+      )}
+    </Box>
+  );
+}
+
+/** The keys that work here, each as a highlighted key and what it does. */
+function KeyHints({ keys }: { keys: [string, string][] }) {
+  return (
+    <Box>
+      {keys.map(([key, action]) => (
+        <Box key={key} marginRight={2}>
+          <Text inverse> {key} </Text>
+          <Text dimColor> {action}</Text>
+        </Box>
+      ))}
     </Box>
   );
 }
@@ -70,11 +93,19 @@ export function App({ api }: { api: TuiApi }) {
   const onBack = useCallback(() => setFocus('menu'), []);
   const onChange = useCallback(() => setVersion((v) => v + 1), []);
   const onHighlight = useCallback((item: { value: ScreenKey }) => setScreen(item.value), []);
+  const navigate = useCallback((key: ScreenKey) => {
+    setHelp(false);
+    setScreen(key);
+    setFocus('screen');
+  }, []);
 
   useInput(
     (input, key) => {
+      const shortcut = SCREENS[Number(input) - 1];
+
       if (input === 'q') exit();
       else if (input === '?') setHelp((h) => !h);
+      else if (shortcut && /^[1-9]$/.test(input)) navigate(shortcut.key);
       else if (key.rightArrow || key.return) {
         setHelp(false);
         setFocus('screen');
@@ -83,20 +114,42 @@ export function App({ api }: { api: TuiApi }) {
     { isActive: focus === 'menu' },
   );
 
-  const props: ScreenProps = { api, active: focus === 'screen', onBack, height, onChange, version };
+  const props: ScreenProps = { api, active: focus === 'screen', onBack, height, onChange, version, navigate };
+  const current = SCREENS.find((s) => s.key === screen);
+  const border = (focused: boolean) => (focused ? 'cyan' : 'gray');
 
   return (
     <Box flexDirection="column">
       <Header api={api} version={version} />
       <Box>
-        <Box flexDirection="column" width={24} flexShrink={0} borderStyle="single" paddingX={1}>
+        <Box
+          flexDirection="column"
+          width={24}
+          flexShrink={0}
+          borderStyle="round"
+          borderColor={border(focus === 'menu')}
+          paddingX={1}
+        >
           <SelectList
-            items={SCREENS.map((s) => ({ label: s.label, value: s.key }))}
+            items={MENU}
             active={focus === 'menu'}
             onHighlight={onHighlight}
+            selected={SCREENS.findIndex((s) => s.key === screen)}
           />
+          <Box marginTop={1}>
+            <Text dimColor wrap="wrap">
+              {current?.about}
+            </Text>
+          </Box>
         </Box>
-        <Box flexDirection="column" flexGrow={1} borderStyle="single" paddingX={1} minHeight={height + 2}>
+        <Box
+          flexDirection="column"
+          flexGrow={1}
+          borderStyle="round"
+          borderColor={border(focus === 'screen')}
+          paddingX={1}
+          minHeight={height + 2}
+        >
           {help ? (
             HELP.map((line) => <Text key={line}>{line}</Text>)
           ) : (
@@ -111,11 +164,23 @@ export function App({ api }: { api: TuiApi }) {
           )}
         </Box>
       </Box>
-      <Text dimColor>
-        {focus === 'menu'
-          ? '↑↓ move · Enter open · ? help · q quit'
-          : '↑↓ move · Enter choose · Esc back · (see ? on the menu for more keys)'}
-      </Text>
+      <KeyHints
+        keys={
+          focus === 'menu'
+            ? [
+                ['↑↓', 'move'],
+                ['Enter', 'open'],
+                ['1-6', 'jump'],
+                ['?', 'help'],
+                ['q', 'quit'],
+              ]
+            : [
+                ['↑↓', 'move'],
+                ['Enter', 'choose'],
+                ['Esc', 'back'],
+              ]
+        }
+      />
     </Box>
   );
 }

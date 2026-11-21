@@ -106,7 +106,7 @@ veritas explain F-0b43c88cc3a6
 
 `--since <ref>` を付けると、mutation testing の対象を、その git の ref から変更されたコードに絞ります。`--include-proposed` を付けると、accepted でない Property も検査します。それらから出た finding は `suspected` 以下になります。
 
-`prove --engine lean` は、別途インストールした Lean 4 と Lake を使います。既定のエンジンは Z3 です。`mutate --import <file>` は、mutator を実行せずに既存の mutation-testing-elements のレポートを読み込みます。`--kill-matrix` とは一緒に使えません。
+`prove --engine lean` は、別途インストールした Lean 4 と Lake を使います。`--engine both` は Z3 の確認に Lean の証明を加えます。`--engine` を付けなければ `formal.backend` に従います（既定は Z3）。`mutate --import <file>` は、mutator を実行せずに既存の mutation-testing-elements のレポートを読み込みます。`--kill-matrix` とは一緒に使えません。
 
 ### `spec`
 

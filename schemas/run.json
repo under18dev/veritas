@@ -62,7 +62,8 @@
           "type": "string",
           "enum": [
             "z3",
-            "lean"
+            "lean",
+            "both"
           ]
         },
         "sources": {
