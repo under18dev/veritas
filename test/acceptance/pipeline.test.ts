@@ -440,6 +440,13 @@ describe('changes since a git ref', () => {
     // what it runs is not known.)
     expect(names).not.toContain('discount-weak.test.ts');
     expect(names).not.toContain('shipping-boundary.test.ts');
+    // Mutants of the unchanged file were outside --since: pending, not "no coverage".
+    const mutation = JSON.parse(readFileSync(path.join(dir, '.veritas/runs', runId, 'mutation.json'), 'utf8'))
+      .data as {
+      mutants: { status: string; location: { file: string } }[];
+    };
+    const unchanged = mutation.mutants.filter((m) => m.location.file === 'src/pricing.ts');
+    expect(unchanged.every((m) => m.status !== 'no_coverage')).toBe(true);
   });
 
   it('marks properties of changed code with the change and refuses refs that look like options', () => {
