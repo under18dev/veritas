@@ -29,4 +29,5 @@ export * from './schema/status.js';
 export * from './schema/tests.js';
 export * from './schemas-registry.js';
 export * from './symbols.js';
+export * from './test-runner.js';
 export * from './version.js';

@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { IntLiteral } from '../schema/ir.js';
 
+/** The test runner a project uses; each one has a test runner provider (see `TestRunnerProvider`). */
+export const TestFramework = z.literal('vitest');
+export type TestFramework = z.infer<typeof TestFramework>;
+
 const Domain = z.string().regex(/^[a-z0-9.-]+$/i, 'expected a bare domain name such as docs.example.com');
 
 export const VeritasConfig = z
@@ -138,10 +142,7 @@ export const VeritasConfig = z
           .array(z.string())
           .default(['**/*.{test,spec}.{ts,tsx,js,mjs}'])
           .describe('Glob patterns of the test files.'),
-        testFramework: z
-          .literal('vitest')
-          .default('vitest')
-          .describe('Test framework; only Vitest is supported.'),
+        testFramework: TestFramework.default('vitest').describe('Test framework; only Vitest is supported.'),
         inferSpecsFromCode: z
           .boolean()
           .default(true)
