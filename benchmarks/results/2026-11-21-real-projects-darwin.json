@@ -7,7 +7,7 @@
     "os": "macOS 26 (Darwin 25.5.0)",
     "node": "v26.13.1"
   },
-  "note": "One veritas process per row, --offline, no LLM. seconds = wall-clock time; peakRssMb = maximum resident set size of the veritas process. Mutation rows ran with cache.enabled false. es-toolkit --since compares against a local commit that emptied src/math/{clamp,inRange,range,sum}.ts, so those four files count as changed.",
+  "note": "One veritas process per row, --offline, no LLM. seconds = wall-clock time; peakRssMb = maximum resident set size of the veritas process. Mutation rows ran with cache.enabled false. es-toolkit --since compares against a local commit that emptied src/math/{clamp,inRange,range,sum}.ts, so those four files count as changed. The two pathe standard runs were measured at commit 3a7395d (same code paths as 44074b1 apart from fixes outside these runs).",
   "runs": [
     {
       "project": "unjs/defu",
@@ -300,6 +300,67 @@
         "assess": 1883,
         "report": 0
       }
+    },
+    {
+      "project": "unjs/pathe",
+      "commit": "bc7477a",
+      "veritasCommit": "3a7395d",
+      "command": "veritas run --profile standard --offline",
+      "exitCode": 0,
+      "seconds": 98.6,
+      "peakRssMb": 2237,
+      "functions": 50,
+      "tests": 62,
+      "mutants": {
+        "killed": 605,
+        "survived": 107,
+        "timeout": 13,
+        "compile_error": 270,
+        "runtime_error": 2,
+        "ignored": 1,
+        "no_coverage": 19,
+        "pending": 4
+      },
+      "stageMs": {
+        "index": 4,
+        "discover": 47,
+        "spec": 4,
+        "map": 540,
+        "mutate": 96019,
+        "assess": 33,
+        "report": 0
+      },
+      "mutateStatus": "partial"
+    },
+    {
+      "project": "unjs/pathe",
+      "commit": "bc7477a",
+      "veritasCommit": "3a7395d",
+      "command": "veritas run --profile standard --offline",
+      "exitCode": 0,
+      "seconds": 93.1,
+      "peakRssMb": 2260,
+      "functions": 50,
+      "tests": 62,
+      "mutants": {
+        "killed": 609,
+        "survived": 107,
+        "timeout": 13,
+        "compile_error": 270,
+        "runtime_error": 2,
+        "ignored": 1,
+        "no_coverage": 19
+      },
+      "stageMs": {
+        "index": 6,
+        "discover": 44,
+        "spec": 3,
+        "map": 550,
+        "mutate": 90912,
+        "assess": 31,
+        "report": 0
+      },
+      "mutateStatus": "succeeded"
     }
   ]
 }

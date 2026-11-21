@@ -4,7 +4,7 @@ How long Veritas takes and how much memory it uses on real open-source projects,
 
 ## Measurements
 
-Measured on 2026-11-21 with Veritas at commit `44074b1`, on a MacBook (Apple M4, 16 GB), macOS 26, Node.js 26.13.1. Each row is one `veritas` process run with `--offline` and no LLM; the time is wall-clock time and the memory is the peak resident set size of the Veritas process. Runs marked "cold" had the cache turned off (`cache.enabled: false`), so mutation testing ran in full.
+Measured on 2026-11-21 with Veritas at commit `44074b1`, on a MacBook (Apple M4, 16 GB), macOS 26, Node.js 26.13.1. Each row is one `veritas` process run with `--offline` and no LLM; the time is wall-clock time and the memory is the peak resident set size of the Veritas process. Runs marked "cold" had the cache turned off (`cache.enabled: false`), so no earlier result was reused; runs with `--scope` or `--since` still mutated only that part.
 
 ### `run --profile quick`
 
@@ -34,15 +34,15 @@ The quick profile indexes code and tests, collects specifications and assesses t
 | valibot    | `mutate --scope src/actions/minValue/minValue.ts`    | 22                             | 14.6 s | 891 MB      |
 | es-toolkit | `run --profile deep --since <ref>` (4 changed files) | 68 (13,134 outside the change) | 45.1 s | 1,380 MB    |
 
-Mutation testing takes most of these runs: 42.7 s of the 44.4 s for ufo, 27.1 s of the 45.1 s for es-toolkit. Its time grows with the number of mutants and with how long the tests that cover them take. With `--since`, only the tests that reach a changed file are run, and mutants of unchanged files stay `pending`.
+Mutation testing takes most of these runs: 42.7 s of the 44.4 s for ufo, 27.1 s of the 45.1 s for es-toolkit. Its time grows with the number of mutants and with how long the tests that cover them take. With `--since`, the tests that reach a changed file are run, plus tests whose reach static analysis cannot see (dynamic imports, unresolved imports, custom registrations), and mutants of unchanged files stay `pending`.
 
-pathe has about 1,000 mutants and took 110 to 125 s in our runs. That is around the default `mutation.timeoutMs` of 120 s, so a run can end with the `mutate` stage `partial` (some mutants pending) or `timeout`; neither is reported as success.
+pathe has about 1,020 mutants; two cold `run --profile standard` runs took 98.6 s and 93.1 s (peak memory 2.2 GB). That is close to the default `mutation.timeoutMs` of 120 s: the first run stopped 4 mutants short and ended with the `mutate` stage `partial`, and a slower machine can end with `timeout`. Neither is reported as success.
 
 ## Large projects
 
 - Start with `quick`. It runs no project code and took at most 15 s on the projects above, with up to 5,333 tests.
 - Run mutation testing on what changed: `--since <ref>` in pull requests, or `mutate --scope <path>` for one area. `--scope` can be given more than once.
 - Raise `mutation.timeoutMs` when a full mutation run needs longer than 120 s.
-- Mutation results, decisive solver results and LLM responses are cached in `.veritas/cache/`, keyed by content, so a run on unchanged code reuses them.
+- Mutation results, decisive solver results and LLM responses are cached in `.veritas/cache/`, keyed by content. A run reuses them when the code, the configuration, the tool versions and the run's options (such as `--scope` or `--since`) are unchanged.
 
 The budget that CI enforces on the fixtures is in [ADR 0009](/adr/0009-performance-budget).

@@ -4,7 +4,7 @@
 
 ## 計測結果
 
-2026-11-21 に、Veritas の commit `44074b1` で計測しました。環境は MacBook（Apple M4、16 GB）、macOS 26、Node.js 26.13.1 です。各行は `--offline` を付け、LLM を使わずに `veritas` を 1 回実行した結果です。時間は経過時間、メモリは Veritas のプロセスの最大常駐メモリです。「キャッシュなし」の行は、キャッシュを切って（`cache.enabled: false`）mutation testing をすべて実行した結果です。
+2026-11-21 に、Veritas の commit `44074b1` で計測しました。環境は MacBook（Apple M4、16 GB）、macOS 26、Node.js 26.13.1 です。各行は `--offline` を付け、LLM を使わずに `veritas` を 1 回実行した結果です。時間は経過時間、メモリは Veritas のプロセスの最大常駐メモリです。「キャッシュなし」の行は、キャッシュを切って（`cache.enabled: false`）、前の結果を再利用せずに実行した結果です。`--scope` や `--since` を付けた行は、その範囲だけに mutation を入れています。
 
 ### `run --profile quick`
 
@@ -34,15 +34,15 @@ quick プロファイルは、コードとテストの索引作り、仕様の�
 | valibot      | `mutate --scope src/actions/minValue/minValue.ts`           | 22                                 | 14.6 秒 | 891 MB     |
 | es-toolkit   | `run --profile deep --since <ref>`（変更したファイル 4 つ） | 68（変更の外の 13,134 件は対象外） | 45.1 秒 | 1,380 MB   |
 
-これらの実行では、時間のほとんどを mutation testing が占めます。ufo では 44.4 秒のうち 42.7 秒、es-toolkit では 45.1 秒のうち 27.1 秒です。mutant が多いほど、またそれを実行するテストに時間がかかるほど、長くなります。`--since` を付けると、変更したファイルに届くテストだけを実行し、変更していないファイルの mutant は `pending` のままにします。
+これらの実行では、時間のほとんどを mutation testing が占めます。ufo では 44.4 秒のうち 42.7 秒、es-toolkit では 45.1 秒のうち 27.1 秒です。mutant が多いほど、またそれを実行するテストに時間がかかるほど、長くなります。`--since` を付けると、変更したファイルに届くテストと、届く範囲を静的に確かめられないテスト（動的 import、解決できない import、独自の登録方法）を実行し、変更していないファイルの mutant は `pending` のままにします。
 
-pathe は mutant が約 1,000 個あり、計測では 110〜125 秒かかりました。これは `mutation.timeoutMs` の既定値の 120 秒前後です。そのため、`mutate` ステージが `partial`（一部の mutant が pending）や `timeout` で終わることがあります。どちらも成功とは報告しません。
+pathe は mutant が約 1,020 個あり、キャッシュなしの `run --profile standard` を 2 回実行すると、98.6 秒と 93.1 秒かかりました（最大メモリ 2.2 GB）。これは `mutation.timeoutMs` の既定値の 120 秒に近い時間です。1 回目は 4 件の mutant を残して打ち切り、`mutate` ステージが `partial` で終わりました。遅いマシンでは `timeout` で終わることもあります。どちらも成功とは報告しません。
 
 ## 大きなプロジェクトでの進め方
 
 - まず `quick` を実行します。プロジェクトのコードを実行せず、上のプロジェクトではテストが最大 5,333 件でも 15 秒以内に終わりました。
 - mutation testing は、変更した部分に絞って実行します。プルリクエストでは `--since <ref>` を使い、特定の範囲だけなら `mutate --scope <path>` を使います。`--scope` は複数回指定できます。
 - mutation testing 全体に 120 秒より長くかかる場合は、`mutation.timeoutMs` を延ばします。
-- mutation の結果、決着したソルバーの結果、LLM の応答は、内容をキーにして `.veritas/cache/` にキャッシュします。コードが変わっていなければ、次の実行で再利用します。
+- mutation の結果、決着したソルバーの結果、LLM の応答は、内容をキーにして `.veritas/cache/` にキャッシュします。コード、設定、ツールのバージョン、実行のオプション（`--scope` や `--since` など）が変わっていなければ、次の実行で再利用します。
 
 CI で fixture に適用している時間の上限は、[ADR 0009](/adr/0009-performance-budget) にあります。
