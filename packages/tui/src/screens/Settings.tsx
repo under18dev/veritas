@@ -1,4 +1,3 @@
-import path from 'node:path';
 import {
   type ConfigField,
   type ConfigSection,
@@ -15,6 +14,7 @@ import {
   errorText,
   type Hints,
   numbered,
+  projectPath,
   ScrollView,
   TextInput,
   useLoad,
@@ -523,7 +523,7 @@ export function Settings({ api, active, onBack, onChange, height, width, version
       </Card>
     );
   if (data.kind === 'code') {
-    const file = path.relative(api.root, data.file) || data.file;
+    const file = projectPath(api.root, data.file);
 
     return (
       <Card title="Settings" right={<Badge color="yellow">read-only</Badge>} color="yellow">
@@ -539,7 +539,7 @@ export function Settings({ api, active, onBack, onChange, height, width, version
     );
   }
 
-  const file = path.relative(api.root, data.file) || data.file;
+  const file = projectPath(api.root, data.file);
 
   if (mode.kind === 'review')
     return (

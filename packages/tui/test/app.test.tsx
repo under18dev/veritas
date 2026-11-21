@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { Finding, Property, Run } from '@under18dev/veritas-core';
 import { VeritasError } from '@under18dev/veritas-core';
 import type { PlanResult } from '@under18dev/veritas-improvement';
@@ -5,7 +6,7 @@ import { render } from 'ink-testing-library';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App.js';
 import type { TuiApi } from '../src/api.js';
-import { ago, duration, statusColor } from '../src/components.js';
+import { ago, duration, projectPath, statusColor } from '../src/components.js';
 import { abbreviateHome, nextSteps } from '../src/screens/Home.js';
 import { sortFindings } from '../src/screens/Results.js';
 import { appendLog, applyStageEvent, clock } from '../src/screens/Run.js';
@@ -1009,6 +1010,12 @@ describe('the TUI', { timeout: 20_000 }, () => {
 });
 
 describe('helpers', () => {
+  it('shows project paths with / on every platform', () => {
+    const root = path.join(path.sep, 'projects', 'shop');
+    expect(projectPath(root, path.join(root, '.veritas', 'config.json'))).toBe('.veritas/config.json');
+    expect(projectPath(root, root)).toBe(root.split(path.sep).join('/'));
+  });
+
   it('tracks stage progress from run events', () => {
     let lines = applyStageEvent([], {
       time: '',

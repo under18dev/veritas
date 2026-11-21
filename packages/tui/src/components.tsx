@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { VeritasError } from '@under18dev/veritas-core';
 import { Box, type DOMElement, Text, useBoxMetrics, useInput } from 'ink';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
@@ -506,3 +507,8 @@ export function countBy<T>(items: T[], key: (item: T) => string): [string, numbe
 
 /** The keys that work in a view, each as a highlighted key and what it does. */
 export type Hints = [string, string][];
+
+/** `file` relative to `root`, written with `/` on every platform, as paths are shown elsewhere in Veritas. */
+export function projectPath(root: string, file: string): string {
+  return (path.relative(root, file) || file).split(path.sep).join('/');
+}

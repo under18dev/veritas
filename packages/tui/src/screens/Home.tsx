@@ -11,6 +11,7 @@ import {
   Confirm,
   duration,
   ErrorView,
+  projectPath,
   runDuration,
   ScrollView,
   SEVERITIES,
@@ -155,10 +156,10 @@ export function Home({
         {config.error ? (
           <Text color="red">unreadable</Text>
         ) : config.data?.kind === 'json' ? (
-          <Text>{path.relative(api.root, config.data.file) || config.data.file}</Text>
+          <Text>{projectPath(api.root, config.data.file)}</Text>
         ) : config.data?.kind === 'code' ? (
           <Text>
-            {path.relative(api.root, config.data.file) || config.data.file}
+            {projectPath(api.root, config.data.file)}
             <Text dimColor> (code, read-only here)</Text>
           </Text>
         ) : config.data?.kind === 'none' ? (
