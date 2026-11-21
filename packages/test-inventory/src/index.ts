@@ -338,6 +338,9 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
       const symbol = checker.getSymbolAtLocation(identifier);
 
       if (!symbol) continue;
+
+      // Adding to a variable declared outside the body keeps what its declaration already carries.
+      if (merge && !localCalls.has(symbol)) outerCalls(symbol);
       const previous = merge ? (localCalls.get(symbol) ?? []) : [];
       localCalls.set(symbol, [...new Set([...previous, ...sources])]);
     }

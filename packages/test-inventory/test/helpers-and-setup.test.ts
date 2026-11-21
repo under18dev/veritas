@@ -117,6 +117,35 @@ export const config = defineConfig;
     expect(get('plugin stays project code').symbols).toEqual(['src/plugin.ts#plugin']);
   });
 
+  it('keeps the call a describe-level value comes from when a helper that calls project code receives it', () => {
+    const get = inventory(
+      `import { describe, it } from 'vitest';
+      import { minLength } from '../src/check.js';
+      import { expectValid } from './expect.js';
+      describe('minLength', () => {
+        const check = minLength(2);
+        it('passed to the helper', () => { expectValid(check, ['ab']); });
+      });
+    `,
+      {
+        'src/check.ts': `import { fn } from './math.js';
+export function minLength(n: number) { return (value: string) => value.length >= n; }
+export const label = (value: number) => String(fn(value));
+`,
+        // The helper calls project code itself (label), and asserts on the check it is given.
+        'test/expect.ts': `import { expect } from 'vitest';
+import { label } from '../src/check.js';
+export function expectValid(check: (value: string) => boolean, values: string[]): void {
+  for (const value of values) expect(check(value)).toBe(label(1) !== '');
+}
+`,
+      },
+    );
+    const test = get('passed to the helper');
+    expect(test.symbols.sort()).toEqual(['src/check.ts#label', 'src/check.ts#minLength']);
+    expect(test.asserted).toBe(true);
+  });
+
   it('follows what an arrow helper returns from an enclosing variable', () => {
     const test = inventory(`${header}
       describe('suite', () => {
