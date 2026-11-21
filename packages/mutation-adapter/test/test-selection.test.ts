@@ -4,8 +4,8 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { baselineFailure } from '../src/diagnose.js';
 import { buildMutatorArgs, rootTsconfigHasNoFiles, runMutation } from '../src/index.js';
-import { baselineFailure } from '../src/run.js';
 import { projectViteUrl, writeMutationVitestConfig } from '../src/vitest-config.js';
 import { config, tempDir } from './helpers.js';
 

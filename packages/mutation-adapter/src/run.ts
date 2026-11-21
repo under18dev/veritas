@@ -14,6 +14,7 @@ import {
   vitestMajor,
 } from '@under18dev/veritas-core';
 import { detectMutator, PINNED_MUTATOR_VERSION, summarize } from './detect.js';
+import { baselineFailure, errorExcerpt, withoutDebug } from './diagnose.js';
 import { importMutationReport } from './import.js';
 import { countMutants, emptyCounts, type MutationRunResult, type MutationRunStatus } from './schema.js';
 import { mutatorVitestDir, projectViteUrl, writeMutationVitestConfig } from './vitest-config.js';
@@ -326,7 +327,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   if (run.exitCode !== 0 && run.exitCode !== EXIT_GATE_FAILED) {
     return result('error', {
       ...common,
-      detail: `mutator exited with ${run.exitCode ?? `signal ${run.signal}`}: ${summarize(withoutDebug(redact(run.stderr)))}`,
+      detail: `mutator exited with ${run.exitCode ?? `signal ${run.signal}`}: ${errorExcerpt(withoutDebug(redact(run.stderr)))}`,
     });
   }
 
@@ -432,45 +433,4 @@ export function importMutationResult(options: { root: string; reportFile: string
       ...(counts.pending > 0 ? [`${counts.pending} mutant(s) in the report are pending`] : []),
     ],
   };
-}
-
-/** `MUTATOR 123: /abs/a.test.ts: message`, what NODE_DEBUG=mutator prints for a test file that failed to load. */
-const DEBUG_LINE = /^MUTATOR \d+: (.+?\.[cm]?[jt]sx?): (.*)$/;
-
-/** mutator's own output, without the debug lines and the stack traces that follow them. */
-function withoutDebug(stderr: string): string {
-  const kept: string[] = [];
-  let inDebug = false;
-
-  for (const line of stderr.split('\n')) {
-    if (/^MUTATOR \d+: /.test(line)) inDebug = true;
-    else if (inDebug && !/^(\s+at |Error: |\S*Error: )/.test(line)) inDebug = false;
-
-    if (!inDebug) kept.push(line);
-  }
-
-  return kept.join('\n');
-}
-
-/**
- * What a failed baseline says: mutator's summary (which tests fail), then the first reason a test file failed to
- * load, which mutator prints only on its debug channel and which is usually the cause (`Cannot find module …`).
- */
-export function baselineFailure(stderr: string, root: string): string {
-  const summary = summarize(withoutDebug(stderr));
-  const first = stderr
-    .split('\n')
-    .map((line) => DEBUG_LINE.exec(line))
-    .find((match) => match !== null);
-
-  if (!first) return summary;
-  // Project-relative with `/`, as the other paths in the detail.
-  const file = (
-    path.isAbsolute(first[1] as string) ? path.relative(root, first[1] as string) : (first[1] as string)
-  )
-    .split(path.sep)
-    .join('/');
-  const message = (first[2] as string).length > 300 ? `${(first[2] as string).slice(0, 300)}…` : first[2];
-
-  return `${summary}\nfirst error: ${file}: ${message}`;
 }
