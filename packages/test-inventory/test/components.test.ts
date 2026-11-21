@@ -1791,6 +1791,129 @@ describe('nested runs, API aliases, named hooks and helper writes', () => {
   });
 });
 
+describe('observation timing, caller chains, inline members, containers, shallow and fixture queries', () => {
+  it('requires a mock to be observed after it was handed over', () => {
+    const byName = inventory(`${header}
+      it('mock state read before the render', () => {
+        const cb = vi.fn();
+        const before = cb.mock.calls.length;
+        render(<Dialog onSave={cb} />);
+        expect(before).toBe(0);
+      });
+      it('mock matcher before the render', () => {
+        const cb = vi.fn();
+        expect(cb).not.toHaveBeenCalled();
+        render(<Dialog onSave={cb} />);
+      });
+      it('mock matcher after the render', () => {
+        const cb = vi.fn();
+        render(<Dialog onSave={cb} />);
+        expect(cb).not.toHaveBeenCalled();
+      });
+    `);
+
+    expect(byName('mock state read before the render').asserted).toBe(false);
+    expect(byName('mock matcher before the render').asserted).toBe(false);
+    expect(byName('mock matcher after the render').asserted).toBe(true);
+  });
+
+  it('requires the callers of a mounting helper to run, transitively', () => {
+    const byName = inventory(`${header}
+      it('only an uncalled caller', () => {
+        function unused() { mount(); }
+        function mount() { render(<Dialog open title="Hi" />); }
+        expect(document.body.textContent).toBe('');
+      });
+      it('caller called', () => {
+        function used() { mount(); }
+        function mount() { render(<Dialog open title="Hi" />); }
+        used();
+        expect(document.body.textContent).toContain('Hi');
+      });
+    `);
+
+    expect(byName('only an uncalled caller')).toMatchObject({ symbols: [], asserted: false });
+    expect(byName('caller called')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
+  });
+
+  it('classifies members read straight off an inline render', () => {
+    const byName = inventory(`${header}
+      it('inline unmount', () => { expect(render(<Dialog open title="Hi" />).unmount).toBeTypeOf('function'); });
+      it('inline query not called', () => { expect(render(<Dialog open title="Hi" />).getByText).toBeDefined(); });
+      it('inline container', () => { expect(render(<Dialog open title="Hi" />).container.textContent).toContain('Hi'); });
+      it('inline query called', () => { expect(render(<Dialog open title="Hi" />).getByText('Hi')).toBeTruthy(); });
+    `);
+
+    expect(byName('inline unmount').asserted).toBe(false);
+    expect(byName('inline query not called').asserted).toBe(false);
+    expect(byName('inline container').asserted).toBe(true);
+    expect(byName('inline query called').asserted).toBe(true);
+  });
+
+  it('keeps a render into a detached container out of the page', () => {
+    const byName = inventory(`${header}
+      it('detached container, screen query', () => {
+        render(<Dialog open title="Hi" />, { container: document.createElement('div') });
+        expect(screen.queryByText('Hi')).toBeNull();
+      });
+      it('detached container, render result', () => {
+        const { container } = render(<Dialog open title="Hi" />, { container: document.createElement('div') });
+        expect(container.textContent).toContain('Hi');
+      });
+      it('appended container, screen query', () => {
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        render(<Dialog open title="Hi" />, { container: host });
+        expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+      });
+    `);
+
+    expect(byName('detached container, screen query')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: false,
+    });
+    expect(byName('detached container, render result').asserted).toBe(true);
+    expect(byName('appended container, screen query').symbols).toEqual(['src/Dialog.tsx#Dialog']);
+  });
+
+  it('runs only the root component of an Enzyme shallow render', () => {
+    const byName = inventory(`${header}
+      import { shallow } from 'enzyme';
+      it('component nested in shallow', () => {
+        const tree = shallow(<div><Dialog open title="Hi" /></div>);
+        expect(tree.exists()).toBe(true);
+      });
+      it('component at the shallow root', () => {
+        const tree = shallow(<Dialog open title="Hi" />);
+        expect(tree.exists()).toBe(true);
+      });
+    `);
+
+    expect(byName('component nested in shallow')).toMatchObject({ symbols: [], asserted: false });
+    expect(byName('component at the shallow root')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: true,
+    });
+  });
+
+  it('does not credit a render-result query that may find content the test wrote', () => {
+    const byName = inventory(`${header}
+      it('query after a fixture write', () => {
+        const { getByText } = render(<Dialog open title="Hi" />);
+        document.body.innerHTML = '<p>fixture</p>';
+        expect(getByText('fixture')).toBeTruthy();
+      });
+      it('query without writes', () => {
+        const { getByText } = render(<Dialog open title="Hi" />);
+        expect(getByText('Hi')).toBeTruthy();
+      });
+    `);
+
+    expect(byName('query after a fixture write').asserted).toBe(false);
+    expect(byName('query without writes').asserted).toBe(true);
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}

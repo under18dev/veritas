@@ -861,8 +861,44 @@ function analyzeBody(
     }
   }
 
+  // Where an assertion runs: its end, or where the local function or callback holding it is called.
+  const observationAt = (assertion: ts.CallExpression) =>
+    inNestedFunction(assertion, body) ? invokedAt(assertion, body, checker) : assertion.getEnd();
+  const setupNodes = () => new Set([...setupEntries].map((entry) => entry.node));
+  // Where a call of the body runs: setup first, an element where the call that mounts it runs (`const ui = <Dialog
+  // />; …; render(ui)`), code in a local function where that is called, anything else where it is written. Code
+  // outside the body runs before it. Not found: never.
+  const executedAt = (node: Invocation): number => {
+    if (setupNodes().has(node)) return Number.NEGATIVE_INFINITY;
+    const outside = mountedAt.get(node);
+
+    if (outside !== undefined) return outside;
+
+    if (!contains(body, node)) return Number.NEGATIVE_INFINITY;
+    const invoked = invokedAt(node, body, checker);
+
+    if (invoked !== node.getStart()) return invoked;
+
+    if (!isJsxInvocation(node)) return node.getStart();
+    const top = jsxTop(ts.isJsxOpeningElement(node) ? node.parent : node, checker);
+    const holder = top.parent;
+
+    if (!ts.isVariableDeclaration(holder) || holder.initializer !== top || !ts.isIdentifier(holder.name))
+      return node.getStart();
+    const symbol = checker.getSymbolAtLocation(holder.name);
+    const mounts = (symbol ? referencesOf(symbol, source, checker) : [])
+      .filter(
+        (item) => item !== holder.name && contains(body, item) && isMounted(mountedExpression(item, ctx, 0)),
+      )
+      .map((item) => item.getStart());
+
+    return mounts.length > 0 ? Math.min(...mounts) : Number.POSITIVE_INFINITY;
+  };
   const reaches = new Map(
-    assertions.map((assertion) => [assertion, assertionReach(assertion, checker, documentWrites)] as const),
+    assertions.map(
+      (assertion) =>
+        [assertion, assertionReach(assertion, checker, documentWrites, observationAt(assertion))] as const,
+    ),
   );
   // Reading such a mock's calls, through a matcher (`toHaveBeenCalled`) or its state (`onSave.mock.calls`), may
   // read the test's own calls: what it says about the calls it was handed to is left out, and nothing else.
@@ -875,6 +911,14 @@ function analyzeBody(
       (reaches.get(assertion)?.mockRoots ?? [])
         .filter(isSelfCalled)
         .flatMap((root) => trackedCalls(root.identifier)),
+    );
+
+  // Whether a query read at `position` may find content the test itself put into the page before it.
+  const queryAfterWrite = (member: string | undefined, position: number) =>
+    member !== undefined &&
+    DOCUMENT_QUERY.test(member) &&
+    documentWrites.some(
+      (write) => write.content && write.end < position && !(write.empty && TEXT_QUERY.test(member)),
     );
 
   // Either side of a comparison counts: `expect(['a', 'b']).toContain(result.status)` checks the result.
@@ -894,8 +938,20 @@ function analyzeBody(
         for (const call of trackedCalls(identifier)) {
           if (excluded.has(call)) continue;
 
+          // A call that runs after the assertion (`expect(cb).not.toHaveBeenCalled(); render(<Dialog onSave={cb}
+          // />)`) is not what it checked.
+          if (executedAt(call) > observationAt(assertion)) continue;
+
           // Of what a render returns, only output counts: the container, or a query that runs.
           if (rendersOutput(call) && !renderOutputRead(identifier, checker)) continue;
+
+          // A query of a render result searches the whole page, which may hold what the test wrote there itself.
+          if (
+            rendersOutput(call) &&
+            calls.some((entry) => entry.node === call && entry.target.rendered === true) &&
+            queryAfterWrite(renderMember(identifier, checker), identifier.getStart())
+          )
+            continue;
           asserted.add(call);
           mergeKeys(assertedKeys, call, keysRead(value, call));
           // Read from the render result itself (`const { getByText } = render(…)`), not from a mock handed to it.
@@ -908,7 +964,13 @@ function analyzeBody(
         }
 
       for (const { node } of calls)
-        if (contains(value, node) && evaluated(node) && !excluded.has(node)) {
+        if (
+          contains(value, node) &&
+          evaluated(node) &&
+          !excluded.has(node) &&
+          // `expect(render(<Dialog />).unmount)` reads the render's API, not its output.
+          !(rendersOutput(node) && !inlineOutputRead(node, checker))
+        ) {
           asserted.add(node);
           mergeKeys(assertedKeys, node, keysRead(value, node));
           (rendersOutput(node) ? outputReads : otherReads).add(node);
@@ -991,52 +1053,23 @@ function analyzeBody(
 
       for (const entry of calls)
         if (
-          entry.target.observedBy?.some((given) => covers(given, root)) ||
-          mockHolders.get(entry.node)?.some((given) => covers(given, root)) ||
-          (entry.target.returnsMocks &&
-            results.has(entry.node) &&
-            keysMatch(keysRead(root.identifier, entry.node), entry.target))
+          // The mock is read after it was handed over, as a page read must come after the render.
+          executedAt(entry.node) <= root.at &&
+          (entry.target.observedBy?.some((given) => covers(given, root)) ||
+            mockHolders.get(entry.node)?.some((given) => covers(given, root)) ||
+            (entry.target.returnsMocks &&
+              results.has(entry.node) &&
+              keysMatch(keysRead(root.identifier, entry.node), entry.target)))
         )
           observed.add(entry);
     }
   }
 
-  // Where a rendered call puts its output on the page: setup before everything, an element where the call that mounts
-  // it runs (`const ui = <Dialog />; …; render(ui)`), anything else where it is written. Not found: never.
-  const renderedAt = (entry: BodyAnalysis['calls'][number]): number => {
-    if (setupEntries.has(entry)) return Number.NEGATIVE_INFINITY;
-    const { node } = entry;
-    const outside = mountedAt.get(node);
-
-    if (outside !== undefined) return outside;
-
-    // A render in a local function of the body (`function mount() { render(<Dialog />); }`) happens where the
-    // function is called.
-    const invoked = invokedAt(node, body, checker);
-
-    if (invoked !== node.getStart()) return invoked;
-
-    if (!isJsxInvocation(node)) return node.getStart();
-    const top = jsxTop(ts.isJsxOpeningElement(node) ? node.parent : node, checker);
-    const holder = top.parent;
-
-    if (!ts.isVariableDeclaration(holder) || holder.initializer !== top || !ts.isIdentifier(holder.name))
-      return node.getStart();
-    const symbol = checker.getSymbolAtLocation(holder.name);
-    const mounts = (symbol ? referencesOf(symbol, source, checker) : [])
-      .filter(
-        (item) => item !== holder.name && contains(body, item) && isMounted(mountedExpression(item, ctx, 0)),
-      )
-      .map((item) => item.getStart());
-
-    return mounts.length > 0 ? Math.min(...mounts) : Number.POSITIVE_INFINITY;
-  };
-
   for (const entry of calls)
     if (
       entry.target.rendered &&
       !entry.target.passThrough &&
-      documentChecks.some((position) => renderedAt(entry) < position)
+      documentChecks.some((position) => executedAt(entry.node) < position)
     )
       observed.add(entry);
   const awaitedProject = awaited.filter((node) => sourcesOf([node.expression]).length > 0);
@@ -1123,12 +1156,14 @@ function assertionReach(
   assertion: ts.CallExpression,
   checker: ts.TypeChecker,
   documentWrites: DocumentWrite[] = [],
-): { documentReads: number[]; mockRoots: (MockReference & { identifier: ts.Identifier })[] } {
+  // Where the assertion runs: its end, or where the local function or callback holding it is called.
+  assertionAt = assertion.getEnd(),
+): { documentReads: number[]; mockRoots: (MockReference & { identifier: ts.Identifier; at: number })[] } {
   const seen = new Set<ts.Symbol>();
-  const mockRoots: (MockReference & { identifier: ts.Identifier })[] = [];
+  const mockRoots: (MockReference & { identifier: ts.Identifier; at: number })[] = [];
   const documentReads: number[] = [];
   // `const onSave = props.onSave; expect(onSave)…` reads the mock of `props`.
-  const addRoot = (expression: ts.Expression, below: string[], depth: number) => {
+  const addRoot = (expression: ts.Expression, below: string[], depth: number, at = assertionAt) => {
     const path: string[] = [];
     let current = skipParens(expression);
 
@@ -1145,7 +1180,7 @@ function assertionReach(
     const symbol = valueSymbol(current, checker);
 
     if (!symbol) return;
-    mockRoots.push({ identifier: current, symbol, path: [...path, ...below] });
+    mockRoots.push({ identifier: current, symbol, path: [...path, ...below], at });
     const declaration = symbol.valueDeclaration;
     const initializer = variableInitializer(declaration);
     // `const { onSave } = props` reads `props.onSave`.
@@ -1156,7 +1191,7 @@ function assertionReach(
     const member = property && ts.isIdentifier(property) ? [property.text] : [];
 
     if (initializer && depth < 5 && initializer.getSourceFile() === assertion.getSourceFile())
-      addRoot(initializer, [...member, ...path, ...below], depth + 1);
+      addRoot(initializer, [...member, ...path, ...below], depth + 1, at);
   };
   // Local functions the compared values call (`const read = () => screen.getByText('x'); expect(read())`).
   const executed = new Set<ts.Node>();
@@ -1181,7 +1216,7 @@ function assertionReach(
         if (fn && isFunctionLike(fn) && fn.body && !positioned.has(fn) && depth < 20) {
           positioned.add(fn);
           const owner = item === node ? undefined : enclosingFunction(item, node);
-          visit(fn.body, depth + 1, owner ? assertion.getEnd() : position);
+          visit(fn.body, depth + 1, owner ? assertionAt : position);
         }
       }
 
@@ -1194,7 +1229,7 @@ function assertionReach(
         // A query in a function reads the page only when that function runs (`expect(() => screen.getByText('x'))`
         // compares a function and runs nothing).
         if (!runs) continue;
-        const at = fn ? assertion.getEnd() : position;
+        const at = fn ? assertionAt : position;
         const chain = documentChain(item as ts.Expression, checker, true);
         const written = documentWrites.some(
           (write) =>
@@ -1210,7 +1245,8 @@ function assertionReach(
         const fn = item === node ? undefined : enclosingFunction(item, node);
 
         // Like a page query, a mock read in a function counts only when that function runs.
-        if (!fn || runs) addRoot(item.expression, [], 0);
+        // Read where the reading code runs (`const before = cb.mock.calls.length` before a render reads nothing of it).
+        if (!fn || runs) addRoot(item.expression, [], 0, fn ? assertionAt : position);
       }
 
       if (!ts.isIdentifier(item)) continue;
@@ -1227,7 +1263,7 @@ function assertionReach(
     }
   };
 
-  for (const value of comparedValues(assertion)) visit(value, 0, assertion.getEnd());
+  for (const value of comparedValues(assertion)) visit(value, 0, assertionAt);
   const subject = assertion.arguments[0];
 
   if (
@@ -1267,6 +1303,44 @@ const RENDER_API = new Set(['unmount', 'rerender', 'debug']);
  * Whether reading `identifier` reads a render result's output: `container`, `baseElement`, the result itself (or a
  * member not known as API), and queries (`getByText`, `asFragment`) only when called.
  */
+/** The member of a render result a local reads (see `renderOutputRead`), if any. */
+function renderMember(identifier: ts.Identifier, checker: ts.TypeChecker): string | undefined {
+  const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
+  const destructured =
+    declaration && ts.isBindingElement(declaration) && ts.isObjectBindingPattern(declaration.parent)
+      ? (declaration.propertyName ?? declaration.name)
+      : undefined;
+
+  return destructured && ts.isIdentifier(destructured) ? destructured.text : memberPath(identifier)[0];
+}
+
+/**
+ * Whether an inline render call is read for its output: `render(<Dialog />).container` and called queries are,
+ * `render(<Dialog />).unmount` or an uncalled `render(<Dialog />).getByText` are not.
+ */
+function inlineOutputRead(node: Invocation, checker: ts.TypeChecker): boolean {
+  let current: ts.Node = isJsxInvocation(node)
+    ? jsxTop(ts.isJsxOpeningElement(node) ? node.parent : node, checker)
+    : node;
+
+  if (isJsxInvocation(node) && (ts.isCallExpression(current.parent) || ts.isNewExpression(current.parent)))
+    current = current.parent;
+
+  while (ts.isParenthesizedExpression(current.parent) || ts.isAwaitExpression(current.parent))
+    current = current.parent;
+  const access = current.parent;
+
+  if (!ts.isPropertyAccessExpression(access) || access.expression !== current) return true;
+  const member = access.name.text;
+
+  if (RENDER_API.has(member)) return false;
+
+  if (DOCUMENT_QUERY.test(member) || member === 'asFragment')
+    return ts.isCallExpression(access.parent) && access.parent.expression === access;
+
+  return true;
+}
+
 function renderOutputRead(identifier: ts.Identifier, checker: ts.TypeChecker): boolean {
   // The member a local stands for: destructured (`const { unmount } = render(…)`), or through an alias of one
   // (`const saved = unmount`, `const saved = view.unmount`).
@@ -1572,9 +1646,13 @@ function writeRuns(
   checker: ts.TypeChecker,
   running: ReadonlySet<ts.Node> = new Set(),
   exportsRun = false,
+  following: Set<ts.Node> = new Set(),
 ): boolean {
   for (let current = node.parent; current && current !== body; current = current.parent) {
     if (!isFunctionLike(current)) continue;
+
+    // A function whose callers are being followed (a cycle) is not shown to run by them.
+    if (following.has(current)) return false;
 
     // Known to run: a helper the test calls, whose code is being followed.
     if (running.has(current)) return true;
@@ -1615,7 +1693,9 @@ function writeRuns(
           ((ts.isCallExpression(item.parent) && item.parent.expression === item) ||
             ((ts.isCallExpression(item.parent) || ts.isNewExpression(item.parent)) &&
               item.parent.arguments?.includes(item) === true &&
-              !(ts.isCallExpression(item.parent) && isAssertionChainCall(item.parent)))),
+              !(ts.isCallExpression(item.parent) && isAssertionChainCall(item.parent)))) &&
+          // The call itself must run: not inside another function nothing calls (`function unused() { mount(); }`).
+          writeRuns(item, body, checker, running, exportsRun, new Set(following).add(current as ts.Node)),
       );
 
     // An exported function may be called from another file, such as a shared render helper in `test-utils`.
@@ -2190,6 +2270,46 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
   return info;
 }
 
+/**
+ * Whether a render is given a `container` option that is not part of the page: an element the test creates and does
+ * not append to the document, or any value not shown to come from it.
+ */
+function detachedContainer(call: ts.CallExpression, checker: ts.TypeChecker): boolean {
+  const options = call.arguments[1] && skipParens(call.arguments[1]);
+
+  if (!options || !ts.isObjectLiteralExpression(options)) return false;
+  const property = options.properties.find(
+    (item) => item.name && ts.isIdentifier(item.name) && item.name.text === 'container',
+  );
+
+  if (!property) return false;
+  const value = ts.isPropertyAssignment(property)
+    ? skipParens(property.initializer)
+    : ts.isShorthandPropertyAssignment(property)
+      ? property.name
+      : undefined;
+
+  if (!value) return true;
+
+  if (documentChain(value, checker) !== undefined) return false;
+
+  if (!ts.isIdentifier(value)) return true;
+  const symbol = valueSymbol(value, checker);
+  const initializer = variableInitializer(symbol?.valueDeclaration);
+
+  if (initializer && documentChain(initializer, checker) !== undefined) return false;
+
+  // Appended to the page (`document.body.appendChild(container)`).
+  return !(symbol ? referencesOf(symbol, value.getSourceFile(), checker) : []).some(
+    (item) =>
+      ts.isCallExpression(item.parent) &&
+      item.parent.arguments.includes(item) &&
+      ts.isPropertyAccessExpression(item.parent.expression) &&
+      CONTENT_METHODS.has(item.parent.expression.name.text) &&
+      documentChain(item.parent.expression.expression, checker) !== undefined,
+  );
+}
+
 /** Renderer names that other libraries use too: only taken as renderers when imported from these packages. */
 const AMBIGUOUS_RENDERERS: Record<string, RegExp> = {
   mount: /^enzyme(?:$|\/)/,
@@ -2407,7 +2527,32 @@ function isMounted(mount: Mount): boolean {
  * judged where that is used), directly or through a local variable that is.
  */
 function mountedJsx(node: ts.JsxSelfClosingElement | ts.JsxOpeningElement, ctx: Ctx): Mount {
-  return mountedExpression(ts.isJsxOpeningElement(node) ? node.parent : node, ctx, 0);
+  const own = ts.isJsxOpeningElement(node) ? node.parent : node;
+  const top = jsxTop(own, ctx.checker);
+
+  // Enzyme's `shallow` runs only the root component: elements nested in it stay descriptions.
+  if (top !== own && ts.isCallExpression(top.parent) && isShallow(top.parent.expression, ctx.checker))
+    return undefined;
+
+  return mountedExpression(own, ctx, 0);
+}
+
+/** Enzyme's `shallow`, imported from `enzyme` (`shallow(...)` or `enzyme.shallow(...)`). */
+function isShallow(expression: ts.Expression, checker: ts.TypeChecker): boolean {
+  const callee = skipParens(expression);
+  const identifier = ts.isIdentifier(callee)
+    ? callee
+    : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(skipParens(callee.expression))
+      ? (skipParens(callee.expression) as ts.Identifier)
+      : undefined;
+  const name = ts.isIdentifier(callee)
+    ? importedName(callee, checker)
+    : ts.isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : undefined;
+  const source = identifier && importSource(identifier, checker);
+
+  return name === 'shallow' && source !== undefined && /^enzyme(?:$|\/)/.test(source);
 }
 
 /**
@@ -2618,9 +2763,15 @@ function mountedExpression(
 
     // A helper or project function with a body (even one named `mount`): mounted only where it hands the element to
     // a renderer. Otherwise a renderer recognized by name and, for ambiguous names, by the package it comes from.
-    return hasFunctionBody(parent, ctx.checker)
-      ? argumentMount(parent, index, ctx, depth, returns, running)
-      : rendererKind(parent.expression, ctx.checker);
+    if (hasFunctionBody(parent, ctx.checker))
+      return argumentMount(parent, index, ctx, depth, returns, running);
+    const kind = rendererKind(parent.expression, ctx.checker);
+
+    // `render(ui, { container: document.createElement('div') })`: a container that is not in the page keeps the
+    // output out of it; what the render returns still holds it.
+    return kind === 'document' && ts.isCallExpression(parent) && detachedContainer(parent, ctx.checker)
+      ? 'string'
+      : kind;
   }
 
   // `<Wrapper><Dialog /></Wrapper>`: mounted where the component renders its children.
