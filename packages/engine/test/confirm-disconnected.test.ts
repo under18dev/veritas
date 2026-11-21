@@ -4,7 +4,15 @@ import { mergeConfirmation, selectConfirmation } from '../src/confirm.js';
 
 const asserted = { symbol: 'f', args: [], asserted: true, location: { file: 'x' } };
 const test = (id: string, file: string, overrides: Partial<TestCase> = {}) =>
-  ({ id, file, suspicions: [], targetCalls: [], modifiers: [], ...overrides }) as unknown as TestCase;
+  ({
+    id,
+    file,
+    suspicions: [],
+    targetCalls: [],
+    modifiers: [],
+    calledSymbols: [],
+    ...overrides,
+  }) as unknown as TestCase;
 const mutant = (id: string, status: Mutant['status'], killedBy: string[], coveredBy: string[]) =>
   ({ id, status, killedBy, coveredBy }) as unknown as Mutant;
 
@@ -36,6 +44,14 @@ describe('selectConfirmation', () => {
       testFiles: ['src/a.test.ts'],
       sourceFiles: ['src/a.ts', 'src/shared.ts'],
     });
+  });
+
+  it('mutates only the files a checked test calls into, when static analysis sees it call any', () => {
+    const calling = {
+      ...inventory,
+      tests: [test('T-calls', 'src/a.test.ts', { calledSymbols: ['src/a.ts#run', 'node_modules/x.js#y'] })],
+    };
+    expect(selectConfirmation(calling, [], config).sourceFiles).toEqual(['src/a.ts']);
   });
 
   it('keeps only sources in the scope', () => {

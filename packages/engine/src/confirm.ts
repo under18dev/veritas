@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { unlinkedByInference } from '@under18dev/veritas-assessment';
-import type { Mutant, VeritasConfig } from '@under18dev/veritas-core';
+import type { Mutant, TestCase, VeritasConfig } from '@under18dev/veritas-core';
 import { isTestSupportPath, type TestInventory } from '@under18dev/veritas-test-inventory';
 
 /** Mutants per source line the confirmation runs: one is enough to show a test observes the line. */
@@ -13,14 +13,17 @@ export interface ConfirmationSelection {
   testIds: string[];
   /** Their test files, which are the only ones the confirmation runs. */
   testFiles: string[];
-  /** Project sources those files import (transitively), which are the only ones it mutates. */
+  /**
+   * The only sources it mutates: for each test, the project files it calls into, or every project source its file
+   * imports (transitively) when static analysis sees it call none.
+   */
   sourceFiles: string[];
 }
 
 /**
  * The tests to confirm and what to run for them. A test qualifies when static analysis calls it disconnected only
  * because it found no link (it does assert, see `unlinkedByInference`), it is not skipped, and the main run's
- * mutants credit it with no kill. A file whose imports reach no project source in scope cannot kill a mutant.
+ * mutants credit it with no kill. A test whose file imports no project source in scope cannot kill a mutant.
  */
 export function selectConfirmation(
   inventory: Pick<TestInventory, 'tests' | 'files'>,
@@ -37,21 +40,29 @@ export function selectConfirmation(
     !matches(file, testInclude) &&
     !isTestSupportPath(file) &&
     (!scope?.length || matches(file, scope));
-  const sourcesOf = new Map(inventory.files.map((f) => [f.path, f.dependencies.filter(isSource)]));
+  const dependenciesOf = new Map(inventory.files.map((f) => [f.path, f.dependencies.filter(isSource)]));
+  // The code a test exercises first is what it calls; mutants there are the ones it is likeliest to detect, so only
+  // those files are mutated. A test static analysis sees calling nothing gets every source its file imports.
+  const sourcesFor = (t: TestCase): string[] => {
+    const imported = dependenciesOf.get(t.file) ?? [];
+    const called = new Set(t.calledSymbols.map((s) => s.slice(0, s.lastIndexOf('#'))));
+    const direct = imported.filter((f) => called.has(f));
+
+    return direct.length > 0 ? direct : imported;
+  };
   const tests = inventory.tests.filter(
     (t) =>
       unlinkedByInference(t) &&
       !t.modifiers.includes('skip') &&
       !t.modifiers.includes('todo') &&
       !killers.has(t.id) &&
-      (sourcesOf.get(t.file)?.length ?? 0) > 0,
+      sourcesFor(t).length > 0,
   );
-  const testFiles = [...new Set(tests.map((t) => t.file))].sort();
 
   return {
     testIds: tests.map((t) => t.id),
-    testFiles,
-    sourceFiles: [...new Set(testFiles.flatMap((f) => sourcesOf.get(f) ?? []))].sort(),
+    testFiles: [...new Set(tests.map((t) => t.file))].sort(),
+    sourceFiles: [...new Set(tests.flatMap(sourcesFor))].sort(),
   };
 }
 
