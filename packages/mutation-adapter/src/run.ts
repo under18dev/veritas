@@ -51,7 +51,10 @@ export interface RunMutationOptions {
   testFiles?: string[];
   /** Vitest config passed as `--config`. */
   configPath?: string;
-  /** Pass `--no-typecheck`. */
+  /**
+   * Pass `--no-typecheck` (true) or not (false), whatever `mutation.typecheck` says. By default `--no-typecheck` is
+   * passed when `mutation.typecheck` is `off`, or when the root tsconfig.json only references other projects.
+   */
   noTypecheck?: boolean;
   /** Source files (relative to the root, no glob characters) passed as `--exclude`. */
   exclude?: string[];
@@ -205,9 +208,14 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   }
   // Checked before anything is created or spawned: mutator writes wherever --report-dir points.
   const reportDir = confineReportDir(options.root, options.reportDir);
-  const noTypecheck = options.noTypecheck ?? rootTsconfigHasNoFiles(options.root);
+  const typecheckOff = options.noTypecheck === undefined && options.config.mutation.typecheck === 'off';
+  const noTypecheck = options.noTypecheck ?? (typecheckOff || rootTsconfigHasNoFiles(options.root));
 
-  if (noTypecheck && options.noTypecheck === undefined)
+  if (typecheckOff)
+    warnings.push(
+      'mutation.typecheck is "off": mutants were not type-checked, so mutants the compiler would reject were run and counted too. Some of them are killed only because the mutated code breaks at run time, which makes the counts read more favourably than a type-checked run would',
+    );
+  else if (noTypecheck && options.noTypecheck === undefined)
     warnings.push(
       'tsconfig.json at the root only references other projects, and mutator type-checks against that file alone: mutants were not type-checked, so some survivors may be type errors',
     );
@@ -337,6 +345,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     exitCode: run.exitCode,
     durationMs,
     rawReportPath: existsSync(reportPath) ? reportPath : null,
+    typecheck: noTypecheck ? ('off' as const) : ('auto' as const),
   });
   const adapterHint = detection.origin === 'adapter' ? `; ${ownCopyHint}` : '';
   args = argsExcluding([]);

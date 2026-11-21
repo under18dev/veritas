@@ -51,6 +51,11 @@ export const MutationRunResult = z.object({
    * copy. Their mutants were not run, so the results do not cover them.
    */
   excludedFiles: z.array(z.string()).optional(),
+  /**
+   * What mutator was told about type-checking: `auto` (its default: type-check mutants with the project's
+   * TypeScript when it finds it) or `off` (`--no-typecheck`). Absent when mutator was not run.
+   */
+  typecheck: z.enum(['auto', 'off']).optional(),
 });
 export type MutationRunResult = z.infer<typeof MutationRunResult>;
 

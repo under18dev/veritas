@@ -628,6 +628,13 @@ async function runInContext(
           ...(cached ? [`mutation results reused from cache ${cacheKey}`] : []),
           ...(cacheMessage ? [cacheMessage] : []),
           `mutator ${result.backend.version ?? 'unknown'}: ${result.status}${result.detail ? ` (${result.detail})` : ''}`,
+          ...(result.typecheck === 'off'
+            ? ['mutants were not type-checked (mutator ran with --no-typecheck)']
+            : result.typecheck === 'auto'
+              ? [
+                  "mutator type-checked mutants with the project's TypeScript when it found it (typecheck: auto), and left out those that do not compile",
+                ]
+              : []),
           `counts: ${JSON.stringify(Object.fromEntries(Object.entries(result.counts).filter(([, n]) => n > 0)))}`,
           ...result.warnings,
           ...(undecided > 0

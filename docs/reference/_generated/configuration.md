@@ -52,6 +52,7 @@ Unknown keys are rejected.
 | `mutation.backend`   | string  | `"mizchi"` | only `"mizchi"` (fixed) |
 | `mutation.mode`      | string  | `"diff"`   | `diff`, `full`          |
 | `mutation.timeoutMs` | integer | `120000`   | > 0                     |
+| `mutation.typecheck` | string  | `"auto"`   | `auto`, `off`           |
 
 ### `pbt`
 
