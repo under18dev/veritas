@@ -1,6 +1,6 @@
 {
   "name": "@under18dev/veritas-improvement",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Plans test-only improvements and applies them after measuring them in an isolated workspace",
   "license": "Apache-2.0",
   "repository": {

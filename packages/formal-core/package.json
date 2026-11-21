@@ -1,6 +1,6 @@
 {
   "name": "@under18dev/veritas-formal-core",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "TypeScript-subset translation, formal claims and semantic validation for Veritas",
   "license": "Apache-2.0",
   "repository": {

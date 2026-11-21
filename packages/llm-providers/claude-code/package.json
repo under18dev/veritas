@@ -1,6 +1,6 @@
 {
   "name": "@under18dev/veritas-llm-claude-code",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Claude Code CLI adapter (uses your own Claude login) for the Veritas LLM interface",
   "license": "Apache-2.0",
   "repository": {

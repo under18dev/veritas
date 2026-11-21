@@ -28,7 +28,7 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: under18dev/veritas/packages/github-action@v0.2.1
+      - uses: under18dev/veritas/packages/github-action@v0.2.2
         with:
           profile: standard
       - uses: actions/upload-artifact@v4
@@ -85,7 +85,7 @@ composite action なので、Action に同梱したランタイムではなく�
 後のステップからは、ステップの `id` を通じて読めます。Veritas が失敗したときも実行されるよう、`if: always()` を付けてください。
 
 ```yaml
-- uses: under18dev/veritas/packages/github-action@v0.2.1
+- uses: under18dev/veritas/packages/github-action@v0.2.2
   id: veritas
   with:
     profile: standard
