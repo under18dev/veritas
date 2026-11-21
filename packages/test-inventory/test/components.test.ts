@@ -1430,6 +1430,83 @@ describe('mounts that run, helper positions, spread overrides and event handlers
   });
 });
 
+describe('render helpers from a shared utils file', () => {
+  it('follows exported render helpers in every export form', () => {
+    const byName = inventory(
+      `${header}
+      import { renderArrow, renderDeclared, renderAliased, renderWithFrame } from './utils';
+      it('exported arrow', () => {
+        renderArrow(<Dialog open title="Hi" />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('exported declaration', () => {
+        renderDeclared(<Dialog open title="Hi" />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('export specifier', () => {
+        renderAliased(<Dialog open title="Hi" />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('exported provider helper', () => {
+        renderWithFrame(<Dialog open title="Hi" />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('render in an uncalled local function', () => {
+        function unused() { render(<Dialog open title="Hi" />); }
+        expect(document.body.textContent).toBe('');
+      });
+    `,
+      {
+        'test/utils.tsx': `import { render } from '@testing-library/react';
+import { Frame } from '../src/Frame';
+export const renderArrow = (ui: JSX.Element) => render(ui);
+export function renderDeclared(ui: JSX.Element) { return render(ui); }
+const plain = (ui: JSX.Element) => render(ui);
+export { plain as renderAliased };
+export function renderWithFrame(ui: JSX.Element) { return render(<Frame>{ui}</Frame>); }
+`,
+        'src/Frame.tsx':
+          'export const Frame = ({ children }: { children?: unknown }) => <section>{children}</section>;\n',
+        // A .tsx module is resolved by name only with a JSX setting.
+        'tsconfig.json': JSON.stringify({
+          compilerOptions: { jsx: 'react-jsx', module: 'esnext', moduleResolution: 'bundler' },
+        }),
+      },
+    );
+
+    for (const name of [
+      'exported arrow',
+      'exported declaration',
+      'export specifier',
+      'exported provider helper',
+    ]) {
+      expect(byName(name).symbols, name).toContain('src/Dialog.tsx#Dialog');
+      expect(byName(name).asserted, name).toBe(true);
+    }
+    expect(byName('render in an uncalled local function')).toMatchObject({ symbols: [], asserted: false });
+  });
+
+  it('counts calls in an inline handler of a DOM element only when the test fires events', () => {
+    const byName = inventory(`${header}
+      it('handler never fired', () => {
+        let clicked = false;
+        const { getByText } = render(<button onClick={() => { clicked = label('a') !== ''; }}>Go</button>);
+        expect(getByText('Go')).toBeTruthy();
+        expect(clicked).toBe(false);
+      });
+      it('handler fired', () => {
+        let clicked = false;
+        const { getByText } = render(<button onClick={() => { clicked = label('a') !== ''; }}>Go</button>);
+        fireEvent.click(getByText('Go'));
+        expect(clicked).toBe(true);
+      });
+    `);
+
+    expect(byName('handler never fired')).toMatchObject({ symbols: [], asserted: false });
+    expect(byName('handler fired').symbols).toEqual(['src/format.ts#label']);
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}

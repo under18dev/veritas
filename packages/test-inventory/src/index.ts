@@ -370,6 +370,8 @@ function analyzeBody(
   // Variables holding mocks, or objects holding mocks, by the calls they were handed to.
   const mockHolders: BodyAnalysis['mockHolders'] = new Map();
   const record = (node: Invocation): boolean => {
+    // Code in an `onClick={() => …}` handler of a DOM or third-party element runs only when an event fires.
+    if (contains(body, node) && inUnfiredHandler(node, body, ctx)) return false;
     const info = callInfo(node, ctx);
 
     if (!recorded.has(node)) {
@@ -1389,9 +1391,18 @@ const EVENT_SOURCES = /^(?:fireEvent|userEvent|user)$|^(?:dispatchEvent|click|fo
  * the body), or given to a call other than `expect`. A listener given to `addEventListener` runs only if the body
  * makes events fire (`fireEvent`, `userEvent`, `dispatchEvent`, `click()`).
  */
-function writeRuns(node: ts.Node, body: ts.Node, checker: ts.TypeChecker): boolean {
+function writeRuns(
+  node: ts.Node,
+  body: ts.Node,
+  checker: ts.TypeChecker,
+  running: ReadonlySet<ts.Node> = new Set(),
+  exportsRun = false,
+): boolean {
   for (let current = node.parent; current && current !== body; current = current.parent) {
     if (!isFunctionLike(current)) continue;
+
+    // Known to run: a helper the test calls, whose code is being followed.
+    if (running.has(current)) return true;
     let fn: ts.Node = current;
 
     while (ts.isParenthesizedExpression(fn.parent)) fn = fn.parent;
@@ -1432,10 +1443,46 @@ function writeRuns(node: ts.Node, body: ts.Node, checker: ts.TypeChecker): boole
               !(ts.isCallExpression(item.parent) && isAssertionChainCall(item.parent)))),
       );
 
-    if (!called) return false;
+    // An exported function may be called from another file, such as a shared render helper in `test-utils`.
+    if (!called && !(exportsRun && name !== undefined && isExported(current, name))) return false;
   }
 
   return true;
+}
+
+/**
+ * Whether a node sits in an inline event handler (`on*` attribute) of a DOM or third-party element while the test body
+ * fires no event, so the handler never runs.
+ */
+function inUnfiredHandler(node: ts.Node, body: ts.Node, ctx: Ctx): boolean {
+  for (let current = node.parent; current && current !== body; current = current.parent) {
+    if (!isFunctionLike(current)) continue;
+    let fn: ts.Node = current;
+
+    while (ts.isParenthesizedExpression(fn.parent)) fn = fn.parent;
+    const expression = fn.parent;
+    const attribute = expression?.parent;
+
+    if (
+      expression &&
+      ts.isJsxExpression(expression) &&
+      attribute &&
+      ts.isJsxAttribute(attribute) &&
+      ts.isIdentifier(attribute.name) &&
+      /^on[A-Z]/.test(attribute.name.text)
+    ) {
+      const element = attribute.parent.parent;
+
+      if (
+        resolveProjectCall(element, ctx.checker, ctx.projectSet, ctx.root) === undefined &&
+        helperBody(element, ctx) === undefined &&
+        !firesEvents(body)
+      )
+        return true;
+    }
+  }
+
+  return false;
 }
 
 /** The test callback (or other function given to a call) a node sits in, where events for it would be fired. */
@@ -1449,6 +1496,29 @@ function eventScope(node: ts.Node): ts.Node {
       return current;
 
   return node.getSourceFile();
+}
+
+/**
+ * Whether a function is exported from its file: `export function f`, `export const f = …`, `export default f` or
+ * `export { f as g }`.
+ */
+function isExported(fn: ts.Node, name: ts.Identifier): boolean {
+  const exportKeyword = (node: ts.Node) =>
+    ts.canHaveModifiers(node) &&
+    (ts.getModifiers(node) ?? []).some((item) => item.kind === ts.SyntaxKind.ExportKeyword);
+
+  if (ts.isFunctionDeclaration(fn) && exportKeyword(fn)) return true;
+  const statement = name.parent?.parent?.parent;
+
+  if (statement && ts.isVariableStatement(statement) && exportKeyword(statement)) return true;
+
+  return descendants(fn.getSourceFile()).some(
+    (item) =>
+      (ts.isExportSpecifier(item) &&
+        (item.propertyName ?? item.name).text === name.text &&
+        !item.parent.parent.moduleSpecifier) ||
+      (ts.isExportAssignment(item) && ts.isIdentifier(item.expression) && item.expression.text === name.text),
+  );
 }
 
 /** Whether a test body makes events fire on the page. */
@@ -2129,6 +2199,7 @@ function argumentMount(
   ctx: Ctx,
   depth: number,
   returns: ResultMounts = new Map(),
+  running: ReadonlySet<ts.Node> = new Set(),
 ): Mount {
   if (index < 0 || depth > 5) return undefined;
   let symbol = aliasTarget(call.expression, ctx.checker);
@@ -2147,7 +2218,7 @@ function argumentMount(
   const target = ctx.checker.getSymbolAtLocation(parameter.name);
   const mounts = descendants(fn.body)
     .filter((item) => ts.isIdentifier(item) && ctx.checker.getSymbolAtLocation(item) === target)
-    .map((item) => mountedExpression(item, ctx, depth + 1, returns));
+    .map((item) => mountedExpression(item, ctx, depth + 1, returns, new Set(running).add(fn)));
 
   return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
 }
@@ -2181,6 +2252,7 @@ function propMount(
   ctx: Ctx,
   depth: number,
   returns: ResultMounts = new Map(),
+  running: ReadonlySet<ts.Node> = new Set(),
 ): Mount {
   const fn = componentFunction(element, ctx.checker);
 
@@ -2219,10 +2291,19 @@ function propMount(
   // What the component returns is mounted exactly as this element is, so a prop it puts into its returned JSX is too.
   const elementMount =
     reads.length > 0
-      ? mountedExpression(ts.isJsxOpeningElement(element) ? element.parent : element, ctx, depth + 1, returns)
+      ? mountedExpression(
+          ts.isJsxOpeningElement(element) ? element.parent : element,
+          ctx,
+          depth + 1,
+          returns,
+          running,
+        )
       : undefined;
   const inner = new Map(returns).set(fn, elementMount);
-  const mounts = reads.map((read) => mountedExpression(read, ctx, depth + 1, inner));
+  // The component runs where its element is rendered, so its own body does not need a caller in its file.
+  const mounts = reads.map((read) =>
+    mountedExpression(read, ctx, depth + 1, inner, new Set(running).add(fn)),
+  );
 
   return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
 }
@@ -2285,6 +2366,7 @@ function mountedExpression(
   ctx: Ctx,
   depth: number,
   returns: ResultMounts = new Map(),
+  running: ReadonlySet<ts.Node> = new Set(),
 ): Mount {
   const current = jsxTop(expression, ctx.checker);
   const parent = current.parent;
@@ -2307,18 +2389,19 @@ function mountedExpression(
     const index = parent.arguments?.indexOf(current as ts.Expression) ?? -1;
 
     // The mounting call must run: not in a function nothing calls (`function unused() { render(<Dialog />); }`).
-    if (!writeRuns(parent, parent.getSourceFile(), ctx.checker)) return undefined;
+    // Functions reached by following a helper the test calls run; others need a caller or an export.
+    if (!writeRuns(parent, parent.getSourceFile(), ctx.checker, running, true)) return undefined;
 
     // A helper or project function with a body (even one named `mount`): mounted only where it hands the element to
     // a renderer. Otherwise a renderer recognized by name and, for ambiguous names, by the package it comes from.
     return hasFunctionBody(parent, ctx.checker)
-      ? argumentMount(parent, index, ctx, depth, returns)
+      ? argumentMount(parent, index, ctx, depth, returns, running)
       : rendererKind(parent.expression, ctx.checker);
   }
 
   // `<Wrapper><Dialog /></Wrapper>`: mounted where the component renders its children.
   if (ts.isJsxElement(parent) && parent.children.includes(current as ts.JsxChild))
-    return depth < 8 ? propMount(parent.openingElement, 'children', ctx, depth, returns) : undefined;
+    return depth < 8 ? propMount(parent.openingElement, 'children', ctx, depth, returns, running) : undefined;
 
   // `<Layout header={<Dialog />} />`: mounted where the component renders that prop.
   if (ts.isJsxExpression(parent) && ts.isJsxAttribute(parent.parent)) {
@@ -2326,7 +2409,7 @@ function mountedExpression(
     const element = attribute.parent.parent;
 
     return ts.isIdentifier(attribute.name) && depth < 8
-      ? propMount(element, attribute.name.text, ctx, depth, returns)
+      ? propMount(element, attribute.name.text, ctx, depth, returns, running)
       : undefined;
   }
 
@@ -2341,7 +2424,7 @@ function mountedExpression(
 
     const mounts = (symbol ? referencesOf(symbol, parent.getSourceFile(), ctx.checker) : [])
       .filter((item) => item !== parent.name)
-      .map((item) => mountedExpression(item, ctx, depth + 1, returns));
+      .map((item) => mountedExpression(item, ctx, depth + 1, returns, running));
 
     return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
   }
