@@ -858,6 +858,22 @@ describe('reaching a renderer and the page', () => {
 
   it('resolves JSX attribute precedence before counting what was handed over', () => {
     const byName = inventory(`${header}
+      describe('helper with overrides', () => {
+        const onSave = vi.fn();
+        const renderWith = (overrides = {}) => render(<Dialog onSave={onSave} {...overrides} />);
+        it('overrides from callers without it', () => {
+          renderWith({ title: 'Hi' });
+          expect(onSave).not.toHaveBeenCalled();
+        });
+      });
+      describe('helper whose caller replaces the mock', () => {
+        const onCancel = vi.fn();
+        const renderOther = (overrides = {}) => render(<Dialog onCancel={onCancel} {...overrides} />);
+        it('overrides from a caller with it', () => {
+          renderOther({ onCancel: undefined });
+          expect(onCancel).not.toHaveBeenCalled();
+        });
+      });
       it('spread overridden by a later attribute', () => {
         const props = { onSave: vi.fn() };
         render(<Dialog {...props} onSave={undefined} />);
@@ -882,6 +898,8 @@ describe('reaching a renderer and the page', () => {
       });
     `);
 
+    expect(byName('overrides from callers without it').asserted).toBe(true);
+    expect(byName('overrides from a caller with it').asserted).toBe(false);
     expect(byName('spread overridden by a later attribute').asserted).toBe(false);
     expect(byName('attribute overridden by a later spread').asserted).toBe(false);
     expect(byName('spread with another attribute after it').asserted).toBe(true);

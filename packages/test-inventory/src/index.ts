@@ -2505,12 +2505,58 @@ function spreadKeys(expression: ts.Expression, checker: ts.TypeChecker): Set<str
   let value = skipParens(expression);
 
   if (ts.isIdentifier(value)) {
-    const initializer = variableInitializer(valueSymbol(value, checker)?.valueDeclaration);
+    const declaration = valueSymbol(value, checker)?.valueDeclaration;
+
+    if (declaration && ts.isParameter(declaration)) return parameterKeys(declaration, checker);
+    const initializer = variableInitializer(declaration);
 
     if (!initializer) return undefined;
     value = skipParens(initializer);
   }
 
+  return objectKeys(value);
+}
+
+/**
+ * The keys a helper's parameter can hold (`const renderDialog = (overrides = {}) => …`): those of its default and of
+ * the object literals every call of the helper in the file passes. Unknown when any call passes something else.
+ */
+function parameterKeys(parameter: ts.ParameterDeclaration, checker: ts.TypeChecker): Set<string> | undefined {
+  const fn = parameter.parent;
+  const index = fn.parameters.indexOf(parameter);
+  let current: ts.Node = fn;
+
+  while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
+  const holder = current.parent;
+  const name =
+    ts.isFunctionDeclaration(fn) && fn.name
+      ? fn.name
+      : ts.isVariableDeclaration(holder) && holder.initializer === current && ts.isIdentifier(holder.name)
+        ? holder.name
+        : undefined;
+  const symbol = name && checker.getSymbolAtLocation(name);
+
+  if (!symbol) return undefined;
+  const keys = new Set<string>();
+
+  for (const reference of referencesOf(symbol, fn.getSourceFile(), checker)) {
+    if (reference === name) continue;
+    const call = reference.parent;
+
+    if (!ts.isCallExpression(call) || call.expression !== reference) return undefined;
+    const argument = call.arguments[index] ?? parameter.initializer;
+    const found = argument ? objectKeys(skipParens(argument)) : new Set<string>();
+
+    if (!found) return undefined;
+
+    for (const key of found) keys.add(key);
+  }
+
+  return keys;
+}
+
+/** The property names of an object literal without spreads or computed names. */
+function objectKeys(value: ts.Expression): Set<string> | undefined {
   if (!ts.isObjectLiteralExpression(value)) return undefined;
   const keys = new Set<string>();
 
