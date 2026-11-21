@@ -5405,8 +5405,10 @@ function importedModules(source: ts.SourceFile, ctx: Ctx): Set<string> {
 
   if (cached) return cached;
   const modules = new Set<string>();
+  // Declarations are top-level statements; only a file that mentions `import(` needs a walk for dynamic imports.
+  const nodes = source.text.includes('import(') ? descendants(source) : source.statements;
 
-  for (const node of descendants(source)) {
+  for (const node of nodes) {
     const specifier =
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier
         ? node.moduleSpecifier
