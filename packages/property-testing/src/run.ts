@@ -328,6 +328,7 @@ async function execute(
     RUNNER,
   ];
   const result = await runCommand(sandbox.node, args, {
+    label: 'fast-check',
     cwd: root,
     timeoutMs: options.timeoutMs,
     input: JSON.stringify({

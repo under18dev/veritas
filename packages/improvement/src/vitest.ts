@@ -53,6 +53,7 @@ export async function runVitest(
     process.execPath,
     [bin, 'run', '--reporter=json', `--outputFile=${outFile}`],
     {
+      label: 'vitest',
       cwd,
       timeoutMs: options.timeoutMs,
       ...(options.signal ? { signal: options.signal } : {}),

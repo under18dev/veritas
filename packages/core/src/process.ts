@@ -39,7 +39,14 @@ export interface RunCommandOptions {
   maxOutputBytes?: number;
   signal?: AbortSignal;
   input?: string;
+  /** Also send each output line as a debug event while the process runs, for long runs someone is watching. */
+  logOutput?: boolean;
+  /** The name log events give the process (default: the executable's name), e.g. `mutator` for `node cli.js`. */
+  label?: string;
 }
+
+/** Output lines sent as events per process, so a chatty process cannot flood a trace. */
+const OUTPUT_EVENT_LIMIT = 2000;
 
 /**
  * Run an executable without a shell (no argument injection), with a timeout, an output cap,
@@ -60,6 +67,7 @@ export function runCommand(
   Object.assign(env, options.env ?? {});
   const max = options.maxOutputBytes ?? 10 * 1024 * 1024;
   const started = Date.now();
+  const name = options.label ?? path.basename(command);
 
   return new Promise((resolve) => {
     let stdout = '';
@@ -77,18 +85,46 @@ export function runCommand(
     });
     installExitHook();
     running.add(child);
+    // So a long-running process shows up while it runs, not only once it ends.
+    logEvent('debug', `${name} started`, {
+      event: 'process-start',
+      command: path.basename(command),
+      cwd: relativeToRoot(options.cwd),
+    });
+    const partial = { stdout: '', stderr: '' };
+    let outputEvents = 0;
+    const logLines = (stream: 'stdout' | 'stderr', text: string) => {
+      if (!options.logOutput || outputEvents >= OUTPUT_EVENT_LIMIT) return;
+      const lines = (partial[stream] + text).split(/\r?\n|\r/);
+      partial[stream] = lines.pop() ?? '';
+
+      for (const raw of lines) {
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escape sequences are removed
+        const line = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').trim();
+
+        if (!line || ++outputEvents > OUTPUT_EVENT_LIMIT) continue;
+        logEvent('debug', `${name}: ${line.length > 300 ? `${line.slice(0, 300)}...` : line}`, {
+          event: 'process-output',
+          command: path.basename(command),
+          stream,
+        });
+      }
+    };
     const finish = (result: Partial<CommandResult>) => {
       if (settled) return;
       settled = true;
       running.delete(child);
       clearTimeout(timer);
       options.signal?.removeEventListener('abort', onAbort);
+
+      // The last line of output may have no newline.
+      for (const stream of ['stdout', 'stderr'] as const) if (partial[stream]) logLines(stream, '\n');
       // Debug trace: what ran, where and how it ended. Arguments are capped and redacted; never the environment
       // or the input/output contents.
       const durationMs = Date.now() - started;
       logEvent(
         'debug',
-        `${path.basename(command)} ${result.spawnError ? 'could not start' : `exited ${result.exitCode ?? result.signal}`}${timedOut ? ' (timed out and killed)' : ''} after ${durationMs} ms`,
+        `${name} ${result.spawnError ? 'could not start' : `exited ${result.exitCode ?? result.signal}`}${timedOut ? ' (timed out and killed)' : ''} after ${durationMs} ms`,
         {
           event: 'process',
           command: path.basename(command),
@@ -125,9 +161,11 @@ export function runCommand(
     if (options.signal?.aborted) onAbort();
     child.stdout?.on('data', (d: Buffer) => {
       if (stdout.length < max) stdout += d.toString();
+      logLines('stdout', d.toString());
     });
     child.stderr?.on('data', (d: Buffer) => {
       if (stderr.length < max) stderr += d.toString();
+      logLines('stderr', d.toString());
     });
 
     if (options.input !== undefined) child.stdin?.end(options.input);

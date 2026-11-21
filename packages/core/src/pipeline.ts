@@ -93,6 +93,9 @@ export async function runStages(stages: Stage[], ctx: Omit<StageContext, 'output
         durationMs: finished.getTime() - started.getTime(),
       },
     );
+
+    for (const message of outcome.messages ?? [])
+      logEvent('debug', message, { event: 'stage-message', stage: stage.name });
     statusOf.set(stage.name, outcome.status);
     results.push({
       stage: stage.name,

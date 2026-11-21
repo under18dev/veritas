@@ -41,7 +41,27 @@ describe('run context', () => {
       runCommand(process.execPath, ['-e', 'process.exit(3)'], { cwd: root, timeoutMs: 20_000 }),
     );
     expect(events).toEqual([
+      expect.objectContaining({ event: 'process-start', cwd: '.', level: 'debug' }),
       expect.objectContaining({ event: 'process', cwd: '.', exitCode: 3, timedOut: false, level: 'debug' }),
+    ]);
+  });
+
+  it('sends output lines as events only when asked, without terminal escapes', async () => {
+    const root = tmp();
+    const script = "process.stdout.write('one\\n\\u001b[32mtwo\\u001b[0m\\n'); process.stderr.write('three')";
+    const run = async (logOutput: boolean) => {
+      const events: LogEvent[] = [];
+      await withRunContext({ root, sinks: [(e) => events.push(e)] }, () =>
+        runCommand(process.execPath, ['-e', script], { cwd: root, timeoutMs: 20_000, logOutput }),
+      );
+
+      return events.filter((e) => e.event === 'process-output').map((e) => [e.stream, e.message]);
+    };
+    expect(await run(false)).toEqual([]);
+    expect(await run(true)).toEqual([
+      ['stdout', expect.stringMatching(/: one$/)],
+      ['stdout', expect.stringMatching(/: two$/)],
+      ['stderr', expect.stringMatching(/: three$/)],
     ]);
   });
 

@@ -291,6 +291,9 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     memoryMb: options.config.limits.memoryMb,
     // mutator logs why a test file failed to load only to this debug channel, and only when one does.
     env: { NODE_DEBUG: 'mutator' },
+    // A mutation run takes minutes; its progress lines show that it is working.
+    logOutput: true,
+    label: 'mutator',
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
   const reportPath = path.join(reportDir, 'mutation.json');

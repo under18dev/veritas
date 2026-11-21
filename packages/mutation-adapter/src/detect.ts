@@ -132,6 +132,7 @@ export async function detectMutator(root: string, options: DetectOptions = {}): 
     };
   }
   const help = await runCommand(process.execPath, [located.binPath, '--help'], {
+    label: 'mutator --help',
     cwd: root,
     timeoutMs: options.timeoutMs ?? 30_000,
   });
