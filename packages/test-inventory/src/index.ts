@@ -341,8 +341,11 @@ function analyzeBody(
   body: ts.Node,
   ctx: Ctx,
   contextAssertion: (node: ts.CallExpression) => boolean = () => false,
+  setupRenders: Invocation[] = [],
 ): BodyAnalysis {
   const { checker } = ctx;
+  // Components rendered by shared setup that runs before the body (`beforeEach(() => render(<Dialog />))`).
+  const setupEntries = new Set<BodyAnalysis['calls'][number]>();
   const source = body.getSourceFile();
   const calls: BodyAnalysis['calls'] = [];
   const recorded = new Set<Invocation>();
@@ -562,6 +565,18 @@ function analyzeBody(
     return declaration?.getSourceFile() === source ? current : undefined;
   };
 
+  for (const node of setupRenders) {
+    if (recorded.has(node)) continue;
+    recorded.add(node);
+
+    for (const target of callInfo(node, ctx).targets)
+      if (target.rendered) {
+        const entry = { node, target };
+        calls.push(entry);
+        setupEntries.add(entry);
+      }
+  }
+
   for (const node of descendants(body)) {
     if (ts.isTryStatement(node) && node.catchClause?.variableDeclaration)
       bind(
@@ -725,24 +740,45 @@ function analyzeBody(
 
       if (reference) selfCalled.push(reference);
     }
-  const checksSelfCalled = (assertion: ts.CallExpression): boolean => {
-    const subject = assertion.arguments[0];
+  // Content the test puts there itself (`document.body.innerHTML = …`, `document.body.appendChild(node)`) may be what
+  // any later read of the page finds; other writes (`document.body.className = 'dark'`) only that member.
+  const documentWrites: DocumentWrite[] = [];
+
+  for (const node of descendants(body)) {
+    let written: ts.Expression | undefined;
+    let content = false;
 
     if (
-      !subject ||
-      !isExpectCall(assertion) ||
-      !matcherNames(assertion).some((name) => MOCK_MATCHER.test(name))
-    )
-      return false;
-    const reference = mockReference(subject, checker);
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    ) {
+      content = ts.isPropertyAccessExpression(node.left) && CONTENT_PROPERTIES.has(node.left.name.text);
+      written = content && ts.isPropertyAccessExpression(node.left) ? node.left.expression : node.left;
+    } else if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      CONTENT_METHODS.has(node.expression.name.text)
+    ) {
+      content = true;
+      written = node.expression.expression;
+    }
+    const chain = written && documentChain(written, checker);
 
-    return (
-      reference !== undefined &&
+    if (chain) documentWrites.push({ chain, end: node.getEnd(), content });
+  }
+
+  const reaches = new Map(
+    assertions.map((assertion) => [assertion, assertionReach(assertion, checker, documentWrites)] as const),
+  );
+  // Reading such a mock's calls, through a matcher (`toHaveBeenCalled`) or its state (`onSave.mock.calls`), may
+  // read the test's own calls.
+  const checksSelfCalled = (assertion: ts.CallExpression): boolean =>
+    (reaches.get(assertion)?.mockRoots ?? []).some((root) =>
       selfCalled.some(
-        (called) => called.symbol === reference.symbol && called.path.join('.') === reference.path.join('.'),
-      )
+        (called) => called.symbol === root.symbol && called.path.join('.') === root.path.join('.'),
+      ),
     );
-  };
 
   // Either side of a comparison counts: `expect(['a', 'b']).toContain(result.status)` checks the result.
   for (const assertion of assertions) {
@@ -826,36 +862,9 @@ function analyzeBody(
   const observed: BodyAnalysis['observed'] = new Set();
 
   // `document.body.className = 'dark'`: what the test writes to the page itself is not what a component rendered.
-  // Content the test puts there itself (`document.body.innerHTML = …`, `document.body.appendChild(node)`) counts as
-  // written to the element it changes.
-  const documentWrites: { chain: string; end: number }[] = [];
-
-  for (const node of descendants(body)) {
-    let written: ts.Expression | undefined;
-
-    if (
-      ts.isBinaryExpression(node) &&
-      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
-      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
-    )
-      written =
-        ts.isPropertyAccessExpression(node.left) && CONTENT_PROPERTIES.has(node.left.name.text)
-          ? node.left.expression
-          : node.left;
-    else if (
-      ts.isCallExpression(node) &&
-      ts.isPropertyAccessExpression(node.expression) &&
-      CONTENT_METHODS.has(node.expression.name.text)
-    )
-      written = node.expression.expression;
-    const chain = written && documentChain(written, checker);
-
-    if (chain) documentWrites.push({ chain, end: node.getEnd() });
-  }
-
   for (const assertion of assertions) {
     if (checksSelfCalled(assertion)) continue;
-    const reached = assertionReach(assertion, checker, documentWrites);
+    const reached = reaches.get(assertion) as ReturnType<typeof assertionReach>;
 
     // Where the page was read: a query kept in a local before the render (`const before = screen.queryByText('x');
     // render(<Dialog />); expect(before)…`) did not see what rendered after it.
@@ -880,7 +889,7 @@ function analyzeBody(
     if (
       entry.target.rendered &&
       !entry.target.passThrough &&
-      documentChecks.some((position) => entry.node.getStart() < position)
+      documentChecks.some((position) => setupEntries.has(entry) || entry.node.getStart() < position)
     )
       observed.add(entry);
   const awaitedProject = awaited.filter((node) => sourcesOf([node.expression]).length > 0);
@@ -965,7 +974,7 @@ const MOCK_MATCHER =
 function assertionReach(
   assertion: ts.CallExpression,
   checker: ts.TypeChecker,
-  documentWrites: { chain: string; end: number }[] = [],
+  documentWrites: DocumentWrite[] = [],
 ): { documentReads: number[]; mockRoots: (MockReference & { identifier: ts.Identifier })[] } {
   const seen = new Set<ts.Symbol>();
   const mockRoots: (MockReference & { identifier: ts.Identifier })[] = [];
@@ -1015,8 +1024,8 @@ function assertionReach(
         const written = documentWrites.some(
           (write) =>
             write.end < at &&
-            chain !== undefined &&
-            (chain === write.chain || chain.startsWith(`${write.chain}.`)),
+            (write.content ||
+              (chain !== undefined && (chain === write.chain || chain.startsWith(`${write.chain}.`)))),
         );
 
         if (!written) documentReads.push(at);
@@ -1054,7 +1063,7 @@ function enclosingFunction(node: ts.Node, root: ts.Node): ts.Node | undefined {
 }
 
 /** Functions that run the callback they are given before they return (or settle). */
-const CALLBACK_RUNNERS = new Set(['waitFor', 'act', 'waitForElementToBeRemoved', 'then', 'within']);
+const CALLBACK_RUNNERS = new Set(['waitFor', 'act', 'waitForElementToBeRemoved', 'then']);
 
 /**
  * Whether an assertion runs a function holding a read of the page: it is called where it is written or by a compared
@@ -1141,6 +1150,13 @@ function documentChain(
   return top.getText().replace(/\s+/g, '');
 }
 
+/** A write of the test to the page: the member chain written, where, and whether it put content there. */
+interface DocumentWrite {
+  chain: string;
+  end: number;
+  content: boolean;
+}
+
 /** Properties whose assignment replaces the content of an element. */
 const CONTENT_PROPERTIES = new Set(['innerHTML', 'outerHTML', 'textContent', 'innerText']);
 
@@ -1209,12 +1225,22 @@ const DOCUMENT_QUERY = /^(?:get|query|find)(?:All)?By[A-Z]/;
 function isDocumentQuery(call: ts.CallExpression, checker: ts.TypeChecker): boolean {
   const callee = skipParens(call.expression);
 
-  if (ts.isIdentifier(callee)) return testingLibraryExport(callee, checker) === 'within';
-
   if (!ts.isPropertyAccessExpression(callee) || !DOCUMENT_QUERY.test(callee.name.text)) return false;
   const receiver = skipParens(callee.expression);
 
-  return ts.isIdentifier(receiver) && testingLibraryExport(receiver, checker) === 'screen';
+  if (ts.isIdentifier(receiver) && testingLibraryExport(receiver, checker) === 'screen') return true;
+  // A query on what `within(element)` returns, inline or kept in a local; `within(...)` alone queries nothing.
+  const scoped = ts.isIdentifier(receiver)
+    ? variableInitializer(valueSymbol(receiver, checker)?.valueDeclaration)
+    : receiver;
+  const within = scoped && skipParens(scoped);
+
+  return (
+    within !== undefined &&
+    ts.isCallExpression(within) &&
+    ts.isIdentifier(within.expression) &&
+    testingLibraryExport(within.expression, checker) === 'within'
+  );
 }
 
 /** The name a `@testing-library/*` package exports that an identifier refers to, if it refers to one. */
@@ -1403,7 +1429,12 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
     if (helper) {
       info = helperInfo(helper, ctx);
 
-      if (mount) info = { ...info, targets: info.targets.map((target) => ({ ...target, rendered })) };
+      // What a local component renders is what it returns: calls whose result does not reach that are not shown.
+      if (mount)
+        info = {
+          ...info,
+          targets: info.targets.map((target) => ({ ...target, rendered: rendered && target.flowsToResult })),
+        };
     } else if (receiver)
       info = {
         ...none,
@@ -1452,6 +1483,37 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
   ctx.callInfo.set(node, info);
 
   return info;
+}
+
+/** The name a module exports that an imported identifier stands for, or the identifier's own name. */
+function importedName(identifier: ts.Identifier, checker: ts.TypeChecker): string {
+  const declaration = checker.getSymbolAtLocation(identifier)?.declarations?.[0];
+
+  return declaration && ts.isImportSpecifier(declaration)
+    ? (declaration.propertyName ?? declaration.name).text
+    : identifier.text;
+}
+
+const setupRendersCache = new WeakMap<ts.SourceFile, Invocation[]>();
+
+/**
+ * The invocations of a file's shared setup (module or describe level, `beforeEach`/`beforeAll`) that render a
+ * component into the document, worked out once per file; which tests they run before is decided per test.
+ */
+function setupRenders(source: ts.SourceFile, ctx: Ctx): Invocation[] {
+  let found = setupRendersCache.get(source);
+
+  if (!found) {
+    found = descendants(source).filter(
+      (node): node is Invocation =>
+        isInvocation(node) &&
+        runsBefore(node, undefined) &&
+        callInfo(node, ctx).targets.some((target) => target.rendered),
+    );
+    setupRendersCache.set(source, found);
+  }
+
+  return found;
 }
 
 /** Functions that mount the element they are given: Testing Library, react-dom, react-test-renderer, Enzyme. */
@@ -1520,8 +1582,9 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount 
     parent.arguments?.includes(current as ts.Expression)
   ) {
     const callee = skipParens(parent.expression);
+    // By the name it is imported under: `import { render as rtlRender } from '@testing-library/react'`.
     const name = ts.isIdentifier(callee)
-      ? callee.text
+      ? importedName(callee, ctx.checker)
       : ts.isPropertyAccessExpression(callee)
         ? callee.name.text
         : undefined;
@@ -1749,11 +1812,20 @@ function helperInfo(body: ts.Node, ctx: Ctx): CallInfo {
         keysMatch(analysis.assertedKeys.get(node), target)) ||
       analysis.observed.has(entry);
     const flowsToResult = target.flowsToResult && analysis.returned.has(node);
+    // Which keys of the result carry this symbol: calls that do not reach the result add none, and only a call that
+    // reaches all of it (`null`) widens to the whole result.
     const keys = analysis.returnedKeys.get(node);
-    const resultKeys =
-      keys === undefined || keys === null || (previous?.resultKeys === undefined && previous !== undefined)
-        ? undefined
-        : [...new Set([...(previous?.resultKeys ?? []), ...keys])];
+    const previousKeys =
+      previous && (previous.flowsToResult || previous.returnsMocks)
+        ? (previous.resultKeys ?? null)
+        : undefined;
+    const merged =
+      keys === undefined
+        ? previousKeys
+        : keys === null || previousKeys === null
+          ? null
+          : new Set([...(previousKeys ?? []), ...keys]);
+    const resultKeys = merged ? [...merged] : undefined;
     // What a nested helper does with a mock it is given is decided inside it, where its own targets record it.
     const handed = helperBody(node, ctx) ? [] : (analysis.handed.get(node) ?? []);
     const observedBy = [...(previous?.observedBy ?? []), ...(target.observedBy ?? []), ...handed].filter(
@@ -2593,7 +2665,12 @@ function analyzeTest(
       ? checker.getSymbolAtLocation(callback.parameters[0].name)
       : undefined;
   const analysis = body
-    ? analyzeBody(body, ctx, (node) => isContextAssertion(node, contextParameter, checker))
+    ? analyzeBody(
+        body,
+        ctx,
+        (node) => isContextAssertion(node, contextParameter, checker),
+        setupRenders(source, ctx).filter((node) => !contains(body, node) && runsBefore(node, body)),
+      )
     : undefined;
   const assertions = analysis?.assertions ?? [];
   const unresolvedImports = analysis?.unresolvedImports ?? new Set<string>();

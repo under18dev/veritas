@@ -571,6 +571,120 @@ describe('links that are not there, continued', () => {
   });
 });
 
+describe('links that are not there, third pass', () => {
+  it('does not count mock state the test produced itself', () => {
+    const byName = inventory(`${header}
+      it('mock calls compared', () => {
+        const onSave = vi.fn();
+        render(<Dialog onSave={onSave} />);
+        onSave('test');
+        expect(onSave.mock.calls).toEqual([['test']]);
+      });
+      it('mock calls kept in a local', () => {
+        const onSave = vi.fn();
+        render(<Dialog onSave={onSave} />);
+        onSave('test');
+        const calls = onSave.mock.calls;
+        expect(calls).toHaveLength(1);
+      });
+    `);
+
+    expect(byName('mock calls compared').asserted).toBe(false);
+    expect(byName('mock calls kept in a local').asserted).toBe(false);
+  });
+
+  it('credits a local component only with what reaches its output', () => {
+    const byName = inventory(`${header}
+      function Harness() { label('ignored'); return <p>Hi</p>; }
+      it('discarded call', () => {
+        render(<Harness />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+    `);
+
+    expect(byName('discarded call')).toMatchObject({ symbols: ['src/format.ts#label'], asserted: false });
+  });
+
+  it('counts only queries run on what within returns', () => {
+    const byName = inventory(`${header}
+      it('within alone', () => {
+        render(<Dialog open title="Hi" />);
+        expect(within(document.createElement('div'))).toBeTruthy();
+      });
+      it('within kept in a local, then queried', () => {
+        render(<Dialog open title="Hi" />);
+        const dialog = within(screen.getByRole('dialog'));
+        expect(dialog.getByText('Hi')).toBeTruthy();
+      });
+    `);
+
+    expect(byName('within alone').asserted).toBe(false);
+    expect(byName('within kept in a local, then queried').asserted).toBe(true);
+  });
+
+  it('does not credit any later read of the page after the test put content into it', () => {
+    const byName = inventory(`${header}
+      it('screen after appended content', () => {
+        const node = document.createElement('p');
+        node.textContent = 'Hi';
+        document.body.appendChild(node);
+        render(<Dialog open />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('query selector after inner HTML', () => {
+        document.documentElement.innerHTML = '<p class="x">Hi</p>';
+        render(<Dialog open />);
+        expect(document.querySelector('.x')).not.toBeNull();
+      });
+    `);
+
+    expect(byName('screen after appended content').asserted).toBe(false);
+    expect(byName('query selector after inner HTML').asserted).toBe(false);
+  });
+
+  it('leaves calls that do not reach a helper result out of the keys it carries', () => {
+    const byName = inventory(
+      `${header}
+      import { compute } from '../src/compute';
+      const calc = () => {
+        const a = compute(2);
+        compute(3);
+        return { used: a, unused: 1 };
+      };
+      it('unused key', () => { expect(calc().unused).toBe(1); });
+      it('used key', () => { expect(calc().used).toBe(3); });
+    `,
+      { 'src/compute.ts': 'export const compute = (n: number) => n + 1;\n' },
+    );
+
+    expect(byName('unused key').asserted).toBe(false);
+    expect(byName('used key').asserted).toBe(true);
+  });
+});
+
+describe('links found in more places', () => {
+  it('recognizes an aliased render and renders in setup hooks that run before the test', () => {
+    const byName = inventory(`${header}
+      import { render as rtlRender } from '@testing-library/react';
+      it('aliased render', () => {
+        rtlRender(<Dialog open title="Hi" />);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      describe('rendered in beforeEach', () => {
+        beforeEach(() => { render(<Dialog open title="Hi" />); });
+        it('shown', () => { expect(screen.getByText('Hi')).toBeInTheDocument(); });
+      });
+      describe('another describe', () => {
+        it('not rendered here', () => { expect(screen.queryByText('Hi')).toBeNull(); });
+      });
+    `);
+
+    expect(byName('aliased render')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
+    expect(byName('shown')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
+    expect(byName('not rendered here')).toMatchObject({ symbols: [], asserted: false });
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}
