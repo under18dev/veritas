@@ -220,7 +220,8 @@ async function press(app: ReturnType<typeof render>, ...keys: string[]) {
   }
 }
 
-describe('the TUI', () => {
+// Each test drives the TUI key by key and waits for frames; slow CI runners (Windows) need more than the default 5 s.
+describe('the TUI', { timeout: 20_000 }, () => {
   it('shows the latest run and the menu, and help on ?', async () => {
     const app = render(<App api={fakeApi()} />);
     unmount = app.unmount;
