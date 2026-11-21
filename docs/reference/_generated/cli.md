@@ -237,11 +237,11 @@ verify formalized properties with an SMT solver (bounded)
 veritas prove [options]
 ```
 
-| Option               | Description                                                | Values       | Default |
-| -------------------- | ---------------------------------------------------------- | ------------ | ------- |
-| `--property <id>`    | verify this property only (repeatable)                     |              |         |
-| `--include-proposed` | also check properties that are not accepted (experimental) |              |         |
-| `--engine <engine>`  | z3 (bounded checks) or lean (kernel-checked proofs)        | `z3`, `lean` | `z3`    |
+| Option               | Description                                                                                              | Values               | Default |
+| -------------------- | -------------------------------------------------------------------------------------------------------- | -------------------- | ------- |
+| `--property <id>`    | verify this property only (repeatable)                                                                   |                      |         |
+| `--include-proposed` | also check properties that are not accepted (experimental)                                               |                      |         |
+| `--engine <engine>`  | z3 (bounded checks), lean (kernel-checked proofs) or both (default: formal.backend in the configuration) | `z3`, `lean`, `both` |         |
 
 ### `veritas improve`
 

@@ -131,6 +131,8 @@ A claim is `kernel_checked` only when the build succeeds and the theorem depends
 - The Lean model is generated from the property's formal model. Its correspondence to your TypeScript code is not proven; every Lean claim lists this under its semantic gaps.
 - Lean builds have a timeout and no memory limit.
 
+To get both kinds of evidence, use `--engine both` or set `formal.backend` to `both`. Every property is checked with Z3 against your code, and properties Lean can translate also get a Lean proof. Lean is skipped, not reported as `unsupported`, for properties outside its subset and for properties Z3 found a counterexample for. Without `--engine`, `prove` uses `formal.backend`.
+
 ## What `proven_within_model` means
 
 It means that no input violates the property within the stated model, domain and assumptions. Every claim lists them, for example:

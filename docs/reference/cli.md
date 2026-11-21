@@ -104,7 +104,7 @@ Only commands with the report stage (`run`, `prove`, and `replay` of such a run)
 
 `--since <ref>` limits mutation testing to code changed since a git ref. `--include-proposed` also checks properties that are not accepted; findings from them are at most `suspected`.
 
-`prove --engine lean` uses Lean 4 with Lake, which you install separately; the default engine is Z3. `mutate --import <file>` reads an existing mutation-testing-elements report instead of running mutator, and cannot be combined with `--kill-matrix`.
+`prove --engine lean` uses Lean 4 with Lake, which you install separately; `--engine both` adds Lean proofs to the Z3 checks; without `--engine`, `prove` uses `formal.backend` (Z3 by default). `mutate --import <file>` reads an existing mutation-testing-elements report instead of running mutator, and cannot be combined with `--kill-matrix`.
 
 ### `spec`
 

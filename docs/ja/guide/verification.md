@@ -131,6 +131,8 @@ Veritas は関数の Lean モデルと Property の定理を生成し、`lake bu
 - Lean のモデルは Property の形式モデルから生成します。TypeScript のコードと対応しているかは証明されておらず、どの Lean の結果にも semantic gaps として記載されます。
 - Lean のビルドには制限時間がありますが、メモリの上限はありません。
 
+両方の根拠がほしいときは、`--engine both` を付けるか、`formal.backend` を `both` にします。すべての Property を Z3 でコードに対して確かめ、Lean に翻訳できる Property には Lean の証明も加えます。Lean に翻訳できない Property と、Z3 が反例を見つけた Property では Lean を飛ばし、`unsupported` ではなく飛ばしたと表示します。`--engine` を付けなければ、`prove` は `formal.backend` に従います。
+
 ## `proven_within_model` の意味
 
 示したモデル、値の範囲、前提の中では、Property を破る入力がない、という意味です。どの結果にも、それらが記載されます。

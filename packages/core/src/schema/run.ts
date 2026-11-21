@@ -73,7 +73,7 @@ export const Run = z.object({
     .object({
       includeProposed: z.boolean(),
       propertyIds: z.array(z.string()).optional(),
-      formalEngine: z.enum(['z3', 'lean']).optional(),
+      formalEngine: z.enum(['z3', 'lean', 'both']).optional(),
       sources: z.array(z.enum(['local', 'github', 'web'])).optional(),
       web: z
         .object({

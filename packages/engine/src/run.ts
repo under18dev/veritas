@@ -73,7 +73,7 @@ import {
   loadApprovals,
 } from '@under18dev/veritas-property-engine';
 import { type PbtResult, runPropertyTest } from '@under18dev/veritas-property-testing';
-import { proveWithLean } from '@under18dev/veritas-solver-lean';
+import { leanTranslatable, proveWithLean } from '@under18dev/veritas-solver-lean';
 import { type DiscoveryResult, discoverEvidence } from '@under18dev/veritas-spec-discovery';
 import { inventoryTests, isTestSupportPath, type TestInventory } from '@under18dev/veritas-test-inventory';
 import { ARTIFACTS } from './artifacts.js';
@@ -109,7 +109,7 @@ export interface RunOptions {
   /** Verify proposed (not yet accepted) properties as experimental. Accepted ones are always verified. */
   includeProposed?: boolean;
   /** Formal backend for conformance claims (mutant equivalence always uses Z3). */
-  formalEngine?: 'z3' | 'lean';
+  formalEngine?: 'z3' | 'lean' | 'both';
   propertyIds?: string[];
   allowCodeConfig?: boolean;
   /**
@@ -716,7 +716,8 @@ async function runInContext(
 
         if (!f) continue;
 
-        if ((options.formalEngine ?? config.formal.backend) === 'lean') {
+        const engine = options.formalEngine ?? config.formal.backend;
+        const lean = async () => {
           const { claim } = await proveWithLean({
             propertyId: p.id,
             ir: f.ir,
@@ -727,6 +728,10 @@ async function runInContext(
           claims.push(claim);
           solverMs += claim.durationMs;
           messages.push(`${p.id} (lean): ${claim.status} [${claim.assurance}]`);
+        };
+
+        if (engine === 'lean') {
+          await lean();
           continue;
         }
         const { claim } = await proveProperty({
@@ -752,6 +757,15 @@ async function runInContext(
         messages.push(
           `${p.id}: ${claim.status}${claim.counterexample ? ` ${JSON.stringify(claim.counterexample)}` : ''}`,
         );
+
+        // With `both`, Lean adds a kernel-checked proof where it can translate the property. Z3 still checks the
+        // implementation, which the Lean model does not cover, and a property Z3 refuted cannot be proven.
+        if (engine !== 'both') continue;
+
+        if (claim.status === 'counterexample_found')
+          messages.push(`${p.id} (lean): skipped, Z3 found a counterexample`);
+        else if (!leanTranslatable(f.ir)) messages.push(`${p.id} (lean): skipped, outside the Lean subset`);
+        else await lean();
       }
       const skipped = spec.properties.filter((p) => spec.formalized.has(p.id) && !toProve.includes(p));
 
