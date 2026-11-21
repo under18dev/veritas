@@ -4209,6 +4209,16 @@ function makesRegistration(node: ts.CallExpression): boolean {
 }
 
 /**
+ * The member a registration call gets its registration function from: `it.each` in `it.each(table)(name, fn)`, and in
+ * the tagged template form `it.each\`table\`(name, fn)`; undefined for a direct call.
+ */
+function registrationFactory(node: ts.CallExpression): ts.Expression | undefined {
+  if (ts.isCallExpression(node.expression)) return node.expression.expression;
+
+  return ts.isTaggedTemplateExpression(node.expression) ? node.expression.tag : undefined;
+}
+
+/**
  * Registration factories (`.each(table)`, `.for(table)`, `.skipIf(cond)`, `.runIf(cond)` in Vitest) return the
  * function that registers.
  */
@@ -4218,9 +4228,11 @@ function testRegistration(node: ts.CallExpression): Registration | undefined {
   if (direct && Array.isArray(direct))
     return { name: literalString(node.arguments[0]), callback: callbackArgument(node), modifiers: direct };
 
-  if (ts.isCallExpression(node.expression)) {
-    const chain = propertyChain(node.expression.expression);
-    const root = rootIdentifier(node.expression.expression);
+  const factory = registrationFactory(node);
+
+  if (factory) {
+    const chain = propertyChain(factory);
+    const root = rootIdentifier(factory);
 
     if (root && runner.tests.has(root) && chain.some((name) => runner.registrationFactories.has(name))) {
       const eachModifiers = chain.filter((name): name is TestCaseType['modifiers'][number] =>
@@ -4251,9 +4263,11 @@ function describeRegistration(node: ts.CallExpression): Registration | undefined
     return { name: literalString(node.arguments[0]), callback: callbackArgument(node), modifiers: direct };
   }
 
-  if (!ts.isCallExpression(node.expression)) return undefined;
-  const chain = propertyChain(node.expression.expression);
-  const root = rootIdentifier(node.expression.expression);
+  const factory = registrationFactory(node);
+
+  if (!factory) return undefined;
+  const chain = propertyChain(factory);
+  const root = rootIdentifier(factory);
 
   if (!root || !runner.suites.has(root) || !chain.some((name) => runner.registrationFactories.has(name)))
     return undefined;

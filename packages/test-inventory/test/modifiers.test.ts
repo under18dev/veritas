@@ -88,4 +88,32 @@ describe('Vitest registration modifiers', () => {
     ]);
     expect(inventory.tests.every((t) => t.targetCalls.some((call) => call.asserted))).toBe(true);
   });
+
+  it('registers tests and suites of a tagged template table', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/table.test.ts': `
+        import { describe, expect, it } from 'vitest';
+        import { value } from '../src/value.js';
+        describe.each\`
+          input
+          \${1}
+        \`('suite $input', ({ input }) => {
+          it.each\`
+            item
+            \${2}
+          \`('row $item', ({ item }) => expect(value(item + input)).toBe(item + input));
+        });
+      `,
+    });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
+
+    expect(inventory.tests.map((t) => [t.name, t.suitePath, t.modifiers])).toEqual([
+      ['row $item', ['suite $input'], ['each']],
+    ]);
+  });
 });
