@@ -480,6 +480,66 @@ export async function load(): Promise<number> { return 1; }
     expect(get('one reading').asserted).toBe(false);
   });
 
+  it('marks a test that asserts only on constants recorded after awaiting a project call', () => {
+    const get = inventory(
+      `${header}
+      import { Gate } from '../src/gate.js';
+      it('progress', async () => {
+        const values: number[] = [];
+        const gate = new Gate();
+        await gate.acquire();
+        values.push(1);
+        await gate.acquire();
+        values.push(2);
+        expect(values).toEqual([1, 2]);
+      });
+      it('counter', async () => {
+        let reached = 0;
+        await new Gate().acquire();
+        reached++;
+        expect(reached).toBe(1);
+      });
+      it('recorded before the await', async () => {
+        const values: number[] = [];
+        values.push(1);
+        await new Gate().acquire();
+        expect(values).toEqual([1]);
+      });
+      it('conditional record', async () => {
+        const values: number[] = [];
+        const gate = new Gate();
+        await gate.acquire();
+        if (gate) values.push(1);
+        expect(values).toEqual([1]);
+      });
+      it('no await', () => {
+        const values: number[] = [];
+        new Gate();
+        values.push(1);
+        expect(values).toEqual([1]);
+      });
+      it('awaits something else', async () => {
+        const values: number[] = [];
+        new Gate();
+        await Promise.resolve();
+        values.push(1);
+        expect(values).toEqual([1]);
+      });
+    `,
+      { 'src/gate.ts': 'export class Gate { async acquire(): Promise<void> {} }\n' },
+    );
+    expect(get('progress').suspicions).toEqual(['progress_only']);
+    expect(get('counter').suspicions).toEqual(['progress_only']);
+
+    for (const name of [
+      'recorded before the await',
+      'conditional record',
+      'no await',
+      'awaits something else',
+    ])
+      expect(get(name).suspicions, name).not.toContain('progress_only');
+  });
+
   it('links counters a callback increments and locals that store project results', () => {
     const extra = {
       'src/fns.ts': `export function each(items: number[], cb: () => void) { for (const _ of items) cb(); }

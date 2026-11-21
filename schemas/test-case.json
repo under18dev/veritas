@@ -156,7 +156,8 @@
           "unconditional_mock",
           "unresolved_import",
           "opaque_call",
-          "type_level_only"
+          "type_level_only",
+          "progress_only"
         ]
       }
     },

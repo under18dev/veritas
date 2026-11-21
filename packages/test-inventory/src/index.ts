@@ -221,6 +221,11 @@ interface BodyAnalysis {
   opaque: boolean;
   /** Calls whose result flows into what the body returns. */
   returned: Set<Invocation>;
+  /**
+   * The body awaits a project call and asserts only on locals it sets to constants after that (`await acquire();
+   * values.push(1); expect(values)…`): it checks that the call settles, not anything the call returns.
+   */
+  progressOnly: boolean;
 }
 
 /**
@@ -557,7 +562,111 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
       for (const { node: call } of calls) if (contains(argument, call)) asserted.add(call);
     }
   }
-  return { calls, assertions, asserted, unresolvedImports, helperAsserts, opaque, returned };
+  const awaitedProject = awaited.filter((node) => sourcesOf([node.expression]).length > 0);
+  const checks = assertions.filter(
+    (assertion) => !isAssertionCountCall(assertion) && !isTypeLevelAssertion(assertion),
+  );
+  const progressOnly =
+    asserted.size === 0 &&
+    awaitedProject.length > 0 &&
+    checks.length > 0 &&
+    recordsProgress(checks, body, Math.min(...awaitedProject.map((node) => node.getEnd())), checker);
+
+  return { calls, assertions, asserted, unresolvedImports, helperAsserts, opaque, returned, progressOnly };
+}
+
+/**
+ * Whether the assertions compare only locals of `body` that it sets to constants, unconditionally, after `after`
+ * (the end of the first awaited project call): `const values = []; await acquire(); values.push(1);
+ * expect(values).toEqual([1])`. Such a record shows that the test got past the await, and nothing else.
+ */
+function recordsProgress(
+  assertions: ts.CallExpression[],
+  body: ts.Node,
+  after: number,
+  checker: ts.TypeChecker,
+): boolean {
+  const compared = assertions.flatMap(comparedValues);
+  const inAssertion = (node: ts.Node) => compared.some((value) => contains(value, node) || value === node);
+  const records = new Set<ts.Symbol>();
+
+  for (const value of compared)
+    for (const identifier of [value, ...descendants(value)].filter(ts.isIdentifier)) {
+      // `values.length`: the property name is not a variable.
+      if (ts.isPropertyAccessExpression(identifier.parent) && identifier.parent.name === identifier) continue;
+
+      if (isCompileTimeConstant(identifier, checker)) continue;
+      const symbol = checker.getSymbolAtLocation(identifier);
+
+      if (!symbol) return false;
+      records.add(symbol);
+    }
+
+  if (records.size === 0) return false;
+
+  return [...records].every((symbol) => {
+    const declaration = symbol.valueDeclaration;
+
+    if (
+      !declaration ||
+      !ts.isVariableDeclaration(declaration) ||
+      !contains(body, declaration) ||
+      inNestedFunction(declaration, body) ||
+      (declaration.initializer && !isCompileTimeConstant(declaration.initializer, checker))
+    )
+      return false;
+    let writes = 0;
+
+    for (const node of descendants(body)) {
+      if (!ts.isIdentifier(node) || node === declaration.name) continue;
+
+      if (checker.getSymbolAtLocation(node) !== symbol || inAssertion(node)) continue;
+      const statement = constantWrite(node, checker);
+
+      // Every other use must be a constant write in a statement of the body itself, after the await.
+      if (!statement || statement.parent !== body || statement.getStart() < after) return false;
+      writes++;
+    }
+
+    return writes > 0;
+  });
+}
+
+/**
+ * The statement around `x.push(1)`, `x = 1`, `x += 1` or `x++` when `identifier` is the `x` it writes a constant
+ * to.
+ */
+function constantWrite(
+  identifier: ts.Identifier,
+  checker: ts.TypeChecker,
+): ts.ExpressionStatement | undefined {
+  const parent = identifier.parent;
+  let write: ts.Expression | undefined;
+
+  if (
+    ts.isPropertyAccessExpression(parent) &&
+    parent.expression === identifier &&
+    parent.name.text === 'push' &&
+    ts.isCallExpression(parent.parent) &&
+    parent.parent.expression === parent &&
+    parent.parent.arguments.every((argument) => isCompileTimeConstant(argument, checker))
+  )
+    write = parent.parent;
+  else if (
+    ts.isBinaryExpression(parent) &&
+    parent.left === identifier &&
+    parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+    parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+    isCompileTimeConstant(parent.right, checker)
+  )
+    write = parent;
+  else if (
+    (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
+    [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(parent.operator)
+  )
+    write = parent;
+
+  return write && ts.isExpressionStatement(write.parent) ? write.parent : undefined;
 }
 
 /** `Date.now()`, `performance.now()` or `new Date()`: a reading of the clock. */
@@ -1227,6 +1336,8 @@ function analyzeTest(
   if (unresolved) suspicions.push('unresolved_import');
 
   if (opaque) suspicions.push('opaque_call');
+
+  if (analysis?.progressOnly) suspicions.push('progress_only');
 
   return {
     id: testId(toPosixRelative(root, file), suitePath, name),

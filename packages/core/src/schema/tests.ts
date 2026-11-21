@@ -28,6 +28,8 @@ export const TestCase = z.object({
    * `opaque_call`: the test runs code in a child process or through a dynamic import.
    * Either way, what the test reaches is unknown rather than absent.
    * `type_level_only`: every assertion checks TypeScript types (`expectTypeOf`, `assertType`), which no run evaluates.
+   * `progress_only`: the test awaits a project call and asserts only on constants it records after the await, so it
+   * checks that the call settles (does not block), not what the call returns; the link to the result is unknown.
    */
   suspicions: z.array(
     z.enum([
@@ -38,6 +40,7 @@ export const TestCase = z.object({
       'unresolved_import',
       'opaque_call',
       'type_level_only',
+      'progress_only',
     ]),
   ),
   granularity: z.enum(['test', 'suite']),
