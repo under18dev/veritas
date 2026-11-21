@@ -1603,6 +1603,56 @@ describe('helper mount positions, render results, explicit children and mock rea
   });
 });
 
+describe('helper calls that run and pass-through render results', () => {
+  it('follows a query helper only when the call to it runs', () => {
+    const byName = inventory(
+      `${header}
+      function query() { return screen.queryByText('Hi'); }
+      it('helper call in a compared function', () => {
+        render(<Dialog open title="Hi" />);
+        expect(() => query()).toBeTruthy();
+      });
+      it('helper call in a function run by waitFor', async () => {
+        render(<Dialog open title="Hi" />);
+        expect(await waitFor(() => query())).toBeTruthy();
+      });
+    `.replace(
+        "from '@testing-library/react';",
+        "from '@testing-library/react';\nimport { waitFor } from '@testing-library/react';",
+      ),
+    );
+
+    expect(byName('helper call in a compared function').asserted).toBe(false);
+    expect(byName('helper call in a function run by waitFor').asserted).toBe(true);
+  });
+
+  it('does not credit a pass-through wrapper through render-result queries', () => {
+    const byName = inventory(
+      `${header}
+      import { Section } from '../src/Section';
+      it('render-result query on a pass-through wrapper', () => {
+        const { getByText } = render(<Section><button>Hi</button></Section>);
+        expect(getByText('Hi')).toBeTruthy();
+      });
+      it('render-result query with the component inside', () => {
+        const { getByText } = render(<Section><Dialog open title="Hi" /></Section>);
+        expect(getByText('Hi')).toBeTruthy();
+      });
+    `,
+      {
+        'src/Section.tsx':
+          'export const Section = ({ children }: { children?: unknown }) => <section>{children}</section>;\n',
+      },
+    );
+
+    expect(byName('render-result query on a pass-through wrapper')).toMatchObject({
+      symbols: ['src/Section.tsx#Section'],
+      asserted: false,
+    });
+    expect(byName('render-result query with the component inside').asserted).toBe(true);
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}

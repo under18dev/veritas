@@ -339,6 +339,11 @@ interface BodyAnalysis {
   returnedKeys: Map<Invocation, Set<string> | null>;
   /** The properties of a call's result that assertions read, by call (see `asserted`); `null` is all of it. */
   assertedKeys: Map<Invocation, Set<string> | null>;
+  /**
+   * Asserted calls read only through their render output: a pass-through wrapper is not credited with what the
+   * test itself supplied as its children (`render(<Providers><button>Hi</button></Providers>).getByText('Hi')`).
+   */
+  outputOnly: Set<Invocation>;
 }
 
 /**
@@ -735,6 +740,9 @@ function analyzeBody(
   );
   const asserted = new Set<Invocation>();
   const assertedKeys: BodyAnalysis['assertedKeys'] = new Map();
+  // Asserted calls read through their render output (queries, container), and through anything else.
+  const outputReads = new Set<Invocation>();
+  const otherReads = new Set<Invocation>();
   const mergeKeys = (
     map: Map<Invocation, Set<string> | null>,
     call: Invocation,
@@ -860,12 +868,20 @@ function analyzeBody(
           if (rendersOutput(call) && !renderOutputRead(identifier, checker)) continue;
           asserted.add(call);
           mergeKeys(assertedKeys, call, keysRead(value, call));
+          // Read from the render result itself (`const { getByText } = render(…)`), not from a mock handed to it.
+          const initializer = variableInitializer(valueSymbol(identifier, checker)?.valueDeclaration);
+          const fromResult =
+            rendersOutput(call) &&
+            initializer !== undefined &&
+            (initializer === call || contains(initializer, call));
+          (fromResult ? outputReads : otherReads).add(call);
         }
 
       for (const { node } of calls)
         if (contains(value, node) && evaluated(node) && !excluded.has(node)) {
           asserted.add(node);
           mergeKeys(assertedKeys, node, keysRead(value, node));
+          (rendersOutput(node) ? outputReads : otherReads).add(node);
         }
 
       // `const block = () => parse(x); expect(block).toThrow()`: a throw matcher runs the local function, so what
@@ -1042,6 +1058,7 @@ function analyzeBody(
   }
 
   return {
+    outputOnly: new Set([...outputReads].filter((call) => !otherReads.has(call))),
     returnedKeys,
     assertedKeys,
     calls,
@@ -1115,8 +1132,13 @@ function assertionReach(
   const positioned = new Set<ts.Node>();
   const visit = (node: ts.Node, depth: number, position: number) => {
     for (const item of [node, ...descendants(node)]) {
-      if (ts.isIdentifier(item) && ts.isCallExpression(item.parent) && item.parent.expression === item) {
-        const fn = localFunction(item, checker);
+      const caller =
+        ts.isIdentifier(item) && ts.isCallExpression(item.parent) && item.parent.expression === item;
+      const callerOwner = caller && item !== node ? enclosingFunction(item, node) : undefined;
+
+      // A call in a function the assertion never runs (`expect(() => query())`) runs nothing.
+      if (caller && !(callerOwner && !runsFunction(callerOwner, assertion, executed))) {
+        const fn = localFunction(item as ts.Identifier, checker);
 
         if (fn) executed.add(fn);
 
@@ -2731,6 +2753,7 @@ function helperInfo(body: ts.Node, ctx: Ctx): CallInfo {
       target.assertedInside ||
       (target.flowsToResult &&
         analysis.asserted.has(node) &&
+        !(target.passThrough && analysis.outputOnly.has(node)) &&
         keysMatch(analysis.assertedKeys.get(node), target)) ||
       analysis.observed.has(entry);
     const flowsToResult = target.flowsToResult && analysis.returned.has(node);
@@ -3845,6 +3868,7 @@ function analyzeTest(
         target.assertedInside ||
         (target.flowsToResult &&
           analysis?.asserted.has(node) === true &&
+          !(target.passThrough && analysis.outputOnly.has(node)) &&
           keysMatch(analysis.assertedKeys.get(node), target)) ||
         analysis?.observed.has(entry) === true,
       location: location(source, node, relativeFile),
