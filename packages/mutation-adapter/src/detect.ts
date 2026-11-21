@@ -14,6 +14,7 @@ export const REQUIRED_CAPABILITIES = ['--root', '--reporter', '--report-dir'] as
 export const OPTIONAL_CAPABILITIES = [
   '--since',
   '--include',
+  '--exclude',
   '--kill-matrix',
   '--only',
   '--config',

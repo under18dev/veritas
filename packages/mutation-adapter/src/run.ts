@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import {
   MUTATOR_DECLARED_VITEST_MAJOR,
@@ -14,7 +14,13 @@ import {
   vitestMajor,
 } from '@under18dev/veritas-core';
 import { detectMutator, PINNED_MUTATOR_VERSION, summarize } from './detect.js';
-import { baselineFailure, errorExcerpt, withoutDebug } from './diagnose.js';
+import {
+  baselineFailure,
+  errorExcerpt,
+  instrumentationFailures,
+  transformErrorLine,
+  withoutDebug,
+} from './diagnose.js';
 import { importMutationReport } from './import.js';
 import { countMutants, emptyCounts, type MutationRunResult, type MutationRunStatus } from './schema.js';
 import { mutatorVitestDir, projectViteUrl, writeMutationVitestConfig } from './vitest-config.js';
@@ -45,6 +51,8 @@ export interface RunMutationOptions {
   configPath?: string;
   /** Pass `--no-typecheck`. */
   noTypecheck?: boolean;
+  /** Source files (relative to the root, no glob characters) passed as `--exclude`. */
+  exclude?: string[];
 }
 
 const MUTANT_KEY = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
@@ -71,18 +79,26 @@ export function buildMutatorArgs(options: RunMutationOptions): string[] {
     args.push('--since', options.since);
   }
 
+  const relativeGlob = (glob: string) =>
+    glob !== '' &&
+    !glob.startsWith('-') &&
+    !glob.includes('\0') &&
+    !path.isAbsolute(glob) &&
+    !/^[A-Za-z]:/.test(glob) &&
+    !glob.split(/[\\/]/).includes('..');
+
   for (const glob of options.scope ?? []) {
-    if (
-      glob === '' ||
-      glob.startsWith('-') ||
-      glob.includes('\0') ||
-      path.isAbsolute(glob) ||
-      /^[A-Za-z]:/.test(glob) ||
-      glob.split(/[\\/]/).includes('..')
-    ) {
+    if (!relativeGlob(glob)) {
       throw new TypeError(`scope glob must be relative to the project root: ${JSON.stringify(glob)}`);
     }
     args.push('--include', glob);
+  }
+
+  for (const file of options.exclude ?? []) {
+    if (!relativeGlob(file)) {
+      throw new TypeError(`excluded file must be relative to the project root: ${JSON.stringify(file)}`);
+    }
+    args.push('--exclude', file);
   }
 
   if (options.configPath !== undefined) args.push('--config', options.configPath);
@@ -164,6 +180,8 @@ function confineReportDir(root: string, reportDir: string): string {
 export async function runMutation(options: RunMutationOptions): Promise<MutationRunResult> {
   const started = Date.now();
   const warnings: string[] = [];
+  /** Source files mutator was run again without, after their instrumented copy failed to parse. */
+  let excluded: string[] = [];
   const result = (
     status: MutationRunStatus,
     fields: Partial<MutationRunResult> & { detail: string | null },
@@ -179,6 +197,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     agentReport: null,
     killMatrix: null,
     warnings,
+    ...(excluded.length > 0 ? { excludedFiles: excluded } : {}),
     ...fields,
   });
 
@@ -275,9 +294,10 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   }
 
   mkdirSync(reportDir, { recursive: true });
+  let configPath: string | undefined;
 
   if (writesConfig) {
-    const configPath = writeMutationVitestConfig({
+    configPath = writeMutationVitestConfig({
       root: options.root,
       dir: reportDir,
       ...(options.testFiles === undefined ? {} : { testFiles: options.testFiles }),
@@ -285,20 +305,90 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
         ? {}
         : { fsAllow: { dirs: [fsAllowDir], viteUrl: projectViteUrl(options.root) } }),
     });
-    args = buildMutatorArgs({ ...options, reportDir, configPath, noTypecheck });
   }
-  const command = [process.execPath, detection.binPath, ...args];
-  const run = await runProjectTests(process.execPath, [detection.binPath, ...args], {
-    cwd: options.root,
-    timeoutMs: options.config.mutation.timeoutMs,
-    memoryMb: options.config.limits.memoryMb,
-    // mutator logs why a test file failed to load only to this debug channel, and only when one does.
-    env: { NODE_DEBUG: 'mutator' },
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-  });
+  const binPath = detection.binPath;
+  const argsExcluding = (exclude: string[]) =>
+    buildMutatorArgs({
+      ...options,
+      reportDir,
+      noTypecheck,
+      ...(configPath === undefined ? {} : { configPath }),
+      ...(exclude.length > 0 ? { exclude } : {}),
+    });
+  const spawn = (argv: string[]) =>
+    runProjectTests(process.execPath, [binPath, ...argv], {
+      cwd: options.root,
+      timeoutMs: options.config.mutation.timeoutMs,
+      memoryMb: options.config.limits.memoryMb,
+      // mutator logs why a test file failed to load only to this debug channel, and only when one does.
+      env: { NODE_DEBUG: 'mutator' },
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
   const reportPath = path.join(reportDir, 'mutation.json');
-  const rawReportPath = existsSync(reportPath) ? reportPath : null;
-  const common = { backend, command, exitCode: run.exitCode, durationMs: run.durationMs, rawReportPath };
+  const ran = (run: Awaited<ReturnType<typeof spawn>>, argv: string[], durationMs: number) => ({
+    backend,
+    command: [process.execPath, binPath, ...argv],
+    exitCode: run.exitCode,
+    durationMs,
+    rawReportPath: existsSync(reportPath) ? reportPath : null,
+  });
+  args = argsExcluding([]);
+  let run = await spawn(args);
+  let durationMs = run.durationMs;
+
+  // A baseline that fails because the bundler cannot parse mutator's instrumented copy of a source file is not
+  // a test failure. Run once more without the files the error names, and say so; a failure that remains is
+  // reported as the instrumentation failure it is.
+  if (run.exitCode === EXIT_BASELINE_FAILED && !run.timedOut && !options.signal?.aborted) {
+    const stderr = redact(run.stderr);
+    const broken = instrumentationFailures(stderr, options.root, {
+      testInclude: options.config.analysis.testInclude,
+      ...(options.testFiles === undefined ? {} : { testFiles: options.testFiles }),
+    });
+
+    if (broken.length > 0) {
+      const list = broken.join(', ');
+      const why = `after mutator instrumented ${list}, the project's bundler could not parse the result (${transformErrorLine(stderr)}). The source itself is not at fault: this is usually a bug in the bundler's parser, and upgrading Vite (or rolldown and oxc) may fix it`;
+      const diagnosis = `instrumentation failed: ${why}.\n${baselineFailure(stderr, options.root)}`;
+
+      if (!detection.capabilities.includes('--exclude')) {
+        return result('error', {
+          ...ran(run, args, durationMs),
+          detail: `${diagnosis}\nthis mutator has no --exclude, so it was not run again without ${list}`,
+        });
+      }
+      const retryArgs = argsExcluding(broken);
+      rmSync(reportPath, { force: true });
+      const retry = await spawn(retryArgs);
+      durationMs += retry.durationMs;
+
+      if (
+        !retry.timedOut &&
+        !retry.spawnError &&
+        !options.signal?.aborted &&
+        retry.exitCode !== 0 &&
+        retry.exitCode !== EXIT_GATE_FAILED
+      ) {
+        const again =
+          retry.exitCode === EXIT_BASELINE_FAILED
+            ? baselineFailure(redact(retry.stderr), options.root)
+            : errorExcerpt(withoutDebug(redact(retry.stderr)));
+
+        return result('error', {
+          ...ran(retry, retryArgs, durationMs),
+          detail: `${diagnosis}\nmutator run again without ${list} failed again (exit ${retry.exitCode ?? `signal ${retry.signal}`}): ${again}`,
+        });
+      }
+      warnings.push(
+        `${list} ${broken.length === 1 ? 'was' : 'were'} left out of mutation, so none of ${broken.length === 1 ? 'its' : 'their'} mutants ran: ${why}`,
+      );
+      excluded = broken;
+      run = retry;
+      args = retryArgs;
+    }
+  }
+  const common = ran(run, args, durationMs);
+  const { rawReportPath } = common;
 
   if (run.spawnError)
     return result('error', { ...common, detail: `could not start mutator: ${run.spawnError}` });

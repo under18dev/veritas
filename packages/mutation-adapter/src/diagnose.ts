@@ -1,4 +1,6 @@
+import { statSync } from 'node:fs';
 import path from 'node:path';
+import { resolveInsideRoot } from '@under18dev/veritas-core';
 
 /** Terminal color and cursor sequences, which Vite and oxc print even into a pipe. */
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[A-Za-z]`, 'g');
@@ -118,4 +120,71 @@ export function baselineFailure(stderr: string, root: string): string {
   );
 
   return `${summary}\nfirst error: ${file}: ${message}${detail === '' ? '' : `\n${detail.replace(/^[ \t]*/gm, '  ')}`}`;
+}
+
+/** A transform or parse error from the bundler, as opposed to a failing assertion. */
+const TRANSFORM_ERROR = /Transform failed|\[PARSE_ERROR\]|^\s*Plugin: \S+/m;
+/** `in src/a.ts at 10..14`, the location oxc prints for a parse error (relative to the working directory). */
+const PARSE_LOCATION = /^\s*-?\s*in (\S+?) at \d+\.\.\d+\s*$/gm;
+/** `File: /abs/src/a.ts:12:3`, the file Vite names for an error raised by a plugin. */
+const PLUGIN_FILE = /^\s*File: (.+?)\s*$/gm;
+const TEST_FILE = /(^|\/)__tests__\/|\.(test|spec)\.[cm]?[jt]sx?$/;
+/** Characters that would make the path a wider glob when passed to mutator's `--exclude`. */
+const GLOB_CHARS = /[*?[\]{}()!\\]/;
+
+/**
+ * Project source files that mutator's instrumented copy broke: the bundler failed to transform or parse them
+ * (`[PARSE_ERROR] … in src/a.ts at 10..14`, or `Plugin: vite:oxc` with `File: <root>/src/a.ts`). Only existing,
+ * non-test files inside the root are returned, project-relative with `/`. An ordinary test failure returns none.
+ */
+export function instrumentationFailures(
+  stderr: string,
+  root: string,
+  options: { testInclude?: readonly string[]; testFiles?: readonly string[] } = {},
+): string[] {
+  const text = stripAnsi(stderr);
+
+  if (!TRANSFORM_ERROR.test(text)) return [];
+  const candidates = [...text.matchAll(PARSE_LOCATION)].map((m) => m[1] as string);
+
+  if (/^\s*Plugin: \S+/m.test(text))
+    candidates.push(...[...text.matchAll(PLUGIN_FILE)].map((m) => m[1] as string));
+  const files = new Set<string>();
+
+  for (const candidate of candidates) {
+    const file = candidate.replace(/\?.*$/, '').replace(/(:\d+){1,2}$/, '');
+    const relative = (path.isAbsolute(file) ? path.relative(root, file) : path.normalize(file))
+      .split(path.sep)
+      .join('/');
+
+    if (
+      relative === '' ||
+      relative.startsWith('..') ||
+      path.isAbsolute(relative) ||
+      relative.startsWith('-') ||
+      GLOB_CHARS.test(relative) ||
+      relative.split('/').includes('node_modules') ||
+      TEST_FILE.test(relative) ||
+      options.testFiles?.includes(relative) ||
+      options.testInclude?.some((glob) => path.posix.matchesGlob(relative, glob))
+    )
+      continue;
+
+    try {
+      if (statSync(resolveInsideRoot(root, relative)).isFile()) files.add(relative);
+    } catch {
+      // Missing, or a link leaving the root: never excluded.
+    }
+  }
+
+  return [...files].sort();
+}
+
+/** The first parse or transform error line, such as `[PARSE_ERROR] HTML comments are not allowed in modules`. */
+export function transformErrorLine(stderr: string): string {
+  const text = stripAnsi(stderr);
+  const line = /\[[A-Z][A-Z_]*\][^\n]*/.exec(text)?.[0] ?? /Transform failed[^\n]*/.exec(text)?.[0];
+  const plugin = /^\s*Plugin: (\S+)/m.exec(text)?.[1];
+
+  return [line?.trim(), plugin && `plugin ${plugin}`].filter(Boolean).join(', ') || 'transform error';
 }
