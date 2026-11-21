@@ -1,6 +1,6 @@
 # MCP サーバー
 
-コーディングエージェントなどの MCP クライアントに Veritas を提供する `veritas-mcp` について、起動方法、各ツールの入力と戻り値、承認・同時実行・キャンセルの仕組みをまとめます。サーバーは `@under18dev/veritas` と一緒にインストールされます。ステージを実行するツールは、対応する `veritas` コマンドと同じく `.veritas/runs/<run-id>/` に新しい実行を作ります。`list_properties`、`get_evidence`、`get_run_status` は既存の実行を読むだけです。`plan_improvement` と `apply_approved_improvement` は `.veritas/improvements/` に書きます。クライアントへの接続方法は[エージェントと MCP](/ja/guide/agents)を参照してください。
+`veritas-mcp` は、コーディングエージェントなどの MCP クライアントに Veritas を提供するサーバーで、`@under18dev/veritas` と一緒にインストールされます。起動方法、各ツールの入力と戻り値、承認・同時実行・キャンセルの仕組みを以下に載せます。ステージを実行するツールは、対応する `veritas` コマンドと同じく `.veritas/runs/<run-id>/` に新しい実行を作ります。`list_properties`、`get_evidence`、`get_run_status` は既存の実行を読むだけです。`plan_improvement` と `apply_approved_improvement` は `.veritas/improvements/` に書きます。クライアントへの接続方法は[エージェントと MCP](/ja/guide/agents)を参照してください。
 
 ## サーバーの起動
 

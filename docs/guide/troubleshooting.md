@@ -1,6 +1,6 @@
 # Troubleshooting
 
-This page lists common errors with their fixes, and the tools for finding out what a run did.
+Common errors and their fixes come first. After them are the tools for finding out what a run did.
 
 ## Common problems
 

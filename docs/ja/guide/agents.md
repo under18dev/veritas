@@ -1,6 +1,6 @@
 # エージェントと MCP
 
-コーディングエージェントに Veritas を使わせる方法を説明します。`veritas` CLI の使い方をエージェントに指示する Agent Skill と、Veritas をツールとして公開する MCP サーバー `veritas-mcp` の二つがあり、どちらも CLI と同じエンジンで動きます。
+コーディングエージェントに Veritas を使わせる方法は二つあります。`veritas` CLI の使い方をエージェントに指示する Agent Skill と、Veritas をツールとして公開する MCP サーバー `veritas-mcp` です。どちらも CLI と同じエンジンで動きます。
 
 ## Agent Skill
 

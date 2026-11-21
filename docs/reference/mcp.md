@@ -1,6 +1,6 @@
 # MCP server
 
-This page describes `veritas-mcp`, which serves Veritas to MCP clients such as coding agents: how to start it, each tool with its inputs and results, and how approvals, concurrency and cancellation work. The server is installed with `@under18dev/veritas`. Tools that run stages create a new run in `.veritas/runs/<run-id>/`, like the matching `veritas` command; `list_properties`, `get_evidence` and `get_run_status` read existing runs; `plan_improvement` and `apply_approved_improvement` write under `.veritas/improvements/`. To connect it to a client, see [Agents and MCP](/guide/agents).
+`veritas-mcp` serves Veritas to MCP clients such as coding agents, and is installed with `@under18dev/veritas`. This reference covers how to start it, each tool with its inputs and results, and how approvals, concurrency and cancellation work. Tools that run stages create a new run in `.veritas/runs/<run-id>/`, like the matching `veritas` command; `list_properties`, `get_evidence` and `get_run_status` read existing runs; `plan_improvement` and `apply_approved_improvement` write under `.veritas/improvements/`. To connect it to a client, see [Agents and MCP](/guide/agents).
 
 ## Starting the server
 

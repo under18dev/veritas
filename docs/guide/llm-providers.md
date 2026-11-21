@@ -1,6 +1,6 @@
 # LLM providers
 
-This page explains how to let an LLM read documentation statements that the built-in rules cannot interpret, and what Veritas sends to it. An LLM is optional: every feature works without one. What an LLM finds becomes experimental `proposed` properties, which are never accepted automatically and never count as evidence or proof.
+An LLM is optional: every feature works without one. If you configure one, it reads the documentation statements that the built-in rules cannot interpret. What it finds becomes experimental `proposed` properties, which are never accepted automatically and never count as evidence or proof. Below are the providers you can use and what Veritas sends to them.
 
 The default is `llm.provider: "none"`.
 

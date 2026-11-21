@@ -1,6 +1,6 @@
 # Reading results
 
-This page explains the verdict, the exit code, findings, test outcomes and the statuses that appear in Veritas output. The exact definitions are in [Semantics](/concepts/semantics).
+Veritas output contains a verdict, an exit code, findings, test outcomes and statuses. Here is how to read each of them; the exact definitions are in [Semantics](/concepts/semantics).
 
 ## Verdict and exit code
 

@@ -1,6 +1,6 @@
 # Security model
 
-This page lists what Veritas protects, which inputs it treats as untrusted, and the control for each threat. The short version: repository content, web pages and model output are data, never instructions; network access is off by default; nothing changes project files without an explicit approval; and project code is trusted code, so analyse a repository you do not trust in an isolated environment ([Untrusted repositories](/guide/untrusted-repositories)).
+Repository content, web pages and model output are data, never instructions. Network access is off by default, and nothing changes project files without an explicit approval. Project code is trusted code, so analyse a repository you do not trust in an isolated environment ([Untrusted repositories](/guide/untrusted-repositories)). The rest of this page lists what Veritas protects, which inputs it treats as untrusted, and the control for each threat.
 
 ## What is protected
 

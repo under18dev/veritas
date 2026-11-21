@@ -1,6 +1,6 @@
 # CLI リファレンス
 
-`veritas` のコマンドとオプション、終了コードと verdict、読み取る環境変数、JSON 出力をまとめます。パイプラインを実行するコマンド（`discover`、`analyze`、`mutate`、`prove`、`run`、`replay`）は、結果を `.veritas/runs/<run-id>/` に書き出します。各ファイルについては[レポートと成果物](/ja/reference/reports)を参照してください。
+`veritas` のコマンドとオプション、終了コードと verdict、読み取る環境変数、JSON 出力のリファレンスです。パイプラインを実行するコマンド（`discover`、`analyze`、`mutate`、`prove`、`run`、`replay`）は、結果を `.veritas/runs/<run-id>/` に書き出します。各ファイルについては[レポートと成果物](/ja/reference/reports)を参照してください。
 
 ```bash
 veritas [グローバルオプション] <command> [オプション]

@@ -1,6 +1,6 @@
 # CI and GitHub Action
 
-This page shows how to run Veritas on pull requests with the GitHub Action or the CLI, and how to choose which results fail the build.
+Run Veritas on pull requests with the GitHub Action or the CLI, and choose which results fail the build.
 
 Before you start, commit `.veritas/config.json` (and `.veritas/approvals.json` if you have accepted properties); [Getting started](/guide/getting-started#find-the-results) has a matching `.gitignore`. Without the configuration, `veritas run` stops with `CONFIG_MISSING` (exit code `2`).
 

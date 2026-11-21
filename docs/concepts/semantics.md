@@ -1,6 +1,6 @@
 # Semantics
 
-Every result Veritas reports has a precise, limited meaning. This page states what each status means, under which model and bounds it holds, and what it must not be read as. The vocabularies are fixed: no other status is ever reported, and none of them is collapsed into a single quality or confidence score.
+Every result Veritas reports has a precise, limited meaning. For each status you will find what it means, under which model and bounds it holds, and what it must not be read as. The vocabularies are fixed: no other status is ever reported, and none of them is collapsed into a single quality or confidence score.
 
 ## Status vocabularies
 

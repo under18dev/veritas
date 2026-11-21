@@ -1,6 +1,6 @@
 # 結果の読み方
 
-Veritas の出力に出てくる verdict（判定）、終了コード、finding（指摘）、テストの判定、各種の状態の意味を説明します。正確な定義は[セマンティクス](/ja/concepts/semantics)にあります。
+Veritas の出力には、verdict（判定）、終了コード、finding（指摘）、テストの判定、各種の状態が出てきます。以下はその読み方で、正確な定義は[セマンティクス](/ja/concepts/semantics)にあります。
 
 ## verdict と終了コード
 

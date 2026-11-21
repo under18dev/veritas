@@ -1,6 +1,6 @@
 # 仕様の確定
 
-Veritas が照らし合わせる規則をどこから見つけるか、規則がどのように Property になるか、Property をどう accept、reject、追跡するかを説明します。何が仕様かを Veritas が自分で決めることはありません。Veritas は Property を `proposed`（出典が食い違う場合は `conflicted`）として作り、accepted にできるのはあなただけです。
+何が仕様かを Veritas が自分で決めることはありません。Veritas は Property を `proposed`（出典が食い違う場合は `conflicted`）として作り、accepted にできるのはあなただけです。このガイドでは、照らし合わせる規則を Veritas がどこから見つけるか、規則がどのように Property になるか、Property をどう accept、reject、追跡するかを順に見ていきます。
 
 ## 規則を読む出典
 

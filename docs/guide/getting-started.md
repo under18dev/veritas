@@ -1,6 +1,6 @@
 # Getting started
 
-This page installs Veritas in your project, checks the environment and runs the pipeline once. For a guided example with a known bug, follow the [tutorial](/guide/tutorial).
+Install Veritas in your project, check the environment and run the pipeline once. For a guided example with a known bug, follow the [tutorial](/guide/tutorial).
 
 ## Requirements
 

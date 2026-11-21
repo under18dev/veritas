@@ -1,6 +1,6 @@
 # Node API
 
-This page lists what `@under18dev/veritas` exports for use from Node.js. The functions run the same stages as the matching `veritas` command, write the same kind of files to `.veritas/runs/<run-id>/`, and return a verdict and exit code computed the same way. Some defaults differ from the CLI; pass the options in the table below to get the same behaviour.
+Everything `@under18dev/veritas` exports for use from Node.js is listed here. The functions run the same stages as the matching `veritas` command, write the same kind of files to `.veritas/runs/<run-id>/`, and return a verdict and exit code computed the same way. Some defaults differ from the CLI; pass the options in the table below to get the same behaviour.
 
 ```bash
 pnpm add -D @under18dev/veritas

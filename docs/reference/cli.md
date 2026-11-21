@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists the commands and options of `veritas`, its exit codes and verdicts, the environment variables it reads, and its JSON output. The commands that run the pipeline (`discover`, `analyze`, `mutate`, `prove`, `run` and `replay`) write their results to `.veritas/runs/<run-id>/`; the files are described in [Reports and artifacts](/reference/reports).
+The commands and options of `veritas`, its exit codes and verdicts, the environment variables it reads, and its JSON output. The commands that run the pipeline (`discover`, `analyze`, `mutate`, `prove`, `run` and `replay`) write their results to `.veritas/runs/<run-id>/`; the files are described in [Reports and artifacts](/reference/reports).
 
 ```bash
 veritas [global options] <command> [options]

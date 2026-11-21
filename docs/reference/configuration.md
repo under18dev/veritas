@@ -1,6 +1,6 @@
 # Configuration
 
-This page describes where Veritas reads its configuration, every setting with its default and allowed values, and how the result cache works.
+Where Veritas reads its configuration, every setting with its default and allowed values, and how the result cache works.
 
 ## Example
 
