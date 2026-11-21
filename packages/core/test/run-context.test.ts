@@ -65,6 +65,27 @@ describe('run context', () => {
     ]);
   });
 
+  it('never sends a private key spread over lines, even split between chunks, and cuts long lines', async () => {
+    const root = tmp();
+    const script = [
+      'const w = (t) => process.stdout.write(t);',
+      "w('before\\n-----BEGIN PRIV');",
+      'setTimeout(() => {',
+      "  w('ATE KEY-----\\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\\n-----END PRIVATE KEY-----\\nafter\\n');",
+      "  w('x'.repeat(100000));",
+      "  w('y'.repeat(100000) + '\\nlast');",
+      '}, 100);',
+    ].join('\n');
+    const events: LogEvent[] = [];
+    await withRunContext({ root, sinks: [(e) => events.push(e)] }, () =>
+      runCommand(process.execPath, ['-e', script], { cwd: root, timeoutMs: 20_000, logOutput: true }),
+    );
+    const messages = events
+      .filter((e) => e.event === 'process-output')
+      .map((e) => e.message.replace(/^\S+: /, ''));
+    expect(messages).toEqual(['before', '[REDACTED]', 'after', `${'x'.repeat(300)}...`, 'last']);
+  });
+
   it('never writes a trace larger than its cap in UTF-8 bytes, truncation line included', () => {
     const trace = traceCollector(1000);
 

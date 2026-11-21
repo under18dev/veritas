@@ -47,6 +47,27 @@ export interface RunCommandOptions {
 
 /** Output lines sent as events per process, so a chatty process cannot flood a trace. */
 const OUTPUT_EVENT_LIMIT = 2000;
+/** Characters of an output line kept for its event; the rest is not buffered. */
+const OUTPUT_LINE_CHARS = 300;
+/** The start or end of a PEM private key, as redact() matches whole blocks. */
+const KEY_MARKER = /-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/g;
+/** Characters kept from the end of a chunk, so a marker split between chunks is still found. */
+const KEY_MARKER_CARRY = 80;
+
+type OutputStream = 'stdout' | 'stderr';
+
+interface OutputLine {
+  /** The first OUTPUT_LINE_CHARS + 1 characters of the line so far. */
+  head: string;
+  carry: string;
+  /** Whether the line has the start of a key block, and the last marker it has. */
+  begin: boolean;
+  last: 'BEGIN' | 'END' | null;
+  /** Whether the line is inside a key block that an earlier line started. */
+  inKey: boolean;
+}
+
+const emptyLine = (): OutputLine => ({ head: '', carry: '', begin: false, last: null, inKey: false });
 
 /**
  * Run an executable without a shell (no argument injection), with a timeout, an output cap,
@@ -91,23 +112,53 @@ export function runCommand(
       command: path.basename(command),
       cwd: relativeToRoot(options.cwd),
     });
-    const partial = { stdout: '', stderr: '' };
+    // Output lines are cut to OUTPUT_LINE_CHARS and scanned for private key blocks as they arrive, so memory stays
+    // bounded and a key spread over lines (which redact() only catches whole) never reaches an event.
+    const lines = { stdout: emptyLine(), stderr: emptyLine() };
     let outputEvents = 0;
-    const logLines = (stream: 'stdout' | 'stderr', text: string) => {
-      if (!options.logOutput || outputEvents >= OUTPUT_EVENT_LIMIT) return;
-      const lines = (partial[stream] + text).split(/\r?\n|\r/);
-      partial[stream] = lines.pop() ?? '';
+    const emit = (stream: OutputStream, text: string) => {
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escape sequences are removed
+      const line = text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').trim();
 
-      for (const raw of lines) {
-        // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escape sequences are removed
-        const line = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').trim();
-
-        if (!line || ++outputEvents > OUTPUT_EVENT_LIMIT) continue;
-        logEvent('debug', `${name}: ${line.length > 300 ? `${line.slice(0, 300)}...` : line}`, {
+      if (!line || ++outputEvents > OUTPUT_EVENT_LIMIT) return;
+      logEvent(
+        'debug',
+        `${name}: ${line.length > OUTPUT_LINE_CHARS ? `${line.slice(0, OUTPUT_LINE_CHARS)}...` : line}`,
+        {
           event: 'process-output',
           command: path.basename(command),
           stream,
-        });
+        },
+      );
+    };
+    const endLine = (stream: OutputStream) => {
+      const line = lines[stream];
+      const inKey = line.inKey;
+      lines[stream] = { ...emptyLine(), inKey: line.last === null ? inKey : line.last === 'BEGIN' };
+
+      // The body and the end of a key block are dropped; the line that starts one is reported as redacted.
+      if (inKey) return;
+      emit(stream, line.begin ? '[REDACTED]' : line.head);
+    };
+    const logLines = (stream: OutputStream, text: string) => {
+      if (!options.logOutput || outputEvents >= OUTPUT_EVENT_LIMIT) return;
+      const segments = text.split(/\r?\n|\r/);
+
+      for (const [index, segment] of segments.entries()) {
+        const line = lines[stream];
+
+        if (line.head.length <= OUTPUT_LINE_CHARS)
+          line.head += segment.slice(0, OUTPUT_LINE_CHARS + 1 - line.head.length);
+        // The end of the previous segment is scanned again, for a marker split between two chunks.
+        const window = line.carry + segment;
+
+        for (const match of window.matchAll(KEY_MARKER)) {
+          if (match[1] === 'BEGIN') line.begin = true;
+          line.last = match[1] as 'BEGIN' | 'END';
+        }
+        line.carry = window.slice(-KEY_MARKER_CARRY);
+
+        if (index < segments.length - 1) endLine(stream);
       }
     };
     const finish = (result: Partial<CommandResult>) => {
@@ -118,7 +169,8 @@ export function runCommand(
       options.signal?.removeEventListener('abort', onAbort);
 
       // The last line of output may have no newline.
-      for (const stream of ['stdout', 'stderr'] as const) if (partial[stream]) logLines(stream, '\n');
+      for (const stream of ['stdout', 'stderr'] as const)
+        if (lines[stream].head || lines[stream].begin) endLine(stream);
       // Debug trace: what ran, where and how it ended. Arguments are capped and redacted; never the environment
       // or the input/output contents.
       const durationMs = Date.now() - started;
