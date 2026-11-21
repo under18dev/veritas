@@ -139,18 +139,24 @@ export function inventoryTests(options: {
     }
   }
 
+  const usedCache = new Map<ts.SourceFile, ts.SourceFile[]>();
+  // For module names TypeScript does not resolve itself, such as the argument of `vi.mock('./x')`.
+  const resolveModule = (name: string, containingFile: string): ts.SourceFile | undefined => {
+    const resolved = ts.resolveModuleName(name, containingFile, compilerOptions, ts.sys).resolvedModule;
+
+    return resolved ? program.getSourceFile(resolved.resolvedFileName) : undefined;
+  };
   const files = uniqueFiles.map((file) => {
     const source = sourceFiles.get(file);
-    const dependencies = source ? localDependencies(source, checker, root) : [];
-    const reached = [
-      source,
-      ...dependencies.map((dependency) => sourceFiles.get(path.resolve(root, dependency))),
-    ];
+    // Every file the test loads, which is what decides whether something it reaches is unseen.
+    const loaded = source ? localDependencies(source, checker, root) : [];
+    const reached = [source, ...loaded.map((dependency) => sourceFiles.get(path.resolve(root, dependency)))];
 
     return {
       path: toPosixRelative(root, file),
       hash: sha256(readFileSync(file)),
-      dependencies,
+      // Only the files whose code the test may run: mutation testing selects tests by these.
+      dependencies: source ? usedDependencies(source, checker, root, usedCache, resolveModule) : [],
       // An unparsed file is unknown too.
       unseenReach:
         !source || reached.some((reachedFile) => reachedFile && hasUnseenReach(reachedFile, checker)),
@@ -1680,6 +1686,13 @@ function passedByReference(identifier: ts.Identifier, checker: ts.TypeChecker): 
  * imported through its built `.d.ts` runs its build output, which changing the source does not affect.
  */
 function localDependencies(start: ts.SourceFile, checker: ts.TypeChecker, root: string): string[] {
+  return loadedFiles(start, checker, root)
+    .map((source) => toPosixRelative(root, source.fileName))
+    .sort();
+}
+
+/** The local files a file loads, transitively: what its imports, re-exports and dynamic imports name. */
+function loadedFiles(start: ts.SourceFile, checker: ts.TypeChecker, root: string): ts.SourceFile[] {
   const seen = new Set<ts.SourceFile>([start]);
   const queue = [start];
 
@@ -1711,10 +1724,248 @@ function localDependencies(start: ts.SourceFile, checker: ts.TypeChecker, root: 
     }
   }
 
-  return [...seen]
+  return [...seen].filter((source) => source !== start);
+}
+
+/**
+ * The local files whose code a test file may run, followed symbol by symbol: an import of `{ f }` through a barrel
+ * counts the file that declares `f`, not every module the barrel re-exports. A file counted is counted whole, and
+ * its own imports are followed the same way. When in doubt a file is counted whole: a test left out would let a
+ * mutant it kills survive. Counted whole are the targets of side-effect imports, of namespace imports used other
+ * than as `ns.member`, of re-exports in a counted file, of `vi.mock`-style and dynamic imports, and every loaded file
+ * whose top level runs more than declarations. Type-only imports count nothing.
+ */
+function usedDependencies(
+  start: ts.SourceFile,
+  checker: ts.TypeChecker,
+  root: string,
+  cache: Map<ts.SourceFile, ts.SourceFile[]>,
+  resolveModule: ModuleResolver,
+): string[] {
+  const local = (file: ts.SourceFile | undefined): file is ts.SourceFile => {
+    if (!file || file.isDeclarationFile) return false;
+    const relative = path.relative(root, path.resolve(file.fileName));
+
+    return !(
+      relative.startsWith('..') ||
+      path.isAbsolute(relative) ||
+      relative.split(path.sep).includes('node_modules')
+    );
+  };
+  const queue: ts.SourceFile[] = [start];
+  const used = new Set<ts.SourceFile>([start]);
+
+  // ES modules run the top level of every module they load, used or not.
+  for (const source of loadedFiles(start, checker, root))
+    if (hasLoadTimeEffects(source)) {
+      used.add(source);
+      queue.push(source);
+    }
+
+  for (let source = queue.shift(); source; source = queue.shift()) {
+    let direct = cache.get(source);
+
+    if (!direct) {
+      direct = directlyUsedFiles(source, checker, resolveModule).filter(local);
+      cache.set(source, direct);
+    }
+
+    for (const file of direct)
+      if (!used.has(file)) {
+        used.add(file);
+        queue.push(file);
+      }
+  }
+
+  return [...used]
     .filter((source) => source !== start)
     .map((source) => toPosixRelative(root, source.fileName))
     .sort();
+}
+
+type ModuleResolver = (name: string, containingFile: string) => ts.SourceFile | undefined;
+
+/** The files whose code a file may run through its imports, re-exports, mocks and dynamic imports. */
+function directlyUsedFiles(
+  source: ts.SourceFile,
+  checker: ts.TypeChecker,
+  resolveModule: ModuleResolver,
+): ts.SourceFile[] {
+  const found = new Set<ts.SourceFile>();
+  const moduleOf = (specifier: ts.Expression | undefined): ts.SourceFile | undefined => {
+    if (!specifier || !ts.isStringLiteralLike(specifier)) return undefined;
+    const declaration = checker.getSymbolAtLocation(specifier)?.declarations?.find(ts.isSourceFile);
+
+    return declaration && ts.isSourceFile(declaration) ? declaration : undefined;
+  };
+  const whole = (file: ts.SourceFile | undefined) => {
+    if (file) found.add(file);
+  };
+  // The files that declare what a name refers to, through every re-export; the module when that fails.
+  const declared = (name: ts.Identifier, module: ts.SourceFile | undefined) => {
+    let symbol = checker.getSymbolAtLocation(name);
+
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    const files = (symbol?.declarations ?? []).map((declaration) =>
+      ts.isSourceFile(declaration) ? declaration : declaration.getSourceFile(),
+    );
+
+    if (files.length === 0) whole(module);
+
+    for (const file of files) whole(file);
+  };
+
+  for (const statement of source.statements) {
+    if (ts.isImportDeclaration(statement)) {
+      const module = moduleOf(statement.moduleSpecifier);
+      const clause = statement.importClause;
+
+      // `import './setup'` runs the module for its effects.
+      if (!clause) {
+        whole(module);
+        continue;
+      }
+
+      if (clause.isTypeOnly) continue;
+
+      if (clause.name) declared(clause.name, module);
+      const bindings = clause.namedBindings;
+
+      if (bindings && ts.isNamedImports(bindings))
+        for (const element of bindings.elements) if (!element.isTypeOnly) declared(element.name, module);
+
+      if (bindings && ts.isNamespaceImport(bindings)) {
+        const members = namespaceMembers(bindings.name, source, checker);
+
+        if (members === null) whole(module);
+        else for (const member of members) declared(member, module);
+      }
+      continue;
+    }
+
+    // What a file re-exports may be used by whoever imports it as a whole.
+    if (ts.isExportDeclaration(statement) && statement.moduleSpecifier && !statement.isTypeOnly)
+      whole(moduleOf(statement.moduleSpecifier));
+  }
+
+  for (const node of descendants(source)) {
+    if (!ts.isCallExpression(node)) continue;
+
+    // `import('./x')`, and the modules `vi.mock('./x')` and friends replace or load.
+    if (node.expression.kind === ts.SyntaxKind.ImportKeyword) whole(moduleOf(node.arguments[0]));
+    else if (MODULE_MOCK_APIS.has(viCall(node, checker) ?? '')) {
+      const name = node.arguments[0];
+
+      if (name && ts.isStringLiteralLike(name)) whole(resolveModule(name.text, source.fileName));
+    }
+  }
+
+  return [...found].filter((file) => file !== source);
+}
+
+const MODULE_MOCK_APIS = new Set(['mock', 'doMock', 'unmock', 'doUnmock', 'importActual', 'importMock']);
+
+/**
+ * The `member` names of a namespace import when every use of it is `ns.member`; null when it is also used
+ * otherwise (passed on, spread, iterated), which may reach any export.
+ */
+function namespaceMembers(
+  name: ts.Identifier,
+  source: ts.SourceFile,
+  checker: ts.TypeChecker,
+): ts.Identifier[] | null {
+  const symbol = checker.getSymbolAtLocation(name);
+  const members: ts.Identifier[] = [];
+
+  for (const node of descendants(source)) {
+    if (!ts.isIdentifier(node) || node === name || checker.getSymbolAtLocation(node) !== symbol) continue;
+    const parent = node.parent;
+
+    if (ts.isPropertyAccessExpression(parent) && parent.expression === node && ts.isIdentifier(parent.name))
+      members.push(parent.name);
+    // `ns.Type` in a type annotation runs nothing.
+    else if (ts.isQualifiedName(parent) && parent.left === node) continue;
+    else return null;
+  }
+
+  return members;
+}
+
+/**
+ * Whether loading a module runs more than declarations: anything at its top level other than imports, exports,
+ * types, function declarations, classes without decorators or static initializers, enums, and `const`/`let`
+ * bindings of literals and functions.
+ */
+function hasLoadTimeEffects(source: ts.SourceFile): boolean {
+  const inert = (expression: ts.Expression | undefined): boolean => {
+    if (!expression) return true;
+    const value = skipParens(expression);
+
+    return (
+      ts.isLiteralExpression(value) ||
+      ts.isNoSubstitutionTemplateLiteral(value) ||
+      value.kind === ts.SyntaxKind.TrueKeyword ||
+      value.kind === ts.SyntaxKind.FalseKeyword ||
+      value.kind === ts.SyntaxKind.NullKeyword ||
+      ts.isIdentifier(value) ||
+      ts.isArrowFunction(value) ||
+      ts.isFunctionExpression(value) ||
+      (ts.isPrefixUnaryExpression(value) && inert(value.operand)) ||
+      ((ts.isAsExpression(value) || ts.isSatisfiesExpression(value)) && inert(value.expression)) ||
+      (ts.isArrayLiteralExpression(value) &&
+        value.elements.every((element) => !ts.isSpreadElement(element) && inert(element))) ||
+      (ts.isObjectLiteralExpression(value) &&
+        value.properties.every(
+          (property) =>
+            (ts.isPropertyAssignment(property) &&
+              !ts.isComputedPropertyName(property.name) &&
+              inert(property.initializer)) ||
+            ts.isShorthandPropertyAssignment(property) ||
+            ts.isMethodDeclaration(property),
+        ))
+    );
+  };
+
+  return !source.statements.every((statement) => {
+    if (
+      ts.isImportDeclaration(statement) ||
+      ts.isExportDeclaration(statement) ||
+      ts.isTypeAliasDeclaration(statement) ||
+      ts.isInterfaceDeclaration(statement) ||
+      ts.isFunctionDeclaration(statement) ||
+      ts.isEnumDeclaration(statement) ||
+      ts.isModuleDeclaration(statement) ||
+      ts.isEmptyStatement(statement)
+    )
+      return true;
+
+    if (ts.isClassDeclaration(statement))
+      return (
+        !ts.getDecorators(statement)?.length &&
+        statement.members.every(
+          (member) =>
+            !ts.isClassStaticBlockDeclaration(member) &&
+            !(ts.canHaveDecorators(member) && ts.getDecorators(member)?.length) &&
+            !(
+              ts.isPropertyDeclaration(member) &&
+              member.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) &&
+              !inert(member.initializer)
+            ),
+        ) &&
+        (statement.heritageClauses ?? []).every((clause) =>
+          clause.types.every((type) => ts.isIdentifier(type.expression)),
+        )
+      );
+
+    if (ts.isVariableStatement(statement))
+      return statement.declarationList.declarations.every(
+        (declaration) => ts.isIdentifier(declaration.name) && inert(declaration.initializer),
+      );
+
+    if (ts.isExportAssignment(statement)) return inert(statement.expression);
+
+    return false;
+  });
 }
 
 const TEST_SUPPORT_DIRECTORIES = new Set(['test', 'tests', '__tests__', '__mocks__', 'e2e']);
