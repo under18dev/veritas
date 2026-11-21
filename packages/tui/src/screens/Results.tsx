@@ -1,7 +1,7 @@
 import { type Finding, isPlainRelativePath, type Location, type Run } from '@under18dev/veritas-core';
 import type { Explanation } from '@under18dev/veritas-engine';
 import { Box, type DOMElement, Text, useBoxMetrics, useInput } from 'ink';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ago,
   Badge,
@@ -16,6 +16,7 @@ import {
   SelectList,
   SeverityLabel,
   StageStrip,
+  statusColor,
   useLoad,
   verdictColor,
 } from '../components.js';
@@ -106,6 +107,12 @@ export function Results({ api, active, onBack, height, width, version, setHints 
                   {(run.verdict ?? run.status).padEnd(VERDICT_WIDTH)}
                 </Badge>
               </Box>
+              {/* Before the fields a narrow terminal cuts: a partial run must never look complete. */}
+              {run.partial ? (
+                <Box flexShrink={0} marginRight={1}>
+                  <Badge color="yellow">partial</Badge>
+                </Box>
+              ) : null}
               <Text wrap="truncate-end" {...(selected ? { color: 'cyan' } : {})}>
                 {(findings === null
                   ? '? findings'
@@ -115,7 +122,6 @@ export function Results({ api, active, onBack, height, width, version, setHints 
                 {/* The duration is the first to go in a narrow terminal. */}
                 {width >= 62 ? ago(run.startedAt).padEnd(9) : ago(run.startedAt)}
                 {width >= 62 ? <Text dimColor>{tookText(run)}</Text> : null}
-                {run.partial ? <Text color="yellow"> partial</Text> : null}
               </Text>
             </>
           ) : (
@@ -216,6 +222,9 @@ function RunDetail({
   const listBox = useRef<DOMElement>(null);
   const listRows = useBoxMetrics(listBox).height;
   const [showEvidence, setShowEvidence] = useState(false);
+  // Kept while the evidence counts replace the list, so `e` twice returns to the same finding.
+  const [cursor, setCursor] = useState(0);
+  const onHighlight = useCallback((_item: unknown, index: number) => setCursor(index), []);
 
   useInput(
     (input) => {
@@ -256,6 +265,8 @@ function RunDetail({
           <SelectList
             active={active}
             height={Math.max(1, listRows - 1)}
+            initial={cursor}
+            onHighlight={onHighlight}
             items={findings.map((f) => ({ label: f.title, value: f }))}
             render={({ value: f }, selected) => (
               <>
@@ -301,21 +312,9 @@ function Section({ title, count, children }: { title: string; count?: number; ch
   );
 }
 
-const OUTCOME_COLOR: Record<string, string> = {
-  meaningful_with_evidence: 'green',
-  tautological_or_disconnected: 'red',
-  spec_conflict: 'red',
-  killed: 'green',
-  survived: 'red',
-  proven_within_model: 'green',
-  counterexample_found: 'red',
-  semantic_mismatch: 'red',
-  error: 'red',
-};
-
 /** A status in the color of what it means; anything not known to be good is yellow. */
 function Status({ children }: { children: string }) {
-  return <Text color={OUTCOME_COLOR[children] ?? 'yellow'}>{children}</Text>;
+  return <Text color={statusColor(children)}>{children}</Text>;
 }
 
 const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim();

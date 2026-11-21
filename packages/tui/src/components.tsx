@@ -414,6 +414,34 @@ export function StageStrip({
   );
 }
 
+const STATUS_COLOR: Record<string, string> = {
+  // test outcomes
+  meaningful_with_evidence: 'green',
+  tautological_or_disconnected: 'red',
+  spec_conflict: 'red',
+  // mutants
+  killed: 'green',
+  survived: 'red',
+  // property-based tests
+  passed: 'green',
+  counterexample: 'red',
+  // solver claims
+  proven_within_model: 'green',
+  counterexample_found: 'red',
+  semantic_mismatch: 'red',
+  failed: 'red',
+  error: 'red',
+};
+
+/**
+ * The color of an evidence status (test outcome, mutant, property-based test or solver claim): green only for a
+ * result known to be good, red for a failure or counterexample, yellow for anything else (weak, unknown, timeout,
+ * cancelled, unsupported).
+ */
+export function statusColor(status: string): string {
+  return STATUS_COLOR[status] ?? 'yellow';
+}
+
 const SEVERITY_COLOR: Record<string, string> = {
   critical: 'red',
   high: 'red',

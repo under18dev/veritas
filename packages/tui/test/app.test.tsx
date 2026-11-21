@@ -5,7 +5,7 @@ import { render } from 'ink-testing-library';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App.js';
 import type { TuiApi } from '../src/api.js';
-import { ago, duration } from '../src/components.js';
+import { ago, duration, statusColor } from '../src/components.js';
 import { abbreviateHome, nextSteps } from '../src/screens/Home.js';
 import { sortFindings } from '../src/screens/Results.js';
 import { appendLog, applyStageEvent, clock } from '../src/screens/Run.js';
@@ -373,6 +373,26 @@ describe('the TUI', () => {
     await press(app, 'e');
     await until(app, 'counts per status');
     expect(app.lastFrame()).toContain('1 proven_within_model');
+  });
+
+  it('marks a partial run in the run list before the fields a narrow terminal cuts', async () => {
+    const app = await open(fakeApi({ readRun: () => ({ ...RUN, partial: true }) as Run }), 1);
+    await until(app, ' partial ');
+    expect(app.lastFrame()).toMatch(/inconclusive\s+partial\s+2 findings/);
+  });
+
+  it('keeps the finding under the cursor when the evidence counts are shown and hidden', async () => {
+    const app = await open(fakeApi(), 1);
+    await until(app, 'R-1');
+    await press(app, KEY.enter);
+    await until(app, 'boundary is not checked');
+    await press(app, KEY.down, 'e');
+    await until(app, 'counts per status');
+    await press(app, 'e');
+    await until(app, '› MEDIUM');
+    await press(app, KEY.enter);
+    await until(app, 'Why it was reported');
+    expect(app.lastFrame()).toMatch(/MEDIUM\s+suspected\s+weak_test/);
   });
 
   it('follows a run to a finding, its evidence in sections, and the suggested next actions apart', async () => {
@@ -902,6 +922,14 @@ describe('helpers', () => {
         (x) => `${x.severity}/${x.certainty}`,
       ),
     ).toEqual(['high/confirmed', 'high/suspected', 'low/confirmed']);
+  });
+
+  it('colors evidence statuses by what they mean', () => {
+    expect(statusColor('counterexample')).toBe('red');
+    expect(statusColor('passed')).toBe('green');
+    expect(statusColor('timeout')).toBe('yellow');
+    expect(statusColor('weak_or_incomplete')).toBe('yellow');
+    expect(statusColor('something new')).toBe('yellow');
   });
 
   it('removes defaults the user did not write', () => {

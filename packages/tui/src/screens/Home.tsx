@@ -16,6 +16,7 @@ import {
   SEVERITIES,
   StageStrip,
   severityColor,
+  statusColor,
   useLoad,
   verdictColor,
 } from '../components.js';
@@ -279,22 +280,6 @@ function packageManager(config: ConfigFile | undefined, doctor: DoctorReport | u
   );
 }
 
-const OUTCOME_COLOR: Record<string, string> = {
-  meaningful_with_evidence: 'green',
-  weak_or_incomplete: 'yellow',
-  tautological_or_disconnected: 'red',
-  spec_conflict: 'red',
-  inconclusive: 'yellow',
-  killed: 'green',
-  survived: 'red',
-  passed: 'green',
-  failed: 'red',
-  proven_within_model: 'green',
-  counterexample_found: 'red',
-  semantic_mismatch: 'red',
-  error: 'red',
-};
-
 /** Counts of one kind of evidence, each in the color of what it means; unknown statuses are yellow, never green. */
 export function EvidenceRow({ label, counts }: { label: string; counts: [string, number][] | null }) {
   if (counts === null) return null;
@@ -309,7 +294,7 @@ export function EvidenceRow({ label, counts }: { label: string; counts: [string,
         {counts.map(([status, count]) => (
           <Box key={status} marginRight={2} flexShrink={0}>
             <Text>
-              <Text bold color={OUTCOME_COLOR[status] ?? 'yellow'}>
+              <Text bold color={statusColor(status)}>
                 {count}
               </Text>{' '}
               {status}
