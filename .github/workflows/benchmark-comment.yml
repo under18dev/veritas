@@ -41,6 +41,8 @@ jobs:
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
           RUN_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
           RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # The pull requests GitHub links to the run (empty for one from a fork).
+          RUN_PULLS: ${{ toJSON(github.event.workflow_run.pull_requests) }}
         run: |
           set -euo pipefail
           number=$(jq -r '.number' out/pr.json)
@@ -52,6 +54,12 @@ jobs:
           [ "$head_sha" = "$RUN_SHA" ] || { echo "the pull request is not at the measured commit; not commenting"; exit 0; }
           [ "$head_repo" = "$RUN_REPO" ] && [ "$head_branch" = "$RUN_BRANCH" ] \
             || { echo "the pull request's head is not the branch that was measured; not commenting"; exit 1; }
+          # When GitHub names the run's pull requests, the artifact's must be one of them: a branch can have pull
+          # requests to several bases.
+          if [ "$(jq 'length' <<< "$RUN_PULLS")" -gt 0 ]; then
+            jq -e --argjson n "$number" 'any(.[]; .number == $n)' <<< "$RUN_PULLS" > /dev/null \
+              || { echo "the run is not linked to pull request $number; not commenting"; exit 1; }
+          fi
           node benchmarks/compare.mjs \
             --base out/fixtures-base.json --head out/fixtures-head.json \
             --real-base out/real-base.json --real-head out/real-head.json \
