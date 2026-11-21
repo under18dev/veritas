@@ -180,6 +180,12 @@ export const VeritasConfig = z
           .describe(
             'auto lets mutator type-check mutants before running them and leave out those that do not compile; off starts mutants right after the baseline, but mutants the compiler would reject are run and counted too.',
           ),
+        confirmDisconnected: z
+          .boolean()
+          .default(true)
+          .describe(
+            'After the mutation run, check the tests static analysis could not link to project code by running mutator again on their test files alone, within what is left of timeoutMs.',
+          ),
       })
       .strict()
       .prefault({})

@@ -47,12 +47,13 @@ Unknown keys are rejected.
 
 ### `mutation`
 
-| Setting              | Type    | Default    | Allowed values          | Description                                                                                                                                                                                                   |
-| -------------------- | ------- | ---------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mutation.backend`   | string  | `"mizchi"` | only `"mizchi"` (fixed) | Mutation testing tool; only mutator (@mizchi/mutator) is supported.                                                                                                                                           |
-| `mutation.mode`      | string  | `"diff"`   | `diff`, `full`          | diff mutates only the code changed since the --since ref, or everything in scope without one; full mutates everything in scope.                                                                               |
-| `mutation.timeoutMs` | integer | `120000`   | > 0                     | Time allowed for mutation testing, in milliseconds.                                                                                                                                                           |
-| `mutation.typecheck` | string  | `"auto"`   | `auto`, `off`           | auto lets mutator type-check mutants before running them and leave out those that do not compile; off starts mutants right after the baseline, but mutants the compiler would reject are run and counted too. |
+| Setting                        | Type    | Default    | Allowed values          | Description                                                                                                                                                                                                   |
+| ------------------------------ | ------- | ---------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mutation.backend`             | string  | `"mizchi"` | only `"mizchi"` (fixed) | Mutation testing tool; only mutator (@mizchi/mutator) is supported.                                                                                                                                           |
+| `mutation.mode`                | string  | `"diff"`   | `diff`, `full`          | diff mutates only the code changed since the --since ref, or everything in scope without one; full mutates everything in scope.                                                                               |
+| `mutation.timeoutMs`           | integer | `120000`   | > 0                     | Time allowed for mutation testing, in milliseconds.                                                                                                                                                           |
+| `mutation.typecheck`           | string  | `"auto"`   | `auto`, `off`           | auto lets mutator type-check mutants before running them and leave out those that do not compile; off starts mutants right after the baseline, but mutants the compiler would reject are run and counted too. |
+| `mutation.confirmDisconnected` | boolean | `true`     |                         | After the mutation run, check the tests static analysis could not link to project code by running mutator again on their test files alone, within what is left of timeoutMs.                                  |
 
 ### `pbt`
 

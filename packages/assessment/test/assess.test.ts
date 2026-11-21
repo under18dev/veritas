@@ -132,7 +132,7 @@ describe('assessTest', () => {
       /1 other mutant\(s\) it covers were killed by another test first/,
     );
 
-    const full = assessTest(t, input({ mutants, fullyRunTestIds: new Set(['T-a']) }));
+    const full = assessTest(t, input({ mutants, ranMutantIds: new Map([['T-a', new Set(['M-2'])]]) }));
     expect(full.rationale).toContain('killed none of the 2 mutant(s) it runs');
     expect(full.rationale.join(' ')).not.toMatch(/another test first/);
   });

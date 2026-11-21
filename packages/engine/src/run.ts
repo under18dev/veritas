@@ -64,6 +64,7 @@ import {
   countMutants,
   importMutationResult,
   locateMutator,
+  type MutationConfirmation,
   MutationRunResult,
   runMutation,
 } from '@under18dev/veritas-mutation-adapter';
@@ -78,6 +79,12 @@ import { detectLean, leanTranslatable, proveWithLean } from '@under18dev/veritas
 import { type DiscoveryResult, discoverEvidence } from '@under18dev/veritas-spec-discovery';
 import { inventoryTests, isTestSupportPath, type TestInventory } from '@under18dev/veritas-test-inventory';
 import { ARTIFACTS } from './artifacts.js';
+import {
+  CONFIRMATION_MUTANTS_PER_LINE,
+  MIN_CONFIRMATION_MS,
+  mergeConfirmation,
+  selectConfirmation,
+} from './confirm.js';
 import { extractWithLlm } from './llm-extract.js';
 import { createLlmProvider } from './llm-providers.js';
 import { defaultSeed, latestRunWith, openProject, readArtifact } from './project.js';
@@ -365,6 +372,116 @@ async function runInContext(
     }
   };
 
+  /**
+   * Check the tests static analysis could not link to project code, by running mutator again on their test files
+   * alone, on the project sources those files import, with --kill-matrix (every covering test runs every mutant)
+   * and one mutant per line, within what is left of mutation.timeoutMs. Their kills and the mutants they ran are
+   * merged into the main run's mutants; a test whose check did not run keeps what the main run says.
+   */
+  const confirmDisconnected = async (
+    main: MutationRunResult,
+    inventory: TestInventory | undefined,
+    remainingMs: number,
+  ): Promise<{
+    confirmation: MutationConfirmation;
+    mutants: Mutant[];
+    artifacts: string[];
+    messages: string[];
+  } | null> => {
+    if (!config.mutation.confirmDisconnected || !inventory || main.status !== 'succeeded') return null;
+    const selection = selectConfirmation(inventory, main.mutants, config, options.scope);
+
+    if (selection.testIds.length === 0) return null;
+    const label = `check of ${selection.testIds.length} test(s) static analysis could not link to project code`;
+
+    if (remainingMs < MIN_CONFIRMATION_MS) {
+      const detail = `${Math.max(0, Math.round(remainingMs / 1000))}s of mutation.timeoutMs left, less than the ${MIN_CONFIRMATION_MS / 1000}s it needs; raise mutation.timeoutMs or narrow the run with --since`;
+
+      return {
+        confirmation: {
+          status: 'skipped',
+          detail,
+          ...selection,
+          command: [],
+          durationMs: 0,
+          counts: countMutants([]),
+          killedBy: [],
+          ranBy: {},
+          inconsistent: [],
+          warnings: [],
+        },
+        mutants: main.mutants,
+        artifacts: [],
+        messages: [`${label}: skipped (${detail}); they stay as static analysis reports them`],
+      };
+    }
+    const cacheKey = cache
+      ? mutationCacheKey(cache, root, {
+          configHash,
+          since: options.since,
+          scope: selection.sourceFiles,
+          killMatrix: true,
+          testFiles: selection.testFiles,
+          mutantsPerLine: CONFIRMATION_MUTANTS_PER_LINE,
+          testRunner,
+        })
+      : null;
+    const cached = cache && cacheKey ? cache.get('mutation', cacheKey, MutationRunResult) : undefined;
+    const run =
+      cached ??
+      (await runMutation({
+        root,
+        config: { ...config, mutation: { ...config.mutation, timeoutMs: Math.floor(remainingMs) } },
+        testRunner,
+        reportDir: store.pathFor('mutation-confirm'),
+        signal,
+        ...(options.since ? { since: options.since } : {}),
+        scope: selection.sourceFiles,
+        testFiles: selection.testFiles,
+        killMatrix: true,
+        mutantsPerLine: CONFIRMATION_MUTANTS_PER_LINE,
+      }));
+
+    if (!cached && cache && cacheKey && cacheableMutationResult(run)) cache.set('mutation', cacheKey, run);
+    const merged =
+      run.status === 'succeeded'
+        ? mergeConfirmation(main.mutants, run.mutants, selection.testIds)
+        : { mutants: main.mutants, ranBy: {}, killedBy: [], inconsistent: [] };
+    const ranSome = Object.keys(merged.ranBy).length;
+
+    return {
+      confirmation: {
+        status: run.status,
+        detail: run.detail,
+        ...selection,
+        command: run.command,
+        durationMs: run.durationMs,
+        counts: run.counts,
+        killedBy: merged.killedBy,
+        ranBy: merged.ranBy,
+        inconsistent: merged.inconsistent,
+        warnings: run.warnings,
+      },
+      mutants: merged.mutants,
+      artifacts: cached ? [] : store.recordExternal('mutation-confirm'),
+      messages: [
+        `${label}: ${run.status}${run.detail ? ` (${run.detail})` : ''}${cached ? ` (reused from cache ${cacheKey})` : ''}; mutator ran ${selection.testFiles.length} test file(s) on ${selection.sourceFiles.length} source file(s) they import, with --kill-matrix and at most ${CONFIRMATION_MUTANTS_PER_LINE} mutant(s) per line`,
+        ...(run.status === 'succeeded'
+          ? [
+              `of the ${selection.testIds.length} test(s) checked: ${merged.killedBy.length} killed at least one mutant, ${ranSome - merged.killedBy.length} ran mutants and killed none, ${selection.testIds.length - ranSome} ran no mutant to a verdict (those stay as static analysis reports them)`,
+              `check counts: ${JSON.stringify(Object.fromEntries(Object.entries(run.counts).filter(([, n]) => n > 0)))}`,
+            ]
+          : ['no test was checked; they stay as static analysis reports them']),
+        ...(merged.inconsistent.length
+          ? [
+              `${merged.inconsistent.length} mutant(s) survived the main run but were killed in the check (a flaky test?); the main run's result was kept: ${merged.inconsistent.join(', ')}`,
+            ]
+          : []),
+        ...run.warnings.map((w) => `check: ${w}`),
+      ],
+    };
+  };
+
   add({
     name: 'index',
     dependsOn: [],
@@ -573,7 +690,9 @@ async function runInContext(
           ],
         };
       }
-      const testFiles = mutationTestFiles(ctx.outputs.get('map') as TestInventory | undefined);
+      const started = Date.now();
+      const mapped = ctx.outputs.get('map') as TestInventory | undefined;
+      const testFiles = mutationTestFiles(mapped);
       const cacheKey = cache
         ? mutationCacheKey(cache, root, {
             configHash,
@@ -617,9 +736,21 @@ async function runInContext(
         );
         result.counts = countMutants(result.mutants);
       }
-      mutants = result.mutants;
       // The mutator writes its own report files; index them so they carry the run metadata and a hash.
       const external = cached ? [] : store.recordExternal('mutation');
+      const confirmed = await confirmDisconnected(
+        result,
+        mapped,
+        config.mutation.timeoutMs - (Date.now() - started),
+      );
+
+      if (confirmed) {
+        result.confirmation = confirmed.confirmation;
+        result.mutants = confirmed.mutants;
+        result.counts = countMutants(result.mutants);
+        external.push(...confirmed.artifacts);
+      }
+      mutants = result.mutants;
       const { status, undecided, empty } = mutationStageStatus(result, {
         incremental: Boolean(options.since),
       });
@@ -654,6 +785,7 @@ async function runInContext(
           ...(empty && result.status === 'succeeded'
             ? ['no mutant was generated; mutation results are partial']
             : []),
+          ...(confirmed?.messages ?? []),
         ],
       };
     },
@@ -1087,6 +1219,11 @@ async function runInContext(
         claims,
         functions,
         mutationAvailable,
+        ranMutantIds: new Map(
+          Object.entries(
+            (ctx.outputs.get('mutate') as MutationRunResult | undefined)?.confirmation?.ranBy ?? {},
+          ).map(([testId, ids]) => [testId, new Set(ids)]),
+        ),
       });
       policyEvidence = { mutants: linkedMutants, properties: spec.properties, assessments };
       findings = deriveFindings({
@@ -1288,6 +1425,7 @@ export function mutationCacheKey(
     scope?: string[] | undefined;
     killMatrix?: boolean;
     testFiles?: string[] | undefined;
+    mutantsPerLine?: number;
     /** The provider of the project's test runner, whose installed version is part of the key (default: Vitest). */
     testRunner?: TestRunnerProvider;
   },
@@ -1329,6 +1467,8 @@ export function mutationCacheKey(
     scope: selection.scope ?? [],
     killMatrix: selection.killMatrix ?? false,
     testFiles: selection.testFiles ?? null,
+    // Absent unless set, so the keys of runs without it stay as they were.
+    ...(selection.mutantsPerLine === undefined ? {} : { mutantsPerLine: selection.mutantsPerLine }),
   });
 }
 

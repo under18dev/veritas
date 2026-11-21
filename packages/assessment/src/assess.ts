@@ -37,10 +37,11 @@ export interface AssessInput {
   /** Whether mutation results exist for this run; without them detection power is unknown. */
   mutationAvailable: boolean;
   /**
-   * Tests that ran every mutant they cover, as with mutator's `--kill-matrix`. Without it mutator stops running a
-   * mutant's tests at the first failure, so a test covering a mutant another test killed may never have run it.
+   * Mutants a test is known to have run to a verdict, by test id, as a `--kill-matrix` run records. Without it,
+   * mutator stops running a mutant's tests at the first failure, so a test covering a mutant another test killed
+   * may never have run it; only survivors are known to have run against every test covering them.
    */
-  fullyRunTestIds?: ReadonlySet<string>;
+  ranMutantIds?: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /**
@@ -238,9 +239,9 @@ export function assessTest(
     // Only a test that ran mutants can be said to have missed them; others were outside the mutation scope. Without
     // a full run, it is known to have run only the mutants no test killed: mutator stops at the first failing test.
     if (input.mutationAvailable && covered.length > 0 && killed.length === 0) {
-      const fullyRun = input.fullyRunTestIds?.has(test.id) ?? false;
+      const known = input.ranMutantIds?.get(test.id);
       const decided = covered.filter((m) => m.status === 'killed' || m.status === 'survived');
-      const ran = fullyRun ? decided : survived;
+      const ran = decided.filter((m) => m.status === 'survived' || known?.has(m.id));
       const unchecked = decided.length - ran.length;
 
       if (ran.length > 0) rationale.push(`killed none of the ${ran.length} mutant(s) it runs`);

@@ -240,6 +240,11 @@
             "auto",
             "off"
           ]
+        },
+        "confirmDisconnected": {
+          "default": true,
+          "description": "After the mutation run, check the tests static analysis could not link to project code by running mutator again on their test files alone, within what is left of timeoutMs.",
+          "type": "boolean"
         }
       },
       "additionalProperties": false

@@ -30,6 +30,32 @@ export type MutationRunStatus = z.infer<typeof MutationRunStatus>;
 export const MutantCounts = z.record(MutantStatus, z.number().int().nonnegative());
 export type MutantCounts = z.infer<typeof MutantCounts>;
 
+/**
+ * A second, narrow mutation run that checks the tests static analysis could not link to project code: mutator ran
+ * only their test files, on the project sources those files import, with `--kill-matrix` so that every covering
+ * test ran every mutant. Its kills and coverage for those tests are merged into the main run's mutants.
+ */
+export const MutationConfirmation = z.object({
+  /** `skipped` when it did not run (nothing to check, too little time left, turned off); see `detail`. */
+  status: z.union([MutationRunStatus, z.literal('skipped')]),
+  detail: z.string().nullable(),
+  /** The tests it checked: those static analysis could not link and the main run credited with no kill. */
+  testIds: z.array(z.string()),
+  testFiles: z.array(z.string()),
+  sourceFiles: z.array(z.string()),
+  command: z.array(z.string()),
+  durationMs: z.number().nonnegative(),
+  counts: MutantCounts,
+  /** Checked tests that killed at least one mutant. */
+  killedBy: z.array(z.string()),
+  /** For each checked test, the mutants (ids of the main run) it ran to a verdict, killed or survived. */
+  ranBy: z.record(z.string(), z.array(z.string())),
+  /** Mutants killed in this run that the main run had decided otherwise (a survivor), which were not merged. */
+  inconsistent: z.array(z.string()),
+  warnings: z.array(z.string()),
+});
+export type MutationConfirmation = z.infer<typeof MutationConfirmation>;
+
 export const MutationRunResult = z.object({
   status: MutationRunStatus,
   /** Human-readable reason for a non-success status (redacted stderr summary, missing binary, ...). */
@@ -63,6 +89,8 @@ export const MutationRunResult = z.object({
   timeBudgetExhausted: z
     .object({ seconds: z.number().int().nonnegative(), notRun: z.number().int().nonnegative() })
     .optional(),
+  /** The run that checked the tests static analysis could not link; absent when the stage did not try one. */
+  confirmation: MutationConfirmation.optional(),
 });
 export type MutationRunResult = z.infer<typeof MutationRunResult>;
 
