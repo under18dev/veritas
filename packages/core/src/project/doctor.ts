@@ -6,33 +6,28 @@ import type { VeritasConfig } from '../config/schema.js';
 import { runCommand } from '../process.js';
 import { sandboxRuntime } from '../sandbox.js';
 import type { Capability, CapabilityName } from '../schema/run.js';
+import { majorVersion, type TestRunnerProvider } from '../test-runner.js';
 import { detectProject, resolvePackageVersion } from './detect.js';
 import { llmAvailability } from './llm.js';
 
-/** Which features depend on which capabilities. `required` missing => disabled; `optional` missing => degraded. */
-export const FEATURES: Record<string, { required: CapabilityName[]; optional: CapabilityName[] }> = {
-  init: { required: ['node'], optional: ['git'] },
-  discover: { required: ['node'], optional: ['git', 'network', 'llm'] },
-  analyze: { required: ['node', 'typescript'], optional: ['llm'] },
-  mutate: { required: ['node', 'vitest', 'mutator'], optional: ['git'] },
-  'test generate': { required: ['node', 'fast_check', 'vitest'], optional: ['llm'] },
-  'prove (z3)': { required: ['node', 'z3'], optional: ['sandbox'] },
-  'prove (lean)': { required: ['node', 'lean'], optional: [] },
-  improve: { required: ['node', 'vitest', 'sandbox'], optional: ['mutator', 'z3', 'llm'] },
-  report: { required: ['node'], optional: [] },
-};
-
 /**
- * Vitest versions mutation testing works with. @mizchi/mutator declares Vitest 5; Vitest 4 projects run, while on
- * Vitest 3 and earlier its test runner integration fails before any mutant is tried.
+ * Which features depend on which capabilities, with `runner` the capability of the project's test runner.
+ * `required` missing => disabled; `optional` missing => degraded.
  */
-export const MUTATOR_MIN_VITEST_MAJOR = 4;
-export const MUTATOR_DECLARED_VITEST_MAJOR = 5;
-
-export function vitestMajor(version: string | null): number | null {
-  const major = version ? Number.parseInt(version, 10) : Number.NaN;
-
-  return Number.isNaN(major) ? null : major;
+export function featureRequirements(
+  runner: CapabilityName,
+): Record<string, { required: CapabilityName[]; optional: CapabilityName[] }> {
+  return {
+    init: { required: ['node'], optional: ['git'] },
+    discover: { required: ['node'], optional: ['git', 'network', 'llm'] },
+    analyze: { required: ['node', 'typescript'], optional: ['llm'] },
+    mutate: { required: ['node', runner, 'mutator'], optional: ['git'] },
+    'test generate': { required: ['node', 'fast_check', runner], optional: ['llm'] },
+    'prove (z3)': { required: ['node', 'z3'], optional: ['sandbox'] },
+    'prove (lean)': { required: ['node', 'lean'], optional: [] },
+    improve: { required: ['node', runner, 'sandbox'], optional: ['mutator', 'z3', 'llm'] },
+    report: { required: ['node'], optional: [] },
+  };
 }
 
 export interface FeatureStatus {
@@ -102,22 +97,25 @@ function packageVersion(
   return fromSelf ? { version: fromSelf, from: 'veritas' } : { version: null, from: null };
 }
 
-function affects(name: CapabilityName): string[] {
-  return Object.entries(FEATURES)
+function affects(features: ReturnType<typeof featureRequirements>, name: CapabilityName): string[] {
+  return Object.entries(features)
     .filter(([, f]) => f.required.includes(name) || f.optional.includes(name))
     .map(([feature]) => feature);
 }
 
+/** Check what the project and this machine provide, with `runner` the provider of the configured test runner. */
 export async function runDoctor(
   root: string,
   config: VeritasConfig | null,
+  runner: TestRunnerProvider,
   env: NodeJS.ProcessEnv = process.env,
   bundled: BundledTools = {},
 ): Promise<DoctorReport> {
-  const project = detectProject(root);
+  const project = detectProject(root, runner);
+  const features = featureRequirements(runner.name);
   const caps: Capability[] = [];
   const add = (name: CapabilityName, state: Capability['state'], detail: string, version?: string | null) =>
-    caps.push({ name, state, detail, affects: affects(name), ...(version ? { version } : {}) });
+    caps.push({ name, state, detail, affects: affects(features, name), ...(version ? { version } : {}) });
 
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   add(
@@ -154,30 +152,33 @@ export async function runDoctor(
     ts.version,
   );
 
-  const vitest = project.vitest.installedVersion;
+  const runnerVersion = project.testRunner.installedVersion;
   add(
-    'vitest',
-    vitest ? 'available' : 'unavailable',
-    vitest
+    runner.name,
+    runnerVersion ? 'available' : 'unavailable',
+    runnerVersion
       ? 'resolved from project'
       : project.plugAndPlay
         ? "Yarn Plug'n'Play is not supported; set `nodeLinker: node-modules` in .yarnrc.yml and run `yarn install`"
-        : project.vitest.declared
+        : project.testRunner.declared
           ? 'declared but not installed; run your package manager install'
-          : 'Vitest not found in project',
-    vitest,
+          : `${runner.displayName} not found in project`,
+    runnerVersion,
   );
 
   const mutator = packageVersion(root, '@mizchi/mutator', bundled);
-  const tooOld = (vitestMajor(vitest) ?? MUTATOR_MIN_VITEST_MAJOR) < MUTATOR_MIN_VITEST_MAJOR;
+  const { minMajor, mutatorRunner } = runner.mutation;
+  const tooOld = minMajor !== null && (majorVersion(runnerVersion) ?? minMajor) < minMajor;
   add(
     'mutator',
-    mutator.version && !tooOld ? 'available' : 'unavailable',
+    mutator.version && mutatorRunner !== null && !tooOld ? 'available' : 'unavailable',
     !mutator.version
       ? '@mizchi/mutator not installed'
-      : tooOld
-        ? `@mizchi/mutator needs Vitest ${MUTATOR_MIN_VITEST_MAJOR} or later; the project has Vitest ${vitest}`
-        : `@mizchi/mutator resolved from ${mutator.from}`,
+      : mutatorRunner === null
+        ? `@mizchi/mutator cannot run ${runner.displayName} tests`
+        : tooOld
+          ? `@mizchi/mutator needs ${runner.displayName} ${minMajor} or later; the project has ${runner.displayName} ${runnerVersion}`
+          : `@mizchi/mutator resolved from ${mutator.from}`,
     mutator.version,
   );
 
@@ -246,7 +247,7 @@ export async function runDoctor(
 
   const stateOf = new Map(caps.map((c) => [c.name, c.state]));
   const usable = (n: CapabilityName) => stateOf.get(n) === 'available' || stateOf.get(n) === 'degraded';
-  const features: FeatureStatus[] = Object.entries(FEATURES).map(([feature, deps]) => {
+  const statuses: FeatureStatus[] = Object.entries(features).map(([feature, deps]) => {
     const missingRequired = deps.required.filter((n) => !usable(n));
     const missingOptional = deps.optional.filter((n) => stateOf.get(n) !== 'available');
 
@@ -261,6 +262,6 @@ export async function runDoctor(
     root,
     os: { platform: process.platform, arch: process.arch, release: release() },
     capabilities: caps,
-    features,
+    features: statuses,
   };
 }

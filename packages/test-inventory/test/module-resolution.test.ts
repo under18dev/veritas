@@ -1,4 +1,5 @@
 import { VeritasConfig } from '@under18dev/veritas-core';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { inventoryTests } from '../src/index.js';
 import { tempProject } from './helpers.js';
@@ -14,7 +15,11 @@ describe('shipping', () => { it('ships free over threshold', () => { ${body} });
 }
 
 function inventory(files: Record<string, string>) {
-  return inventoryTests({ root: tempProject(files), config: VeritasConfig.parse({}) });
+  return inventoryTests({
+    recognition: vitest.recognition,
+    root: tempProject(files),
+    config: VeritasConfig.parse({}),
+  });
 }
 
 describe('module resolution without a tsconfig', () => {

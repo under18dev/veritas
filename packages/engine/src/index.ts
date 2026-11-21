@@ -7,4 +7,5 @@ export * from './project.js';
 export * from './report.js';
 export * from './run.js';
 export * from './spec.js';
+export * from './test-runners.js';
 export * from './tools.js';

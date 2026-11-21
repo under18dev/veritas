@@ -35,7 +35,7 @@ Evidence collectors  Code intelligence  Test inventory
 | `spec-discovery`           | 根拠の収集（ローカル、GitHub、Web）、出典の関係、規範的な文の抽出                                                                                                                                        |
 | `code-intelligence`        | TypeScript の解析。export、シグネチャ、分岐、境界、副作用                                                                                                                                                |
 | `property-engine`          | Property の登録、レビューの状態遷移、食い違い、承認                                                                                                                                                      |
-| `test-inventory`           | Vitest のテストの検出、assertion の解析、テスト・シンボル・Property のグラフ                                                                                                                             |
+| `test-inventory`           | テストの検出、assertion の解析、テスト・シンボル・Property のグラフ。テスト API の名前はプロジェクトのテストランナーのものを使う                                                                         |
 | `mutation-adapter`         | mutation のバックエンドを実行し、結果を正規化する                                                                                                                                                        |
 | `property-testing`         | fast-check のジェネレーター、seed、shrink、再実行                                                                                                                                                        |
 | `formal-core`              | TypeScript の部分集合から Property IR への変換、主張、意味の検証                                                                                                                                         |
@@ -43,6 +43,7 @@ Evidence collectors  Code intelligence  Test inventory
 | `assessment`               | 証拠のベクトルとテストの判定                                                                                                                                                                             |
 | `improvement`              | 計画、隔離したワークスペースでの承認済みパッチの適用、ロールバック                                                                                                                                       |
 | `llm`、`llm-providers/*`   | プロバイダーに依存しない LLM のインターフェースと、プロバイダーごとのアダプター。`llm-providers/claude`（Anthropic API）、`claude-code`（Claude Code CLI）、`openai`（OpenAI API）、`codex`（Codex CLI） |
+| `test-runners/*`           | テストランナーごとの provider。`core` の `TestRunnerProvider` インターフェースを実装する。検出、テスト API の名前、テストの実行、mutation とのつなぎ、生成するテストの書き方。今は `vitest` のみ         |
 | `reports`                  | テキスト、JSON、Markdown、HTML、SARIF                                                                                                                                                                    |
 | `mcp`                      | MCP サーバー                                                                                                                                                                                             |
 | `github-action`            | CI との連携                                                                                                                                                                                              |

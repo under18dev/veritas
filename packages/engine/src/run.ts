@@ -12,7 +12,7 @@ import {
 import {
   type Capability,
   type ContentCache,
-  detectProject,
+  detectProject as detectProjectWith,
   evaluatePolicy,
   type Finding,
   type FormalClaim,
@@ -35,13 +35,13 @@ import {
   type Run,
   RunStore,
   resolveInsideRoot,
-  runDoctor,
   runStages,
   type Stage,
   type StageName,
   type StageResult,
   sha256,
   stableId,
+  type TestRunnerProvider,
   toPosixRelative,
   traceCollector,
   type VerificationStatus,
@@ -82,6 +82,7 @@ import { extractWithLlm } from './llm-extract.js';
 import { createLlmProvider } from './llm-providers.js';
 import { defaultSeed, latestRunWith, openProject, readArtifact } from './project.js';
 import { buildReportInput, REPORT_FILES, renderReport } from './report.js';
+import { runDoctor, testRunnerFor } from './test-runners.js';
 import { bundledTools } from './tools.js';
 
 export type Profile = 'quick' | 'standard' | 'deep';
@@ -347,15 +348,18 @@ async function runInContext(
 
     return changedSince;
   };
+  const testRunner = testRunnerFor(config);
   const mutationTestFiles = (mapped: TestInventory | undefined): string[] | undefined => {
-    if (config.analysis.testFramework !== 'vitest') return undefined;
-
     // With --since, mutator only mutates what changed, so only tests that reach a changed file can kill a mutant.
     const changed = changedSinceFiles();
     const scope = options.scope?.length ? options.scope : changed?.length ? changed : undefined;
 
     try {
-      return selectMutationTestFiles(mapped ?? inventoryTests({ root, config }), config, scope);
+      return selectMutationTestFiles(
+        mapped ?? inventoryTests({ root, config, recognition: testRunner.recognition }),
+        config,
+        scope,
+      );
     } catch {
       return undefined;
     }
@@ -532,13 +536,13 @@ async function runInContext(
     name: 'map',
     dependsOn: [],
     run: async () => {
-      const inventory = inventoryTests({ root, config });
+      const inventory = inventoryTests({ root, config, recognition: testRunner.recognition });
 
       return {
         status: 'succeeded',
         output: inventory,
         messages: [
-          // Counted as written in the test files, so Vitest, which counts each case of a loop or .each, may report more.
+          // Counted as written in the test files, so the test runner, which counts each case of a loop or .each, may report more.
           `${inventory.tests.length} test registration(s) (a loop or .each counts once), ${inventory.edges.length} symbol edge(s)`,
         ],
       };
@@ -577,6 +581,7 @@ async function runInContext(
             scope: options.scope,
             killMatrix: Boolean(options.killMatrix),
             testFiles,
+            testRunner,
           })
         : null;
       const cached = cache && cacheKey ? cache.get('mutation', cacheKey, MutationRunResult) : undefined;
@@ -585,6 +590,7 @@ async function runInContext(
         (await runMutation({
           root,
           config,
+          testRunner,
           reportDir: store.pathFor('mutation'),
           signal,
           ...(options.since ? { since: options.since } : {}),
@@ -1226,7 +1232,7 @@ async function runInContext(
 
 /**
  * Cache key for a mutation run: every file the tests could read (tracked and untracked, not ignored, from
- * `git ls-files`, without tool state) by content, the mutator and Vitest builds, Node.js, the configuration and
+ * `git ls-files`, without tool state) by content, the mutator and test runner builds, Node.js, the configuration and
  * the selection (`--since` resolved to a commit, scope). Without git the files cannot be listed and the cache is
  * not used.
  */
@@ -1282,6 +1288,8 @@ export function mutationCacheKey(
     scope?: string[] | undefined;
     killMatrix?: boolean;
     testFiles?: string[] | undefined;
+    /** The provider of the project's test runner, whose installed version is part of the key (default: Vitest). */
+    testRunner?: TestRunnerProvider;
   },
 ): string | null {
   const listed = gitOutput(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
@@ -1309,11 +1317,12 @@ export function mutationCacheKey(
     }
   });
   const mutator = locateMutator(root);
+  const runner = selection.testRunner ?? testRunnerFor(null);
 
   return cache.key({
     mutation: contents,
     mutator: mutator ? { version: mutator.version, origin: mutator.origin } : null,
-    vitest: detectProject(root).vitest.installedVersion,
+    [runner.name]: detectProjectWith(root, runner).testRunner.installedVersion,
     node: process.versions.node,
     configHash: selection.configHash,
     since: since?.trim() ?? null,

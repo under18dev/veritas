@@ -65,7 +65,7 @@ export function diffSnapshots(before: Map<string, string>, after: Map<string, st
 
 /**
  * Copy the project into a fresh temporary directory, leaving out dependencies and tool state, and link
- * `node_modules` so the project's own Vitest and mutator are used without reinstalling.
+ * `node_modules` so the project's own test runner and mutator are used without reinstalling.
  */
 export function createWorkspace(root: string): string {
   const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-improve-')));

@@ -1,4 +1,5 @@
 import { equivalenceProperty, translateFunction } from '@under18dev/veritas-formal-core';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import {
   boundaryValues,
@@ -107,21 +108,26 @@ describe('expected values from the specification model', () => {
 
 describe('rendering', () => {
   it('renders spec-derived literals and a relative .js import', () => {
-    const content = renderTestFile('test/veritas-P-1.test.ts', 'P-1', [
-      {
-        id: 'PT-1',
-        propertyId: 'P-1',
-        symbol: 'src/age.ts#isSenior',
-        exportName: 'isSenior',
-        module: 'src/age.ts',
-        params: ['age'],
-        input: { age: '65' },
-        expected: true,
-        origin: 'survived_mutant',
-        citations: ['README.md:5'],
-        derivation: 'x',
-      },
-    ]);
+    const content = renderTestFile(
+      'test/veritas-P-1.test.ts',
+      'P-1',
+      [
+        {
+          id: 'PT-1',
+          propertyId: 'P-1',
+          symbol: 'src/age.ts#isSenior',
+          exportName: 'isSenior',
+          module: 'src/age.ts',
+          params: ['age'],
+          input: { age: '65' },
+          expected: true,
+          origin: 'survived_mutant',
+          citations: ['README.md:5'],
+          derivation: 'x',
+        },
+      ],
+      vitest.templates,
+    );
     expect(content).toContain('import { isSenior } from "../src/age.js";');
     expect(content).toContain('expect(isSenior(65)).toBe(true);');
     expect(content).not.toMatch(/\.(skip|only|todo)\b/);
@@ -130,21 +136,26 @@ describe('rendering', () => {
 
   it('refuses an export name that is not an identifier', () => {
     expect(() =>
-      renderTestFile('test/a.test.ts', 'P-1', [
-        {
-          id: 'PT-1',
-          propertyId: 'P-1',
-          symbol: 's',
-          exportName: 'x); process.exit(1); (',
-          module: 'src/a.ts',
-          params: [],
-          input: {},
-          expected: true,
-          origin: 'boundary',
-          citations: [],
-          derivation: 'x',
-        },
-      ]),
+      renderTestFile(
+        'test/a.test.ts',
+        'P-1',
+        [
+          {
+            id: 'PT-1',
+            propertyId: 'P-1',
+            symbol: 's',
+            exportName: 'x); process.exit(1); (',
+            module: 'src/a.ts',
+            params: [],
+            input: {},
+            expected: true,
+            origin: 'boundary',
+            citations: [],
+            derivation: 'x',
+          },
+        ],
+        vitest.templates,
+      ),
     ).toThrow();
   });
 

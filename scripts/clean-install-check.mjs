@@ -44,6 +44,8 @@ run(
     './packages/*',
     '--filter',
     './packages/llm-providers/*',
+    '--filter',
+    './packages/test-runners/*',
     'pack',
     '--pack-destination',
     tgz,

@@ -12,6 +12,7 @@
     "packages/*/test/**/*.ts",
     "packages/*/test/**/*.tsx",
     "packages/llm-providers/*/test/**/*.ts",
+    "packages/test-runners/*/test/**/*.ts",
     "test/**/*.ts",
     "vitest.config.ts"
   ]

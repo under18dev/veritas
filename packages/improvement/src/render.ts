@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { TestRunnerTemplates } from '@under18dev/veritas-core';
 import type { PatchFile, ProposedTest, ScalarValue } from './schema.js';
 
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -22,8 +23,16 @@ export function callText(test: ProposedTest): string {
   return `${test.exportName}(${test.params.map((p) => literal(test.input[p] as ScalarValue)).join(', ')})`;
 }
 
-/** Render one Vitest file for the tests of a single property. Every expected value is a spec-derived literal. */
-export function renderTestFile(file: string, propertyId: string, tests: ProposedTest[]): string {
+/**
+ * Render one test file, in the syntax of the project's test runner, for the tests of a single property. Every
+ * expected value is a spec-derived literal.
+ */
+export function renderTestFile(
+  file: string,
+  propertyId: string,
+  tests: ProposedTest[],
+  templates: TestRunnerTemplates,
+): string {
   const first = tests[0];
 
   if (!first) throw new Error('no test to render');
@@ -35,7 +44,7 @@ export function renderTestFile(file: string, propertyId: string, tests: Proposed
   const lines = [
     `// Added by \`veritas improve\` for property ${propertyId}.`,
     `// Expected values come from the specification${citations.length ? ` (${citations.join(', ')})` : ''}, not from the implementation.`,
-    "import { expect, it } from 'vitest';",
+    ...templates.imports(['expect', 'it']),
     `import { ${first.exportName} } from ${JSON.stringify(importSpecifier(file, first.module))};`,
   ];
 
@@ -45,7 +54,7 @@ export function renderTestFile(file: string, propertyId: string, tests: Proposed
     lines.push(
       '',
       `it(${JSON.stringify(`${call} is ${literal(t.expected)} (${why})`)}, () => {`,
-      `  expect(${call}).toBe(${literal(t.expected)});`,
+      `  ${templates.expectToBe(call, literal(t.expected))}`,
       '});',
     );
   }

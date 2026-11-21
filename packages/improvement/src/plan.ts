@@ -16,6 +16,7 @@ import {
   resolveInsideRoot,
   stableId,
   type TestCase,
+  type TestRunnerProvider,
   VeritasError,
 } from '@under18dev/veritas-core';
 import {
@@ -23,6 +24,7 @@ import {
   type ArtifactName,
   latestRunWith,
   readArtifact,
+  testRunnerFor,
 } from '@under18dev/veritas-engine';
 import { applyApprovals, loadApprovals } from '@under18dev/veritas-property-engine';
 import { expectedFromSpec, type SpecClause } from './oracle.js';
@@ -151,6 +153,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
   const { root } = options;
   const loaded = await loadConfig(root, { allowCodeConfig: options.allowCodeConfig ?? false });
   const config = loaded.config;
+  const testRunner = testRunnerFor(config);
   const runId = options.runId ?? latestRunWith(root, 'findings');
 
   if (!runId) {
@@ -514,7 +517,11 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
         });
       continue;
     }
-    files.push({ operation: 'add', path: file, content: renderTestFile(file, propertyId, group) });
+    files.push({
+      operation: 'add',
+      path: file,
+      content: renderTestFile(file, propertyId, group, testRunner.templates),
+    });
 
     for (const t of group) fileByTest.set(t.id, file);
     planned.push(...group);
@@ -553,7 +560,7 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
     testInclude: config.analysis.testInclude,
     maxPatchFiles: budget.maxPatchFiles,
   });
-  const plan = buildPlan(planned, fileByTest, files, budget, usable, byId);
+  const plan = buildPlan(planned, fileByTest, files, budget, usable, byId, testRunner);
 
   if (problems.length > 0) {
     return finish(root, context, {
@@ -604,6 +611,7 @@ function buildPlan(
   budget: ImprovementBudget,
   targets: Target[],
   byId: Map<string, Property>,
+  testRunner: TestRunnerProvider,
 ): ImprovementPlan {
   const mutants = new Set(tests.flatMap((t) => (t.mutantId ? [t.mutantId] : [])));
   const propertyIds = [...new Set(tests.map((t) => t.propertyId))];
@@ -647,7 +655,7 @@ function buildPlan(
     ],
     commands: [
       'veritas improve --apply --plan <plan-id> --approve <approval-token>',
-      'vitest run (baseline and patched, in the isolated copy)',
+      `${testRunner.execution.command} (baseline and patched, in the isolated copy)`,
       'mutator (baseline and patched, in the isolated copy)',
     ],
     budget,

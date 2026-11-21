@@ -1,19 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
-import { redact, runProjectTests } from '@under18dev/veritas-core';
-
-export type TestStatus = 'passed' | 'failed' | 'skipped';
-
-export type VitestRun =
-  | {
-      status: 'ok';
-      /** `<relative file>::<full test name>` -> status. A file that fails to load is `<file>::(file)`. */
-      tests: Map<string, TestStatus>;
-      failures: string[];
-      passed: number;
-      failed: number;
-    }
-  | { status: 'error'; detail: string };
+import {
+  redact,
+  runProjectTests,
+  type TestRunOptions,
+  type TestRunResult,
+  type TestRunStatus,
+} from '@under18dev/veritas-core';
 
 interface JsonReport {
   testResults?: {
@@ -39,19 +32,23 @@ function short(text: string, max = 300): string {
 }
 
 /** Run the project's own Vitest once in `cwd` with the JSON reporter, without a shell. */
-export async function runVitest(
-  cwd: string,
-  options: { timeoutMs: number; label: string; signal?: AbortSignal },
-): Promise<VitestRun> {
+export async function runVitest(cwd: string, options: TestRunOptions): Promise<TestRunResult> {
   const bin = path.join(cwd, 'node_modules', 'vitest', 'vitest.mjs');
 
   if (!existsSync(bin)) return { status: 'error', detail: 'vitest is not installed in the project' };
+  // File filters are positional arguments: one that reads as an option or leaves the directory is refused.
+  const unsafe = options.files?.find(
+    (f) => f === '' || f.startsWith('-') || path.isAbsolute(f) || f.includes('..'),
+  );
+
+  if (unsafe !== undefined)
+    return { status: 'error', detail: `invalid test file: ${JSON.stringify(unsafe)}` };
   const outDir = path.join(cwd, '.veritas', 'improve');
   mkdirSync(outDir, { recursive: true });
   const outFile = path.join(outDir, `vitest-${options.label}.json`);
   const result = await runProjectTests(
     process.execPath,
-    [bin, 'run', '--reporter=json', `--outputFile=${outFile}`],
+    [bin, 'run', '--reporter=json', `--outputFile=${outFile}`, ...(options.files ?? [])],
     {
       label: 'vitest',
       cwd,
@@ -75,7 +72,7 @@ export async function runVitest(
       detail: `vitest wrote no JSON report (exit ${result.exitCode}): ${short(result.stderr || result.stdout)}`,
     };
   }
-  const tests = new Map<string, TestStatus>();
+  const tests = new Map<string, TestRunStatus>();
   const failures: string[] = [];
   // Compare real long paths: on Windows the temp directory may be an 8.3 short name (RUNNER~1) while Vitest
   // reports the long form, which would make every relative path wrong.
@@ -95,7 +92,7 @@ export async function runVitest(
 
     for (const a of assertions) {
       const key = `${rel}::${a.fullName ?? a.title ?? '?'}`;
-      const status: TestStatus =
+      const status: TestRunStatus =
         a.status === 'passed' ? 'passed' : a.status === 'failed' ? 'failed' : 'skipped';
       tests.set(key, status);
 

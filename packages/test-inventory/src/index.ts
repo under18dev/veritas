@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
+  type MockCallRole,
   resolveInsideRoot,
   sha256,
   stableId,
@@ -9,6 +10,7 @@ import {
   type TestCase as TestCaseType,
   TestPropertyEdge,
   type TestPropertyEdge as TestPropertyEdgeType,
+  type TestRunnerRecognition,
   toPosixRelative,
   type VeritasConfig,
 } from '@under18dev/veritas-core';
@@ -35,18 +37,90 @@ export const TestInventory = z.object({
 });
 export type TestInventory = z.infer<typeof TestInventory>;
 
-const modifiers = new Set(['skip', 'only', 'todo', 'concurrent', 'each']);
-const testNames = new Set(['it', 'test']);
+/** The test runner's API names (`TestRunnerRecognition`), as sets for lookups. */
+interface RunnerApi {
+  modules: Set<string>;
+  tests: Set<string>;
+  suites: Set<string>;
+  modifiers: Set<string>;
+  registrationFactories: Set<string>;
+  tableFactories: Set<string>;
+  beforeEach: Set<string>;
+  /** Hooks that run before a test: `beforeEach` and `beforeAll`. */
+  setup: Set<string>;
+  hooks: Set<string>;
+  runtimeExports: Set<string>;
+  expect: Set<string>;
+  typeLevel: Set<string>;
+  mockObjects: Set<string>;
+  mockCalls: Map<string, MockCallRole>;
+  configureMethod: RegExp;
+}
+
+function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
+  const { hooks } = recognition;
+
+  return {
+    modules: new Set(recognition.modules),
+    tests: new Set(recognition.tests),
+    suites: new Set(recognition.suites),
+    modifiers: new Set(recognition.modifiers),
+    registrationFactories: new Set(recognition.registrationFactories),
+    tableFactories: new Set(recognition.tableFactories),
+    beforeEach: new Set(hooks.beforeEach),
+    setup: new Set([...hooks.beforeEach, ...hooks.beforeAll]),
+    hooks: new Set([...hooks.beforeEach, ...hooks.beforeAll, ...hooks.afterEach, ...hooks.afterAll]),
+    runtimeExports: new Set(recognition.runtimeExports),
+    expect: new Set(recognition.assertions.expect),
+    typeLevel: new Set(recognition.assertions.typeLevel),
+    mockObjects: new Set(recognition.mocks.objects),
+    mockCalls: new Map(Object.entries(recognition.mocks.calls)),
+    configureMethod: new RegExp(recognition.mocks.configureMethod),
+  };
+}
+
+/**
+ * The API of the test runner whose tests are being inventoried. `inventoryTests` is synchronous and sets it for the
+ * duration of one call; outside a call nothing is recognized.
+ */
+let runner: RunnerApi = runnerApi({
+  modules: [],
+  tests: [],
+  suites: [],
+  modifiers: [],
+  registrationFactories: [],
+  tableFactories: [],
+  hooks: { beforeEach: [], beforeAll: [], afterEach: [], afterAll: [] },
+  runtimeExports: [],
+  assertions: { expect: [], typeLevel: [] },
+  mocks: { objects: [], calls: {}, configureMethod: '(?!)' },
+});
 
 export function testId(file: string, suitePath: string[], name: string): string {
   return stableId('T', { file: file.split('\\').join('/'), suitePath, name });
 }
 
+/**
+ * Inventory the tests of a project statically: what each test registers, calls and asserts. `recognition` names the
+ * test API of the project's test runner (its provider's `recognition`).
+ */
 export function inventoryTests(options: {
   root: string;
   config: VeritasConfig;
+  recognition: TestRunnerRecognition;
   files?: string[];
 }): TestInventory {
+  const previous = runner;
+  runner = runnerApi(options.recognition);
+
+  try {
+    return inventory(options);
+  } finally {
+    runner = previous;
+  }
+}
+
+function inventory(options: { root: string; config: VeritasConfig; files?: string[] }): TestInventory {
   const root = path.resolve(options.root);
   const testFiles =
     options.files?.map((file) =>
@@ -74,7 +148,7 @@ export function inventoryTests(options: {
       .filter((file) => {
         const source = sourceFiles.get(file);
 
-        return !source || !importsVitestRuntime(source);
+        return !source || !importsRunnerRuntime(source);
       }),
   );
   const tests: TestCaseType[] = [];
@@ -1689,7 +1763,7 @@ function setupWriteNodes(
 
     // Writes of a named function registered as a hook (`beforeEach(reset)`), scoped to the registration.
     for (const hook of descendants(source))
-      for (const fn of namedHook(hook, ['beforeEach', 'beforeAll'], checker))
+      for (const fn of namedHook(hook, runner.setup, checker))
         for (const node of descendants(fn))
           if (!inNestedFunction(node, fn) && documentWriteOf(node, fn, checker) !== undefined)
             found.push({ node, scope: hook });
@@ -2551,7 +2625,7 @@ function setupRenders(source: ts.SourceFile, ctx: Ctx): { node: Invocation; call
     // `beforeEach(mount)` with `function mount() { render(<Dialog />); }`: the renders of the named function, scoped
     // to the registration.
     for (const hook of descendants(source))
-      for (const fn of namedHook(hook, 'beforeEach', ctx.checker))
+      for (const fn of namedHook(hook, runner.beforeEach, ctx.checker))
         for (const call of descendants(fn))
           if (ts.isCallExpression(call) && !inNestedFunction(call, fn)) {
             if (rendered(call)) found.push({ node: call, call: hook as ts.CallExpression });
@@ -2587,13 +2661,11 @@ function setupRenders(source: ts.SourceFile, ctx: Ctx): { node: Invocation; call
  * The body of a local function registered by name with a hook (`beforeEach(mount)`), when the registration is shared
  * setup (see `runsBefore`).
  */
-function namedHook(node: ts.Node, hooks: string | string[], checker: ts.TypeChecker): ts.Node[] {
-  const names = Array.isArray(hooks) ? hooks : [hooks];
-
+function namedHook(node: ts.Node, hooks: Set<string>, checker: ts.TypeChecker): ts.Node[] {
   if (
     !ts.isCallExpression(node) ||
     !ts.isIdentifier(node.expression) ||
-    !names.includes(node.expression.text) ||
+    !hooks.has(node.expression.text) ||
     !runsBefore(node, undefined)
   )
     return [];
@@ -2611,7 +2683,7 @@ function inBeforeEach(node: ts.Node): boolean {
     if (isFunctionLike(current) && ts.isCallExpression(current.parent)) {
       const callee = current.parent.expression;
 
-      if (ts.isIdentifier(callee) && callee.text === 'beforeEach') return true;
+      if (ts.isIdentifier(callee) && runner.beforeEach.has(callee.text)) return true;
     }
 
   return false;
@@ -3240,15 +3312,15 @@ function isTestCodeFile(sourceFile: ts.SourceFile, ctx: Ctx): boolean {
 }
 
 /**
- * Whether a file imports Vitest's assertions or its mock API as values (`import { expect } from 'vitest'`,
+ * Whether a file imports the test runner's assertions or its mock API as values (`import { expect } from 'vitest'`,
  * `import { vi } from 'vitest'`): that only runs inside a test run, so it is test code wherever it lives. Types and
- * a config helper (`vitest/config`) do not count.
+ * other modules of the runner (a config helper such as `vitest/config`) do not count.
  */
-function importsVitestRuntime(source: ts.SourceFile): boolean {
+function importsRunnerRuntime(source: ts.SourceFile): boolean {
   return source.statements.some((statement) => {
     if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) return false;
 
-    if (!ts.isStringLiteral(statement.moduleSpecifier) || statement.moduleSpecifier.text !== 'vitest')
+    if (!ts.isStringLiteral(statement.moduleSpecifier) || !runner.modules.has(statement.moduleSpecifier.text))
       return false;
     const bindings = statement.importClause?.namedBindings;
 
@@ -3259,13 +3331,12 @@ function importsVitestRuntime(source: ts.SourceFile): boolean {
       bindings !== undefined &&
       ts.isNamedImports(bindings) &&
       bindings.elements.some(
-        (element) => !element.isTypeOnly && VITEST_RUNTIME.has((element.propertyName ?? element.name).text),
+        (element) =>
+          !element.isTypeOnly && runner.runtimeExports.has((element.propertyName ?? element.name).text),
       )
     );
   });
 }
-
-const VITEST_RUNTIME = new Set(['expect', 'assert', 'expectTypeOf', 'assertType', 'vi', 'vitest']);
 
 /** The body of the function a call invokes, when that function is test code inside the root. */
 function helperBody(node: Invocation, ctx: Ctx): ts.Node | undefined {
@@ -3328,16 +3399,16 @@ function handedOver(fn: ts.Node, value: ts.Node): boolean {
 }
 
 /**
- * Whether an expression creates a Vitest mock: `vi.fn(...)` or `vi.spyOn(...)`, possibly configured further
- * (`vi.fn().mockReturnValue(1)`).
+ * Whether an expression creates a mock of the test runner: `vi.fn(...)` or `vi.spyOn(...)`, possibly configured
+ * further (`vi.fn().mockReturnValue(1)`).
  */
 function isMockCreation(expression: ts.Expression, checker: ts.TypeChecker): boolean {
   let current = skipParens(expression);
 
   while (ts.isCallExpression(current)) {
-    const api = viCall(current, checker);
+    const role = mockCall(current, checker);
 
-    if (api === 'fn' || api === 'spyOn') return true;
+    if (role === 'create' || role === 'spy') return true;
 
     if (!ts.isPropertyAccessExpression(current.expression)) return false;
     current = skipParens(current.expression.expression);
@@ -3347,7 +3418,7 @@ function isMockCreation(expression: ts.Expression, checker: ts.TypeChecker): boo
 }
 
 /**
- * The local variables an invocation is given that hold Vitest mocks: mocks themselves, named anywhere in its
+ * The local variables an invocation is given that hold mocks of the test runner: mocks themselves, named anywhere in its
  * arguments, and objects holding mocks (`const props = { onSave: vi.fn() }; render(<Dialog {...props} />)`). What a
  * local function called there returns (`render(<Tabs {...defaultProps()} />)`, `useShortcuts(params())`) and what an
  * object it is given holds (`editorRef = { current: mockEditor }`) are followed.
@@ -3766,7 +3837,7 @@ function valuesOf(declaration: ts.VariableDeclaration, checker: ts.TypeChecker):
   return symbol ? assignmentsTo(symbol, declaration.getSourceFile(), checker) : [];
 }
 
-/** Whether a variable holds a Vitest mock (see `mockHolding`). */
+/** Whether a variable holds a mock of the test runner (see `mockHolding`). */
 function holdsMock(declaration: ts.VariableDeclaration, checker: ts.TypeChecker): boolean {
   return mockHolding(declaration, checker) === 'mock';
 }
@@ -3776,7 +3847,7 @@ const deciding = new Set<ts.VariableDeclaration>();
 let cycleSeen = false;
 
 /**
- * What a variable holds: a Vitest mock (`const onSave = vi.fn()`, or a `let` only ever assigned mocks in a hook), an
+ * What a variable holds: a mock of the test runner (`const onSave = vi.fn()`, or a `let` only ever assigned mocks in a hook), an
  * object or array holding mocks (`{ onSave: vi.fn() }`, what a local `createProps()` returns), or neither.
  */
 function mockHolding(
@@ -3812,7 +3883,7 @@ function mockHolding(
   return result;
 }
 
-/** Whether an expression makes a Vitest mock, or an object or array holding one (see `mockHolding`). */
+/** Whether an expression makes a mock of the test runner, or an object or array holding one (see `mockHolding`). */
 function mockValue(
   expression: ts.Expression,
   checker: ts.TypeChecker,
@@ -3922,12 +3993,12 @@ function spiesOn(source: ts.SourceFile, checker: ts.TypeChecker): Map<ts.Symbol,
     // Configured further: `vi.spyOn(o, 'm').mockReturnValue(1)`.
     while (
       ts.isCallExpression(spy) &&
-      viCall(spy, checker) !== 'spyOn' &&
+      mockCall(spy, checker) !== 'spy' &&
       ts.isPropertyAccessExpression(spy.expression)
     )
       spy = skipParens(spy.expression.expression);
     const watched =
-      ts.isCallExpression(spy) && viCall(spy, checker) === 'spyOn' ? spy.arguments[0] : undefined;
+      ts.isCallExpression(spy) && mockCall(spy, checker) === 'spy' ? spy.arguments[0] : undefined;
     const symbol = watched && ts.isIdentifier(watched) ? checker.getSymbolAtLocation(watched) : undefined;
 
     if (symbol && symbol.valueDeclaration?.getSourceFile() === source)
@@ -3958,7 +4029,7 @@ function runsBefore(node: ts.Node, body: ts.Node | undefined): boolean {
     }
     const hook = ts.isIdentifier(call.expression) ? call.expression.text : undefined;
 
-    if (hook !== 'beforeEach' && hook !== 'beforeAll') return false;
+    if (hook === undefined || !runner.setup.has(hook)) return false;
   }
 
   return true;
@@ -4129,14 +4200,12 @@ function makesRegistration(node: ts.CallExpression): boolean {
   return ts.isCallExpression(node.parent) && node.parent.expression === node;
 }
 
-/** `.each(table)`, `.for(table)`, `.skipIf(cond)` and `.runIf(cond)` return the function that registers. */
-const REGISTRATION_FACTORIES = new Set(['each', 'for', 'skipIf', 'runIf']);
-const TABLE_FACTORIES = new Set(['each', 'for']);
-
+/**
+ * Registration factories (`.each(table)`, `.for(table)`, `.skipIf(cond)`, `.runIf(cond)` in Vitest) return the
+ * function that registers.
+ */
 function testRegistration(node: ts.CallExpression): Registration | undefined {
-  const direct = makesRegistration(node)
-    ? undefined
-    : (registration(node, 'it') ?? registration(node, 'test'));
+  const direct = makesRegistration(node) ? undefined : registration(node, runner.tests);
 
   if (direct && Array.isArray(direct))
     return { name: literalString(node.arguments[0]), callback: callbackArgument(node), modifiers: direct };
@@ -4145,12 +4214,12 @@ function testRegistration(node: ts.CallExpression): Registration | undefined {
     const chain = propertyChain(node.expression.expression);
     const root = rootIdentifier(node.expression.expression);
 
-    if (root && testNames.has(root) && chain.some((name) => REGISTRATION_FACTORIES.has(name))) {
+    if (root && runner.tests.has(root) && chain.some((name) => runner.registrationFactories.has(name))) {
       const eachModifiers = chain.filter((name): name is TestCaseType['modifiers'][number] =>
-        modifiers.has(name),
+        runner.modifiers.has(name),
       );
 
-      if (chain.some((name) => TABLE_FACTORIES.has(name)) && !eachModifiers.includes('each'))
+      if (chain.some((name) => runner.tableFactories.has(name)) && !eachModifiers.includes('each'))
         eachModifiers.push('each');
 
       return {
@@ -4165,7 +4234,7 @@ function testRegistration(node: ts.CallExpression): Registration | undefined {
 }
 
 function describeRegistration(node: ts.CallExpression): Registration | undefined {
-  const direct = makesRegistration(node) ? undefined : registration(node, 'describe');
+  const direct = makesRegistration(node) ? undefined : registration(node, runner.suites);
 
   if (direct && Array.isArray(direct)) {
     return { name: literalString(node.arguments[0]), callback: callbackArgument(node), modifiers: direct };
@@ -4175,13 +4244,13 @@ function describeRegistration(node: ts.CallExpression): Registration | undefined
   const chain = propertyChain(node.expression.expression);
   const root = rootIdentifier(node.expression.expression);
 
-  if (!root || root !== 'describe' || !chain.some((name) => REGISTRATION_FACTORIES.has(name)))
+  if (!root || !runner.suites.has(root) || !chain.some((name) => runner.registrationFactories.has(name)))
     return undefined;
   const eachModifiers = chain.filter((name): name is TestCaseType['modifiers'][number] =>
-    modifiers.has(name),
+    runner.modifiers.has(name),
   );
 
-  if (chain.some((name) => TABLE_FACTORIES.has(name)) && !eachModifiers.includes('each'))
+  if (chain.some((name) => runner.tableFactories.has(name)) && !eachModifiers.includes('each'))
     eachModifiers.push('each');
 
   return {
@@ -4191,12 +4260,15 @@ function describeRegistration(node: ts.CallExpression): Registration | undefined
   };
 }
 
-const vitestAliases = new WeakMap<ts.SourceFile, Map<string, string>>();
+const runnerAliases = new WeakMap<ts.SourceFile, Map<string, string>>();
 
-/** The Vitest export a local name stands for: itself, or the name imported as it (`import { it as vIt }`). */
-function vitestName(identifier: ts.Identifier): string {
+/**
+ * The export of the test runner's modules a local name stands for: itself, or the name imported as it
+ * (`import { it as vIt } from 'vitest'`).
+ */
+function runnerName(identifier: ts.Identifier): string {
   const source = identifier.getSourceFile();
-  let aliases = vitestAliases.get(source);
+  let aliases = runnerAliases.get(source);
 
   if (!aliases) {
     aliases = new Map();
@@ -4208,23 +4280,21 @@ function vitestName(identifier: ts.Identifier): string {
         !bindings ||
         !ts.isNamedImports(bindings) ||
         !ts.isStringLiteral((statement as ts.ImportDeclaration).moduleSpecifier) ||
-        ((statement as ts.ImportDeclaration).moduleSpecifier as ts.StringLiteral).text !== 'vitest'
+        !runner.modules.has(((statement as ts.ImportDeclaration).moduleSpecifier as ts.StringLiteral).text)
       )
         continue;
 
       for (const element of bindings.elements)
         if (element.propertyName) aliases.set(element.name.text, element.propertyName.text);
     }
-    vitestAliases.set(source, aliases);
+    runnerAliases.set(source, aliases);
   }
 
   return aliases.get(identifier.text) ?? identifier.text;
 }
 
-function registration(
-  node: ts.CallExpression,
-  kind: 'it' | 'test' | 'describe',
-): TestCaseType['modifiers'] | undefined {
+/** The modifiers of a call to one of `names` (`it.skip(...)`), or undefined when it calls none of them. */
+function registration(node: ts.CallExpression, names: Set<string>): TestCaseType['modifiers'] | undefined {
   const chain: string[] = [];
   let expression: ts.Expression = node.expression;
 
@@ -4233,8 +4303,8 @@ function registration(
     expression = expression.expression;
   }
 
-  if (!ts.isIdentifier(expression) || vitestName(expression) !== kind) return undefined;
-  const found = chain.filter((name): name is TestCaseType['modifiers'][number] => modifiers.has(name));
+  if (!ts.isIdentifier(expression) || !names.has(runnerName(expression))) return undefined;
+  const found = chain.filter((name): name is TestCaseType['modifiers'][number] => runner.modifiers.has(name));
 
   return found;
 }
@@ -4874,7 +4944,7 @@ function directlyUsedFiles(
 
     // `import('./x')`, and the modules `vi.mock('./x')` and friends replace or load.
     if (node.expression.kind === ts.SyntaxKind.ImportKeyword) whole(moduleOf(node.arguments[0]));
-    else if (MODULE_MOCK_APIS.has(viCall(node, checker) ?? '')) {
+    else if (isModuleMockCall(node, checker)) {
       const name = node.arguments[0];
 
       if (name && ts.isStringLiteralLike(name)) whole(resolveModule(name.text, source.fileName));
@@ -4884,7 +4954,14 @@ function directlyUsedFiles(
   return [...found].filter((file) => file !== source);
 }
 
-const MODULE_MOCK_APIS = new Set(['mock', 'doMock', 'unmock', 'doUnmock', 'importActual', 'importMock']);
+/** Mock calls that name a module to replace or load (`vi.mock('./x')`, `vi.importActual('./x')`). */
+const MODULE_MOCK_ROLES = new Set<MockCallRole>(['module_hoisted', 'module', 'module_access']);
+
+function isModuleMockCall(node: ts.CallExpression, checker: ts.TypeChecker): boolean {
+  const role = mockCall(node, checker);
+
+  return role !== undefined && MODULE_MOCK_ROLES.has(role);
+}
 
 /**
  * The `member` names of a namespace import when every use of it is `ns.member`; null when it is also used
@@ -5138,33 +5215,44 @@ function projectSymbolId(
   return symbolId(toPosixRelative(root, declaration.getSourceFile().fileName), symbol.getName());
 }
 
-/** A call to a real Vitest mock API, with the project symbols it replaces (if any). */
+/** A call to a real mock API of the test runner, with the project symbols it replaces (if any). */
 interface MockRecord {
   node: ts.CallExpression;
-  /** `vi.mock` is hoisted by Vitest, so it applies to every test in the file wherever it is written. */
+  /** A hoisted module mock (`vi.mock`) applies to every test in the file wherever it is written. */
   fileWide: boolean;
   targets: string[];
 }
 
-const VI_MOCK_APIS = new Set(['mock', 'doMock', 'spyOn', 'fn', 'mocked', 'stubGlobal']);
+/** Mock calls recorded as mocks of a test; loading a module (`module_access`) is not one. */
+const RECORDED_MOCK_ROLES = new Set<MockCallRole>([
+  'module_hoisted',
+  'module',
+  'spy',
+  'create',
+  'wrap',
+  'stub_global',
+]);
 
-/** `vi.<name>(...)` where `vi` is Vitest's (imported from 'vitest' or the ambient global). */
-function viCall(node: ts.Expression, checker: ts.TypeChecker): string | undefined {
+/**
+ * What `vi.<name>(...)` does (see `MockCallRole`), where `vi` is a mock object of the test runner, imported from its
+ * module or the ambient global.
+ */
+function mockCall(node: ts.Expression, checker: ts.TypeChecker): MockCallRole | undefined {
   if (!ts.isCallExpression(node)) return undefined;
   const callee = node.expression;
 
   if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)) return undefined;
 
-  if (callee.expression.text !== 'vi') return undefined;
+  if (!runner.mockObjects.has(callee.expression.text)) return undefined;
   const declarations = checker.getSymbolAtLocation(callee.expression)?.declarations ?? [];
-  const fromVitest = declarations.every((declaration) => {
+  const fromRunner = declarations.every((declaration) => {
     if (!ts.isImportSpecifier(declaration)) return declaration.getSourceFile().isDeclarationFile;
     const specifier = declaration.parent.parent.parent.moduleSpecifier;
 
-    return ts.isStringLiteral(specifier) && specifier.text === 'vitest';
+    return ts.isStringLiteral(specifier) && runner.modules.has(specifier.text);
   });
 
-  return fromVitest ? callee.name.text : undefined;
+  return fromRunner ? runner.mockCalls.get(callee.name.text) : undefined;
 }
 
 function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
@@ -5174,9 +5262,9 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
     const target = skipParens(spy);
 
     if (!ts.isCallExpression(target)) return [];
-    const api = viCall(target, checker);
+    const role = mockCall(target, checker);
 
-    if (api === 'mocked') {
+    if (role === 'wrap') {
       const argument = target.arguments[0];
       const id =
         argument && projectSymbolId(checker.getSymbolAtLocation(argument), checker, projectSet, root);
@@ -5184,7 +5272,7 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
       return id ? [id] : [];
     }
 
-    if (api !== 'spyOn') return [];
+    if (role !== 'spy') return [];
     const [object, nameNode] = target.arguments;
     const name = literalString(nameNode);
 
@@ -5204,30 +5292,31 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
     const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
 
     if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer) return undefined;
-    const api = viCall(skipParens(declaration.initializer), checker);
+    const role = mockCall(skipParens(declaration.initializer), checker);
 
-    return api === 'spyOn' || api === 'mocked' || api === 'fn'
+    return role === 'spy' || role === 'wrap' || role === 'create'
       ? spyTargets(declaration.initializer)
       : undefined;
   };
 
   for (const node of descendants(source)) {
     if (!ts.isCallExpression(node)) continue;
-    const api = viCall(node, checker);
+    const role = mockCall(node, checker);
 
-    if (api && VI_MOCK_APIS.has(api)) {
-      const targets = api === 'mock' || api === 'doMock' ? moduleExports(node.arguments[0], ctx) : [];
-      records.push({ node, fileWide: api === 'mock', targets });
+    if (role && RECORDED_MOCK_ROLES.has(role)) {
+      const targets =
+        role === 'module_hoisted' || role === 'module' ? moduleExports(node.arguments[0], ctx) : [];
+      records.push({ node, fileWide: role === 'module_hoisted', targets });
       continue;
     }
-    // `<spy>.mockReturnValue(...)` and friends, only on real Vitest spies.
+    // `<spy>.mockReturnValue(...)` and friends, only on real spies of the test runner.
     const callee = node.expression;
 
-    if (!ts.isPropertyAccessExpression(callee) || !/^mock[A-Z]/.test(callee.name.text)) continue;
+    if (!ts.isPropertyAccessExpression(callee) || !runner.configureMethod.test(callee.name.text)) continue;
     const receiver = skipParens(callee.expression);
-    const receiverApi = viCall(receiver, checker);
+    const receiverRole = mockCall(receiver, checker);
 
-    if (receiverApi === 'spyOn' || receiverApi === 'mocked' || receiverApi === 'fn')
+    if (receiverRole === 'spy' || receiverRole === 'wrap' || receiverRole === 'create')
       records.push({ node, fileWide: false, targets: spyTargets(receiver) });
     else if (ts.isIdentifier(receiver)) {
       const targets = spyVariable(receiver);
@@ -5658,8 +5747,6 @@ function calleeName(expression: ts.Expression): string {
       : '';
 }
 
-const HOOK_NAMES = new Set(['beforeEach', 'beforeAll', 'afterEach', 'afterAll']);
-
 /**
  * Whether a test is registered inside a function other than a describe, test or hook callback (a shared suite such
  * as `export const renderTest = (getEnv) => { ... }`, or `runTest(name, fn, cases)`), and its body uses a parameter of
@@ -5684,7 +5771,7 @@ function usesSuiteParameters(
       call.arguments.includes(current as ts.Expression) &&
       (describeRegistration(call) !== undefined ||
         testRegistration(call) !== undefined ||
-        (ts.isIdentifier(call.expression) && HOOK_NAMES.has(call.expression.text)));
+        (ts.isIdentifier(call.expression) && runner.hooks.has(call.expression.text)));
 
     if (!registers) {
       suite = current;
@@ -5743,18 +5830,21 @@ function usesSuiteParameters(
   return refersToSupplied(body);
 }
 
-/** Vitest's type-level checks, which compare types at compile time and do nothing when the test runs. */
+/**
+ * The test runner's type-level checks (`expectTypeOf`, `assertType`), which compare types at compile time and do
+ * nothing when the test runs.
+ */
 function isTypeLevelAssertion(node: ts.CallExpression): boolean {
   const root = rootIdentifier(node.expression);
 
-  return root === 'expectTypeOf' || root === 'assertType';
+  return root !== undefined && runner.typeLevel.has(root);
 }
 
-/** `expect(...)`, and Vitest's type-level checks `expectTypeOf(...)` and `assertType(...)`. */
+/** `expect(...)`, and the test runner's type-level checks (`expectTypeOf(...)`, `assertType(...)`). */
 function isExpectCall(node: ts.CallExpression): boolean {
   const root = rootIdentifier(node.expression);
 
-  return root === 'expect' || root === 'expectTypeOf' || root === 'assertType';
+  return root !== undefined && (runner.expect.has(root) || runner.typeLevel.has(root));
 }
 
 function isAssertCall(node: ts.CallExpression): boolean {

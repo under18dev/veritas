@@ -1,4 +1,5 @@
 import { VeritasConfig } from '@under18dev/veritas-core';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { inventoryTests } from '../src/index.js';
 import { tempProject } from './helpers.js';
@@ -31,7 +32,7 @@ import { asMock } from '../src/test-utils';
 
 function inventory(testSource: string, extra: Record<string, string> = {}) {
   const root = tempProject({ ...project, 'test/case.test.tsx': testSource, ...extra });
-  const result = inventoryTests({ root, config: VeritasConfig.parse({}) });
+  const result = inventoryTests({ recognition: vitest.recognition, root, config: VeritasConfig.parse({}) });
 
   return (name: string) => {
     const test = result.tests.find((candidate) => candidate.name === name);
@@ -1019,7 +1020,11 @@ it('function compared', () => { expect(() => compute(1)).toBeTruthy(); });
 it('function thrown', () => { expect(() => compute(1)).not.toThrow(); });
 `,
     });
-    const tests = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests;
+    const tests = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests;
     const asserted = (name: string) =>
       tests.find((test) => test.name === name)?.targetCalls.some((call) => call.asserted);
 
@@ -1927,7 +1932,11 @@ it('chai throw', () => { expect(() => fail()).to.throw(/bad/); });
 it('compared only', () => { assert.ok(() => fail()); });
 `,
     });
-    const tests = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests;
+    const tests = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests;
     const asserted = (name: string) =>
       tests.find((test) => test.name === name)?.targetCalls.some((call) => call.asserted);
 

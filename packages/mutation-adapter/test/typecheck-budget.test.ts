@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import {
   buildMutatorArgs,
@@ -71,6 +72,7 @@ describe('mutation.typecheck', () => {
       `${BASELINE} fs.writeFileSync(dir + '/mutation.json', ${JSON.stringify(REPORT.replace(/Pending/g, 'Survived'))}); console.log('{}');`,
     );
     const r = await runMutation({
+      testRunner: vitest,
       root,
       config: config({ typecheck: 'off' }),
       reportDir: path.join(root, 'out'),
@@ -90,6 +92,7 @@ describe('mutation.typecheck', () => {
       `${BASELINE} fs.writeFileSync(dir + '/mutation.json', ${JSON.stringify(REPORT.replace(/Pending/g, 'Survived'))}); console.log('{}');`,
     );
     const r = await runMutation({
+      testRunner: vitest,
       root,
       config: config(),
       reportDir: path.join(root, 'out'),
@@ -109,6 +112,7 @@ describe('a timeout before any mutant had finished', () => {
       [...lines.map((l) => `console.error(${JSON.stringify(l)});`), hang].join('\n'),
     );
     const r = await runMutation({
+      testRunner: vitest,
       root,
       config: config({ timeoutMs: 1500, ...mutation }),
       reportDir: path.join(root, 'out'),
@@ -180,6 +184,7 @@ describe('an exhausted time budget', () => {
     );
 
     return runMutation({
+      testRunner: vitest,
       root,
       config: config({ timeoutMs: 60_000 }),
       reportDir: path.join(root, 'out'),

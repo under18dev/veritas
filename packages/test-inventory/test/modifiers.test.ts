@@ -1,4 +1,5 @@
 import { VeritasConfig } from '@under18dev/veritas-core';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { inventoryTests, testId } from '../src/index.js';
 import { tempProject } from './helpers.js';
@@ -17,7 +18,11 @@ describe('Vitest registration modifiers', () => {
         describe.skip('outer', () => describe('inner', () => it('child', () => expect(value(1)).toBe(1))));
       `,
     });
-    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
     const byName = (name: string) => {
       const test = inventory.tests.find((candidate) => candidate.name === name);
 
@@ -46,7 +51,11 @@ describe('Vitest registration modifiers', () => {
         });
       `,
     });
-    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
     const testCase = inventory.tests.at(0);
 
     if (!testCase) throw new Error('missing generated test');
@@ -67,7 +76,11 @@ describe('Vitest registration modifiers', () => {
         });
       `,
     });
-    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
 
     expect(inventory.tests.map((t) => [t.name, t.suitePath, t.modifiers])).toEqual([
       ['conditional', [], []],

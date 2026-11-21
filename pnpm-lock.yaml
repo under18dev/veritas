@@ -196,6 +196,9 @@ importers:
       '@under18dev/veritas-reports':
         specifier: workspace:*
         version: link:packages/reports
+      '@under18dev/veritas-test-runner-vitest':
+        specifier: workspace:*
+        version: link:packages/test-runners/vitest
       dependency-cruiser:
         specifier: 18.8.0
         version: 18.8.0
@@ -451,6 +454,9 @@ importers:
       '@under18dev/veritas-test-inventory':
         specifier: workspace:*
         version: link:../test-inventory
+      '@under18dev/veritas-test-runner-vitest':
+        specifier: workspace:*
+        version: link:../test-runners/vitest
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -691,6 +697,12 @@ importers:
       zod:
         specifier: 4.6.7
         version: 4.6.7
+
+  packages/test-runners/vitest:
+    dependencies:
+      '@under18dev/veritas-core':
+        specifier: workspace:*
+        version: link:../../core
 
   packages/tui:
     dependencies:

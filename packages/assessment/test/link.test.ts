@@ -10,6 +10,7 @@ import {
   VeritasConfig,
 } from '@under18dev/veritas-core';
 import { inventoryTests } from '@under18dev/veritas-test-inventory';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { linkMutants, linkTests } from '../src/index.js';
 
@@ -64,7 +65,11 @@ describe('linkTests', () => {
         '',
       ].join('\n'),
     });
-    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
     const byName = (name: string) => inventory.tests.find((t) => t.name === name);
     const nameOnly = [byName('discountAmount gives 100 off at 1000'), byName('discountAmount is correct')];
     const caller = byName('charges a discount on large orders');

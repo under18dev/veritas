@@ -12,6 +12,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
@@ -81,7 +82,7 @@ describe('config', () => {
       JSON.stringify({ name: 'p', devDependencies: { vitest: '5.1.1' } }),
     );
     symlinkSync(outside, path.join(root, '.veritas'), process.platform === 'win32' ? 'junction' : 'dir');
-    expect(() => initProject(root, { force: true })).toThrow(/escapes the project root/);
+    expect(() => initProject(root, vitest, { force: true })).toThrow(/escapes the project root/);
     expect(existsSync(path.join(outside, 'config.json'))).toBe(false);
     writeFileSync(path.join(outside, 'config.json'), 'secret-token-value');
     await expect(loadConfig(root)).rejects.toThrow(/escapes the project root/);
@@ -634,6 +635,7 @@ describe('doctor', { timeout: 30_000 }, () => {
     const report = await runDoctor(
       root,
       null,
+      vitest,
       {},
       { '@mizchi/mutator': '1.2.3', 'fast-check': '4.5.6', 'z3-solver': '7.8.9' },
     );
@@ -654,7 +656,7 @@ describe('doctor', { timeout: 30_000 }, () => {
     writeFileSync(path.join(root, 'adapters/two/package.json'), '{}');
     writeFileSync(path.join(root, 'src/test.ts'), "import { it } from 'vitest';\n");
     writeFileSync(path.join(root, 'lib/__tests__/a.ts'), "import { expect } from 'vitest';\n");
-    const project = detectProject(root);
+    const project = detectProject(root, vitest);
     expect(project.sourceGlobs).toEqual([
       'src/**/*.{ts,tsx,js,mjs}',
       'adapters/one/src/**/*.{ts,tsx,js,mjs}',
@@ -679,16 +681,16 @@ describe('doctor', { timeout: 30_000 }, () => {
     git('add', 'package.json', 'package-lock.json');
     // Left behind by running `pnpm install` once; never committed.
     writeFileSync(path.join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
-    expect(detectProject(root).packageManager).toBe('npm');
+    expect(detectProject(root, vitest).packageManager).toBe('npm');
     // A packageManager field still settles it when no lockfile is committed.
     git('rm', '-q', '--cached', 'package-lock.json');
     writeFileSync(path.join(root, 'package.json'), '{"name":"p","packageManager":"yarn@4.0.0"}');
-    expect(detectProject(root).packageManager).toBe('yarn');
+    expect(detectProject(root, vitest).packageManager).toBe('yarn');
     // Without git or a field, a lockfile on disk is all there is.
     const plain = tmp();
     writeFileSync(path.join(plain, 'package.json'), '{"name":"p"}');
     writeFileSync(path.join(plain, 'bun.lock'), '');
-    expect(detectProject(plain).packageManager).toBe('bun');
+    expect(detectProject(plain, vitest).packageManager).toBe('bun');
   });
 
   it('looks past an untracked lockfile of a workspace package to the committed one at the root', () => {
@@ -702,13 +704,13 @@ describe('doctor', { timeout: 30_000 }, () => {
     git('init', '-q');
     git('add', 'package.json', 'pnpm-lock.yaml', 'packages/app/package.json');
     writeFileSync(path.join(app, 'package-lock.json'), '{}');
-    expect(detectProject(app).packageManager).toBe('pnpm');
+    expect(detectProject(app, vitest).packageManager).toBe('pnpm');
     // Without a committed lockfile, the packageManager field of the workspace root still outweighs the stray one.
     git('rm', '-q', '--cached', 'pnpm-lock.yaml');
-    expect(detectProject(app).packageManager).toBe('pnpm');
+    expect(detectProject(app, vitest).packageManager).toBe('pnpm');
     // With neither, the nearest lockfile on disk decides.
     writeFileSync(path.join(root, 'package.json'), '{"name":"w"}');
-    expect(detectProject(app).packageManager).toBe('npm');
+    expect(detectProject(app, vitest).packageManager).toBe('npm');
   });
 
   it('does not take a test.ts or __tests__ file that does not use Vitest for a test', () => {
@@ -717,7 +719,7 @@ describe('doctor', { timeout: 30_000 }, () => {
     mkdirSync(path.join(root, 'src/__tests__'), { recursive: true });
     writeFileSync(path.join(root, 'src/test.ts'), 'export const sample = 1;\n');
     writeFileSync(path.join(root, 'src/__tests__/fixtures.ts'), 'export const data = [];\n');
-    expect(detectProject(root).testGlobs).toEqual(['**/*.{test,spec}.{ts,tsx,js,mjs}']);
+    expect(detectProject(root, vitest).testGlobs).toEqual(['**/*.{test,spec}.{ts,tsx,js,mjs}']);
   });
 
   it('finds Vitest files deeper under __tests__ and side-effect imports of vitest', () => {
@@ -726,7 +728,7 @@ describe('doctor', { timeout: 30_000 }, () => {
     mkdirSync(path.join(root, 'src/__tests__/unit'), { recursive: true });
     writeFileSync(path.join(root, 'src/__tests__/unit/foo.ts'), "import { it } from 'vitest';\n");
     writeFileSync(path.join(root, 'src/test.ts'), "import 'vitest';\n");
-    expect(detectProject(root).testGlobs).toEqual([
+    expect(detectProject(root, vitest).testGlobs).toEqual([
       '**/*.{test,spec}.{ts,tsx,js,mjs}',
       '**/test.{ts,tsx,js,mjs}',
       '**/__tests__/**/*.{ts,tsx,js,mjs}',
@@ -738,7 +740,7 @@ describe('doctor', { timeout: 30_000 }, () => {
     writeFileSync(path.join(root, 'package.json'), '{"name":"p","devDependencies":{"vitest":"^4.0.0"}}');
     writeFileSync(path.join(root, 'yarn.lock'), '');
     writeFileSync(path.join(root, '.pnp.cjs'), '');
-    const report = await runDoctor(root, null, {}, {});
+    const report = await runDoctor(root, null, vitest, {}, {});
     expect(report.capabilities.find((c) => c.name === 'vitest')?.detail).toMatch(
       /Plug'n'Play is not supported; set `nodeLinker: node-modules`/,
     );
@@ -749,7 +751,7 @@ describe('doctor', { timeout: 30_000 }, () => {
     writeFileSync(path.join(root, 'package.json'), '{"name":"p","devDependencies":{"vitest":"^1.5.3"}}');
     mkdirSync(path.join(root, 'node_modules/vitest'), { recursive: true });
     writeFileSync(path.join(root, 'node_modules/vitest/package.json'), '{"name":"vitest","version":"1.5.3"}');
-    const report = await runDoctor(root, null, {}, { '@mizchi/mutator': '0.4.5' });
+    const report = await runDoctor(root, null, vitest, {}, { '@mizchi/mutator': '0.4.5' });
     expect(report.capabilities.find((c) => c.name === 'mutator')).toMatchObject({
       state: 'unavailable',
       detail: '@mizchi/mutator needs Vitest 4 or later; the project has Vitest 1.5.3',

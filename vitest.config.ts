@@ -10,6 +10,7 @@ export default defineConfig({
             'packages/*/test/**/*.test.ts',
             'packages/*/test/**/*.test.tsx',
             'packages/llm-providers/*/test/**/*.test.ts',
+            'packages/test-runners/*/test/**/*.test.ts',
           ],
         },
       },

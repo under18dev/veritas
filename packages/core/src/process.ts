@@ -490,7 +490,7 @@ function shimTarget(file: string): string | null {
 }
 
 /**
- * Run the project's own tests (Vitest, mutator) the way `pnpm test` would, with an allowlisted environment
+ * Run the project's own tests (the test runner, mutator) the way `pnpm test` would, with an allowlisted environment
  * and an empty temporary home directory, so nothing under the user's real home is found through HOME.
  * This is not a sandbox: test code runs with the user's file and network access (see the threat model).
  */

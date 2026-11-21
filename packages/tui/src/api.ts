@@ -17,7 +17,6 @@ import {
   type DoctorReport,
   type Finding,
   type InitResult,
-  initProject,
   JSON_CONFIG,
   type LogEvent,
   listRuns,
@@ -27,7 +26,6 @@ import {
   parseConfig,
   type Run,
   resolveInsideRoot,
-  runDoctor,
   VeritasError,
 } from '@under18dev/veritas-core';
 import {
@@ -36,11 +34,13 @@ import {
   diffLatest,
   type Explanation,
   explainFinding,
+  initProject,
   listProperties,
   type Profile,
   type RunSummary,
   readArtifact,
   run,
+  runDoctor,
   showProperty,
 } from '@under18dev/veritas-engine';
 import { applyImprovement, type PlanResult, planImprovement } from '@under18dev/veritas-improvement';

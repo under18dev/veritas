@@ -1,4 +1,5 @@
 import { VeritasConfig } from '@under18dev/veritas-core';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { inventoryTests } from '../src/index.js';
 import { tempProject } from './helpers.js';
@@ -13,7 +14,7 @@ export class Counter { count = 0; inc(): void { this.count++; } }
 
 function inventory(testSource: string, extra: Record<string, string> = {}) {
   const root = tempProject({ 'src/math.ts': math, 'test/case.test.ts': testSource, ...extra });
-  const result = inventoryTests({ root, config: VeritasConfig.parse({}) });
+  const result = inventoryTests({ recognition: vitest.recognition, root, config: VeritasConfig.parse({}) });
 
   return (name: string) => {
     const test = result.tests.find((candidate) => candidate.name === name);
@@ -797,9 +798,11 @@ import { expect, it } from 'vitest';
 it('renders', () => { const element = <hr />; expect(String(element)).toBe('<hr/>'); });
 `,
     });
-    const test = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests.find(
-      (t) => t.name === 'renders',
-    );
+    const test = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests.find((t) => t.name === 'renders');
     expect(test?.suspicions).toEqual(['opaque_call']);
   });
 

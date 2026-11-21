@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { initProject } from '@under18dev/veritas-core';
+import { initProject } from '@under18dev/veritas-engine';
 import { describe, expect, it } from 'vitest';
 import { REPO_ROOT } from './helpers.js';
 

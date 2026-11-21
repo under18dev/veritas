@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { gitOutput } from '../artifacts/store.js';
+import type { TestRunnerInstallation, TestRunnerProvider } from '../test-runner.js';
 
 export type PackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun' | 'unknown';
 
@@ -9,7 +10,8 @@ export interface ProjectInfo {
   hasPackageJson: boolean;
   packageManager: PackageManager;
   tsconfig: string | null;
-  vitest: { declared: boolean; installedVersion: string | null; configFile: string | null };
+  /** The configured test runner as installed in the project. */
+  testRunner: TestRunnerInstallation;
   git: boolean;
   /** Yarn Plug'n'Play (`.pnp.cjs`): dependencies are not in node_modules, which Veritas resolves from. */
   plugAndPlay: boolean;
@@ -23,15 +25,6 @@ const LOCKFILES: [string, PackageManager][] = [
   ['bun.lockb', 'bun'],
   ['yarn.lock', 'yarn'],
   ['package-lock.json', 'npm'],
-];
-
-const VITEST_CONFIGS = [
-  'vitest.config.ts',
-  'vitest.config.mts',
-  'vitest.config.js',
-  'vitest.config.mjs',
-  'vite.config.ts',
-  'vite.config.js',
 ];
 
 function readPackageJson(root: string): Record<string, unknown> | null {
@@ -234,8 +227,16 @@ function hasFileNamed(dir: string, test: (name: string, parent: string) => boole
   return false;
 }
 
-/** Inspect a project without running any of its code. */
-export function detectProject(root: string): ProjectInfo {
+/** Whether source text imports or requires one of `modules` (`import { it } from 'vitest'`, `require('vitest')`). */
+function importsModule(text: string, modules: readonly string[]): boolean {
+  if (modules.length === 0) return false;
+  const names = modules.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+
+  return new RegExp(`(?:from\\s+|import\\s+|require\\(\\s*)['"](?:${names})['"]`).test(text);
+}
+
+/** Inspect a project, and how it has the test runner `runner`, without running any of its code. */
+export function detectProject(root: string, runner: TestRunnerProvider): ProjectInfo {
   const pkg = readPackageJson(root);
   const deps = { ...((pkg?.dependencies as object) ?? {}), ...((pkg?.devDependencies as object) ?? {}) };
   const packageManager = detectPackageManager(root, pkg);
@@ -253,20 +254,18 @@ export function detectProject(root: string): ProjectInfo {
   // Test files named `test.ts` or kept under `__tests__/`, when the project has them, besides `*.test.ts`.
   const testGlobs = [`**/*.{test,spec}.${EXTENSIONS}`];
 
-  // Only when such a file uses Vitest: a `src/test.ts` utility or a `__tests__/fixtures.ts` alone is not a test.
-  const usesVitest = (name: string, parent: string) => {
+  // Only when such a file uses the test runner: a `src/test.ts` utility or a `__tests__/fixtures.ts` alone is not
+  // a test.
+  const usesRunner = (name: string, parent: string) => {
     try {
-      // `import { it } from 'vitest'`, `import 'vitest'` or `require('vitest')`.
-      return /(?:from\s+|import\s+|require\(\s*)['"]vitest['"]/.test(
-        readFileSync(path.join(parent, name), 'utf8'),
-      );
+      return importsModule(readFileSync(path.join(parent, name), 'utf8'), runner.recognition.modules);
     } catch {
       return false;
     }
   };
 
   if (
-    hasFileNamed(root, (name, parent) => /^test\.(?:ts|tsx|js|mjs)$/.test(name) && usesVitest(name, parent))
+    hasFileNamed(root, (name, parent) => /^test\.(?:ts|tsx|js|mjs)$/.test(name) && usesRunner(name, parent))
   )
     testGlobs.push(`**/test.${EXTENSIONS}`);
 
@@ -277,7 +276,7 @@ export function detectProject(root: string): ProjectInfo {
         parent.split(path.sep).includes('__tests__') &&
         /\.(?:ts|tsx|js|mjs)$/.test(name) &&
         !/\.(?:test|spec)\./.test(name) &&
-        usesVitest(name, parent),
+        usesRunner(name, parent),
     )
   )
     testGlobs.push(`**/__tests__/**/*.${EXTENSIONS}`);
@@ -287,10 +286,11 @@ export function detectProject(root: string): ProjectInfo {
     hasPackageJson: pkg !== null,
     packageManager: ['pnpm', 'npm', 'yarn', 'bun'].includes(packageManager) ? packageManager : 'unknown',
     tsconfig: existsSync(path.join(root, 'tsconfig.json')) ? 'tsconfig.json' : null,
-    vitest: {
-      declared: 'vitest' in deps,
-      installedVersion: resolvePackageVersion(root, 'vitest'),
-      configFile: VITEST_CONFIGS.find((f) => existsSync(path.join(root, f))) ?? null,
+    testRunner: {
+      name: runner.name,
+      declared: runner.detection.packageName in deps,
+      installedVersion: resolvePackageVersion(root, runner.detection.packageName),
+      configFile: runner.detection.configFiles.find((f) => existsSync(path.join(root, f))) ?? null,
     },
     git: findUp(root, '.git'),
     plugAndPlay: ['.pnp.cjs', '.pnp.js'].some((f) => findUp(root, f)),

@@ -1,4 +1,5 @@
 import { VeritasConfig } from '@under18dev/veritas-core';
+import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { inventoryTests } from '../src/index.js';
 import { tempProject } from './helpers.js';
@@ -17,7 +18,11 @@ describe('tautology, mocks, and imports', () => {
         test('project', () => expect(fn(1)).toBe(1));
       `,
     });
-    const inventory = inventoryTests({ root, config: VeritasConfig.parse({}) });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
     const byName = (name: string) => {
       const test = inventory.tests.find((candidate) => candidate.name === name);
 
@@ -43,7 +48,11 @@ describe('tautology, mocks, and imports', () => {
         test('mocked', () => expect(mod.fn(1)).toBe(2));
       `,
     });
-    const testCase = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests.at(0);
+    const testCase = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests.at(0);
 
     if (!testCase) throw new Error('missing mocked test');
 
@@ -66,7 +75,11 @@ describe('tautology, mocks, and imports', () => {
         test('namespace', () => expect(namespace.named(1)).toBe(1));
       `,
     });
-    const tests = inventoryTests({ root, config: VeritasConfig.parse({}) }).tests;
+    const tests = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests;
 
     expect(tests.map((test) => test.calledSymbols)).toEqual([
       ['src/named.ts#named'],

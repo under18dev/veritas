@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseSymbolId, resolveInsideRoot, VeritasError } from '@under18dev/veritas-core';
-import { generateVitestFile } from '@under18dev/veritas-property-testing';
+import { generateTestFile } from '@under18dev/veritas-property-testing';
 import { defaultSeed, openProject } from './project.js';
 import { listProperties } from './spec.js';
+import { testRunnerFor } from './test-runners.js';
 
 export interface GeneratedTest {
   propertyId: string;
@@ -14,7 +15,7 @@ export interface GeneratedTest {
 }
 
 /**
- * Generate Vitest + fast-check test files for formalized properties of the latest run. Files are proposals:
+ * Generate fast-check test files, for the project's test runner, for formalized properties of the latest run. Files are proposals:
  * they are written under `.veritas/generated-tests/` and never added to the project's test suite here.
  */
 export async function generateTests(
@@ -35,6 +36,7 @@ export async function generateTests(
       'run `veritas spec show <id>` to see why',
     );
   }
+  const { templates } = testRunnerFor(config);
   const outDir = path.join('.veritas', 'generated-tests');
   const generated = selected.map((p) => {
     const { file, name } = parseSymbolId(p.targetSymbols[0] as string);
@@ -42,13 +44,14 @@ export async function generateTests(
     const importPath = path.posix.relative(path.posix.dirname(target), file).replace(/^(?!\.)/, './');
     const seed = config.pbt.seed ?? defaultSeed(p.id);
     const experimental = p.status !== 'accepted';
-    const content = generateVitestFile({
+    const content = generateTestFile({
       propertyId: p.id,
       ir: p.ir as NonNullable<typeof p.ir>,
       bindings: [{ modelName: name, importPath, exportName: name }],
       seed,
       numRuns: config.pbt.numRuns,
       experimental,
+      templates,
     });
 
     return { propertyId: p.id, file: target, content, experimental };

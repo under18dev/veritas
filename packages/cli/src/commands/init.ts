@@ -3,18 +3,15 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
-  detectProject,
   ExitCode,
   gitOutput,
-  initProject,
   llmAvailability,
   resolveCommand,
   resolvePackageVersion,
-  runDoctor,
   type VeritasConfig,
   VeritasError,
 } from '@under18dev/veritas-core';
-import { bundledTools } from '@under18dev/veritas-engine';
+import { bundledTools, detectProject, initProject, runDoctor } from '@under18dev/veritas-engine';
 import { isCi } from '@under18dev/veritas-improvement';
 import { emitJson, emitText, type GlobalOptions, log } from '../output.js';
 import { runInitWizard, type WizardAction, type WizardEnvironment } from './init-wizard.js';
@@ -209,7 +206,7 @@ export async function initCommand(
   } else {
     emitText(`wrote ${result.file}`);
     emitText(
-      `detected: package manager=${result.project.packageManager}, tsconfig=${result.project.tsconfig ?? 'none'}, vitest=${result.project.vitest.installedVersion ?? 'declared, not installed'}, git=${result.project.git}`,
+      `detected: package manager=${result.project.packageManager}, tsconfig=${result.project.tsconfig ?? 'none'}, ${result.project.testRunner.name}=${result.project.testRunner.installedVersion ?? 'declared, not installed'}, git=${result.project.git}`,
     );
     emitText(`next:\n${result.nextSteps.map((s) => `  ${s}`).join('\n')}`);
   }
