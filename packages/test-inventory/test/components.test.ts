@@ -473,15 +473,113 @@ describe('links that are not there', () => {
   });
 });
 
+describe('links that are not there, continued', () => {
+  it('keeps which returned property of a helper carries what it handed over', () => {
+    const byName = inventory(`${header}
+      function setup() {
+        const used = vi.fn();
+        const unused = vi.fn();
+        render(<Dialog onSave={used} />);
+        return { used, unused };
+      }
+      it('unused member', () => { expect(setup().unused).not.toHaveBeenCalled(); });
+      it('unused member destructured', () => {
+        const { unused } = setup();
+        expect(unused).not.toHaveBeenCalled();
+      });
+      it('used member', () => {
+        const { used } = setup();
+        expect(used).not.toHaveBeenCalled();
+      });
+      it('used member through a local', () => {
+        const mocks = setup();
+        expect(mocks.used).not.toHaveBeenCalled();
+      });
+    `);
+
+    expect(byName('unused member').asserted).toBe(false);
+    expect(byName('unused member destructured').asserted).toBe(false);
+    expect(byName('used member').asserted).toBe(true);
+    expect(byName('used member through a local').asserted).toBe(true);
+  });
+
+  it('counts a query in a function only when the function runs', () => {
+    const byName = inventory(`${header}
+      import { waitFor } from '@testing-library/react';
+      it('function compared', () => {
+        render(<Dialog open title="Hi" />);
+        expect(() => screen.getByText('Hi')).toBeTruthy();
+      });
+      it('function run by a throw matcher', () => {
+        render(<Dialog open title="Hi" />);
+        expect(() => screen.getByText('Hi')).not.toThrow();
+      });
+      it('local function called', () => {
+        const read = () => screen.getByText('Hi');
+        render(<Dialog open title="Hi" />);
+        expect(read()).toBeTruthy();
+      });
+      it('run by waitFor', async () => {
+        render(<Dialog open title="Hi" />);
+        expect(await waitFor(() => screen.getByText('Hi'))).toBeTruthy();
+      });
+    `);
+
+    expect(byName('function compared').asserted).toBe(false);
+    expect(byName('function run by a throw matcher').asserted).toBe(true);
+    expect(byName('local function called').asserted).toBe(true);
+    expect(byName('run by waitFor').asserted).toBe(true);
+  });
+
+  it('runs server-rendered components without linking reads of the document to them', () => {
+    const byName = inventory(`${header}
+      import { renderToString } from 'react-dom/server';
+      it('document after server rendering', () => {
+        renderToString(<Dialog open title="Hi" />);
+        expect(document.body.textContent).toBe('');
+      });
+      it('returned HTML', () => {
+        const html = renderToString(<Dialog open title="Hi" />);
+        expect(html).toContain('Hi');
+      });
+    `);
+
+    expect(byName('document after server rendering')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: false,
+    });
+    expect(byName('returned HTML').asserted).toBe(true);
+  });
+
+  it('treats content the test puts into the page itself as written by the test', () => {
+    const byName = inventory(`${header}
+      it('inner HTML', () => {
+        document.body.innerHTML = '<p>Hi</p>';
+        render(<Dialog open />);
+        expect(document.body.textContent).toContain('Hi');
+      });
+      it('appended node', () => {
+        const node = document.createElement('p');
+        document.body.appendChild(node);
+        render(<Dialog open />);
+        expect(document.body.lastChild).toBe(node);
+      });
+    `);
+
+    expect(byName('inner HTML').asserted).toBe(false);
+    expect(byName('appended node').asserted).toBe(false);
+  });
+});
+
 describe('large component test files', () => {
-  it('analyses many tests sharing a mock of the file without slowing down per test', () => {
+  const file = (count: number) => {
     let source = `${header}
       const shared = { onSave: vi.fn(), onClose: vi.fn() };
       let onSave: ReturnType<typeof vi.fn>;
       beforeEach(() => { onSave = vi.fn(); });
     `;
 
-    for (let index = 0; index < 400; index++)
+    for (let index = 0; index < count; index++)
       source += `
       it('t${index}', () => {
         const props = { onSave: vi.fn(), title: 'x${index}' };
@@ -491,11 +589,25 @@ describe('large component test files', () => {
         expect(onSave).not.toHaveBeenCalled();
       });
     `;
-    const started = Date.now();
-    const byName = inventory(source);
 
-    expect(byName('t399').asserted).toBe(true);
-    // Work per test that grew with the size of the file made this take minutes; it takes seconds.
-    expect(Date.now() - started).toBeLessThan(45_000);
+    return source;
+  };
+  const timed = (count: number) => {
+    const started = Date.now();
+    const byName = inventory(file(count));
+
+    expect(byName(`t${count - 1}`).asserted).toBe(true);
+
+    return Date.now() - started;
+  };
+
+  it('grows about linearly with the number of tests sharing a mock of the file', () => {
+    timed(20);
+    const small = timed(100);
+    const large = timed(400);
+
+    // Four times the tests: linear work takes about four times as long (less, with the fixed cost of the program);
+    // work per test that grows with the file takes about sixteen times as long.
+    expect(large).toBeLessThan(8 * small + 1000);
   }, 120_000);
 });

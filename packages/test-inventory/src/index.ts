@@ -189,6 +189,11 @@ interface MockReference {
   path: string[];
 }
 
+/** Whether an assertion reading `keys` of a helper's result (`null`: all of it) reads what carries `target`. */
+function keysMatch(keys: Set<string> | null | undefined, target: Target): boolean {
+  return !target.resultKeys || !keys || target.resultKeys.some((key) => keys.has(key));
+}
+
 /** Whether handing over `given` hands over the mock `read` checks: the whole value, or a property above it. */
 function covers(given: MockReference, read: MockReference): boolean {
   return given.symbol === read.symbol && given.path.every((name, index) => read.path[index] === name);
@@ -279,6 +284,11 @@ interface Target {
    * vi.fn() }; render(<Card {...props} />); return props;`).
    */
   returnsMocks?: boolean;
+  /**
+   * The properties of the helper's result through which this call's output or the mocks handed to it come out
+   * (`return { used, unused }` with only `used` handed over gives `['used']`); absent when it is the whole result.
+   */
+  resultKeys?: string[];
 }
 
 interface CallInfo {
@@ -317,6 +327,10 @@ interface BodyAnalysis {
   mockHolders: Map<Invocation, MockReference[]>;
   /** An assertion of the body (or of a helper it calls) checks a Testing Library query of the document. */
   observesDocument: boolean;
+  /** Calls whose output a returned object literal carries, by the properties carrying it; `null` is all of it. */
+  returnedKeys: Map<Invocation, Set<string> | null>;
+  /** The properties of a call's result that assertions read, by call (see `asserted`); `null` is all of it. */
+  assertedKeys: Map<Invocation, Set<string> | null>;
 }
 
 /**
@@ -635,6 +649,71 @@ function analyzeBody(
     sourcesOf(ts.isBlock(body) ? returnedExpressions(body) : ts.isExpression(body) ? [body] : []),
   );
   const asserted = new Set<Invocation>();
+  const assertedKeys: BodyAnalysis['assertedKeys'] = new Map();
+  const mergeKeys = (
+    map: Map<Invocation, Set<string> | null>,
+    call: Invocation,
+    keys: Set<string> | null,
+  ) => {
+    const previous = map.get(call);
+
+    if (previous === null || keys === null) map.set(call, null);
+    else map.set(call, new Set([...(previous ?? []), ...keys]));
+  };
+  // The properties of `call`'s result that `value` reads: `setup().used`, `const { used } = setup()`, or `r.used`
+  // with `const r = setup()`. `null` when it reads the whole result or the path is not that plain.
+  const keysRead = (value: ts.Node, call: Invocation): Set<string> | null => {
+    if (value === call || contains(value, call)) {
+      let current: ts.Node = call;
+
+      while (
+        ts.isParenthesizedExpression(current.parent) ||
+        ts.isAwaitExpression(current.parent) ||
+        ts.isNonNullExpression(current.parent)
+      )
+        current = current.parent;
+      const parent = current.parent;
+      const name =
+        (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+        parent.expression === current
+          ? memberName(parent)
+          : undefined;
+
+      return name === undefined ? null : new Set([name]);
+    }
+    const keys = new Set<string>();
+
+    for (const item of [value, ...descendants(value)]) {
+      if (!ts.isIdentifier(item)) continue;
+      const symbol = valueSymbol(item, checker);
+
+      if (!symbol || !(localCalls.get(symbol) ?? []).includes(call)) continue;
+      const declaration = symbol.valueDeclaration;
+      const initializer = variableInitializer(declaration);
+
+      // Only a local set straight from the call names a property of its result.
+      if (!initializer || !(initializer === call || contains(initializer, call))) return null;
+
+      if (declaration && ts.isBindingElement(declaration) && ts.isObjectBindingPattern(declaration.parent)) {
+        const property = declaration.propertyName ?? declaration.name;
+
+        if (
+          declaration.dotDotDotToken ||
+          !ts.isIdentifier(property) ||
+          declaration.parent.parent !== initializer.parent
+        )
+          return null;
+        keys.add(property.text);
+      } else {
+        const [first] = memberPath(item);
+
+        if (first === undefined) return null;
+        keys.add(first);
+      }
+    }
+
+    return keys.size > 0 ? keys : null;
+  };
 
   // Mocks the body calls itself (`onSave(); expect(onSave).toHaveBeenCalled()`): a call count on them may count the
   // test's own calls, so it is not taken as checking project code.
@@ -672,9 +751,16 @@ function analyzeBody(
     const runsSubject = matcherNames(assertion).some((name) => name.startsWith('toThrow'));
 
     for (const value of comparedValues(assertion)) {
-      for (const call of trackedCalls(value)) asserted.add(call);
+      for (const call of trackedCalls(value)) {
+        asserted.add(call);
+        mergeKeys(assertedKeys, call, keysRead(value, call));
+      }
 
-      for (const { node } of calls) if (contains(value, node)) asserted.add(node);
+      for (const { node } of calls)
+        if (contains(value, node)) {
+          asserted.add(node);
+          mergeKeys(assertedKeys, node, keysRead(value, node));
+        }
 
       // `const block = () => parse(x); expect(block).toThrow()`: a throw matcher runs the local function, so what
       // it calls is checked as if written inline. Other matchers only compare the function as a value.
@@ -740,15 +826,32 @@ function analyzeBody(
   const observed: BodyAnalysis['observed'] = new Set();
 
   // `document.body.className = 'dark'`: what the test writes to the page itself is not what a component rendered.
-  const documentWrites = descendants(body)
-    .filter(
-      (node): node is ts.BinaryExpression =>
-        ts.isBinaryExpression(node) &&
-        node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
-        node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
-        documentChain(node.left, checker) !== undefined,
+  // Content the test puts there itself (`document.body.innerHTML = …`, `document.body.appendChild(node)`) counts as
+  // written to the element it changes.
+  const documentWrites: { chain: string; end: number }[] = [];
+
+  for (const node of descendants(body)) {
+    let written: ts.Expression | undefined;
+
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
     )
-    .map((node) => ({ chain: documentChain(node.left, checker) as string, end: node.getEnd() }));
+      written =
+        ts.isPropertyAccessExpression(node.left) && CONTENT_PROPERTIES.has(node.left.name.text)
+          ? node.left.expression
+          : node.left;
+    else if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      CONTENT_METHODS.has(node.expression.name.text)
+    )
+      written = node.expression.expression;
+    const chain = written && documentChain(written, checker);
+
+    if (chain) documentWrites.push({ chain, end: node.getEnd() });
+  }
 
   for (const assertion of assertions) {
     if (checksSelfCalled(assertion)) continue;
@@ -765,7 +868,9 @@ function analyzeBody(
         if (
           entry.target.observedBy?.some((given) => covers(given, root)) ||
           mockHolders.get(entry.node)?.some((given) => covers(given, root)) ||
-          (entry.target.returnsMocks && results.has(entry.node))
+          (entry.target.returnsMocks &&
+            results.has(entry.node) &&
+            keysMatch(keysRead(root.identifier, entry.node), entry.target))
         )
           observed.add(entry);
     }
@@ -788,7 +893,49 @@ function analyzeBody(
     checks.length > 0 &&
     recordsProgress(checks, body, Math.min(...awaitedProject.map((node) => node.getEnd())), checker);
 
+  // What each returned property carries: the calls its value comes from and the calls handed the mocks it holds.
+  const returnedKeys: BodyAnalysis['returnedKeys'] = new Map();
+  const noteReturned = (expression: ts.Expression, key: string | null) => {
+    const carried = new Set(sourcesOf([expression]));
+
+    for (const item of [expression, ...descendants(expression)]) {
+      if (!ts.isIdentifier(item)) continue;
+      const symbol = valueSymbol(item, checker);
+
+      for (const [call, given] of mockHolders)
+        if (given.some((reference) => reference.symbol === symbol)) carried.add(call);
+    }
+
+    for (const call of carried) mergeKeys(returnedKeys, call, key === null ? null : new Set([key]));
+  };
+
+  for (const expression of ts.isBlock(body)
+    ? returnedExpressions(body)
+    : ts.isExpression(body)
+      ? [body]
+      : []) {
+    const value = skipParens(expression);
+
+    if (!ts.isObjectLiteralExpression(value)) {
+      noteReturned(expression, null);
+      continue;
+    }
+
+    for (const property of value.properties) {
+      const name =
+        property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+          ? property.name.text
+          : null;
+
+      if (ts.isPropertyAssignment(property)) noteReturned(property.initializer, name);
+      else if (ts.isShorthandPropertyAssignment(property)) noteReturned(property.name, property.name.text);
+      else if (ts.isSpreadAssignment(property)) noteReturned(property.expression, null);
+    }
+  }
+
   return {
+    returnedKeys,
+    assertedKeys,
     calls,
     assertions,
     asserted,
@@ -847,10 +994,23 @@ function assertionReach(
     if (initializer && depth < 5 && initializer.getSourceFile() === assertion.getSourceFile())
       addRoot(initializer, [...path, ...below], depth + 1);
   };
+  // Local functions the compared values call (`const read = () => screen.getByText('x'); expect(read())`).
+  const executed = new Set<ts.Node>();
   const visit = (node: ts.Node, depth: number, position: number) => {
     for (const item of [node, ...descendants(node)]) {
+      if (ts.isIdentifier(item) && ts.isCallExpression(item.parent) && item.parent.expression === item) {
+        const fn = localFunction(item, checker);
+
+        if (fn) executed.add(fn);
+      }
+
       if ((ts.isCallExpression(item) && isDocumentQuery(item, checker)) || isDocumentRead(item, checker)) {
-        const at = item !== node && inNestedFunction(item, node) ? assertion.getEnd() : position;
+        const fn = item === node ? undefined : enclosingFunction(item, node);
+
+        // A query in a function reads the page only when that function runs (`expect(() => screen.getByText('x'))`
+        // compares a function and runs nothing).
+        if (fn && !runsFunction(fn, assertion, executed)) continue;
+        const at = fn ? assertion.getEnd() : position;
         const chain = documentChain(item as ts.Expression, checker, true);
         const written = documentWrites.some(
           (write) =>
@@ -883,6 +1043,45 @@ function assertionReach(
     addRoot(subject, [], 0);
 
   return { documentReads, mockRoots };
+}
+
+/** The innermost function between `node` and `root` that encloses `node`, if any. */
+function enclosingFunction(node: ts.Node, root: ts.Node): ts.Node | undefined {
+  for (let current = node.parent; current && current !== root; current = current.parent)
+    if (isFunctionLike(current)) return current;
+
+  return isFunctionLike(root) ? root : undefined;
+}
+
+/** Functions that run the callback they are given before they return (or settle). */
+const CALLBACK_RUNNERS = new Set(['waitFor', 'act', 'waitForElementToBeRemoved', 'then', 'within']);
+
+/**
+ * Whether an assertion runs a function holding a read of the page: it is called where it is written or by a compared
+ * value (`executed`), given to a function that runs it (`waitFor`, `act`), or the subject of a throw matcher.
+ */
+function runsFunction(fn: ts.Node, assertion: ts.CallExpression, executed: Set<ts.Node>): boolean {
+  if (executed.has(fn)) return true;
+  let current: ts.Node = fn;
+
+  while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
+  const parent = current.parent;
+
+  if (ts.isCallExpression(parent) && parent.expression === current) return true;
+
+  if (ts.isCallExpression(parent) && parent.arguments.includes(current as ts.Expression)) {
+    if (parent === assertion) return matcherNames(assertion).some((name) => name.startsWith('toThrow'));
+    const callee = skipParens(parent.expression);
+    const name = ts.isIdentifier(callee)
+      ? callee.text
+      : ts.isPropertyAccessExpression(callee)
+        ? callee.name.text
+        : undefined;
+
+    return name !== undefined && CALLBACK_RUNNERS.has(name);
+  }
+
+  return false;
 }
 
 /** The name of a member access: `a.b` and `a['b']` name `b`; a computed `a[key]` names none. */
@@ -941,6 +1140,20 @@ function documentChain(
 
   return top.getText().replace(/\s+/g, '');
 }
+
+/** Properties whose assignment replaces the content of an element. */
+const CONTENT_PROPERTIES = new Set(['innerHTML', 'outerHTML', 'textContent', 'innerText']);
+
+/** Methods that put content into an element. */
+const CONTENT_METHODS = new Set([
+  'appendChild',
+  'append',
+  'prepend',
+  'insertBefore',
+  'replaceChildren',
+  'insertAdjacentHTML',
+  'insertAdjacentElement',
+]);
 
 /** What the global `document` exposes of the rendered page: `document.body`, `document.querySelector(...)`. */
 const DOCUMENT_READS = new Set([
@@ -1165,14 +1378,16 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
   // A JSX element renders the component its tag names once it is mounted: what that component (or a local component
   // of the test file and whatever it calls) produces is in the document. An element that is only created
   // (`expect(<Dialog />).toBeTruthy()`, `const unused = <Dialog />`) runs nothing.
-  const rendered = isJsxInvocation(node);
+  // Server rendering (`renderToString(<Dialog />)`) runs the component into the string it returns, not the document.
+  const mount = isJsxInvocation(node) ? mountedJsx(node, ctx) : undefined;
 
-  if (rendered && !mountedJsx(node, ctx)) {
+  if (isJsxInvocation(node) && !mount) {
     ctx.callInfo.set(node, none);
 
     return none;
   }
-  const passThrough = rendered && suppliesOnlyForeignChildren(node, ctx);
+  const rendered = mount === 'document';
+  const passThrough = rendered && isJsxInvocation(node) && suppliesOnlyForeignChildren(node, ctx);
 
   if (direct)
     info = {
@@ -1188,7 +1403,7 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
     if (helper) {
       info = helperInfo(helper, ctx);
 
-      if (rendered) info = { ...info, targets: info.targets.map((target) => ({ ...target, rendered })) };
+      if (mount) info = { ...info, targets: info.targets.map((target) => ({ ...target, rendered })) };
     } else if (receiver)
       info = {
         ...none,
@@ -1248,20 +1463,24 @@ const MOUNTING_FUNCTIONS = new Set([
   'mount',
   'shallow',
   'create',
-  'renderToString',
-  'renderToStaticMarkup',
 ]);
+
+/** Functions that run the components of an element into a string of HTML, outside the document. */
+const STRING_RENDERING_FUNCTIONS = new Set(['renderToString', 'renderToStaticMarkup']);
+
+/** How a JSX element is mounted: into the document, into a string of HTML (server rendering), or not at all. */
+type Mount = 'document' | 'string' | undefined;
 
 /**
  * Whether a JSX element is mounted: it (or the JSX tree it sits in) is given to a function that mounts it, to a
  * function of the test code or the project (a render helper), or is returned by a function (a component or a helper,
  * judged where that is used), directly or through a local variable that is.
  */
-function mountedJsx(node: ts.JsxSelfClosingElement | ts.JsxOpeningElement, ctx: Ctx): boolean {
+function mountedJsx(node: ts.JsxSelfClosingElement | ts.JsxOpeningElement, ctx: Ctx): Mount {
   return mountedExpression(ts.isJsxOpeningElement(node) ? node.parent : node, ctx, 0);
 }
 
-function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): boolean {
+function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount {
   let current = expression;
 
   for (;;) {
@@ -1293,7 +1512,8 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): boolea
   }
   const parent = current.parent;
 
-  if (ts.isReturnStatement(parent) || (ts.isArrowFunction(parent) && parent.body === current)) return true;
+  if (ts.isReturnStatement(parent) || (ts.isArrowFunction(parent) && parent.body === current))
+    return 'document';
 
   if (
     (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
@@ -1306,11 +1526,13 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): boolea
         ? callee.name.text
         : undefined;
 
-    return (
-      (name !== undefined && MOUNTING_FUNCTIONS.has(name)) ||
+    if (name !== undefined && STRING_RENDERING_FUNCTIONS.has(name)) return 'string';
+
+    return (name !== undefined && MOUNTING_FUNCTIONS.has(name)) ||
       helperBody(parent, ctx) !== undefined ||
       resolveProjectCall(parent, ctx.checker, ctx.projectSet, ctx.root) !== undefined
-    );
+      ? 'document'
+      : undefined;
   }
 
   // `const ui = <Dialog />; render(ui)`.
@@ -1322,12 +1544,14 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): boolea
   ) {
     const symbol = ctx.checker.getSymbolAtLocation(parent.name);
 
-    return (symbol ? referencesOf(symbol, parent.getSourceFile(), ctx.checker) : []).some(
-      (item) => item !== parent.name && mountedExpression(item, ctx, depth + 1),
-    );
+    const mounts = (symbol ? referencesOf(symbol, parent.getSourceFile(), ctx.checker) : [])
+      .filter((item) => item !== parent.name)
+      .map((item) => mountedExpression(item, ctx, depth + 1));
+
+    return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
   }
 
-  return false;
+  return undefined;
 }
 
 const referencesCache = new WeakMap<ts.SourceFile, Map<ts.Symbol, ts.Identifier[]>>();
@@ -1517,14 +1741,21 @@ function helperInfo(body: ts.Node, ctx: Ctx): CallInfo {
 
   for (const entry of analysis.calls) {
     const { node, target } = entry;
+    const previous = bySymbol.get(target.symbol);
     const assertedInside =
       target.assertedInside ||
-      (target.flowsToResult && analysis.asserted.has(node)) ||
+      (target.flowsToResult &&
+        analysis.asserted.has(node) &&
+        keysMatch(analysis.assertedKeys.get(node), target)) ||
       analysis.observed.has(entry);
     const flowsToResult = target.flowsToResult && analysis.returned.has(node);
+    const keys = analysis.returnedKeys.get(node);
+    const resultKeys =
+      keys === undefined || keys === null || (previous?.resultKeys === undefined && previous !== undefined)
+        ? undefined
+        : [...new Set([...(previous?.resultKeys ?? []), ...keys])];
     // What a nested helper does with a mock it is given is decided inside it, where its own targets record it.
     const handed = helperBody(node, ctx) ? [] : (analysis.handed.get(node) ?? []);
-    const previous = bySymbol.get(target.symbol);
     const observedBy = [...(previous?.observedBy ?? []), ...(target.observedBy ?? []), ...handed].filter(
       outside,
     );
@@ -1537,6 +1768,7 @@ function helperInfo(body: ts.Node, ctx: Ctx): CallInfo {
       // Pass-through only if every rendering of it in the helper is.
       passThrough: target.passThrough === true && (previous === undefined || previous.passThrough === true),
       returnsMocks: returnedMocks.has(node) || previous?.returnsMocks === true,
+      ...(resultKeys ? { resultKeys } : {}),
       ...(observedBy.length > 0 ? { observedBy } : {}),
     });
   }
@@ -2380,7 +2612,9 @@ function analyzeTest(
           : [],
       asserted:
         target.assertedInside ||
-        (target.flowsToResult && analysis?.asserted.has(node) === true) ||
+        (target.flowsToResult &&
+          analysis?.asserted.has(node) === true &&
+          keysMatch(analysis.assertedKeys.get(node), target)) ||
         analysis?.observed.has(entry) === true,
       location: location(source, node, relativeFile),
     };
