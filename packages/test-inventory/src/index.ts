@@ -350,6 +350,7 @@ function analyzeBody(
   ctx: Ctx,
   contextAssertion: (node: ts.CallExpression) => boolean = () => false,
   setupRenders: Invocation[] = [],
+  setupWrites: DocumentWrite[] = [],
 ): BodyAnalysis {
   const { checker } = ctx;
   // Components rendered by shared setup that runs before the body (`beforeEach(() => render(<Dialog />))`).
@@ -383,6 +384,16 @@ function analyzeBody(
 
     return info.targets.length > 0;
   };
+  // `const ui = <Dialog />` holds the element's description, not what the component renders: reading `ui.props` reads
+  // what the test wrote. The element still runs where it is mounted.
+  const notDescriptor = (value: ts.Expression, sources: Invocation[]) =>
+    sources.filter(
+      (item) =>
+        !(
+          isJsxInvocation(item) &&
+          jsxTop(ts.isJsxOpeningElement(item) ? item.parent : item, checker) === value
+        ),
+    );
   // Variables holding (something derived from) a project call's result, keyed by symbol so shadowing is respected.
   const localCalls = new Map<ts.Symbol, Invocation[]>();
   const outerDone = new Set<ts.Symbol>();
@@ -397,6 +408,26 @@ function analyzeBody(
       );
 
       for (const item of direct.length > 0 ? direct : trackedCalls(expression)) found.add(item);
+
+      // `render(ui)` with `const ui = <Dialog />`: what the render returns comes from the element it mounts.
+      for (const item of [expression, ...descendants(expression)])
+        if (ts.isCallExpression(item))
+          for (const argument of item.arguments) {
+            const value = skipParens(argument);
+            const initializer = ts.isIdentifier(value)
+              ? variableInitializer(checker.getSymbolAtLocation(value)?.valueDeclaration)
+              : undefined;
+
+            if (!initializer || !mountedExpression(value, ctx, 0)) continue;
+
+            for (const element of [initializer, ...descendants(initializer)])
+              if (
+                isJsxInvocation(element) &&
+                jsxTop(ts.isJsxOpeningElement(element) ? element.parent : element, checker) === initializer &&
+                record(element)
+              )
+                found.add(element);
+          }
     }
 
     return [...found];
@@ -598,14 +629,14 @@ function analyzeBody(
       );
 
     if (ts.isVariableDeclaration(node) && node.initializer)
-      bind(bindingIdentifiers(node.name), sourcesOf([node.initializer]));
+      bind(bindingIdentifiers(node.name), notDescriptor(node.initializer, sourcesOf([node.initializer])));
 
     if (
       ts.isBinaryExpression(node) &&
       node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
       ts.isIdentifier(node.left)
     )
-      bind([node.left], sourcesOf([node.right]));
+      bind([node.left], notDescriptor(node.right, sourcesOf([node.right])));
 
     // Storing a project result in a local (`Circle.prototype = create(...)`, `actual.push(parse(x))`) makes the
     // local carry it.
@@ -675,7 +706,7 @@ function analyzeBody(
         for (const element of [initializer, ...descendants(initializer)])
           if (
             isJsxInvocation(element) &&
-            jsxTop(ts.isJsxOpeningElement(element) ? element.parent : element) === initializer &&
+            jsxTop(ts.isJsxOpeningElement(element) ? element.parent : element, checker) === initializer &&
             record(element)
           ) {
             bindCallOutputs(element);
@@ -779,57 +810,36 @@ function analyzeBody(
     }
   // Content the test puts there itself (`document.body.innerHTML = …`, `document.body.appendChild(node)`) may be what
   // any later read of the page finds; other writes (`document.body.className = 'dark'`) only that member.
-  const documentWrites: DocumentWrite[] = [];
+  // Writes of shared setup that runs before the body (`beforeEach(() => { document.body.innerHTML = … })`) come first.
+  const documentWrites: DocumentWrite[] = [...setupWrites];
 
   for (const node of descendants(body)) {
     // A write in a function that never runs (`const reset = () => { document.body.innerHTML = ''; }`) writes nothing.
     if (!writeRuns(node, body, checker)) continue;
-    let written: ts.Expression | undefined;
-    let content = false;
+    const write = documentWriteOf(node, body, checker);
 
-    if (
-      ts.isBinaryExpression(node) &&
-      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
-      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
-    ) {
-      content = ts.isPropertyAccessExpression(node.left) && CONTENT_PROPERTIES.has(node.left.name.text);
-      written = content && ts.isPropertyAccessExpression(node.left) ? node.left.expression : node.left;
-    } else if (
-      ts.isCallExpression(node) &&
-      ts.isPropertyAccessExpression(node.expression) &&
-      CONTENT_METHODS.has(node.expression.name.text)
-    ) {
-      content = true;
-      written = node.expression.expression;
-    }
-    const chain = written && documentChain(written, checker);
-    // `document.body.appendChild(anchor)` with `anchor = document.createElement('button')` the test never fills: an
-    // empty element no text query can find, though a query by role or structure can.
-    const empty =
-      content &&
-      ts.isCallExpression(node) &&
-      node.arguments.length === 1 &&
-      emptyElement(node.arguments[0], body, checker);
-
-    if (chain) documentWrites.push({ chain, end: node.getEnd(), content, empty });
+    if (write) documentWrites.push(write);
   }
 
   const reaches = new Map(
     assertions.map((assertion) => [assertion, assertionReach(assertion, checker, documentWrites)] as const),
   );
   // Reading such a mock's calls, through a matcher (`toHaveBeenCalled`) or its state (`onSave.mock.calls`), may
-  // read the test's own calls.
-  const checksSelfCalled = (assertion: ts.CallExpression): boolean =>
-    (reaches.get(assertion)?.mockRoots ?? []).some((root) =>
-      selfCalled.some(
-        (called) => called.symbol === root.symbol && called.path.join('.') === root.path.join('.'),
-      ),
+  // read the test's own calls: what it says about the calls it was handed to is left out, and nothing else.
+  const isSelfCalled = (root: MockReference) =>
+    selfCalled.some(
+      (called) => called.symbol === root.symbol && called.path.join('.') === root.path.join('.'),
+    );
+  const selfCalledEvidence = (assertion: ts.CallExpression): Set<Invocation> =>
+    new Set(
+      (reaches.get(assertion)?.mockRoots ?? [])
+        .filter(isSelfCalled)
+        .flatMap((root) => trackedCalls(root.identifier)),
     );
 
   // Either side of a comparison counts: `expect(['a', 'b']).toContain(result.status)` checks the result.
   for (const assertion of assertions) {
-    if (checksSelfCalled(assertion)) continue;
-
+    const excluded = selfCalledEvidence(assertion);
     const runsSubject = matcherNames(assertion).some((name) => name.startsWith('toThrow'));
 
     for (const value of comparedValues(assertion)) {
@@ -839,12 +849,13 @@ function analyzeBody(
 
       for (const identifier of [value, ...descendants(value)].filter(ts.isIdentifier).filter(evaluated))
         for (const call of trackedCalls(identifier)) {
+          if (excluded.has(call)) continue;
           asserted.add(call);
           mergeKeys(assertedKeys, call, keysRead(value, call));
         }
 
       for (const { node } of calls)
-        if (contains(value, node) && evaluated(node)) {
+        if (contains(value, node) && evaluated(node) && !excluded.has(node)) {
           asserted.add(node);
           mergeKeys(assertedKeys, node, keysRead(value, node));
         }
@@ -914,7 +925,6 @@ function analyzeBody(
 
   // `document.body.className = 'dark'`: what the test writes to the page itself is not what a component rendered.
   for (const assertion of assertions) {
-    if (checksSelfCalled(assertion)) continue;
     const reached = reaches.get(assertion) as ReturnType<typeof assertionReach>;
 
     // Where the page was read: a query kept in a local before the render (`const before = screen.queryByText('x');
@@ -922,6 +932,7 @@ function analyzeBody(
     documentChecks.push(...reached.documentReads);
 
     for (const root of reached.mockRoots) {
+      if (isSelfCalled(root)) continue;
       const results = new Set(trackedCalls(root.identifier));
 
       for (const entry of calls)
@@ -946,7 +957,7 @@ function analyzeBody(
     if (outside !== undefined) return outside;
 
     if (!isJsxInvocation(node)) return node.getStart();
-    const top = jsxTop(ts.isJsxOpeningElement(node) ? node.parent : node);
+    const top = jsxTop(ts.isJsxOpeningElement(node) ? node.parent : node, checker);
     const holder = top.parent;
 
     if (!ts.isVariableDeclaration(holder) || holder.initializer !== top || !ts.isIdentifier(holder.name))
@@ -1072,10 +1083,17 @@ function assertionReach(
 
     if (!symbol) return;
     mockRoots.push({ identifier: current, symbol, path: [...path, ...below] });
-    const initializer = variableInitializer(symbol.valueDeclaration);
+    const declaration = symbol.valueDeclaration;
+    const initializer = variableInitializer(declaration);
+    // `const { onSave } = props` reads `props.onSave`.
+    const property =
+      declaration && ts.isBindingElement(declaration) && ts.isObjectBindingPattern(declaration.parent)
+        ? (declaration.propertyName ?? declaration.name)
+        : undefined;
+    const member = property && ts.isIdentifier(property) ? [property.text] : [];
 
     if (initializer && depth < 5 && initializer.getSourceFile() === assertion.getSourceFile())
-      addRoot(initializer, [...path, ...below], depth + 1);
+      addRoot(initializer, [...member, ...path, ...below], depth + 1);
   };
   // Local functions the compared values call (`const read = () => screen.getByText('x'); expect(read())`).
   const executed = new Set<ts.Node>();
@@ -1296,6 +1314,66 @@ function documentRoot(expression: ts.Expression, checker: ts.TypeChecker, depth:
   return ts.isIdentifier(value) ? documentBase(value, checker, depth + 1) : undefined;
 }
 
+/**
+ * The write to the page a node makes, if any: an assignment to a `document` member, or content put into one
+ * (`innerHTML`, `appendChild`, …). `scope` is the code that may fill an element it appends.
+ */
+function documentWriteOf(node: ts.Node, scope: ts.Node, checker: ts.TypeChecker): DocumentWrite | undefined {
+  let written: ts.Expression | undefined;
+  let content = false;
+
+  if (
+    ts.isBinaryExpression(node) &&
+    node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+    node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+  ) {
+    content = ts.isPropertyAccessExpression(node.left) && CONTENT_PROPERTIES.has(node.left.name.text);
+    written = content && ts.isPropertyAccessExpression(node.left) ? node.left.expression : node.left;
+  } else if (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    CONTENT_METHODS.has(node.expression.name.text)
+  ) {
+    content = true;
+    written = node.expression.expression;
+  }
+  const chain = written && documentChain(written, checker);
+
+  if (!chain) return undefined;
+  // `document.body.appendChild(anchor)` with `anchor = document.createElement('button')` the test never fills: an
+  // empty element no text query can find, though a query by role or structure can.
+  const empty =
+    content &&
+    ts.isCallExpression(node) &&
+    node.arguments.length === 1 &&
+    emptyElement(node.arguments[0], scope, checker);
+
+  return { chain, end: node.getEnd(), content, empty };
+}
+
+const setupWritesCache = new WeakMap<ts.SourceFile, ts.Node[]>();
+
+/**
+ * The writes to the page made by a file's shared setup (module or describe level, `beforeEach`/`beforeAll`) whose
+ * code runs, worked out once per file; which tests they run before is decided per test.
+ */
+function setupWriteNodes(source: ts.SourceFile, checker: ts.TypeChecker): ts.Node[] {
+  let found = setupWritesCache.get(source);
+
+  if (!found) {
+    found = descendants(source).filter(
+      (node) =>
+        (ts.isBinaryExpression(node) || ts.isCallExpression(node)) &&
+        runsBefore(node, undefined) &&
+        writeRuns(node, source, checker) &&
+        documentWriteOf(node, source, checker) !== undefined,
+    );
+    setupWritesCache.set(source, found);
+  }
+
+  return found;
+}
+
 /** Calls that make the page fire events, so listeners given to `addEventListener` may run. */
 const EVENT_SOURCES = /^(?:fireEvent|userEvent|user)$|^(?:dispatchEvent|click|focus|blur|submit)$/;
 
@@ -1444,11 +1522,11 @@ const CONTENT_METHODS = new Set([
   'insertAdjacentElement',
 ]);
 
-/** What the global `document` exposes of the rendered page: `document.body`, `document.querySelector(...)`. */
-const DOCUMENT_READS = new Set([
-  'body',
-  'documentElement',
-  'activeElement',
+/** Properties of the global `document` that hold part of the rendered page. */
+const DOCUMENT_PROPERTIES = new Set(['body', 'documentElement', 'activeElement']);
+
+/** Methods of the global `document` that query the rendered page, read only when called. */
+const DOCUMENT_METHODS = new Set([
   'querySelector',
   'querySelectorAll',
   'getElementById',
@@ -1459,7 +1537,12 @@ const DOCUMENT_READS = new Set([
 
 /** A read of the page through the global `document` (not a local of that name), where Testing Library renders. */
 function isDocumentRead(node: ts.Node, checker: ts.TypeChecker): boolean {
-  if (!ts.isPropertyAccessExpression(node) || !DOCUMENT_READS.has(node.name.text)) return false;
+  if (!ts.isPropertyAccessExpression(node)) return false;
+  const name = node.name.text;
+  // `document.querySelector` as a value (`expect(document.querySelector).toBeTypeOf('function')`) queries nothing.
+  const called = ts.isCallExpression(node.parent) && node.parent.expression === node;
+
+  if (!DOCUMENT_PROPERTIES.has(name) && !(DOCUMENT_METHODS.has(name) && called)) return false;
   const receiver = skipParens(node.expression);
 
   // `document.body`, or the same through a local holding `document` (`const doc = document; doc.body`).
@@ -1887,7 +1970,7 @@ function importedName(identifier: ts.Identifier, checker: ts.TypeChecker): strin
     : identifier.text;
 }
 
-const setupRendersCache = new WeakMap<ts.SourceFile, Invocation[]>();
+const setupRendersCache = new WeakMap<ts.SourceFile, { node: Invocation; call: ts.CallExpression }[]>();
 
 /**
  * The renders of a file's `beforeEach` hooks, worked out once per file; which tests they run before is decided per
@@ -1896,7 +1979,7 @@ const setupRendersCache = new WeakMap<ts.SourceFile, Invocation[]>();
  * `beforeAll` or directly at module or describe level are left out, since Testing Library cleans the page up after
  * each test and only the first test would see them.
  */
-function setupRenders(source: ts.SourceFile, ctx: Ctx): Invocation[] {
+function setupRenders(source: ts.SourceFile, ctx: Ctx): { node: Invocation; call: ts.CallExpression }[] {
   let found = setupRendersCache.get(source);
 
   if (!found) {
@@ -1907,7 +1990,7 @@ function setupRenders(source: ts.SourceFile, ctx: Ctx): Invocation[] {
       if (!ts.isCallExpression(call) || !inBeforeEach(call)) continue;
 
       if (rendered(call)) {
-        found.push(call);
+        found.push({ node: call, call });
         continue;
       }
 
@@ -1921,10 +2004,10 @@ function setupRenders(source: ts.SourceFile, ctx: Ctx): Invocation[] {
           for (const node of [root, ...descendants(root)])
             if (
               isJsxInvocation(node) &&
-              jsxTop(ts.isJsxOpeningElement(node) ? node.parent : node) === root &&
+              jsxTop(ts.isJsxOpeningElement(node) ? node.parent : node, ctx.checker) === root &&
               rendered(node)
             )
-              found.push(node);
+              found.push({ node, call });
       }
     }
     setupRendersCache.set(source, found);
@@ -2048,6 +2131,24 @@ function argumentMount(
   return mounts.includes('document') ? 'document' : mounts.includes('string') ? 'string' : undefined;
 }
 
+/** The function a JSX tag names when its code is visible (test code or project code), not a declaration. */
+function componentFunction(
+  element: ts.JsxOpeningElement | ts.JsxSelfClosingElement,
+  checker: ts.TypeChecker,
+): ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | ts.MethodDeclaration | undefined {
+  if (ts.isJsxNamespacedName(element.tagName)) return undefined;
+  let symbol = aliasTarget(element.tagName as ts.Expression, checker);
+
+  if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+  const fn = (symbol?.declarations ?? [])
+    .map((item) => (ts.isVariableDeclaration(item) && item.initializer ? skipParens(item.initializer) : item))
+    .find(
+      (item) => isFunctionLike(item) && item.body !== undefined && !item.getSourceFile().isDeclarationFile,
+    );
+
+  return fn && isFunctionLike(fn) ? fn : undefined;
+}
+
 /**
  * How an element given as the `name` prop of a component is mounted: where the component's own code puts that prop
  * (`function Layout({ header }) { return <main>{header}</main>; }`), judged like any other expression, and only if the
@@ -2059,16 +2160,9 @@ function propMount(
   ctx: Ctx,
   depth: number,
 ): Mount {
-  let symbol = aliasTarget(element.tagName as ts.Expression, ctx.checker);
+  const fn = componentFunction(element, ctx.checker);
 
-  if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = ctx.checker.getAliasedSymbol(symbol);
-  const fn = (symbol?.declarations ?? [])
-    .map((item) => (ts.isVariableDeclaration(item) && item.initializer ? skipParens(item.initializer) : item))
-    .find(
-      (item) => isFunctionLike(item) && item.body !== undefined && !item.getSourceFile().isDeclarationFile,
-    );
-
-  if (!fn || !isFunctionLike(fn) || !fn.body) return undefined;
+  if (!fn?.body) return undefined;
   const parameter = fn.parameters[0];
 
   if (!parameter) return undefined;
@@ -2106,7 +2200,7 @@ function propMount(
 }
 
 /** The outermost expression of the JSX tree an element sits in, through conditionals, arrays and parentheses. */
-function jsxTop(expression: ts.Node): ts.Node {
+function jsxTop(expression: ts.Node, checker: ts.TypeChecker): ts.Node {
   let current = expression;
   for (;;) {
     const parent = current.parent;
@@ -2114,6 +2208,15 @@ function jsxTop(expression: ts.Node): ts.Node {
     // A prop value (`<Ignore unused={<Dialog />} />`) is handed to that component, which may not render it: it is
     // judged as an argument, not as part of the tree around it.
     if (ts.isJsxExpression(parent) && ts.isJsxAttribute(parent.parent)) break;
+
+    // So are the children of a component whose code is visible (`<Ignore><Dialog /></Ignore>`); intrinsic and
+    // third-party elements are taken to render their children.
+    if (
+      ts.isJsxElement(parent) &&
+      parent.children.includes(current as ts.JsxChild) &&
+      componentFunction(parent.openingElement, checker) !== undefined
+    )
+      break;
 
     if (
       ts.isJsxElement(parent) ||
@@ -2144,7 +2247,7 @@ function jsxTop(expression: ts.Node): ts.Node {
 }
 
 function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount {
-  const current = jsxTop(expression);
+  const current = jsxTop(expression, ctx.checker);
   const parent = current.parent;
 
   // Returned by a component or factory: mounted where what the function returns is, so only if that is.
@@ -2168,6 +2271,10 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount 
       ? argumentMount(parent, index, ctx, depth)
       : rendererKind(parent.expression, ctx.checker);
   }
+
+  // `<Wrapper><Dialog /></Wrapper>`: mounted where the component renders its children.
+  if (ts.isJsxElement(parent) && parent.children.includes(current as ts.JsxChild))
+    return depth < 5 ? propMount(parent.openingElement, 'children', ctx, depth) : undefined;
 
   // `<Layout header={<Dialog />} />`: mounted where the component renders that prop.
   if (ts.isJsxExpression(parent) && ts.isJsxAttribute(parent.parent)) {
@@ -2673,6 +2780,20 @@ function findMockHolders(call: Invocation, checker: ts.TypeChecker): MockHolders
       // In `{ cloneObject }` the name is the property; the variable is its value.
       const symbol = valueSymbol(item, checker);
       const declaration = symbol?.valueDeclaration;
+      // `const { onSave } = props`: the member `onSave` of the object `props` holds.
+      const member = declaration && destructuredMember(declaration, checker);
+
+      if (member) {
+        containers.set(`${member.declaration.pos}:${member.name}`, {
+          declaration: member.declaration,
+          path: [member.name],
+        });
+        follow(
+          member.declaration,
+          member.name,
+          memberValues(valuesOf(member.declaration, checker), [member.name]),
+        );
+      }
       const holding =
         declaration && ts.isVariableDeclaration(declaration) ? mockHolding(declaration, checker) : undefined;
 
@@ -2823,6 +2944,33 @@ function objectKeys(value: ts.Expression): Set<string> | undefined {
   }
 
   return keys;
+}
+
+/**
+ * The object variable and member a destructured binding takes (`const { onSave } = props`, `{ onSave: save }`), when
+ * that variable holds mocks.
+ */
+function destructuredMember(
+  declaration: ts.Declaration,
+  checker: ts.TypeChecker,
+): { declaration: ts.VariableDeclaration; name: string } | undefined {
+  if (
+    !ts.isBindingElement(declaration) ||
+    declaration.dotDotDotToken ||
+    !ts.isObjectBindingPattern(declaration.parent)
+  )
+    return undefined;
+  const holder = declaration.parent.parent;
+  const property = declaration.propertyName ?? declaration.name;
+
+  if (!ts.isVariableDeclaration(holder) || !holder.initializer || !ts.isIdentifier(property))
+    return undefined;
+  const source = skipParens(holder.initializer);
+  const object = ts.isIdentifier(source) ? checker.getSymbolAtLocation(source)?.valueDeclaration : undefined;
+
+  return object && ts.isVariableDeclaration(object) && mockHolding(object, checker) !== undefined
+    ? { declaration: object, name: property.text }
+    : undefined;
 }
 
 /** The plain member path read below an identifier: `props.a.b` gives `['a', 'b']`; a computed member ends it. */
@@ -3410,7 +3558,16 @@ function analyzeTest(
         body,
         ctx,
         (node) => isContextAssertion(node, contextParameter, checker),
-        setupRenders(source, ctx).filter((node) => !contains(body, node) && runsBefore(node, body)),
+        setupRenders(source, ctx)
+          .filter(
+            ({ node, call }) => !contains(body, node) && !contains(body, call) && runsBefore(call, body),
+          )
+          .map(({ node }) => node),
+        setupWriteNodes(source, checker)
+          .filter((node) => !contains(body, node) && runsBefore(node, body))
+          .map((node) => documentWriteOf(node, source, checker))
+          .filter((write): write is DocumentWrite => write !== undefined)
+          .map((write) => ({ ...write, end: Number.NEGATIVE_INFINITY })),
       )
     : undefined;
   const assertions = analysis?.assertions ?? [];

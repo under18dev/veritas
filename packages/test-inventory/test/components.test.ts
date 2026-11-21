@@ -1137,6 +1137,143 @@ describe('props, setup hand-offs, writes that run and namespaces', () => {
   });
 });
 
+describe('children, scopes, descriptors and setup writes', () => {
+  it('counts children only when the receiving component renders them', () => {
+    const byName = inventory(`${header}
+      function Ignore({ children }: { children?: unknown }) { return <p>Hi</p>; }
+      function Frame({ children }: { children?: unknown }) { return <section>{children}</section>; }
+      it('children ignored', () => {
+        render(<Ignore><Dialog open title="Hi" /></Ignore>);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+      it('children rendered', () => {
+        render(<Frame><Dialog open title="Hi" /></Frame>);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+    `);
+
+    expect(byName('children ignored')).toMatchObject({ symbols: [], asserted: false });
+    expect(byName('children rendered')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
+  });
+
+  it('scopes a stored element mounted in a hook to the describe of that hook', () => {
+    const byName = inventory(`${header}
+      const ui = <Dialog open title="Hi" />;
+      describe('A', () => {
+        beforeEach(() => { render(ui); });
+        it('in A', () => { expect(screen.getByText('Hi')).toBeInTheDocument(); });
+      });
+      describe('B', () => {
+        it('in B', () => { expect(screen.queryByText('Hi')).toBeNull(); });
+      });
+    `);
+
+    expect(byName('in A')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
+    expect(byName('in B')).toMatchObject({ symbols: [], asserted: false });
+  });
+
+  it('counts document query methods only when called', () => {
+    const byName = inventory(`${header}
+      it('method as a value', () => {
+        render(<Dialog open title="Hi" />);
+        expect(document.querySelector).toBeTypeOf('function');
+      });
+      it('method kept in a local', () => {
+        render(<Dialog open title="Hi" />);
+        const query = document.querySelector;
+        expect(query).toBeDefined();
+      });
+      it('method called', () => {
+        render(<Dialog open title="Hi" />);
+        expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+      });
+    `);
+
+    expect(byName('method as a value').asserted).toBe(false);
+    expect(byName('method kept in a local').asserted).toBe(false);
+    expect(byName('method called').asserted).toBe(true);
+  });
+
+  it('leaves out only what a self-called mock says, not other project results in the assertion', () => {
+    const byName = inventory(`${header}
+      it('project result against a self-called mock', () => {
+        const expected = vi.fn();
+        expected('A');
+        expect(label('a')).toBe(expected.mock.calls[0][0]);
+      });
+      it('self-called mock alone', () => {
+        const onSave = vi.fn();
+        render(<Dialog onSave={onSave} />);
+        onSave();
+        expect(onSave.mock.calls).toHaveLength(1);
+      });
+    `);
+
+    expect(byName('project result against a self-called mock').asserted).toBe(true);
+    expect(byName('self-called mock alone').asserted).toBe(false);
+  });
+
+  it('does not take the element description as what the component rendered', () => {
+    const byName = inventory(`${header}
+      it('descriptor props', () => {
+        const ui = <Dialog open title="Hi" />;
+        render(ui);
+        expect(ui.props.title).toBe('Hi');
+      });
+      it('render result of a stored element', () => {
+        const ui = <Dialog open title="Hi" />;
+        const { getByText } = render(ui);
+        expect(getByText('Hi')).toBeTruthy();
+      });
+    `);
+
+    expect(byName('descriptor props')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: false });
+    expect(byName('render result of a stored element').asserted).toBe(true);
+  });
+
+  it('follows a destructured mock back to the object it came from', () => {
+    const byName = inventory(`${header}
+      it('destructured mock handed over', () => {
+        const props = { onSave: vi.fn(), onCancel: vi.fn() };
+        const { onSave } = props;
+        render(<Dialog onSave={onSave} />);
+        expect(onSave).not.toHaveBeenCalled();
+      });
+      it('other member asserted', () => {
+        const props = { onSave: vi.fn(), onCancel: vi.fn() };
+        const { onSave } = props;
+        render(<Dialog onSave={onSave} />);
+        expect(props.onCancel).not.toHaveBeenCalled();
+      });
+    `);
+
+    expect(byName('destructured mock handed over').asserted).toBe(true);
+    expect(byName('other member asserted').asserted).toBe(false);
+  });
+
+  it('counts page writes made by shared setup before the test', () => {
+    const byName = inventory(`${header}
+      describe('fixture written in setup', () => {
+        beforeEach(() => {
+          document.body.innerHTML = '<p>fixture</p>';
+          render(<Dialog open title="Hi" />);
+        });
+        it('reads the fixture', () => { expect(screen.getByText('fixture')).toBeInTheDocument(); });
+      });
+      describe('no writes in setup', () => {
+        beforeEach(() => { render(<Dialog open title="Hi" />); });
+        it('reads the dialog', () => { expect(screen.getByText('Hi')).toBeInTheDocument(); });
+      });
+    `);
+
+    expect(byName('reads the fixture')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: false,
+    });
+    expect(byName('reads the dialog')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
+  });
+});
+
 describe('large component test files', () => {
   const file = (count: number) => {
     let source = `${header}
