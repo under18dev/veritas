@@ -184,7 +184,7 @@ export const VeritasConfig = z
           .boolean()
           .default(true)
           .describe(
-            'After the mutation run, check the tests static analysis could not link to project code by running mutator again on their test files alone, within what is left of timeoutMs.',
+            'After the mutation run, check the tests static analysis could not link to project code by running mutator again on their test files alone, mutating the project files they call into, within what is left of timeoutMs.',
           ),
       })
       .strict()
