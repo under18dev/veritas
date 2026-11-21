@@ -87,13 +87,25 @@ The outcome summarizes the evidence vector below; it is not a grade.
 
 A test checks project code when an assertion looks at what project code produced. For a plain function that is its return value, an object it changed, or how it called a callback or a `vi.fn()` mock the test handed to it.
 
-Component and hook tests are read the same way. Rendering a project component as JSX counts as calling it, whether the test writes `render(<Dialog />)` itself, calls a local helper such as `renderDialog()` that does, or renders a local wrapper component. A project hook called inside `renderHook` counts too. After that, these assertions count as checking the component or hook:
+Component and hook tests are read the same way. A project component counts as called once its JSX element is mounted: given to `render` (or `rerender`, `mount`, a render helper of the test code or the project), returned by a component or helper, or kept in a local that is. This holds whether the test writes `render(<Dialog />)` itself, calls a local helper such as `renderDialog()` that does, or renders a local wrapper component. An element that is only created, as in `expect(<Dialog />).toBeTruthy()`, does not count. A project hook called inside `renderHook` counts too. After that, these assertions count as checking the component or hook:
 
-- a Testing Library query of the page (`screen.getByText`, `within(...)`, the queries returned by `render`), or a read of the global `document`, after a project component rendered
+- a Testing Library query of the page (`screen.getByText`, `within(...)`, the queries returned by `render`), or a read of the global `document`, made after a project component rendered
 - `result.current` from `renderHook`
-- `toHaveBeenCalled*` or `.mock.calls` on a mock that was handed to the component or hook, either directly as a prop or argument, inside a props object (`render(<Dialog {...props} />)` with `props.onSave` checked), or through a local helper or factory that passes or returns it
+- `toHaveBeenCalled*` or `.mock.calls` on a mock that was handed to the component or hook: directly as a prop or argument, inside a props object (`render(<Dialog {...props} />)` with `props.onSave` checked), or through a local helper or factory that passes or returns it
 
-Some assertions still do not count. A mock that was never handed to project code does not count, and neither does a value of a props object that the test set itself. A page query counts only when something from the project rendered, so a test that renders only third-party components is still reported. Veritas also does not yet link a module mocked with `vi.mock` that project code calls internally, or a spy on a global object, to the code under test. Tests that check only those are still reported as `tautological_or_disconnected`, so read them before acting on the finding.
+Some assertions still do not count:
+
+- a mock that was never handed to project code, or a different member of a mock object than the one handed over (`onSave={mocks.onSave}` does not cover `mocks.track`)
+- a value of a props object that the test set itself
+- a call count on a mock the test also calls itself
+- a page read made before the component rendered (`const before = screen.queryByText('x')` before `render`), or a read of something the test wrote to the page itself (`document.body.className = 'dark'`)
+- a page query when nothing from the project rendered, so a test that renders only third-party components is still reported
+
+A page query also does not credit a project component whose children in the test hold no project component, such as `<Providers><Button>Go</Button></Providers>` or a provider helper that wraps whatever it is given: the query may find only what the test supplied. This also leaves out a component like `<Card>Body</Card>` when the query looks for something the card renders itself; such a test is reported unless another assertion links it.
+
+Veritas does not yet link a module mocked with `vi.mock` that project code calls internally, or a spy on a global object, to the code under test. Tests that check only those are still reported as `tautological_or_disconnected`, so read them before acting on the finding.
+
+A file inside the analysis scope that imports Vitest's runtime (`expect`, `assert`, `vi`, or `import * as vitest from 'vitest'`) is treated as test code wherever it lives, because it only runs inside a test run. A mock utility such as `src/test-utils.ts` is therefore not counted as project code. The flip side is that a real function kept in such a file is not counted either, so a test that calls only that function is reported as not checking project behaviour. Move the function out of that file if it is project code.
 
 ## Evidence vector
 
