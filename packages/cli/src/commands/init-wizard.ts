@@ -2,8 +2,34 @@ import type { LlmAvailability, LlmProviderName, ProjectInfo, VeritasConfig } fro
 
 /** How the wizard talks to the user. */
 export interface Prompter {
+  /** Free text, such as a repository name. */
   ask(question: string): Promise<string>;
   say(line: string): void;
+  /** One of `choices`, as its index; `initial` is the default. */
+  select(question: string, choices: string[], initial?: number): Promise<number>;
+  /** A yes/no question; `initial` is the default. */
+  confirm(question: string, initial?: boolean): Promise<boolean>;
+}
+
+/** Choices and yes/no questions answered by typing, for when the terminal cannot take arrow keys. */
+export function withTypedChoices<T extends Pick<Prompter, 'ask' | 'say'>>(base: T): T & Prompter {
+  return {
+    ...base,
+    async select(question, choices, initial = 0) {
+      base.say(question);
+
+      for (const [index, choice] of choices.entries()) base.say(`  ${index + 1}) ${choice}`);
+      const answer = (await base.ask(`Choose 1-${choices.length} [${initial + 1}]: `)).trim();
+      const index = answer ? Number.parseInt(answer, 10) - 1 : initial;
+
+      return index >= 0 && index < choices.length ? index : initial;
+    },
+    async confirm(question, initial = false) {
+      const answer = (await base.ask(`${question} ${initial ? '[Y/n]' : '[y/N]'} `)).trim();
+
+      return answer ? /^y(es)?$/i.test(answer) : initial;
+    },
+  };
 }
 
 /** What the wizard reads from the machine and the project. Injected so it can be tested. */
@@ -32,8 +58,6 @@ export interface WizardResult {
 const REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/;
 // The same rule as `sources.web.allowDomains` in the configuration schema.
 const DOMAIN = /^[a-z0-9.-]+$/i;
-
-const yes = (answer: string) => /^y(es)?$/i.test(answer.trim());
 
 /** The command that adds a dev dependency with the project's package manager. */
 export function addDevDependency(manager: ProjectInfo['packageManager'], spec: string): string[] {
@@ -70,9 +94,9 @@ export async function runInitWizard(
   const actions: WizardAction[] = [];
 
   // LLM provider.
-  prompter.say('LLM provider (reads documentation that rules cannot; its proposals still need your review):');
+  const labels: string[] = [];
 
-  for (const [index, provider] of PROVIDERS.entries()) {
+  for (const provider of PROVIDERS) {
     // codex is not run before the user allows its read-only shell to read local files.
     const state =
       provider.name === 'none'
@@ -80,14 +104,17 @@ export async function runInitWizard(
         : provider.name === 'codex'
           ? ' [asks for permission first]'
           : ` [${(await env.llm(provider.name)).state === 'available' ? 'available' : 'not set up'}]`;
-    prompter.say(`  ${index + 1}) ${provider.label}${state}`);
+    labels.push(`${provider.label}${state}`);
   }
-  const choice = Number.parseInt((await prompter.ask('Choose 1-5 [1]: ')).trim() || '1', 10);
-  const provider = PROVIDERS[choice - 1]?.name ?? 'none';
+  const choice = await prompter.select(
+    'LLM provider (reads documentation that rules cannot; its proposals still need your review):',
+    labels,
+  );
+  const provider = PROVIDERS[choice]?.name ?? 'none';
 
   if (provider === 'codex') {
     // The codex CLI keeps a read-only shell, so it is only used when the user allows it to read local files.
-    if (yes(await prompter.ask("codex's read-only shell can read files on this machine. Allow it? [y/N] "))) {
+    if (await prompter.confirm("codex's read-only shell can read files on this machine. Allow it?")) {
       config.llm.provider = 'codex';
       config.llm.allowCodexFileReads = true;
     } else prompter.say('  codex not enabled; keeping rule-based analysis');
@@ -100,7 +127,7 @@ export async function runInitWizard(
   }
 
   // GitHub issues and pull requests.
-  if (yes(await prompter.ask('Read GitHub issues and pull requests as specification evidence? [y/N] '))) {
+  if (await prompter.confirm('Read GitHub issues and pull requests as specification evidence?')) {
     const detected = env.githubRepo();
 
     for (;;) {
@@ -126,7 +153,7 @@ export async function runInitWizard(
   }
 
   // Web pages.
-  if (yes(await prompter.ask('Read web pages as specification evidence? [y/N] '))) {
+  if (await prompter.confirm('Read web pages as specification evidence?')) {
     for (;;) {
       const answer = await prompter.ask('  Allowed domains, comma-separated (empty to skip): ');
       const domains = answer
@@ -154,11 +181,9 @@ export async function runInitWizard(
 
   if (
     !lean &&
-    yes(
-      await prompter.ask(
-        'Lean 4 is not installed. Install it with elan (downloads the official installer from GitHub)? [y/N] ',
-      ),
-    )
+    (await prompter.confirm(
+      'Lean 4 is not installed. Install it with elan (downloads the official installer from GitHub)?',
+    ))
   ) {
     actions.push({ kind: 'install-lean' });
     lean = true;
@@ -166,23 +191,20 @@ export async function runInitWizard(
 
   if (
     lean &&
-    yes(
-      await prompter.ask(
-        'Use Lean instead of Z3 for proofs in `veritas run`? Lean covers integers and booleans only; Z3 also covers records and arrays. [y/N] ',
-      ),
-    )
+    (await prompter.confirm(
+      'Also prove properties with Lean? Z3 keeps checking the implementation; Lean adds kernel-checked proofs for properties over integers and booleans.',
+      true,
+    ))
   )
-    config.formal.backend = 'lean';
+    config.formal.backend = 'both';
 
   // The project's own mutator.
   if (!env.projectHasMutator && env.mutatorVersion) {
     const command = addDevDependency(env.project.packageManager, `@mizchi/mutator@${env.mutatorVersion}`);
 
     if (
-      yes(
-        await prompter.ask(
-          `Add @mizchi/mutator to the project (\`${command.join(' ')}\`)? Mutation testing then loads all of mutator's files from the project instead of from where Veritas is installed. [y/N] `,
-        ),
+      await prompter.confirm(
+        `Add @mizchi/mutator to the project (\`${command.join(' ')}\`)? Mutation testing then loads all of mutator's files from the project instead of from where Veritas is installed.`,
       )
     )
       actions.push({ kind: 'add-mutator', command });
