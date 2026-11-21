@@ -634,8 +634,8 @@ describe('doctor', { timeout: 30_000 }, () => {
       mkdirSync(path.join(root, dir), { recursive: true });
     writeFileSync(path.join(root, 'adapters/one/package.json'), '{}');
     writeFileSync(path.join(root, 'adapters/two/package.json'), '{}');
-    writeFileSync(path.join(root, 'src/add/test.ts'.replace('/add', '')), '');
-    writeFileSync(path.join(root, 'lib/__tests__/a.ts'), '');
+    writeFileSync(path.join(root, 'src/test.ts'), "import { it } from 'vitest';\n");
+    writeFileSync(path.join(root, 'lib/__tests__/a.ts'), "import { expect } from 'vitest';\n");
     const project = detectProject(root);
     expect(project.sourceGlobs).toEqual([
       'src/**/*.{ts,tsx,js,mjs}',
@@ -647,6 +647,18 @@ describe('doctor', { timeout: 30_000 }, () => {
       '**/__tests__/**/*.{ts,tsx,js,mjs}',
     ]);
     expect(workspacePackages(root, { workspaces: ['adapters/*'] })).toEqual(['adapters/one', 'adapters/two']);
+    // The flow form of pnpm-workspace.yaml.
+    writeFileSync(path.join(root, 'pnpm-workspace.yaml'), "packages: ['adapters/*']\n");
+    expect(workspacePackages(root, null)).toEqual(['adapters/one', 'adapters/two']);
+  });
+
+  it('does not take a test.ts or __tests__ file that does not use Vitest for a test', () => {
+    const root = tmp();
+    writeFileSync(path.join(root, 'package.json'), '{"name":"p","devDependencies":{"vitest":"^4.0.0"}}');
+    mkdirSync(path.join(root, 'src/__tests__'), { recursive: true });
+    writeFileSync(path.join(root, 'src/test.ts'), 'export const sample = 1;\n');
+    writeFileSync(path.join(root, 'src/__tests__/fixtures.ts'), 'export const data = [];\n');
+    expect(detectProject(root).testGlobs).toEqual(['**/*.{test,spec}.{ts,tsx,js,mjs}']);
   });
 
   it("explains that Yarn Plug'n'Play is not supported instead of asking to install again", async () => {

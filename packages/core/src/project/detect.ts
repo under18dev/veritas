@@ -104,6 +104,14 @@ export function workspacePackages(root: string, pkg: Record<string, unknown> | n
 
       if (value) patterns.push(value);
     }
+    // The flow form: `packages: ['packages/*', 'apps/*']`.
+    const inline = /^packages:[ \t]*\[([^\]]*)\]/m.exec(text)?.[1];
+
+    for (const item of inline?.split(',') ?? []) {
+      const value = item.trim().replace(/^['"]|['"]$/g, '');
+
+      if (value) patterns.push(value);
+    }
   }
   const workspaces = pkg?.workspaces;
   const list = Array.isArray(workspaces)
@@ -183,13 +191,28 @@ export function detectProject(root: string): ProjectInfo {
   // Test files named `test.ts` or kept under `__tests__/`, when the project has them, besides `*.test.ts`.
   const testGlobs = [`**/*.{test,spec}.${EXTENSIONS}`];
 
-  if (hasFileNamed(root, (name) => /^test\.(?:ts|tsx|js|mjs)$/.test(name)))
+  // Only when such a file uses Vitest: a `src/test.ts` utility or a `__tests__/fixtures.ts` alone is not a test.
+  const usesVitest = (name: string, parent: string) => {
+    try {
+      return /from\s+['"]vitest['"]/.test(readFileSync(path.join(parent, name), 'utf8'));
+    } catch {
+      return false;
+    }
+  };
+
+  if (
+    hasFileNamed(root, (name, parent) => /^test\.(?:ts|tsx|js|mjs)$/.test(name) && usesVitest(name, parent))
+  )
     testGlobs.push(`**/test.${EXTENSIONS}`);
 
   if (
     hasFileNamed(
       root,
-      (name, parent) => path.basename(parent) === '__tests__' && /\.(?:ts|tsx|js|mjs)$/.test(name),
+      (name, parent) =>
+        path.basename(parent) === '__tests__' &&
+        /\.(?:ts|tsx|js|mjs)$/.test(name) &&
+        !/\.(?:test|spec)\./.test(name) &&
+        usesVitest(name, parent),
     )
   )
     testGlobs.push(`**/__tests__/**/*.${EXTENSIONS}`);
