@@ -1,7 +1,10 @@
 // Measures wall-clock time and usage counters of `veritas run` per profile on each fixture.
-// Usage: node benchmarks/run.mjs [--check] [--keep-runs <dir>] [profile ...]   (default: quick standard deep)
+// Usage: node benchmarks/run.mjs [--check] [--keep-runs <dir>] [--cli <bin.js>] [--out <file>] [profile ...]
+//   (default profiles: quick standard deep)
 // --keep-runs copies each run's .veritas/runs/<run-id>/ to <dir>/<fixture>-<profile>/ (CI uploads them).
-// Writes benchmarks/results/<date>-<platform>.json. With --check, exits 1 when a run fails or exceeds the budget in
+// --cli measures another build (the benchmark workflow measures the base branch with it); --out sets the result file.
+// Writes benchmarks/results/<date>-<platform>.json unless --out is given. On Linux the peak memory of each run is
+// recorded too (GNU time). With --check, exits 1 when a run fails or exceeds the budget in
 // benchmarks/budget.json (ADR 0009); without it, numbers are recorded only.
 import { spawnSync } from 'node:child_process';
 import {
@@ -19,7 +22,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const cli = path.join(repo, 'packages/cli/dist/bin.js');
+const option = (name) => {
+  const at = process.argv.indexOf(name);
+
+  return at >= 0 ? process.argv[at + 1] : undefined;
+};
+const cli = path.resolve(option('--cli') ?? path.join(repo, 'packages/cli/dist/bin.js'));
+const outFile = option('--out');
 const fixtures = [
   'small-app',
   'discount-boundary',
@@ -32,7 +41,8 @@ const args = process.argv.slice(2);
 const check = args.includes('--check');
 const keepAt = args.indexOf('--keep-runs');
 const keepRuns = keepAt >= 0 ? path.resolve(args[keepAt + 1] ?? '') : null;
-const named = args.filter((a, i) => a !== '--check' && i !== keepAt && i !== keepAt + 1);
+const valued = new Set(['--keep-runs', '--cli', '--out']);
+const named = args.filter((a, i) => a !== '--check' && !valued.has(a) && !valued.has(args[i - 1] ?? ''));
 const profiles = named.length ? named : ['quick', 'standard', 'deep'];
 const budget = JSON.parse(readFileSync(path.join(repo, 'benchmarks/budget.json'), 'utf8'));
 
@@ -65,18 +75,34 @@ function copy(name) {
   return dir;
 }
 
+// GNU time, for peak memory; only on Linux, where /usr/bin/time is GNU's.
+const gnuTime =
+  process.platform === 'linux' && spawnSync('/usr/bin/time', ['-f', '%M', 'true']).status === 0
+    ? '/usr/bin/time'
+    : null;
 const results = [];
 
 for (const fixture of fixtures) {
   for (const profile of profiles) {
     const dir = copy(fixture);
     const started = process.hrtime.bigint();
-    const run = spawnSync(
-      process.execPath,
-      [cli, 'run', '--profile', profile, '--offline', '--include-proposed', '--json'],
-      { cwd: dir, encoding: 'utf8' },
-    );
+    const command = [cli, 'run', '--profile', profile, '--offline', '--include-proposed', '--json'];
+    // GNU time writes the peak resident set size (KiB) of the run to a file of its own.
+    const rssFile = gnuTime ? path.join(dir, '.peak-rss') : null;
+    const run = rssFile
+      ? spawnSync(gnuTime, ['-f', '%M', '-o', rssFile, process.execPath, ...command], {
+          cwd: dir,
+          encoding: 'utf8',
+        })
+      : spawnSync(process.execPath, command, { cwd: dir, encoding: 'utf8' });
     const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    let peakRssMb = null;
+
+    try {
+      if (rssFile) peakRssMb = Math.round(Number(readFileSync(rssFile, 'utf8').trim()) / 1024);
+    } catch {
+      // no measurement
+    }
     let usage = null;
     let functions = null;
     let tests = null;
@@ -93,13 +119,27 @@ for (const fixture of fixtures) {
     } catch {
       // keep nulls: a failed run is reported, not hidden
     }
-    results.push({ fixture, profile, exitCode: run.status, wallMs: Math.round(ms), functions, tests, usage });
+    results.push({
+      fixture,
+      profile,
+      exitCode: run.status,
+      wallMs: Math.round(ms),
+      peakRssMb,
+      functions,
+      tests,
+      usage,
+    });
     console.log(`${fixture.padEnd(20)} ${profile.padEnd(8)} exit=${run.status} ${Math.round(ms)} ms`);
   }
 }
-const out = path.join(repo, 'benchmarks/results');
-mkdirSync(out, { recursive: true });
-const file = path.join(out, `${new Date().toISOString().slice(0, 10)}-${process.platform}.json`);
+const file = outFile
+  ? path.resolve(outFile)
+  : path.join(
+      repo,
+      'benchmarks/results',
+      `${new Date().toISOString().slice(0, 10)}-${process.platform}.json`,
+    );
+mkdirSync(path.dirname(file), { recursive: true });
 writeFileSync(
   file,
   `${JSON.stringify({ node: process.versions.node, platform: process.platform, arch: process.arch, cpus: cpus().length, results }, null, 2)}\n`,

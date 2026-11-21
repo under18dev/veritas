@@ -1,0 +1,25 @@
+{
+  "description": "Open-source projects measured by benchmarks/real.mjs, each pinned to a commit. Dependencies are installed with lifecycle scripts disabled; the quick profile runs none of the project's code.",
+  "projects": [
+    {
+      "name": "defu",
+      "repo": "https://github.com/unjs/defu.git",
+      "commit": "82632b66f5914e9946edce300e10633a3d5c0cb7"
+    },
+    {
+      "name": "ufo",
+      "repo": "https://github.com/unjs/ufo.git",
+      "commit": "f06c800d0c59f2a4a1b9ba65eb6cb61a84419be6"
+    },
+    {
+      "name": "pathe",
+      "repo": "https://github.com/unjs/pathe.git",
+      "commit": "bc7477a01f0bd60ada017add8142c9f9d69ccdc5"
+    },
+    {
+      "name": "hono",
+      "repo": "https://github.com/honojs/hono.git",
+      "commit": "75ff8e3ea18485589816881c6278bc9783e56602"
+    }
+  ]
+}

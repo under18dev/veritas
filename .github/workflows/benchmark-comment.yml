@@ -1,0 +1,48 @@
+name: benchmark-comment
+
+# Posts the report of a finished benchmark run on its pull request. It checks out and runs no code from the pull
+# request: it reads the artifact as text, checks that the pull request's head is the commit that was measured, and
+# creates or updates one comment.
+on:
+  workflow_run:
+    workflows: [benchmark]
+    types: [completed]
+
+permissions:
+  actions: read
+  pull-requests: write
+
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: benchmark
+          path: out
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          number=$(jq -r '.number' out/pr.json)
+          sha=$(jq -r '.headSha' out/pr.json)
+          [[ "$number" =~ ^[0-9]+$ ]] || { echo "invalid pull request number"; exit 1; }
+          # The artifact names the pull request; trust it only when that pull request's head is the measured commit.
+          [ "$sha" = "$RUN_SHA" ] || { echo "the artifact is not from this run"; exit 1; }
+          current=$(gh api "repos/$REPO/pulls/$number" --jq .head.sha)
+          [ "$current" = "$RUN_SHA" ] || { echo "the pull request has moved on; not commenting"; exit 0; }
+          head -c 60000 out/comment.md > body.md
+          existing=$(gh api "repos/$REPO/issues/$number/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- veritas-benchmark -->"))) | .id' \
+            | head -n 1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$existing" -F body=@body.md > /dev/null
+          else
+            gh api -X POST "repos/$REPO/issues/$number/comments" -F body=@body.md > /dev/null
+          fi
