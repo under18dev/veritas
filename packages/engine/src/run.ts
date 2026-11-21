@@ -761,6 +761,9 @@ async function runInContext(
       if (cached) result.rawReportPath = null;
       // Tests were chosen by the changed files, so mutator calls a mutant of an unchanged file "no coverage". It
       // was outside --since and not run: pending, as without the narrower test selection.
+      // The mutants mutator itself left unrun, before --since relabels others as pending.
+      const budgetBefore = result.timeBudgetExhausted?.notRun;
+      const unrun = result.mutants.filter((m) => m.status === 'pending').map((m) => m.id);
       const changed = testFiles ? changedSinceFiles() : undefined;
 
       if (changed?.length) {
@@ -782,7 +785,11 @@ async function runInContext(
 
       if (confirmed) {
         result.confirmation = confirmed.confirmation;
-        result.timeBudgetExhausted = outstandingBudget(result, confirmed.confirmation.adopted);
+        result.timeBudgetExhausted = outstandingBudget(
+          result.timeBudgetExhausted,
+          unrun,
+          confirmed.confirmation.adopted,
+        );
         result.mutants = confirmed.mutants;
         result.counts = countMutants(result.mutants);
         external.push(...confirmed.artifacts);
@@ -828,6 +835,13 @@ async function runInContext(
             ? ['no mutant was generated; mutation results are partial']
             : []),
           ...(confirmed?.messages ?? []),
+          ...(confirmed &&
+          result.timeBudgetExhausted &&
+          result.timeBudgetExhausted.notRun < (budgetBefore ?? 0)
+            ? [
+                `the check of unlinked tests killed mutants the main run had no time for: ${result.timeBudgetExhausted.notRun} mutant(s) are still not run`,
+              ]
+            : []),
         ],
       };
     },
@@ -1601,18 +1615,17 @@ export function literalInput(
 }
 
 /**
- * The time-budget overrun still outstanding once the confirmation's kills are adopted: the mutants the main run did
- * not start are `pending`, and each one the confirmation killed now has a verdict. The record stays (with `notRun`
- * possibly 0) so the result is still not cached.
+ * The time-budget overrun still outstanding once the confirmation's kills are adopted: each mutant mutator left unrun
+ * (`unrun`, its own `pending` mutants, not those `--since` relabelled) that the confirmation killed now has a verdict.
+ * The record stays (with `notRun` possibly 0) so the result is still not cached.
  */
 export function outstandingBudget(
-  result: Pick<MutationRunResult, 'mutants' | 'timeBudgetExhausted'>,
+  budget: MutationRunResult['timeBudgetExhausted'],
+  unrun: string[],
   adopted: string[],
 ): MutationRunResult['timeBudgetExhausted'] {
-  const budget = result.timeBudgetExhausted;
-
   if (!budget) return budget;
-  const pending = new Set(result.mutants.filter((m) => m.status === 'pending').map((m) => m.id));
+  const pending = new Set(unrun);
   const decided = adopted.filter((id) => pending.has(id)).length;
 
   return { ...budget, notRun: Math.max(0, budget.notRun - decided) };
