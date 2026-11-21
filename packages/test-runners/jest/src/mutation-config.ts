@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 /** Jest's config files at the project root, in the order Jest looks for them. */
 export const JEST_CONFIG_FILES = [
@@ -102,7 +101,8 @@ const SELECT_TESTS = String.raw`if (files !== null) {
  * Write a Jest config for one mutation run that is the project's own (its config file, or the `jest` key of
  * package.json), with `rootDir` made absolute because the file lives outside the project root, and, with `testFiles`
  * (POSIX, relative to `root`), limited to those tests: mutator runs its baseline and every mutant with the tests this
- * config selects. Jest itself loads the project's config when mutator reads this one; Veritas never runs it.
+ * config selects. The project's own jest-config reads its config when mutator reads this one, the way Jest reads it
+ * (TypeScript configs included); Veritas never runs it.
  */
 export function writeMutationJestConfig(options: {
   root: string;
@@ -116,24 +116,21 @@ export function writeMutationJestConfig(options: {
   const lines = [
     '// Written by Veritas for one mutation run: the project Jest config, limited to the tests that',
     '// import the mutated code. Safe to delete.',
-    "import { readFileSync, realpathSync } from 'node:fs';",
+    "import { realpathSync } from 'node:fs';",
+    "import { createRequire } from 'node:module';",
     "import path from 'node:path';",
     `const projectDir = ${JSON.stringify(root)};`,
     `const baseFile = ${JSON.stringify(base)};`,
-    `const baseUrl = ${JSON.stringify(base ? pathToFileURL(base).href : null)};`,
     `const files = ${JSON.stringify(absolute)};`,
-    'const readJson = (f) => JSON.parse(readFileSync(f, "utf8"));',
-    'let base;',
-    "if (baseFile === null) base = readJson(path.join(projectDir, 'package.json')).jest ?? {};",
-    "else if (baseFile.endsWith('.json')) base = readJson(baseFile);",
-    'else {',
-    '  const loaded = await import(baseUrl);',
-    '  base = loaded.default ?? loaded;',
-    "  if (typeof base === 'function') base = await base();",
-    '}',
-    'base = (await base) ?? {};',
-    'const baseDir = baseFile === null ? projectDir : path.dirname(baseFile);',
-    'const config = { ...base, rootDir: base.rootDir ? path.resolve(baseDir, base.rootDir) : baseDir };',
+    "// The project config is read by the jest-config of the project's own Jest, as Jest reads it (TypeScript",
+    '// configs included), never imported directly.',
+    "const fromProject = createRequire(path.join(projectDir, 'package.json'));",
+    "const fromJest = createRequire(fromProject.resolve('jest/package.json'));",
+    "const jestConfig = createRequire(fromJest.resolve('jest-cli/package.json'))('jest-config');",
+    'const { config: base } = await jestConfig.readInitialOptions(baseFile ?? undefined, {',
+    '  packageRootOrConfig: baseFile ?? projectDir,',
+    '});',
+    'const config = { ...base, rootDir: base.rootDir ? path.resolve(projectDir, base.rootDir) : projectDir };',
     SELECT_TESTS,
     'export default config;',
     '',
