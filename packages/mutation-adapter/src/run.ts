@@ -269,6 +269,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   const needed = [
     options.since !== undefined && '--since',
     (options.scope?.length ?? 0) > 0 && '--include',
+    (options.exclude?.length ?? 0) > 0 && '--exclude',
     options.killMatrix && '--kill-matrix',
     (options.only?.length ?? 0) > 0 && '--only',
     writesConfig && '--config',
@@ -314,7 +315,8 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       reportDir,
       noTypecheck,
       ...(configPath === undefined ? {} : { configPath }),
-      ...(exclude.length > 0 ? { exclude } : {}),
+      // The caller's own exclusions stay, and the files diagnosed here are added to them.
+      ...(exclude.length > 0 ? { exclude: [...new Set([...(options.exclude ?? []), ...exclude])] } : {}),
     });
   const spawn = (argv: string[], timeoutMs = options.config.mutation.timeoutMs) =>
     runProjectTests(process.execPath, [binPath, ...argv], {

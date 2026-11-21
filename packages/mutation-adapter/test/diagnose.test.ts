@@ -186,6 +186,22 @@ describe('runMutation when instrumented code does not parse', () => {
     expect(budget).toBeLessThanOrEqual(90);
   });
 
+  it("keeps the caller's exclusions when it runs again", async () => {
+    const { root, bin, reportDir } = parseErrorCli('fixed');
+    const r = await runMutation({
+      root,
+      config: config(),
+      reportDir,
+      mutatorBin: bin,
+      exclude: ['src/z.ts'],
+    });
+    expect(r.status).toBe('succeeded');
+    const excludes = r.command.filter((_, i) => r.command[i - 1] === '--exclude');
+    expect(excludes).toEqual(['src/z.ts', 'src/a.ts']);
+    expect(runs(reportDir)).toHaveLength(2);
+    expect(runs(reportDir)[0]).toContain('--exclude src/z.ts');
+  });
+
   it('says the source does not parse when the same error remains without instrumentation', async () => {
     const { root, bin, reportDir } = parseErrorCli('same');
     const r = await runMutation({ root, config: config(), reportDir, mutatorBin: bin });
