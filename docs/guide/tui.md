@@ -81,7 +81,7 @@ The spinner and the clocks move even when no new event arrives, so a long stage 
 
 When the run finishes, the activity log is cleared and the screen shows the verdict, exit code, number of findings, total time, policy reasons and the stages as the run recorded them. `Enter` opens **Results** to read the findings.
 
-If you cancel the run, the screen says **Run cancelled** and shows the run id and the stages as the run recorded them (the ones it did not finish are `cancelled`), without a verdict: the results of a cancelled run are incomplete. `Enter` still opens **Results**, where the cancelled run is the newest one. If the run fails or is cancelled, the last lines of the activity log stay on the screen to show where it stopped. Leaving the screen or quitting the TUI also cancels a run in progress.
+If you cancel the run, the screen says **Run cancelled** and shows the run id and the stages as the run recorded them (a stage stopped by the cancel is usually `cancelled`, but can be recorded as `error`), without a verdict: the results of a cancelled run are incomplete. `Enter` still opens **Results**, where the cancelled run is the newest one. If the run fails or is cancelled, the last lines of the activity log stay on the screen to show where it stopped. Leaving the screen or quitting the TUI also cancels a run in progress.
 
 ### Improve tests
 
