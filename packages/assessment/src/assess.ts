@@ -69,9 +69,10 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
   const unresolved = test.suspicions.includes('unresolved_import');
   const opaque = test.suspicions.includes('opaque_call');
   const progressOnly = test.suspicions.includes('progress_only');
+  const callerSupplied = test.suspicions.includes('caller_supplied');
   // Static analysis could not see everything the test reaches, or the test checks when a call settles rather than
   // what it returns: either way a missing link is not proof of none.
-  const linkUnknown = unresolved || opaque || progressOnly;
+  const linkUnknown = unresolved || opaque || progressOnly || callerSupplied;
 
   const boundaryCoverage: EvidenceVector['boundaryCoverage'] = [];
 
@@ -197,6 +198,11 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
     if (progressOnly)
       rationale.push(
         'asserts only on constants recorded after awaiting a project call: it checks that the call settles (does not block), which static analysis cannot link to the call',
+      );
+
+    if (callerSupplied)
+      rationale.push(
+        "registered inside a shared or parameterized suite: what it calls comes from the suite's caller, which static analysis does not follow",
       );
   } else if (properties.some((p) => p.status === 'conflicted')) {
     outcome = 'spec_conflict';

@@ -694,6 +694,50 @@ it('options callback', () => { let count = 0; run({ cb: () => { count++; } }); e
     expect(byName('changed').asserted).toBe(true);
   });
 
+  it('reads assertions on a test context, type checks without expectTypeOf, and shared suites', () => {
+    const extra = {
+      'src/glob.ts': `export function matches(glob: string, path: string) { return glob === path; }
+export type Pair<T> = [T, T];
+`,
+    };
+    const byName = inventory(
+      `import { describe as vDescribe, expect, it as vIt } from 'vitest';
+import { matches, type Pair } from '../src/glob.js';
+type Assert = { true: (v: unknown) => void; is: (a: unknown, b: unknown) => void };
+const describe = (name: string, fn: (it: (label: string, body: (t: Assert) => void) => void) => void) =>
+  vDescribe(name, () => fn((label, body) => vIt(label, () => body({ true: (v) => expect(v).toBe(true), is: (a, b) => expect(a).toBe(b) }))));
+describe('glob', (it) => {
+  it('context', (t) => { t.true(matches('a', 'a')); });
+});
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+type Expect<T extends true> = T;
+const util = { assertEqual: <A, B>(_: Equal<A, B>) => {} };
+vIt('type alias check', () => { type _check = Expect<Equal<Pair<number>, [number, number]>>; });
+vIt('typed assert call', () => { util.assertEqual<Pair<string>, [string, string]>(true); });
+function runTest(fn: (a: string, b: string) => boolean) {
+  vIt('suite', () => { expect(fn('a', 'a')).toBe(true); });
+}
+runTest(matches);
+vIt('local thrower', () => { const block = () => matches(1 as never, 'a'); expect(block).toThrow(); });
+vIt('compiles', () => { function _check(a: string) { matches(a, a); } });
+vIt('local value', () => { const later = () => matches('a', 'a'); expect(later).toBeDefined(); });
+`,
+      extra,
+    );
+    expect(byName('context')).toMatchObject({ symbols: ['src/glob.ts#matches'], asserted: true });
+    expect(byName('context').suspicions).toEqual([]);
+    expect(byName('type alias check').suspicions).toEqual(['type_level_only']);
+    expect(byName('typed assert call').suspicions).toEqual(['type_level_only']);
+    // What `fn` is comes from runTest's caller.
+    expect(byName('suite').suspicions).toEqual(['caller_supplied']);
+    // The matcher runs the local function, so its call is checked.
+    expect(byName('local thrower')).toMatchObject({ symbols: ['src/glob.ts#matches'], asserted: true });
+    // toBeDefined only compares the function as a value; it does not run it.
+    expect(byName('local value').asserted).toBe(false);
+    // Declares a function and never runs it: a check that it compiles.
+    expect(byName('compiles').suspicions).toEqual(['type_level_only']);
+  });
+
   it('links the expected side of an assertion and the state of an object a project method ran on', () => {
     const byName = inventory(`${header}
       it('reversed', () => { expect([2, 3]).toContain(fn(1)); });

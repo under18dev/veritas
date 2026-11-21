@@ -238,7 +238,11 @@ interface BodyAnalysis {
  * Calls, assertions and result flow in a test body or helper body. Values are followed through local and
  * enclosing (describe-level or module-level) variables of the same file, including `let` set in a hook.
  */
-function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
+function analyzeBody(
+  body: ts.Node,
+  ctx: Ctx,
+  contextAssertion: (node: ts.CallExpression) => boolean = () => false,
+): BodyAnalysis {
   const { checker } = ctx;
   const source = body.getSourceFile();
   const calls: BodyAnalysis['calls'] = [];
@@ -506,7 +510,8 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
       if (specifier !== undefined) unresolvedImports.add(specifier);
     }
 
-    if (ts.isCallExpression(node) && (isExpectCall(node) || isAssertCall(node))) assertions.push(node);
+    if (ts.isCallExpression(node) && (isExpectCall(node) || isAssertCall(node) || contextAssertion(node)))
+      assertions.push(node);
   }
   // What a helper returns may come from enclosing variables, e.g. `const of = (n) => candidates.filter(...)`.
   const returned = new Set(
@@ -515,10 +520,20 @@ function analyzeBody(body: ts.Node, ctx: Ctx): BodyAnalysis {
   const asserted = new Set<Invocation>();
 
   // Either side of a comparison counts: `expect(['a', 'b']).toContain(result.status)` checks the result.
-  for (const value of assertions.flatMap(comparedValues)) {
-    for (const call of trackedCalls(value)) asserted.add(call);
+  for (const assertion of assertions) {
+    const runsSubject = matcherNames(assertion).some((name) => name.startsWith('toThrow'));
 
-    for (const { node } of calls) if (contains(value, node)) asserted.add(node);
+    for (const value of comparedValues(assertion)) {
+      for (const call of trackedCalls(value)) asserted.add(call);
+
+      for (const { node } of calls) if (contains(value, node)) asserted.add(node);
+
+      // `const block = () => parse(x); expect(block).toThrow()`: a throw matcher runs the local function, so what
+      // it calls is checked as if written inline. Other matchers only compare the function as a value.
+      const local = runsSubject ? localFunction(skipParens(value), checker) : undefined;
+
+      if (local) for (const { node } of calls) if (contains(local, node)) asserted.add(node);
+    }
   }
   // `const before = Date.now(); await sleep(1000); const after = Date.now(); expect(after - before)…`: an
   // assertion comparing clock readings taken before and after awaiting a project call checks how long it took.
@@ -1328,6 +1343,36 @@ function describeRegistration(node: ts.CallExpression): Registration | undefined
   };
 }
 
+const vitestAliases = new WeakMap<ts.SourceFile, Map<string, string>>();
+
+/** The Vitest export a local name stands for: itself, or the name imported as it (`import { it as vIt }`). */
+function vitestName(identifier: ts.Identifier): string {
+  const source = identifier.getSourceFile();
+  let aliases = vitestAliases.get(source);
+
+  if (!aliases) {
+    aliases = new Map();
+
+    for (const statement of source.statements) {
+      const bindings = ts.isImportDeclaration(statement) ? statement.importClause?.namedBindings : undefined;
+
+      if (
+        !bindings ||
+        !ts.isNamedImports(bindings) ||
+        !ts.isStringLiteral((statement as ts.ImportDeclaration).moduleSpecifier) ||
+        ((statement as ts.ImportDeclaration).moduleSpecifier as ts.StringLiteral).text !== 'vitest'
+      )
+        continue;
+
+      for (const element of bindings.elements)
+        if (element.propertyName) aliases.set(element.name.text, element.propertyName.text);
+    }
+    vitestAliases.set(source, aliases);
+  }
+
+  return aliases.get(identifier.text) ?? identifier.text;
+}
+
 function registration(
   node: ts.CallExpression,
   kind: 'it' | 'test' | 'describe',
@@ -1340,7 +1385,7 @@ function registration(
     expression = expression.expression;
   }
 
-  if (!ts.isIdentifier(expression) || expression.text !== kind) return undefined;
+  if (!ts.isIdentifier(expression) || vitestName(expression) !== kind) return undefined;
   const found = chain.filter((name): name is TestCaseType['modifiers'][number] => modifiers.has(name));
 
   return found;
@@ -1360,7 +1405,13 @@ function analyzeTest(
   const name = info.name ?? '<dynamic test>';
   const body = callback && isFunction(callback) ? callback.body : undefined;
   const nodes = body ? descendants(body) : [];
-  const analysis = body ? analyzeBody(body, ctx) : undefined;
+  const contextParameter =
+    callback && isFunction(callback) && callback.parameters[0] && ts.isIdentifier(callback.parameters[0].name)
+      ? checker.getSymbolAtLocation(callback.parameters[0].name)
+      : undefined;
+  const analysis = body
+    ? analyzeBody(body, ctx, (node) => isContextAssertion(node, contextParameter, checker))
+    : undefined;
   const assertions = analysis?.assertions ?? [];
   const unresolvedImports = analysis?.unresolvedImports ?? new Set<string>();
   const calledSymbols = [...new Set(analysis?.calls.map((call) => call.target.symbol))];
@@ -1375,7 +1426,11 @@ function analyzeTest(
   }));
   // Tautological only when every compared value (subject and expected) is a compile-time
   // constant; runtime values such as process.env or non-project call results are not.
-  const typeLevel = assertions.length > 0 && assertions.every(isTypeLevelAssertion);
+  // Only type-level checks: Vitest's `expectTypeOf`/`assertType`, or no runtime assertion but a type check written
+  // as a type alias (`type _ = Expect<Equal<A, B>>`) or a call with type arguments (`assertEqual<A, B>(true)`).
+  const typeLevel =
+    (assertions.length > 0 && assertions.every(isTypeLevelAssertion)) ||
+    (assertions.length === 0 && body !== undefined && hasTypeOnlyCheck(body));
   // Type-level checks compare types, not values, so they are neither constant nor about a value.
   const comparisons = assertions.filter(
     (assertion) => !isAssertionCountCall(assertion) && !isTypeLevelAssertion(assertion),
@@ -1401,7 +1456,12 @@ function analyzeTest(
   const nondeterminism = [...new Set(nodes.flatMap((node) => nondeterminismFor(node, fakeTimers)))];
   const suspicions: TestCaseType['suspicions'] = [];
 
-  if (assertions.length === 0 && !analysis?.helperAsserts && !callsHelperWithAssertion(body, source))
+  if (
+    assertions.length === 0 &&
+    !typeLevel &&
+    !analysis?.helperAsserts &&
+    !callsHelperWithAssertion(body, source)
+  )
     suspicions.push('no_assertion');
 
   if (tautological) suspicions.push('tautological_assertion');
@@ -1412,7 +1472,13 @@ function analyzeTest(
   const unresolved = unresolvedImports.size > 0 || loading.unresolved;
 
   // An unresolved import, a child process or a dynamic import may well reach project code: absence is not proven.
+  // Inside a function that registers tests with values its caller supplies (a shared or parameterized suite), what a
+  // test calls is decided at the call site, which may be another file.
+  const callerSupplied =
+    calledSymbols.length === 0 && body !== undefined && usesSuiteParameters(registrationCall, body, checker);
+
   if (typeLevel) suspicions.push('type_level_only');
+  else if (callerSupplied) suspicions.push('caller_supplied');
   else if (calledSymbols.length === 0 && !unresolved && !opaque) suspicions.push('target_not_called');
 
   if (mockedTarget) suspicions.push('unconditional_mock');
@@ -2518,6 +2584,164 @@ function assertingHelpers(source: ts.SourceFile): Map<ts.Node, Set<number>> {
   ts.forEachChild(source, visit);
   assertingHelpersCache.set(source, helpers);
   return helpers;
+}
+
+/** Names chained on an assertion: `expect(x).not.toThrow(e)` gives `not`, `toThrow`. */
+function matcherNames(assertion: ts.CallExpression): string[] {
+  const names: string[] = [];
+
+  for (let current: ts.Node = assertion; ; ) {
+    const parent = current.parent;
+
+    if (ts.isPropertyAccessExpression(parent) && parent.expression === current) {
+      names.push(parent.name.text);
+      current = parent;
+    } else if (ts.isCallExpression(parent) && parent.expression === current) current = parent;
+    else if (ts.isAwaitExpression(parent)) current = parent;
+    else return names;
+  }
+}
+
+/** The function a local `const name = () => ...` (or `function name() {}`) of this file holds. */
+function localFunction(value: ts.Expression, checker: ts.TypeChecker): ts.Node | undefined {
+  if (!ts.isIdentifier(value)) return undefined;
+  const declaration = checker.getSymbolAtLocation(value)?.valueDeclaration;
+
+  if (!declaration || declaration.getSourceFile() !== value.getSourceFile()) return undefined;
+  const fn =
+    ts.isVariableDeclaration(declaration) && declaration.initializer
+      ? skipParens(declaration.initializer)
+      : declaration;
+
+  return isFunctionLike(fn) ? fn : undefined;
+}
+
+/** Assertion methods of a test context object, as AVA and tap name them, plus Vitest's `context.expect`. */
+const CONTEXT_ASSERTIONS = new Set([
+  'is',
+  'not',
+  'true',
+  'false',
+  'truthy',
+  'falsy',
+  'deepEqual',
+  'notDeepEqual',
+  'like',
+  'notLike',
+  'throws',
+  'throwsAsync',
+  'notThrows',
+  'notThrowsAsync',
+  'regex',
+  'notRegex',
+  'assert',
+  'ok',
+  'notOk',
+  'equal',
+  'notEqual',
+  'strictEqual',
+  'notStrictEqual',
+  'same',
+  'notSame',
+  'match',
+  'expect',
+]);
+
+/** `t.is(a, b)` or `ctx.expect(a)` where `t`/`ctx` is the test callback's first parameter. */
+function isContextAssertion(
+  node: ts.CallExpression,
+  parameter: ts.Symbol | undefined,
+  checker: ts.TypeChecker,
+) {
+  const callee = node.expression;
+
+  return (
+    parameter !== undefined &&
+    ts.isPropertyAccessExpression(callee) &&
+    CONTEXT_ASSERTIONS.has(callee.name.text) &&
+    ts.isIdentifier(callee.expression) &&
+    checker.getSymbolAtLocation(callee.expression) === parameter
+  );
+}
+
+const TYPE_CHECK_NAMES = /\b(?:Expect|Equal|IsEqual|IsExact|AssertTrue|AssertFalse|AssertEqual|Assert)\b/;
+
+/** A type alias that states a type check, or a call with type arguments to an assert/expect helper. */
+function hasTypeOnlyCheck(body: ts.Node): boolean {
+  // A body that only declares functions and types, and runs none of them, checks that they compile.
+  if (
+    ts.isBlock(body) &&
+    body.statements.length > 0 &&
+    body.statements.every(
+      (statement) =>
+        ts.isFunctionDeclaration(statement) ||
+        ts.isTypeAliasDeclaration(statement) ||
+        ts.isInterfaceDeclaration(statement),
+    )
+  )
+    return true;
+
+  return descendants(body).some(
+    (node) =>
+      (ts.isTypeAliasDeclaration(node) && TYPE_CHECK_NAMES.test(node.type.getText())) ||
+      (ts.isCallExpression(node) &&
+        node.typeArguments !== undefined &&
+        node.typeArguments.length > 0 &&
+        /(?:assert|expect)/i.test(calleeName(node.expression))),
+  );
+}
+
+function calleeName(expression: ts.Expression): string {
+  return ts.isPropertyAccessExpression(expression)
+    ? expression.name.text
+    : ts.isIdentifier(expression)
+      ? expression.text
+      : '';
+}
+
+const HOOK_NAMES = new Set(['beforeEach', 'beforeAll', 'afterEach', 'afterAll']);
+
+/**
+ * Whether a test is registered inside a function other than a describe, test or hook callback (a shared suite such
+ * as `export const renderTest = (getEnv) => { ... }`, or `runTest(name, fn, cases)`), and its body uses a parameter of
+ * that function or a value declared in it.
+ */
+function usesSuiteParameters(
+  registrationCall: ts.CallExpression,
+  body: ts.Node,
+  checker: ts.TypeChecker,
+): boolean {
+  let suite: ts.Node | undefined;
+
+  for (
+    let current: ts.Node = registrationCall.parent;
+    current && !ts.isSourceFile(current);
+    current = current.parent
+  ) {
+    if (!isFunctionLike(current)) continue;
+    const call = current.parent;
+    const registers =
+      ts.isCallExpression(call) &&
+      call.arguments.includes(current as ts.Expression) &&
+      (describeRegistration(call) !== undefined ||
+        testRegistration(call) !== undefined ||
+        (ts.isIdentifier(call.expression) && HOOK_NAMES.has(call.expression.text)));
+
+    if (!registers) {
+      suite = current;
+      break;
+    }
+  }
+
+  if (!suite) return false;
+  const container = suite;
+
+  return descendants(body).some((node) => {
+    if (!ts.isIdentifier(node)) return false;
+    const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration;
+
+    return declaration !== undefined && contains(container, declaration) && !contains(body, declaration);
+  });
 }
 
 /** Vitest's type-level checks, which compare types at compile time and do nothing when the test runs. */

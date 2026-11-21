@@ -30,6 +30,8 @@ export const TestCase = z.object({
    * `type_level_only`: every assertion checks TypeScript types (`expectTypeOf`, `assertType`), which no run evaluates.
    * `progress_only`: the test awaits a project call and asserts only on constants it records after the await, so it
    * checks that the call settles (does not block), not what the call returns; the link to the result is unknown.
+   * `caller_supplied`: the test is registered inside a function (a shared or parameterized suite) and calls values
+   * that function's caller supplies, so what it calls is decided at a call site static analysis does not follow.
    */
   suspicions: z.array(
     z.enum([
@@ -41,6 +43,7 @@ export const TestCase = z.object({
       'opaque_call',
       'type_level_only',
       'progress_only',
+      'caller_supplied',
     ]),
   ),
   granularity: z.enum(['test', 'suite']),

@@ -133,6 +133,13 @@ describe('assessTest', () => {
     expect(a.rationale.join(' ')).toMatch(/checks that the call settles/);
   });
 
+  it('is inconclusive, not disconnected, when the test belongs to a suite its caller supplies', () => {
+    const t = testCase({ id: 'T-a', calledSymbols: [], suspicions: ['caller_supplied'] });
+    const a = assessTest(t, input());
+    expect(a.outcome).toBe('inconclusive');
+    expect(a.rationale.join(' ')).toMatch(/shared or parameterized suite/);
+  });
+
   it('is inconclusive, not disconnected, when the test checks only types', () => {
     const t = testCase({ id: 'T-a', calledSymbols: [], suspicions: ['type_level_only'] });
     const a = assessTest(t, input({ mutants: [mutant('M-1', 'survived', [], ['T-a'])] }));
