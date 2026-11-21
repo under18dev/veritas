@@ -93,6 +93,7 @@ describe('discount-boundary fixture', () => {
         right: '1000',
         literal: '1000',
         param: 'total',
+        paramSide: 'left',
       },
     ]);
     expect(f.branches).toEqual([

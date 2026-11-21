@@ -70,6 +70,58 @@ interface Target {
   score: number;
 }
 
+/** What a statement maps to, plus the other readings that were close enough to mention. */
+interface Mapping {
+  target: Target | null;
+  /** Other function parameters that also match the statement's wording, as `fn(param)`. */
+  alternatives: string[];
+  /** Why nothing was chosen, when nothing was. */
+  reason: string;
+}
+
+/**
+ * Prefix of the assumption recorded on a property whose binding had other plausible parameters. A conflict between
+ * such properties may be an artefact of the binding, so it is never reported as confirmed.
+ */
+export const AMBIGUOUS_BINDING = 'other parameters also match this statement';
+
+/** Assumption recorded on a property whose threshold an LLM read from free text. */
+export const LLM_THRESHOLD =
+  'threshold read by an LLM from free text; not reproducible, review before accepting';
+
+const label = (t: Target) => `${t.fn.name}(${t.param})`;
+
+/**
+ * Words naming what the threshold counts: up to three words right after the number ("5 or more distinct days" ->
+ * "distinct", "day"; "5 failed login attempts" -> "failed", "login", "attempt"). They outweigh other words of the
+ * sentence, which may describe a different number.
+ */
+const GENERIC_QUANTITY = new Set(['number', 'amount', 'quantity', 'value']);
+
+const UNIT_STOP = new Set([
+  ...'a an the of to for in within per after before and or with than on at by from is are was be'.split(' '),
+  // Verbs of the consequence ("1000 or more get discount 100"): what follows is the result, not what is counted.
+  ...'get gets receive receives earn earns pay pays cost costs give gives unlock unlocks'.split(' '),
+]);
+
+function unitWords(quote: string, value: string): string[] {
+  const digits = value.replace(/^-/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(
+    `(?<![\\d.,])${digits}(?![\\d]|[.,]\\d)\\s*(?:\\+\\s*)?(?:(?:or|and)\\s+(?:more|fewer|less|greater|above|over|up|below|under)\\s+)?((?:[A-Za-z][\\w-]*\\s+){0,2}[A-Za-z][\\w-]*)`,
+    'i',
+  );
+  const hit = re.exec(quote)?.[1] ?? '';
+  // "receive a discount" is not a unit: stop at the first function word.
+  const kept: string[] = [];
+
+  for (const token of hit.split(/\s+/)) {
+    if (UNIT_STOP.has(token.toLowerCase())) break;
+    kept.push(token);
+  }
+
+  return words(kept.join(' '));
+}
+
 /**
  * Whether a statement is about how many elements an array has: it says count/number of/length/size, or puts
  * the number right before the array's noun ("3 or more items", "at least 2 values") without an ordinal
@@ -148,28 +200,106 @@ export function statementScope(
   return () => true;
 }
 
+/** Whether a declared record field holds numbers; code indexes without the flag fall back to the printed type. */
+function fieldNumeric(field: {
+  type: string;
+  numeric?: boolean | 'unknown' | undefined;
+}): boolean | 'unknown' {
+  return field.numeric ?? numberOnly(field.type);
+}
+
+type Scored = Target & {
+  /** The parameter's own name matches the quantity or a word of the statement. */
+  paramHit: boolean;
+  /** The parameter's name matches the quantity the statement names. */
+  quantityHit: boolean;
+  /** The parameter's name matches the words right after the value. */
+  unitHit: boolean;
+};
+
+/** "a, b, c" or "a, b, c and 2 more". */
+function listed(items: string[], max = 3): string {
+  return items.slice(0, max).join(', ') + (items.length > max ? ` and ${items.length - max} more` : '');
+}
+
 function mapStatement(
   statement: StatementInput,
   relation: ThresholdRelation,
   index: CodeIndex,
   inScope: (fn: FunctionInfo) => boolean = () => true,
-): Target | null {
+): Mapping {
   const quoteWords = new Set([...words(statement.quote), ...statement.subjects.flatMap(words)]);
-  const quantityWords = words(relation.quantity);
-  const scored: Target[] = [];
+  // "number of declines" names declines; "number", "amount" and the default "value" say nothing about which one.
+  const quantityWords = words(relation.quantity).filter((w) => !GENERIC_QUANTITY.has(w));
+  const units = unitWords(statement.quote, relation.value);
+  const scored: Scored[] = [];
+  // Declared number fields the function does not compare, scored the same way. They are never bound (there is no
+  // comparison to check), but one that fits the statement as well as the chosen field makes the binding doubtful.
+  const uncompared: Scored[] = [];
+  // Compared record fields the wording points at whose declared type is not a number (`state.lastUsedDay: string | null`).
+  const wrongType: string[] = [];
 
   for (const fn of index.functions) {
     if (!fn.exported || !inScope(fn)) continue;
-    // Number parameters, and fields of record parameters the function compares (`order.total`).
+    const declared = (name: string) => {
+      const dot = name.indexOf('.');
+      const base = fn.params.find((p) => p.name === name.slice(0, dot));
+
+      return base?.fields?.find((f) => f.name === name.slice(dot + 1));
+    };
+    const nameHits = words(fn.name).filter((w) => quoteWords.has(w)).length;
+    const comparedNames = new Set(fn.comparisons.map((c) => c.param));
+    // Number parameters, and fields of record parameters the function compares (`order.total`). A field whose
+    // declared type is positively not a number is never modelled as an integer; an unresolved type keeps its chance.
+    const fields = [...comparedNames]
+      .filter((n): n is string => n?.includes('.') ?? false)
+      .filter((name) => {
+        const field = declared(name);
+
+        if (field && fieldNumeric(field) === false) {
+          if (nameHits > 0 || words(field.name).some((w) => quoteWords.has(w)))
+            wrongType.push(`${fn.name}(${name}: ${field.type})`);
+
+          return false;
+        }
+
+        return true;
+      });
     const numeric = [
       ...fn.params.filter((p) => numberOnly(p.type)).map((p) => ({ name: p.name, words: words(p.name) })),
-      ...[
-        ...new Set(fn.comparisons.map((c) => c.param).filter((n): n is string => n?.includes('.') ?? false)),
-      ].map((name) => ({ name, words: words(name.slice(name.indexOf('.') + 1)) })),
+      ...fields.map((name) => ({ name, words: words(name.slice(name.indexOf('.') + 1)) })),
     ];
+    const shadows = fn.params.flatMap((p) =>
+      (p.fields ?? [])
+        .filter((f) => fieldNumeric(f) === true && !comparedNames.has(`${p.name}.${f.name}`))
+        .map((f) => ({ name: `${p.name}.${f.name}`, words: words(f.name) })),
+    );
 
     if (numeric.length === 0) continue;
-    const nameHits = words(fn.name).filter((w) => quoteWords.has(w)).length;
+    // Every number the function takes, including declared number fields it does not compare: a statement naming
+    // only the function is about its parameter only when there is exactly one.
+    const inputs = fn.params.reduce(
+      (n, p) =>
+        n +
+        (numberOnly(p.type)
+          ? 1
+          : p.fields
+            ? p.fields.filter((f) => fieldNumeric(f) !== false).length
+            : fields.filter((f) => f.startsWith(`${p.name}.`)).length),
+      0,
+    );
+    const hits = (paramWords: string[]) => {
+      const quantityHit = quantityWords.some((w) => paramWords.includes(w));
+
+      return {
+        quantityHit,
+        paramHit: quantityHit || paramWords.some((w) => quoteWords.has(w)),
+        unitHit: units.some((w) => paramWords.includes(w)),
+      };
+    };
+
+    // A quantity the statement names explicitly ("total") outweighs the words after the value.
+    const quantityNamed = numeric.some((p) => hits(p.words).quantityHit);
 
     for (const p of numeric) {
       // An array's length only when the statement talks about a count ("3 or more items", "the item count"),
@@ -179,29 +309,87 @@ function mapStatement(
 
         if (!lengthStatement(statement.quote, arrayWords)) continue;
       }
-      const paramWords = p.words;
-      const paramHit =
-        p.name.endsWith('.length') ||
-        quantityWords.some((w) => paramWords.includes(w)) ||
-        paramWords.some((w) => quoteWords.has(w));
-      const compared = fn.comparisons.some((c) => c.param === p.name);
+      const { paramHit: wordHit, quantityHit, unitHit } = hits(p.words);
+      const paramHit = p.name.endsWith('.length') || wordHit;
+      const compared = comparedNames.has(p.name);
+      // The words after the value only weigh for a parameter the function compares: "receive a discount" must not
+      // pull a threshold onto the discount it pays out.
       const score =
         (paramHit ? 2 : 0) +
+        // Being the quantity the statement names breaks a tie with a field only mentioned elsewhere in it.
+        (quantityHit ? 1 : 0) +
+        (unitHit && compared && (quantityHit || !quantityNamed) ? 2 : 0) +
         nameHits * 2 +
         (compared ? 1 : 0) +
-        (numeric.length === 1 && nameHits > 0 ? 1 : 0);
+        (numeric.length === 1 && inputs <= 1 && nameHits > 0 ? 1 : 0);
 
-      if (paramHit || nameHits > 0) scored.push({ fn, param: p.name, score });
+      if (paramHit || nameHits > 0) scored.push({ fn, param: p.name, score, paramHit, quantityHit, unitHit });
+    }
+
+    for (const p of shadows) {
+      const { paramHit, quantityHit, unitHit } = hits(p.words);
+
+      if (paramHit || unitHit) {
+        const score = (paramHit ? 2 : 0) + nameHits * 2;
+        uncompared.push({ fn, param: p.name, score, paramHit, quantityHit, unitHit });
+      }
     }
   }
   scored.sort((a, b) => b.score - a.score);
   const [best, second] = scored;
+  const skipped = wrongType.length
+    ? `; skipped fields not declared as numbers: ${listed([...new Set(wrongType)])}`
+    : '';
 
-  if (!best || best.score < 3) return null;
+  if (!best || best.score < 3) {
+    return {
+      target: null,
+      alternatives: [],
+      reason: `no single exported function and parameter clearly matches${skipped}`,
+    };
+  }
 
-  if (second && second.score === best.score) return null;
+  if (second && second.score === best.score) {
+    const tied = scored.filter((t) => t.score === best.score).map(label);
 
-  return best;
+    return {
+      target: null,
+      alternatives: [],
+      reason: `ambiguous: ${listed(tied)} match equally; not bound${skipped}`,
+    };
+  }
+  // A number field of the same function that the statement's quantity names while the chosen, compared one matches
+  // neither the quantity nor the words after the value: binding to the compared field would only be a guess. A
+  // compared field otherwise outranks one the function never compares.
+  const rivals = uncompared.filter((t) => t.fn === best.fn).sort((a, b) => b.score - a.score);
+  const rival = rivals.find((t) => t.quantityHit && !best.quantityHit && !best.unitHit);
+
+  if (rival) {
+    return {
+      target: null,
+      alternatives: [],
+      reason: `ambiguous: the statement's quantity "${relation.quantity}" names ${label(rival)}, which ${best.fn.name} does not compare, not ${label(best)}; not bound${skipped}`,
+    };
+  }
+  // Close readings: near ties anywhere, other fields of the same function that the wording names, and uncompared
+  // number fields of the same function that come close. When the chosen parameter is the quantity the statement
+  // names, a reading that matches neither that quantity nor the words after the value is not a real alternative.
+  const contender = (t: Scored) => !best.quantityHit || t.quantityHit || t.unitHit;
+  const alternatives = [
+    ...new Set([
+      ...scored
+        .slice(1)
+        .filter((t) => t.score >= best.score - 1 || (t.fn === best.fn && t.paramHit && t.score >= 3))
+        .filter(contender)
+        .map(label),
+      ...rivals
+        .filter((t) => t.score >= best.score - 1 && (t.paramHit || t.unitHit))
+        .filter(contender)
+        .map((t) => `${label(t)}, not compared`),
+    ]),
+  ].slice(0, 3);
+
+  return { target: best, alternatives, reason: '' };
 }
 
 /** Compare the documented predicate with the implementation's comparisons on the same parameter. */
@@ -216,7 +404,7 @@ export function implementationAgreement(
 
   for (const c of fn.comparisons) {
     if (c.param !== param || c.literal === null) continue;
-    const paramOnLeft = c.left.trim() === param;
+    const paramOnLeft = c.paramSide ? c.paramSide === 'left' : c.left.trim() === param;
     const codeOp = normalizeComparison(c.operator, paramOnLeft);
 
     if (!codeOp) continue;
@@ -332,15 +520,11 @@ export function buildRegistry(options: BuildOptions): Registry {
       continue;
     }
     const relation = statement.relation;
-    const target = mapStatement(statement, relation, code, statementScope(statement, source, code.functions));
+    const mapped = mapStatement(statement, relation, code, statementScope(statement, source, code.functions));
+    const target = mapped.target;
 
     if (!target) {
-      mapping.push({
-        statementId: statement.id,
-        status: 'unmapped',
-        symbol: null,
-        reason: 'no single exported function and parameter clearly matches',
-      });
+      mapping.push({ statementId: statement.id, status: 'unmapped', symbol: null, reason: mapped.reason });
       continue;
     }
     const stale = statement.flags.includes('stale');
@@ -398,16 +582,20 @@ export function buildRegistry(options: BuildOptions): Registry {
     if (instructionLike)
       property.assumptions.push('source text contains instruction-like content; treated as data only');
 
-    if (llmExtracted)
+    if (llmExtracted) property.assumptions.push(LLM_THRESHOLD);
+
+    if (mapped.alternatives.length)
       property.assumptions.push(
-        'threshold read by an LLM from free text; not reproducible, review before accepting',
+        `${AMBIGUOUS_BINDING}: ${mapped.alternatives.join(', ')}; check that ${target.param} is the intended one before accepting`,
       );
     properties.push(property);
     mapping.push({
       statementId: statement.id,
       status: stale ? 'stale' : 'mapped',
       symbol: target.fn.symbol,
-      reason: `matched ${target.fn.name}(${target.param})`,
+      reason:
+        `matched ${label(target)}` +
+        (mapped.alternatives.length ? ` (also: ${mapped.alternatives.join(', ')})` : ''),
     });
     const key = `${target.fn.symbol}#${target.param}`;
     const group = bySymbolParam.get(key) ?? [];
@@ -482,6 +670,27 @@ export function buildRegistry(options: BuildOptions): Registry {
           tie || !top
             ? 'no source is clearly preferable; a human decision is required'
             : `suggested: ${top.property.citations[0]} (newer release, higher source rank or an explicit decision/outdated marker); not applied without approval`,
+          ...live
+            .filter((g) => g.statement.flags.includes('llm_extracted'))
+            .map(
+              (g) =>
+                `${g.property.citations[0]}: threshold read by an LLM from free text; not reproducible, so this conflict is only suspected`,
+            ),
+          ...live
+            .filter((g) => g.statement.flags.includes('instruction_like'))
+            .map(
+              (g) =>
+                `${g.property.citations[0]}: source text contains instruction-like content, so this conflict is only suspected`,
+            ),
+          ...live.flatMap((g) => {
+            const note = g.property.assumptions.find((a) => a.startsWith(AMBIGUOUS_BINDING));
+
+            return note
+              ? [
+                  `${g.property.citations[0]}: binding to ${param} is ambiguous (${note.slice(AMBIGUOUS_BINDING.length + 2)})`,
+                ]
+              : [];
+          }),
           ...group
             .filter((g) => g.stale)
             .map((g) => `${g.property.citations[0]} is marked stale and was not counted`),

@@ -15,6 +15,24 @@ export const FunctionParam = z.object({
   /** Type as printed by the TypeScript checker. */
   type: z.string(),
   optional: z.boolean(),
+  /**
+   * Declared properties of a record-typed parameter (`state.daysUsed: number`), with types as printed by the checker.
+   * Absent for primitives, arrays, unions of records and types the checker cannot resolve.
+   */
+  fields: z
+    .array(
+      z.object({
+        name: z.string(),
+        type: z.string(),
+        /**
+         * Whether the field holds only numbers, from the checker's type flags: numbers, numeric literals and enums,
+         * branded numbers (`number & {...}`), optionally with null or undefined. `unknown` for any, unknown,
+         * unresolved and generic types. Absent in code indexes written before it was recorded.
+         */
+        numeric: z.union([z.boolean(), z.literal('unknown')]).optional(),
+      }),
+    )
+    .optional(),
 });
 export type FunctionParam = z.infer<typeof FunctionParam>;
 
@@ -27,6 +45,11 @@ export const Comparison = z.object({
   literal: z.string().nullable(),
   /** The parameter compared (`total`), or a field of one (`order.total`, `xs.length`); null otherwise. */
   param: z.string().nullable(),
+  /**
+   * Which operand holds `param` (`(state.daysUsed ?? 0) >= 5` has it on the left even though the left text is not just
+   * the parameter). Absent when `param` is null and in code indexes written before it was recorded.
+   */
+  paramSide: z.enum(['left', 'right']).optional(),
 });
 export type Comparison = z.infer<typeof Comparison>;
 

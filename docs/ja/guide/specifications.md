@@ -40,7 +40,9 @@ quote   line 7: "Orders with a total of 1000 or more receive a flat discount of 
 property P-ee03e6e8b749 [proposed, normative] discountAmount: total >= 1000 -> Orders with a total of 1000 or more receive a flat discount of 100.
 ```
 
-どの関数にも対応しない記述は、対応なしとして報告します。言い回しの規則で読めない記述は、任意の [LLM プロバイダー](/ja/guide/llm-providers)に読ませることもできます。
+数値のしきい値は、number と宣言された引数やレコードのフィールドにだけ対応付けます。`lastUsedDay: string | null` のようなフィールドは、名前が記述と合っていても対象にしません。数値の enum、`number & { __brand: "cents" }` のようなブランド付きの数値、`1 | 2 | 3` のようなリテラルの union は数値として扱い、型を解決できないフィールドは候補に残します。関数が比較しているフィールドは、比較していないフィールドより優先します。記述が数えている量が同じレコードの比較していない number のフィールドを指し、比較しているフィールドがその量にも数値の直後の語にも合わない場合だけ、対応付けません。ほかの引数も記述に合う場合は、その候補を Property の前提（assumptions）に書きます。accept する前に、対応付けが正しいか確かめてください。
+
+どの関数にも対応しない記述は、対応なしとして報告します。候補が同点で決められなかった場合は、その候補も示します。言い回しの規則で読めない記述は、任意の [LLM プロバイダー](/ja/guide/llm-providers)に読ませることもできます。
 
 Property は、出典のファイルと行、引用したテキスト、形式化に使った前提を持っています。由来（origin）は次のどれかです。
 
@@ -92,6 +94,8 @@ veritas spec reject <property-id> --reason "outdated"
 ## 食い違いを解消する
 
 同じ関数と引数について二つの出典が違う規則を述べている場合、たとえば README は「1000 以上」、Issue は「1000 より大きい」と書いている場合、どちらの Property も `conflicted` になり、関係するテストは `spec_conflict` と判定されます。Veritas は両方の出典を示し、順位に差があれば望ましい読み方を一つ挙げます（新しいリリースの記述が上になる、など）。Property をまとめたり、どちらかを accepted にしたりはしません。正しいほうを accept し、もう一方を reject してください。
+
+`spec_conflict` の検出結果が `confirmed` になるのは、どの読み方も言い回しの規則で取り出したもので、ほかに有力な候補がない引数に対応付けられている場合だけです。LLM が自由文から読み取ったしきい値や、指示のような文を含む出典から取り出した読み方が含まれる場合、また対応付けにほかの候補がある場合は `suspected` になり、どの読み方が疑わしいかを説明に示します。
 
 Veritas が README や docs や Issue を書き換えることはなく、コードに合わせて仕様や期待値を変えることもありません。
 

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseConfig, symbolId } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
-import { analyzeCode, CodeIndex, type FunctionInfo } from '../src/index.js';
+import { analyzeCode, CodeIndex, type FunctionInfo, inferBehaviorCandidates } from '../src/index.js';
 
 function project(files: Record<string, string>): string {
   const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-ci-review-')));
@@ -177,5 +177,121 @@ describe('tsconfig extends', () => {
     expect(messages).not.toContain('secret-marker-target');
     expect(messages).toMatch(/outside-base\.json/);
     expect(index.functions.map((f) => f.name)).toEqual(['f']);
+  });
+});
+
+describe('declared field types of record parameters', () => {
+  const index = analyze({
+    'src/prompt.ts': `export interface PromptState {
+  daysUsed: number;
+  lastUsedDay: string | null;
+  declineCount?: number;
+}
+export function record(state: PromptState, now: number): number {
+  return state.lastUsedDay !== String(now) ? state.daysUsed + 1 : state.daysUsed;
+}
+export function maybe(state: PromptState | null, xs: number[], cb: () => void): number {
+  cb();
+  return (state?.daysUsed ?? 0) + xs.length;
+}
+`,
+  });
+
+  it('lists each property of a record parameter with its declared type', () => {
+    const [state, now] = fn(index, symbolId('src/prompt.ts', 'record')).params;
+    expect(state?.fields).toEqual([
+      { name: 'daysUsed', type: 'number', numeric: true },
+      { name: 'lastUsedDay', type: 'string | null', numeric: false },
+      { name: 'declineCount', type: expect.stringMatching(/^number( \| undefined)?$/), numeric: true },
+    ]);
+    expect(now?.fields).toBeUndefined();
+  });
+
+  it('looks through null for a nullable record and leaves arrays and functions alone', () => {
+    const [state, xs, cb] = fn(index, symbolId('src/prompt.ts', 'maybe')).params;
+    expect(state?.fields?.map((f) => f.name)).toEqual(['daysUsed', 'lastUsedDay', 'declineCount']);
+    expect(xs?.fields).toBeUndefined();
+    expect(cb?.fields).toBeUndefined();
+  });
+});
+
+describe('whether a record field holds numbers', () => {
+  const index = analyze({
+    'src/kinds.ts': `import type { Count } from 'missing-pkg';
+export enum Tier { Free = 0, Pro = 1 }
+export enum Mode { Light = 'light', Dark = 'dark' }
+export type Cents = number & { readonly __brand: 'cents' };
+export type Days = number;
+export interface Kinds {
+  tier: Tier;
+  mode: Mode;
+  total: Cents;
+  days?: Days;
+  level: 1 | 2 | 3;
+  mixed: 1 | 'one';
+  flag: boolean;
+  items: Count;
+  label: string;
+  nested: { a: number };
+}
+export function f<T>(k: Kinds, g: { value: T }): number {
+  return k.total + (g.value ? 1 : 0);
+}
+`,
+  });
+
+  it('reads numeric enums, branded numbers, aliases, optional fields and literal unions as numbers', () => {
+    const [k, g] = fn(index, symbolId('src/kinds.ts', 'f')).params;
+    const numeric = Object.fromEntries((k?.fields ?? []).map((field) => [field.name, field.numeric]));
+    expect(numeric).toEqual({
+      tier: true,
+      mode: false,
+      total: true,
+      days: true,
+      level: true,
+      mixed: false,
+      flag: false,
+      items: 'unknown',
+      label: false,
+      nested: false,
+    });
+    expect(g?.fields).toEqual([{ name: 'value', type: 'T', numeric: 'unknown' }]);
+  });
+});
+
+describe('comparisons on a record field behind a default or an assertion', () => {
+  const index = analyze({
+    'src/state.ts': `export interface State { daysUsed?: number; level: number }
+export function canPrompt(state: State): boolean {
+  return (state.daysUsed ?? 0) >= 5 && (state.level as number) >= 2 && state.daysUsed! < 100;
+}
+`,
+  });
+
+  it('records the field compared, not null', () => {
+    const params = fn(index, symbolId('src/state.ts', 'canPrompt')).comparisons.map((c) => c.param);
+    expect(params).toEqual(['state.daysUsed', 'state.level', 'state.daysUsed']);
+  });
+
+  it('records which side the field is on, so the boundary keeps its direction', () => {
+    const sides = analyze({
+      'src/side.ts': `export interface State { daysUsed?: number }
+export function canPrompt(state: State): boolean { return (state.daysUsed ?? 0) >= 5; }
+export function within(state: State): boolean { return 10 > (state.daysUsed ?? 0); }
+`,
+    });
+    const at = (name: string) => fn(sides, symbolId('src/side.ts', name)).comparisons[0];
+    expect(at('canPrompt')).toMatchObject({ param: 'state.daysUsed', paramSide: 'left' });
+    expect(at('within')).toMatchObject({ param: 'state.daysUsed', paramSide: 'right' });
+    const boundaries = inferBehaviorCandidates(sides)
+      .map((c) => c.boundary)
+      .filter((b) => b !== undefined);
+    expect(boundaries).toEqual(
+      expect.arrayContaining([
+        { param: 'state.daysUsed', operator: '>=', value: '5' },
+        { param: 'state.daysUsed', operator: '<', value: '10' },
+      ]),
+    );
+    expect(boundaries).not.toContainEqual({ param: 'state.daysUsed', operator: '<=', value: '5' });
   });
 });

@@ -491,11 +491,16 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
     file,
     exported,
     location: loc(sf, file, target.declaration === node ? node : outerStatement(target.declaration)),
-    params: node.parameters.map((p) => ({
-      name: p.name.getText(sf),
-      type: checker.typeToString(checker.getTypeAtLocation(p), node, ts.TypeFormatFlags.NoTruncation),
-      optional: Boolean(p.questionToken || p.initializer),
-    })),
+    params: node.parameters.map((p) => {
+      const fields = recordFieldsOf(checker, p, node);
+
+      return {
+        name: p.name.getText(sf),
+        type: checker.typeToString(checker.getTypeAtLocation(p), node, ts.TypeFormatFlags.NoTruncation),
+        optional: Boolean(p.questionToken || p.initializer),
+        ...(fields ? { fields } : {}),
+      };
+    }),
     returnType: returnTypeOf(checker, node),
     jsdoc: jsdocOf(sf, target),
     async: hasModifier(node, ts.SyntaxKind.AsyncKeyword),
@@ -565,6 +570,10 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
   /** A parameter, or a field of one (`order.total`, `xs.length`), as `param` / `param.field`. */
   const paramPath = (expr: ts.Expression): string | null => {
     const e = skipParens(expr);
+
+    // `(state.daysUsed ?? 0) >= 5` compares state.daysUsed whenever it is set.
+    if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
+      return paramPath(e.left);
 
     if (ts.isPropertyAccessExpression(e) && !e.questionDotToken && ts.isIdentifier(e.name)) {
       const base = isOwnParam(e.expression);
@@ -815,13 +824,20 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
 
       if (comparison) {
         const literal = integerLiteral(n.right) ?? integerLiteral(n.left);
+        const onLeft = paramPath(n.left);
+        const onRight = onLeft === null ? paramPath(n.right) : null;
         const record: Comparison = {
           location: loc(sf, file, n),
           operator: comparison,
           left: text(n.left),
           right: text(n.right),
           literal,
-          param: paramPath(n.left) ?? paramPath(n.right),
+          param: onLeft ?? onRight,
+          ...(onLeft !== null
+            ? { paramSide: 'left' as const }
+            : onRight !== null
+              ? { paramSide: 'right' as const }
+              : {}),
         };
 
         if (!nestedFunction) info.comparisons.push(record);
@@ -1072,6 +1088,75 @@ function isExpressionIdentifier(n: ts.Identifier): boolean {
   return true;
 }
 
+/** Records with more properties than this (DOM nodes, framework objects) are not listed field by field. */
+const MAX_RECORD_FIELDS = 64;
+
+/**
+ * Declared properties of a parameter whose type is one object type (an interface, type literal or alias, optionally
+ * `| null | undefined`), so a statement can be checked against the type of the field it names. Arrays, functions,
+ * unions of several object types and very large types are left out.
+ */
+function recordFieldsOf(
+  checker: ts.TypeChecker,
+  param: ts.ParameterDeclaration,
+  node: FunctionNode,
+): { name: string; type: string; numeric: boolean | 'unknown' }[] | undefined {
+  const type = checker.getNonNullableType(checker.getTypeAtLocation(param));
+
+  if (!(type.flags & (ts.TypeFlags.Object | ts.TypeFlags.Intersection))) return undefined;
+
+  if (checker.isArrayType(type) || checker.isTupleType(type) || type.getCallSignatures().length > 0)
+    return undefined;
+  const props = checker.getPropertiesOfType(type);
+
+  if (props.length === 0 || props.length > MAX_RECORD_FIELDS) return undefined;
+
+  return props.map((prop) => {
+    const fieldType = checker.getTypeOfSymbolAtLocation(prop, param);
+
+    return {
+      name: prop.name,
+      type: checker.typeToString(fieldType, node, ts.TypeFormatFlags.NoTruncation),
+      numeric: numericType(fieldType),
+    };
+  });
+}
+
+/**
+ * Whether a type holds only numbers, read from its flags rather than its printed name: numbers, numeric literals and
+ * numeric enums are, and so is an intersection with a number member (a branded number). A union is numeric when
+ * every member other than null and undefined is. Any, unknown, unresolved and generic types are `unknown`.
+ */
+function numericType(type: ts.Type): boolean | 'unknown' {
+  const F = ts.TypeFlags;
+
+  if (type.flags & (F.Any | F.Unknown | F.TypeParameter | F.IndexedAccess | F.Conditional | F.Substitution))
+    return 'unknown';
+
+  if (type.flags & F.NumberLike) return true;
+
+  if (type.isUnion()) {
+    const members = type.types.filter((t) => !(t.flags & (F.Null | F.Undefined | F.Void)));
+
+    if (members.length === 0) return false;
+    const kinds = members.map(numericType);
+
+    if (kinds.includes(false)) return false;
+
+    return kinds.includes('unknown') ? 'unknown' : true;
+  }
+
+  if (type.isIntersection()) {
+    const kinds = type.types.map(numericType);
+
+    if (kinds.includes(true)) return true;
+
+    return kinds.includes('unknown') ? 'unknown' : false;
+  }
+
+  return false;
+}
+
 function returnTypeOf(checker: ts.TypeChecker, node: FunctionNode): string {
   const signature = checker.getSignatureFromDeclaration(node);
 
@@ -1125,7 +1210,13 @@ function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
 function skipParens(expr: ts.Expression): ts.Expression {
   let e = expr;
 
-  while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e))
+  while (
+    ts.isParenthesizedExpression(e) ||
+    ts.isAsExpression(e) ||
+    ts.isSatisfiesExpression(e) ||
+    ts.isTypeAssertionExpression(e) ||
+    ts.isNonNullExpression(e)
+  )
     e = e.expression;
 
   return e;
