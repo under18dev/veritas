@@ -133,14 +133,43 @@ const TEST_FILE = /(^|\/)__tests__\/|\.(test|spec)\.[cm]?[jt]sx?$/;
 const GLOB_CHARS = /[*?[\]{}()!\\]/;
 
 /**
+ * True for a glob or path relative to the project root that cannot be read as a CLI option: what mutator's
+ * `--include` and `--exclude` accept from Veritas.
+ */
+export function isRelativeGlob(glob: string): boolean {
+  return (
+    glob !== '' &&
+    !glob.startsWith('-') &&
+    !glob.includes('\0') &&
+    !path.isAbsolute(glob) &&
+    !/^[A-Za-z]:/.test(glob) &&
+    !glob.split(/[\\/]/).includes('..')
+  );
+}
+
+/** At most `max` items joined with commas, then how many more there are. */
+export function listSome(items: readonly string[], max = 5): string {
+  return items.length > max
+    ? `${items.slice(0, max).join(', ')} and ${items.length - max} more`
+    : items.join(', ');
+}
+
+/**
  * Project source files that mutator's instrumented copy broke: the bundler failed to transform or parse them
  * (`[PARSE_ERROR] … in src/a.ts at 10..14`, or `Plugin: vite:oxc` with `File: <root>/src/a.ts`). Only existing,
- * non-test files inside the root are returned, project-relative with `/`. An ordinary test failure returns none.
+ * non-test files inside the root that mutator would instrument (matching `include` and not `exclude`, when given)
+ * are returned, project-relative with `/`. An ordinary test failure returns none.
  */
 export function instrumentationFailures(
   stderr: string,
   root: string,
-  options: { testInclude?: readonly string[]; testFiles?: readonly string[] } = {},
+  options: {
+    testInclude?: readonly string[];
+    testFiles?: readonly string[];
+    /** Source globs mutator instruments; files outside them were never instrumented. */
+    include?: readonly string[];
+    exclude?: readonly string[];
+  } = {},
 ): string[] {
   const text = stripAnsi(stderr);
 
@@ -150,6 +179,8 @@ export function instrumentationFailures(
   if (/^\s*Plugin: \S+/m.test(text))
     candidates.push(...[...text.matchAll(PLUGIN_FILE)].map((m) => m[1] as string));
   const files = new Set<string>();
+  const matches = (file: string, globs: readonly string[]) =>
+    globs.some((glob) => path.posix.matchesGlob(file, glob));
 
   for (const candidate of candidates) {
     const file = candidate.replace(/\?.*$/, '').replace(/(:\d+){1,2}$/, '');
@@ -158,15 +189,14 @@ export function instrumentationFailures(
       .join('/');
 
     if (
-      relative === '' ||
-      relative.startsWith('..') ||
-      path.isAbsolute(relative) ||
-      relative.startsWith('-') ||
+      !isRelativeGlob(relative) ||
       GLOB_CHARS.test(relative) ||
       relative.split('/').includes('node_modules') ||
       TEST_FILE.test(relative) ||
       options.testFiles?.includes(relative) ||
-      options.testInclude?.some((glob) => path.posix.matchesGlob(relative, glob))
+      (options.testInclude !== undefined && matches(relative, options.testInclude)) ||
+      (options.include !== undefined && !matches(relative, options.include)) ||
+      (options.exclude !== undefined && matches(relative, options.exclude))
     )
       continue;
 
