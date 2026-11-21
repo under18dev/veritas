@@ -43,7 +43,7 @@ pathe は mutant が約 1,020 個あり、キャッシュなしの `run --profil
 - まず `quick` を実行します。プロジェクトのコードを実行せず、上のプロジェクトではテストが最大 5,333 件でも 15 秒以内に終わりました。
 - mutation testing は、変更した部分に絞って実行します。プルリクエストでは `--since <ref>` を使い、特定の範囲だけなら `mutate --scope <path>` を使います。`--scope` は複数回指定できます。
 - mutation testing 全体に 120 秒より長くかかる場合は、`mutation.timeoutMs` を延ばします。
-- mutant を 1 つも実行しないまま mutation の実行が時間切れになる場合は、mutator が mutant の型チェックに時間を使っている可能性が高いです。`mutation.typecheck: "off"` にすると型チェックを省けます。[トラブルシューティング](/ja/guide/troubleshooting)を参照してください。
+- どの mutant も終わらないうちに mutation の実行が時間切れになり、mutator が mutant の計画をまだ出力していなかったとメッセージに出る場合は、mutator が mutant の型チェックに時間を使っている可能性が高いです。`mutation.typecheck: "off"` にすると型チェックを省けます。[トラブルシューティング](/ja/guide/troubleshooting)を参照してください。
 - mutation の結果、決着したソルバーの結果、LLM の応答は、内容をキーにして `.veritas/cache/` にキャッシュします。コード、設定、ツールのバージョン、実行のオプション（`--scope` や `--since` など）が変わっていなければ、次の実行で再利用します。
 
 CI で fixture に適用している時間の上限は、[ADR 0009](/adr/0009-performance-budget) にあります。
