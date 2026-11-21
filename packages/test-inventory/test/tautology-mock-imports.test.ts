@@ -87,4 +87,58 @@ describe('tautology, mocks, and imports', () => {
       ['src/named.ts#named'],
     ]);
   });
+
+  it('links a mock of a module project code imports when project code called before the assertion loads it', () => {
+    const root = tempProject({
+      'src/api.ts': 'export function send(message: string): void { void message; }\n',
+      'src/log.ts':
+        "import { send } from './api.js';\nexport function log(message: string): void { send(message); }\n",
+      'src/unrelated.ts': 'export function idle(): number { return 1; }\n',
+      'test/log.test.ts': `
+        import { expect, test, vi } from 'vitest';
+        import { send } from '../src/api.js';
+        import * as api from '../src/api.js';
+        import { log } from '../src/log.js';
+        import { idle } from '../src/unrelated.js';
+        vi.mock('../src/api.js');
+        test('named', () => { log('hi'); expect(send).toHaveBeenCalledWith('hi'); });
+        test('namespace', () => { log('hi'); expect(api.send).toHaveBeenCalled(); });
+        test('not loading', () => { idle(); expect(send).not.toHaveBeenCalled(); });
+        test('before the call', () => { expect(send).not.toHaveBeenCalled(); log('hi'); });
+        test('self called', () => { log('hi'); send('x'); expect(send).toHaveBeenCalled(); });
+        test('mocked module itself', () => { api.send('x'); expect(api.send).toHaveBeenCalled(); });
+      `,
+      'test/unmocked.test.ts': `
+        import { expect, test, vi } from 'vitest';
+        import { send } from '../src/api.js';
+        import { log } from '../src/log.js';
+        vi.spyOn(console, 'log');
+        test('not mocked', () => { log('hi'); expect(send).toHaveBeenCalled(); });
+      `,
+    });
+    const tests = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests;
+    const asserted = (name: string) => {
+      const test = tests.find((candidate) => candidate.name === name);
+
+      if (!test) throw new Error(`missing test: ${name}`);
+
+      return test.targetCalls.some((call) => call.asserted);
+    };
+
+    expect(asserted('named')).toBe(true);
+    expect(asserted('namespace')).toBe(true);
+    // The project code called does not load the mocked module, so it cannot have called the mock.
+    expect(asserted('not loading')).toBe(false);
+    // Read before project code ran.
+    expect(asserted('before the call')).toBe(false);
+    // The test calls the mock itself, so its calls may be the test's own.
+    expect(asserted('self called')).toBe(false);
+    expect(asserted('mocked module itself')).toBe(false);
+    // Without vi.mock of that module, the import is the real function.
+    expect(asserted('not mocked')).toBe(false);
+  });
 });

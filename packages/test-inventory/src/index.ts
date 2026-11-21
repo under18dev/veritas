@@ -122,6 +122,8 @@ export function inventoryTests(options: {
 
 function inventory(options: { root: string; config: VeritasConfig; files?: string[] }): TestInventory {
   const root = path.resolve(options.root);
+  // Module resolution depends on the compiler options and files of this project.
+  resolvedModules.clear();
   const testFiles =
     options.files?.map((file) =>
       resolveInsideRoot(root, path.isAbsolute(file) ? path.relative(root, file) : file),
@@ -1147,6 +1149,8 @@ function analyzeBody(
     for (const root of reached.mockRoots) {
       if (isSelfCalled(root)) continue;
       const results = new Set(trackedCalls(root.identifier));
+      // An export of a module the file mocks (`vi.mock('./api')`; `expect(api.save).toHaveBeenCalled()`).
+      const mockedModule = mockedModuleOf(root.identifier, ctx);
 
       for (const entry of calls)
         if (
@@ -1156,7 +1160,10 @@ function analyzeBody(
             mockHolders.get(entry.node)?.some((given) => covers(given, root)) ||
             (entry.target.returnsMocks &&
               results.has(entry.node) &&
-              keysMatch(keysRead(root.identifier, entry.node), entry.target)))
+              keysMatch(keysRead(root.identifier, entry.node), entry.target)) ||
+            // Project code that loads the mocked module calls the mock itself, so how it was called is what the
+            // project call did. Code that does not load it cannot have called it.
+            (mockedModule !== undefined && loadsModule(entry.target.symbol, mockedModule, ctx)))
         )
           observed.add(entry);
     }
@@ -5327,6 +5334,118 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
 
   return records;
 }
+
+/** Resolved module files by containing directory and specifier, for the run of one inventory. */
+const resolvedModules = new Map<string, string | undefined>();
+
+/** The file a module specifier resolves to from `containingFile`, or undefined when it does not resolve. */
+function resolvedModuleFile(specifier: string, containingFile: string, ctx: Ctx): string | undefined {
+  const key = `${path.dirname(containingFile)}\0${specifier}`;
+
+  if (resolvedModules.has(key)) return resolvedModules.get(key);
+  const resolved = ts.resolveModuleName(
+    specifier,
+    containingFile,
+    ctx.compilerOptions,
+    ts.sys,
+  ).resolvedModule;
+  const file = resolved ? path.resolve(resolved.resolvedFileName) : undefined;
+  resolvedModules.set(key, file);
+
+  return file;
+}
+
+/**
+ * The file of the module `identifier` is imported from (a named, default or namespace import of the test file),
+ * when the test file replaces that module with a hoisted module mock (`vi.mock('./api')`); otherwise undefined.
+ */
+function mockedModuleOf(identifier: ts.Identifier, ctx: Ctx): string | undefined {
+  const declaration = ctx.checker.getSymbolAtLocation(identifier)?.declarations?.[0];
+  let node: ts.Node | undefined = declaration;
+
+  while (node && !ts.isImportDeclaration(node)) node = node.parent;
+
+  if (!node || !ts.isImportDeclaration(node) || node.importClause?.isTypeOnly) return undefined;
+  const specifier = literalString(node.moduleSpecifier);
+  const source = node.getSourceFile();
+  const file = specifier === undefined ? undefined : resolvedModuleFile(specifier, source.fileName, ctx);
+
+  if (file === undefined) return undefined;
+  let mocked = mockedModulesCache.get(source);
+
+  if (!mocked) {
+    mocked = new Set();
+
+    for (const call of descendants(source)) {
+      if (!ts.isCallExpression(call) || mockCall(call, ctx.checker) !== 'module_hoisted') continue;
+      const argument = call.arguments[0] && skipParens(call.arguments[0]);
+      const target =
+        argument && ts.isCallExpression(argument) && argument.expression.kind === ts.SyntaxKind.ImportKeyword
+          ? argument.arguments[0]
+          : argument;
+      const name = literalString(target);
+      const resolved = name === undefined ? undefined : resolvedModuleFile(name, source.fileName, ctx);
+
+      if (resolved !== undefined) mocked.add(resolved);
+    }
+    mockedModulesCache.set(source, mocked);
+  }
+
+  return mocked.has(file) ? file : undefined;
+}
+
+/** Per test file, the module files its hoisted module mocks replace. */
+const mockedModulesCache = new WeakMap<ts.SourceFile, Set<string>>();
+
+/** Per file, the module files it imports itself (static, re-export or literal `import()`). */
+const importedModulesCache = new WeakMap<ts.SourceFile, Set<string>>();
+
+function importedModules(source: ts.SourceFile, ctx: Ctx): Set<string> {
+  const cached = importedModulesCache.get(source);
+
+  if (cached) return cached;
+  const modules = new Set<string>();
+
+  for (const node of descendants(source)) {
+    const specifier =
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier
+        ? node.moduleSpecifier
+        : ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword
+          ? node.arguments[0]
+          : undefined;
+    const name = literalString(specifier);
+    const file = name === undefined ? undefined : resolvedModuleFile(name, source.fileName, ctx);
+
+    if (file !== undefined) modules.add(file);
+  }
+  importedModulesCache.set(source, modules);
+
+  return modules;
+}
+
+/** Whether the file declaring a project symbol, or a local file it loads, imports the module in `moduleFile`. */
+function loadsModule(symbol: string, moduleFile: string, ctx: Ctx): boolean {
+  const index = symbol.lastIndexOf('#');
+  const start =
+    index > 0 ? ctx.program.getSourceFile(path.resolve(ctx.root, symbol.slice(0, index))) : undefined;
+
+  if (!start) return false;
+  let modules = loadedModulesCache.get(start);
+
+  if (!modules) {
+    modules = new Set(
+      [start, ...loadedFiles(start, ctx.checker, ctx.root)].flatMap((source) => [
+        ...importedModules(source, ctx),
+      ]),
+    );
+    loadedModulesCache.set(start, modules);
+  }
+
+  return modules.has(moduleFile);
+}
+
+/** Per project file, the module files it and the local files it loads import. */
+const loadedModulesCache = new WeakMap<ts.SourceFile, Set<string>>();
 
 /** Project symbols exported by the module a `vi.mock(specifier)` call replaces. */
 function moduleExports(argument: ts.Expression | undefined, ctx: Ctx): string[] {
