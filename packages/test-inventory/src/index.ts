@@ -65,15 +65,16 @@ export function inventoryTests(options: {
 
   for (const sourceFile of program.getSourceFiles())
     sourceFiles.set(path.resolve(sourceFile.fileName), sourceFile);
-  // Assertion helpers kept with the source (`src/vitest/expectIssue.ts`) are test code: they stay in the program
-  // so their imports resolve, but calls into them are followed as helpers, not counted as project targets.
+  // Assertion helpers and mock utilities kept with the source (`src/vitest/expectIssue.ts`, `src/test-utils.ts`)
+  // are test code: they stay in the program so their imports resolve, but calls into them are followed as
+  // helpers, not counted as project targets.
   const projectSet = new Set(
     projectFiles
       .map((file) => path.resolve(file))
       .filter((file) => {
         const source = sourceFiles.get(file);
 
-        return !source || !importsVitestAssertions(source);
+        return !source || !importsVitestRuntime(source);
       }),
   );
   const tests: TestCaseType[] = [];
@@ -955,10 +956,11 @@ function isTestCodeFile(sourceFile: ts.SourceFile, ctx: Ctx): boolean {
 }
 
 /**
- * Whether a file imports Vitest's assertions as values (`import { expect } from 'vitest'`): it asserts, so it is
- * test code wherever it lives. Importing anything else from Vitest (a config helper, `vi`) does not count.
+ * Whether a file imports Vitest's assertions or its mock API as values (`import { expect } from 'vitest'`,
+ * `import { vi } from 'vitest'`): that only runs inside a test run, so it is test code wherever it lives. Types and
+ * a config helper (`vitest/config`) do not count.
  */
-function importsVitestAssertions(source: ts.SourceFile): boolean {
+function importsVitestRuntime(source: ts.SourceFile): boolean {
   return source.statements.some((statement) => {
     if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) return false;
 
@@ -970,14 +972,13 @@ function importsVitestAssertions(source: ts.SourceFile): boolean {
       bindings !== undefined &&
       ts.isNamedImports(bindings) &&
       bindings.elements.some(
-        (element) =>
-          !element.isTypeOnly && VITEST_ASSERTIONS.has((element.propertyName ?? element.name).text),
+        (element) => !element.isTypeOnly && VITEST_RUNTIME.has((element.propertyName ?? element.name).text),
       )
     );
   });
 }
 
-const VITEST_ASSERTIONS = new Set(['expect', 'assert', 'expectTypeOf', 'assertType']);
+const VITEST_RUNTIME = new Set(['expect', 'assert', 'expectTypeOf', 'assertType', 'vi', 'vitest']);
 
 /** The body of the function a call invokes, when that function is test code inside the root. */
 function helperBody(node: Invocation, ctx: Ctx): ts.Node | undefined {
