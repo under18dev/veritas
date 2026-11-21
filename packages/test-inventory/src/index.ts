@@ -829,13 +829,18 @@ function analyzeBody(
     const runsSubject = matcherNames(assertion).some((name) => name.startsWith('toThrow'));
 
     for (const value of comparedValues(assertion)) {
-      for (const call of trackedCalls(value)) {
-        asserted.add(call);
-        mergeKeys(assertedKeys, call, keysRead(value, call));
-      }
+      // Only what the assertion evaluates: code in a function it never runs (`expect(() => onSave.mock.calls)`)
+      // reads nothing.
+      const evaluated = (node: ts.Node) => runsWithin(node, value, assertion);
+
+      for (const identifier of [value, ...descendants(value)].filter(ts.isIdentifier).filter(evaluated))
+        for (const call of trackedCalls(identifier)) {
+          asserted.add(call);
+          mergeKeys(assertedKeys, call, keysRead(value, call));
+        }
 
       for (const { node } of calls)
-        if (contains(value, node)) {
+        if (contains(value, node) && evaluated(node)) {
           asserted.add(node);
           mergeKeys(assertedKeys, node, keysRead(value, node));
         }
@@ -1102,7 +1107,12 @@ function assertionReach(
         if (!written) documentReads.push(at);
       }
 
-      if (ts.isPropertyAccessExpression(item) && item.name.text === 'mock') addRoot(item.expression, [], 0);
+      if (ts.isPropertyAccessExpression(item) && item.name.text === 'mock') {
+        const fn = item === node ? undefined : enclosingFunction(item, node);
+
+        // Like a page query, a mock read in a function counts only when that function runs.
+        if (!fn || runsFunction(fn, assertion, executed)) addRoot(item.expression, [], 0);
+      }
 
       if (!ts.isIdentifier(item)) continue;
       const symbol = valueSymbol(item, checker);
@@ -1119,10 +1129,29 @@ function assertionReach(
   for (const value of comparedValues(assertion)) visit(value, 0, assertion.getEnd());
   const subject = assertion.arguments[0];
 
-  if (subject && isExpectCall(assertion) && matcherNames(assertion).some((name) => MOCK_MATCHER.test(name)))
+  if (
+    subject &&
+    !isFunctionLike(skipParens(subject)) &&
+    isExpectCall(assertion) &&
+    matcherNames(assertion).some((name) => MOCK_MATCHER.test(name))
+  )
     addRoot(subject, [], 0);
 
   return { documentReads, mockRoots };
+}
+
+/**
+ * Whether evaluating `root` in an assertion runs `node`: every function between them is run (called where written,
+ * given to `waitFor`/`act`/`then`, or the subject of a throw matcher).
+ */
+function runsWithin(node: ts.Node, root: ts.Node, assertion: ts.CallExpression): boolean {
+  for (let current: ts.Node | undefined = node; current; current = current.parent) {
+    if (isFunctionLike(current) && !runsFunction(current, assertion, new Set())) return false;
+
+    if (current === root) return true;
+  }
+
+  return true;
 }
 
 /** The innermost function between `node` and `root` that encloses `node`, if any. */
@@ -1425,12 +1454,15 @@ function fromRenderedPage(expression: ts.Expression, checker: ts.TypeChecker, de
     if (ts.isCallExpression(item)) {
       if (isDocumentQuery(item, checker)) return true;
       const callee = skipParens(item.expression);
+      const fn = ts.isIdentifier(callee) ? localFunction(callee, checker) : undefined;
 
-      if (
-        ts.isIdentifier(callee) &&
-        (MOUNTING_FUNCTIONS.has(importedName(callee, checker)) || localFunction(callee, checker))
-      )
-        return true;
+      // A local helper gives what it returns (`openDropdown()` returning a query, `renderDialog()` a render result).
+      if (fn && isFunctionLike(fn) && fn.body)
+        return (ts.isBlock(fn.body) ? returnedExpressions(fn.body) : [fn.body as ts.Expression]).some(
+          (returned) => fromRenderedPage(returned, checker, depth + 1),
+        );
+
+      if (rendererKind(item.expression, checker) === 'document') return true;
     }
 
     if (isDocumentRead(item, checker)) return true;
@@ -1688,6 +1720,72 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
   return info;
 }
 
+/** Renderer names that other libraries use too: only taken as renderers when imported from these packages. */
+const AMBIGUOUS_RENDERERS: Record<string, RegExp> = {
+  mount: /^enzyme(?:$|\/)/,
+  shallow: /^enzyme(?:$|\/)/,
+  create: /^react-test-renderer(?:$|\/)/,
+};
+
+/**
+ * What kind of renderer a callee is: `render`/`rerender`/`hydrate` draw into the page; server rendering, and
+ * `create`/`shallow`/`mount` imported from react-test-renderer or Enzyme (directly or as `TestRenderer.create`), render
+ * into their own output. Anything else renders nothing known.
+ */
+function rendererKind(expression: ts.Expression, checker: ts.TypeChecker): Mount {
+  const callee = skipParens(expression);
+  const identifier = ts.isIdentifier(callee)
+    ? callee
+    : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(skipParens(callee.expression))
+      ? (skipParens(callee.expression) as ts.Identifier)
+      : undefined;
+  const name = ts.isIdentifier(callee)
+    ? importedName(callee, checker)
+    : ts.isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : undefined;
+
+  if (name === undefined) return undefined;
+
+  if (MOUNTING_FUNCTIONS.has(name)) return 'document';
+  const source = identifier && importSource(identifier, checker);
+  const ambiguous = AMBIGUOUS_RENDERERS[name];
+
+  if (ambiguous) return source !== undefined && ambiguous.test(source) ? 'string' : undefined;
+
+  return STRING_RENDERING_FUNCTIONS.has(name) ? 'string' : undefined;
+}
+
+/** The module an imported identifier comes from (`enzyme` for `import { mount } from 'enzyme'`). */
+function importSource(identifier: ts.Identifier, checker: ts.TypeChecker): string | undefined {
+  for (const declaration of checker.getSymbolAtLocation(identifier)?.declarations ?? []) {
+    const statement = ts.isImportSpecifier(declaration)
+      ? declaration.parent.parent.parent
+      : ts.isNamespaceImport(declaration)
+        ? declaration.parent.parent
+        : ts.isImportClause(declaration)
+          ? declaration.parent
+          : undefined;
+
+    if (statement && ts.isStringLiteral(statement.moduleSpecifier)) return statement.moduleSpecifier.text;
+  }
+
+  return undefined;
+}
+
+/** Whether a call runs a function whose body is visible (test code or project code), not a declaration. */
+function hasFunctionBody(call: ts.CallExpression | ts.NewExpression, checker: ts.TypeChecker): boolean {
+  let symbol = aliasTarget(call.expression, checker);
+
+  if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+
+  return (symbol?.declarations ?? [])
+    .map((item) => (ts.isVariableDeclaration(item) && item.initializer ? skipParens(item.initializer) : item))
+    .some(
+      (item) => isFunctionLike(item) && item.body !== undefined && !item.getSourceFile().isDeclarationFile,
+    );
+}
+
 /** The name a module exports that an imported identifier stands for, or the identifier's own name. */
 function importedName(identifier: ts.Identifier, checker: ts.TypeChecker): string {
   const declaration = checker.getSymbolAtLocation(identifier)?.declarations?.[0];
@@ -1909,20 +2007,13 @@ function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): Mount 
     (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
     parent.arguments?.includes(current as ts.Expression)
   ) {
-    const callee = skipParens(parent.expression);
-    // By the name it is imported under: `import { render as rtlRender } from '@testing-library/react'`.
-    const name = ts.isIdentifier(callee)
-      ? importedName(callee, ctx.checker)
-      : ts.isPropertyAccessExpression(callee)
-        ? callee.name.text
-        : undefined;
+    const index = parent.arguments?.indexOf(current as ts.Expression) ?? -1;
 
-    if (name !== undefined && STRING_RENDERING_FUNCTIONS.has(name)) return 'string';
-
-    if (name !== undefined && MOUNTING_FUNCTIONS.has(name)) return 'document';
-
-    // Given to a helper or a project function: mounted only where that function hands it to a renderer.
-    return argumentMount(parent, parent.arguments?.indexOf(current as ts.Expression) ?? -1, ctx, depth);
+    // A helper or project function with a body (even one named `mount`): mounted only where it hands the element to
+    // a renderer. Otherwise a renderer recognized by name and, for ambiguous names, by the package it comes from.
+    return hasFunctionBody(parent, ctx.checker)
+      ? argumentMount(parent, index, ctx, depth)
+      : rendererKind(parent.expression, ctx.checker);
   }
 
   // `const ui = <Dialog />; render(ui)`.
@@ -3164,7 +3255,7 @@ function analyzeTest(
   const unresolvedImports = analysis?.unresolvedImports ?? new Set<string>();
   const calledSymbols = [...new Set(analysis?.calls.map((call) => call.target.symbol))];
   const relativeFile = toPosixRelative(root, file);
-  const targetCalls = (analysis?.calls ?? []).map((entry) => {
+  const allCalls = (analysis?.calls ?? []).map((entry) => {
     const { node, target } = entry;
 
     return {
@@ -3184,6 +3275,33 @@ function analyzeTest(
       location: location(source, node, relativeFile),
     };
   });
+  // A component a local function of the body renders is recorded twice, once where the function is written and once
+  // where it is called (`const make = () => <Dialog />; render(make())`): keep the call, with either one's check.
+  const entries = analysis?.calls ?? [];
+  const duplicateOf = entries.map((entry) => {
+    if (!body || !isJsxInvocation(entry.node)) return -1;
+    const fn = enclosingFunction(entry.node, body);
+
+    return fn && isFunctionLike(fn) && fn.body
+      ? entries.findIndex(
+          (other) =>
+            other !== entry &&
+            other.target.symbol === entry.target.symbol &&
+            isInvocation(other.node) &&
+            helperBody(other.node, ctx) === fn.body,
+        )
+      : -1;
+  });
+  const targetCalls = allCalls
+    .map((call, index) => ({
+      ...call,
+      asserted:
+        call.asserted ||
+        duplicateOf.some(
+          (original, duplicate) => original === index && allCalls[duplicate]?.asserted === true,
+        ),
+    }))
+    .filter((_, index) => (duplicateOf[index] ?? -1) < 0);
   // Tautological only when every compared value (subject and expected) is a compile-time
   // constant; runtime values such as process.env or non-project call results are not.
   // Only type-level checks: Vitest's `expectTypeOf`/`assertType`, or no runtime assertion but a type check written

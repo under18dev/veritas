@@ -769,6 +769,8 @@ describe('ordering, running and provenance of page reads', () => {
 
     expect(byName('function never called')).toMatchObject({ symbols: [], asserted: false });
     expect(byName('factory called')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: true });
+    // Recorded once, at the call, not also where the factory is written.
+    expect(byName('factory called').args).toEqual([[]]);
   });
 
   it('credits a within query only when its container comes from the rendered page', () => {
@@ -931,6 +933,72 @@ describe('reaching a renderer and the page', () => {
     expect(byName('destructured body').asserted).toBe(false);
     // The local is read where it is set, before the render: not counted (conservative).
     expect(byName('alias only read').asserted).toBe(false);
+  });
+});
+
+describe('reads that run, containers and renderer names', () => {
+  it('counts a mock read inside a function only when the function runs', () => {
+    const byName = inventory(`${header}
+      it('mock state in a function compared', () => {
+        const onSave = vi.fn();
+        render(<Dialog onSave={onSave} />);
+        expect(() => onSave.mock.calls).toBeTruthy();
+      });
+      it('mock in a function compared', () => {
+        const onSave = vi.fn();
+        render(<Dialog onSave={onSave} />);
+        expect(() => onSave).toBeTruthy();
+      });
+      it('mock state read by a called local function', () => {
+        const onSave = vi.fn();
+        const calls = () => onSave.mock.calls;
+        render(<Dialog onSave={onSave} />);
+        expect(calls()).toEqual([]);
+      });
+    `);
+
+    expect(byName('mock state in a function compared').asserted).toBe(false);
+    expect(byName('mock in a function compared').asserted).toBe(false);
+    expect(byName('mock state read by a called local function').asserted).toBe(true);
+  });
+
+  it('follows what a local function returns when judging a within container', () => {
+    const byName = inventory(`${header}
+      const detached = () => document.createElement('div');
+      const dialog = () => screen.getByRole('dialog');
+      it('detached through a helper', () => {
+        render(<Dialog open title="Hi" />);
+        expect(within(detached()).queryByText('Hi')).toBeNull();
+      });
+      it('page element through a helper', () => {
+        render(<Dialog open title="Hi" />);
+        expect(within(dialog()).getByText('Hi')).toBeTruthy();
+      });
+    `);
+
+    expect(byName('detached through a helper').asserted).toBe(false);
+    expect(byName('page element through a helper').asserted).toBe(true);
+  });
+
+  it('takes mount, shallow and create as outside renderers only from their packages', () => {
+    const byName = inventory(`${header}
+      import { mount as enzymeMount } from 'enzyme';
+      function mount(element: JSX.Element) { return render(element); }
+      it('local helper named mount', () => {
+        mount(<Dialog open title="Hi" />);
+        expect(screen.getByText('Hi')).toBeTruthy();
+      });
+      it('enzyme mount', () => {
+        enzymeMount(<Dialog open title="Hi" />);
+        expect(screen.queryByText('Hi')).toBeNull();
+      });
+    `);
+
+    expect(byName('local helper named mount')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: true,
+    });
+    expect(byName('enzyme mount')).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: false });
   });
 });
 
