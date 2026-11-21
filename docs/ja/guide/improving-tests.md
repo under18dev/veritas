@@ -83,7 +83,7 @@ note: formal and property-based results re-evaluated in run-20261120T105528565Z-
 
 `--apply` の中では、次の順に処理します。
 
-1. プロジェクトを新しい一時ディレクトリにコピーします。`node_modules` とツールの状態はコピーせず、`node_modules` はリンクして、プロジェクトの Vitest と mutator を使います。
+1. プロジェクトを新しい一時ディレクトリにコピーします。`node_modules` とツールの状態はコピーせず、`node_modules` はリンクして、プロジェクトのテストランナーと mutator を使います。
 2. コピーでテストと mutation testing を実行します。
 3. コピーに新しいテストファイルを加え、すべての mutant についてテストと mutation testing をもう一度実行します。
 4. 計画の元になった実行と同じステージとオプションで、形式検証と property-based testing の結果をオフラインで評価し直します。

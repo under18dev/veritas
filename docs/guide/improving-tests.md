@@ -83,7 +83,7 @@ note: formal and property-based results re-evaluated in run-20261120T105528565Z-
 
 During `--apply`, Veritas:
 
-1. copies the project to a new temporary directory, without `node_modules` and tool state, and links `node_modules` so your Vitest and mutator are used;
+1. copies the project to a new temporary directory, without `node_modules` and tool state, and links `node_modules` so your test runner and mutator are used;
 2. runs the tests and mutation testing on the copy;
 3. adds the new test files to the copy and runs the tests and mutation testing again, on every mutant;
 4. re-evaluates the formal and property-based results on the copy with the stages and options of the run the plan came from, offline;

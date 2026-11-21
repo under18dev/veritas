@@ -11,8 +11,8 @@ What the current release supports: features, the formal subset, environments and
 | Statement extraction            | Rule-based English and Japanese threshold phrases; optional LLM-assisted extraction through the Claude Code or Codex CLI with your own login, or the Anthropic or OpenAI API                 |
 | Code intelligence               | TypeScript Compiler API; static only                                                                                                                                                         |
 | Property registry               | proposed / reviewed / accepted / rejected / conflicted / superseded, append-only approvals                                                                                                   |
-| Test inventory                  | Vitest `it`/`test`/`describe` incl. modifiers, assertions, mocks, snapshots                                                                                                                  |
-| Mutation testing                | `@mizchi/mutator` 0.4.x                                                                                                                                                                      |
+| Test inventory                  | Vitest and Jest `it`/`test`/`describe` incl. modifiers, assertions, mocks, snapshots; Jest's globals, `@jest/globals` and `jest.*` mocks                                                     |
+| Mutation testing                | `@mizchi/mutator` 0.4.x; with Jest it is experimental (see below)                                                                                                                            |
 | Property-based testing          | fast-check, in a restricted process (permission model; project code is trusted, [ADR 0011](/adr/0011-trusted-project-code)), fixed seeds                                                     |
 | Z3 checks                       | Bounded integer/boolean subset (see below), `z3-solver` (WASM), run in its own process                                                                                                       |
 | Lean checks                     | Lean 4 with Lake when installed; proofs using `sorry`, `admit`, `native_decide` or extra axioms are rejected                                                                                 |
@@ -42,13 +42,22 @@ Lean proofs cover integer and boolean parameters only; a property over records o
 
 ## Environments
 
-| Item         | Supported                                                                                                                                                                                                                            |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Node.js      | 24 or later; project code runs only under Node.js 25+ (network blocked), unless `sandbox.allowNetworkWithoutIsolation` is set: the running Node.js, `VERITAS_SANDBOX_NODE` or `node` on PATH                                         |
-| OS           | Linux, macOS, Windows                                                                                                                                                                                                                |
-| Test runner  | Vitest. Mutation testing needs Vitest 4 or later: `@mizchi/mutator` declares Vitest 5 and also runs Vitest 4 projects, with a warning. On Vitest 3 and earlier, `mutate` is reported as `unsupported` and the other stages still run |
-| Dependencies | Installed in `node_modules` (npm, pnpm, Yarn with `nodeLinker: node-modules`, Bun). Yarn Plug'n'Play is not supported                                                                                                                |
-| Languages    | TypeScript, JavaScript (ESM)                                                                                                                                                                                                         |
+| Item         | Supported                                                                                                                                                                                    |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Node.js      | 24 or later; project code runs only under Node.js 25+ (network blocked), unless `sandbox.allowNetworkWithoutIsolation` is set: the running Node.js, `VERITAS_SANDBOX_NODE` or `node` on PATH |
+| OS           | Linux, macOS, Windows                                                                                                                                                                        |
+| Test runner  | Vitest or Jest, set by `analysis.testFramework` (`veritas init` detects it). See [Test runners](#test-runners)                                                                               |
+| Dependencies | Installed in `node_modules` (npm, pnpm, Yarn with `nodeLinker: node-modules`, Bun). Yarn Plug'n'Play is not supported                                                                        |
+| Languages    | TypeScript, JavaScript (ESM)                                                                                                                                                                 |
+
+## Test runners
+
+| Runner | Detected from                                                                                                    | Tests run with                                               | Mutation testing                                                                                                                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Vitest | `vitest.config.*`, `vitest` in package.json, a test script that runs `vitest`                                    | `vitest run` with the JSON reporter                          | Needs Vitest 4 or later: `@mizchi/mutator` declares Vitest 5 and also runs Vitest 4 projects, with a warning. On Vitest 3 and earlier, `mutate` is reported as `unsupported` and the other stages still run                                                                 |
+| Jest   | `jest.config.{js,ts,mjs,cjs,cts,json}`, a `"jest"` key or `jest` in package.json, a test script that runs `jest` | `jest --json`, started with `node --experimental-vm-modules` | Experimental, as `@mizchi/mutator` marks its Jest support: Jest 30, native ESM projects only (`"type": "module"`), no Jest `projects`. Other projects get `unsupported` with the reason. `doctor` shows the mutator as `degraded`, and every mutation run carries a warning |
+
+When a project has both, `init` takes the one its `test` script runs; if the script does not tell them apart, it chooses Vitest, says so, and (in a terminal) asks. A configuration without `analysis.testFramework` means Vitest.
 
 ## External tools and licenses
 

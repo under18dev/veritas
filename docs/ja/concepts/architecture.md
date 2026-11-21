@@ -27,32 +27,33 @@ Evidence collectors  Code intelligence  Test inventory
 
 ## パッケージ
 
-| パッケージ                 | 役割                                                                                                                                                                                                     |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `core`                     | ドメインのスキーマ、Property IR、成果物の保存、キャッシュ、ID、ポリシー、終了コード、プロセスの実行、パスの安全性、秘密情報の秘匿、プロジェクトの検出、`init`/`doctor`                                   |
-| `cli`                      | `veritas` と `veritas-mcp` の実行ファイル。`@under18dev/veritas` として公開。引数を解析し、各パッケージの API を呼び出す                                                                                 |
-| `engine`                   | オーケストレーターと Node API。ステージの実行、実行の成果物の保存、レポート、`explain`、仕様の操作。CLI、MCP サーバー、GitHub Action が共有する                                                          |
-| `spec-discovery`           | 根拠の収集（ローカル、GitHub、Web）、出典の関係、規範的な文の抽出                                                                                                                                        |
-| `code-intelligence`        | TypeScript の解析。export、シグネチャ、分岐、境界、副作用                                                                                                                                                |
-| `property-engine`          | Property の登録、レビューの状態遷移、食い違い、承認                                                                                                                                                      |
-| `test-inventory`           | テストの検出、assertion の解析、テスト・シンボル・Property のグラフ。テスト API の名前はプロジェクトのテストランナーのものを使う                                                                         |
-| `mutation-adapter`         | mutation のバックエンドを実行し、結果を正規化する                                                                                                                                                        |
-| `property-testing`         | fast-check のジェネレーター、seed、shrink、再実行                                                                                                                                                        |
-| `formal-core`              | TypeScript の部分集合から Property IR への変換、主張、意味の検証                                                                                                                                         |
-| `solver-z3`、`solver-lean` | ソルバーのバックエンド                                                                                                                                                                                   |
-| `assessment`               | 証拠のベクトルとテストの判定                                                                                                                                                                             |
-| `improvement`              | 計画、隔離したワークスペースでの承認済みパッチの適用、ロールバック                                                                                                                                       |
-| `llm`、`llm-providers/*`   | プロバイダーに依存しない LLM のインターフェースと、プロバイダーごとのアダプター。`llm-providers/claude`（Anthropic API）、`claude-code`（Claude Code CLI）、`openai`（OpenAI API）、`codex`（Codex CLI） |
-| `test-runners/*`           | テストランナーごとの provider。`core` の `TestRunnerProvider` インターフェースを実装する。検出、テスト API の名前、テストの実行、mutation とのつなぎ、生成するテストの書き方。今は `vitest` のみ         |
-| `reports`                  | テキスト、JSON、Markdown、HTML、SARIF                                                                                                                                                                    |
-| `mcp`                      | MCP サーバー                                                                                                                                                                                             |
-| `github-action`            | CI との連携                                                                                                                                                                                              |
+| パッケージ                 | 役割                                                                                                                                                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `core`                     | ドメインのスキーマ、Property IR、成果物の保存、キャッシュ、ID、ポリシー、終了コード、プロセスの実行、パスの安全性、秘密情報の秘匿、プロジェクトの検出、`init`/`doctor`                                                                                 |
+| `cli`                      | `veritas` と `veritas-mcp` の実行ファイル。`@under18dev/veritas` として公開。引数を解析し、各パッケージの API を呼び出す                                                                                                                               |
+| `engine`                   | オーケストレーターと Node API。ステージの実行、実行の成果物の保存、レポート、`explain`、仕様の操作。CLI、MCP サーバー、GitHub Action が共有する                                                                                                        |
+| `spec-discovery`           | 根拠の収集（ローカル、GitHub、Web）、出典の関係、規範的な文の抽出                                                                                                                                                                                      |
+| `code-intelligence`        | TypeScript の解析。export、シグネチャ、分岐、境界、副作用                                                                                                                                                                                              |
+| `property-engine`          | Property の登録、レビューの状態遷移、食い違い、承認                                                                                                                                                                                                    |
+| `test-inventory`           | テストの検出、assertion の解析、テスト・シンボル・Property のグラフ。テスト API の名前はプロジェクトのテストランナーのものを使う                                                                                                                       |
+| `mutation-adapter`         | mutation のバックエンドを実行し、結果を正規化する                                                                                                                                                                                                      |
+| `property-testing`         | fast-check のジェネレーター、seed、shrink、再実行                                                                                                                                                                                                      |
+| `formal-core`              | TypeScript の部分集合から Property IR への変換、主張、意味の検証                                                                                                                                                                                       |
+| `solver-z3`、`solver-lean` | ソルバーのバックエンド                                                                                                                                                                                                                                 |
+| `assessment`               | 証拠のベクトルとテストの判定                                                                                                                                                                                                                           |
+| `improvement`              | 計画、隔離したワークスペースでの承認済みパッチの適用、ロールバック                                                                                                                                                                                     |
+| `llm`、`llm-providers/*`   | プロバイダーに依存しない LLM のインターフェースと、プロバイダーごとのアダプター。`llm-providers/claude`（Anthropic API）、`claude-code`（Claude Code CLI）、`openai`（OpenAI API）、`codex`（Codex CLI）                                               |
+| `test-runners/*`           | テストランナーごとの provider。`core` の `TestRunnerProvider` インターフェースを実装する。検出、テスト API の名前、テストの完全な名前の書き方、テストの実行、mutation とのつなぎ、生成するテストの書き方。`test-runners/vitest` と `test-runners/jest` |
+| `reports`                  | テキスト、JSON、Markdown、HTML、SARIF                                                                                                                                                                                                                  |
+| `mcp`                      | MCP サーバー                                                                                                                                                                                                                                           |
+| `github-action`            | CI との連携                                                                                                                                                                                                                                            |
 
 各部分が何に対応しているかは[対応環境](/ja/concepts/support-matrix)にまとめています。
 
 ## 各部分の関係
 
 - CLI、Node API、MCP サーバー、GitHub Action は、同じパッケージの関数を呼び出します。コマンドと、それに対応する API の関数や MCP のツールは、同じステージを実行して同じファイルを書きます。たとえば `veritas analyze`、`analyze()`、MCP のツール `analyze_tests` がそうです。
+- テストランナーは実行ごとに 1 回、`analysis.testFramework`（`init` の前は検出の結果）から決め、ランナーに固有の処理はすべてその provider を通します。test-inventory はその API の名前でテストを読み、mutation はそのランナーと設定で mutator を実行し、`improve` はそのランナーでテストを実行し、生成するテストはその書き方に従います。`test-runners/*` の外のコードは、特定のランナーの名前を持ちません。
 - ステージは、それぞれ自分の結果だけを報告します。例外を投げたステージは `error` になり、失敗したステージに依存するステージは `skipped` になります。あるステージが、別のステージの代わりに成功を報告することはありません。
 
 ## 保存場所

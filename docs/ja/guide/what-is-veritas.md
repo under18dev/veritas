@@ -1,6 +1,6 @@
 # Veritas とは
 
-Veritas は、TypeScript や JavaScript のプロジェクトのテストが、実際に何を保証しているかを確かめるツールです。プロジェクトにすでにある仕様（README、docs、JSDoc、OpenAPI や JSON Schema、git の履歴、エクスポートした Issue）を読み、コードと Vitest のテストに結び付けます。そのうえで mutation testing、property-based testing、範囲を限った形式検証を実行し、見つけたことを根拠と一緒に報告します。
+Veritas は、TypeScript や JavaScript のプロジェクトのテストが、実際に何を保証しているかを確かめるツールです。プロジェクトにすでにある仕様（README、docs、JSDoc、OpenAPI や JSON Schema、git の履歴、エクスポートした Issue）を読み、コードと Vitest や Jest のテストに結び付けます。そのうえで mutation testing、property-based testing、範囲を限った形式検証を実行し、見つけたことを根拠と一緒に報告します。
 
 ## 解決する問題
 
@@ -59,7 +59,7 @@ Evidence collectors  Code intelligence  Test inventory
 
 1. Evidence collector がローカルの出典を読みます。GitHub と Web は、有効にしたときだけ読みます。どの出典も、ファイルと行番号を付けて保存します。
 2. Specification engine が、「Orders with a total of 1000 or more receive a flat discount of 100」のような記述を、関数と引数に結び付いた Property にします。Code intelligence はコードから推測した Property も加えますが、これは仮説のままです。
-3. Test inventory が Vitest のテストを見つけ、それぞれが何を呼び、何を assert しているかを調べます。
+3. Test inventory が Vitest や Jest のテストを見つけ、それぞれが何を呼び、何を assert しているかを調べます。
 4. mutation testing、property-based testing、Z3 や Lean による検査が、Property についての根拠を作ります。
 5. Assessment engine がすべてをまとめ、テストごとの evidence vector、finding（指摘）、終了コード付きの verdict（判定）を出します。
 6. 依頼すると、Improvement planner が accepted な仕様から期待値を取った新しいテストファイルを提案します。

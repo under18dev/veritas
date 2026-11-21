@@ -11,8 +11,8 @@
 | 文の抽出               | 英語と日本語の閾値の表現をルールで抽出。任意で、自分のログインで使う Claude Code・Codex の CLI、または Anthropic・OpenAI の API による LLM の抽出                                                          |
 | コードの解析           | TypeScript Compiler API。静的な解析のみ                                                                                                                                                                    |
 | Property の登録        | proposed / reviewed / accepted / rejected / conflicted / superseded。承認は追記のみ                                                                                                                        |
-| テストの一覧           | Vitest の `it`/`test`/`describe`（修飾子を含む）、assertion、モック、スナップショット                                                                                                                      |
-| mutation testing       | `@mizchi/mutator` 0.4.x                                                                                                                                                                                    |
+| テストの一覧           | Vitest と Jest の `it`/`test`/`describe`（修飾子を含む）、assertion、モック、スナップショット。Jest のグローバル、`@jest/globals`、`jest.*` のモックも読む                                                 |
+| mutation testing       | `@mizchi/mutator` 0.4.x。Jest では実験的（後述）                                                                                                                                                           |
 | property-based テスト  | fast-check を制限したプロセスで実行（パーミッションモデル。プロジェクトのコードは信頼するコード、[ADR 0011](/adr/0011-trusted-project-code)）。seed は固定                                                 |
 | Z3 による検査          | 有界な整数・真偽値の部分集合（後述）。`z3-solver`（WASM）を専用のプロセスで実行                                                                                                                            |
 | Lean による検査        | Lean 4 と Lake がインストールされていれば使う。`sorry`、`admit`、`native_decide`、追加の公理を使った証明は拒否する                                                                                         |
@@ -42,13 +42,22 @@ Lean の証明が扱うのは整数と真偽値の引数だけで、レコード
 
 ## 環境
 
-| 項目           | 対応                                                                                                                                                                                                                                                     |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Node.js        | 24 以上。プロジェクトのコードを実行するのは Node.js 25 以上（ネットワークを遮断）があるときだけ（実行中のもの、`VERITAS_SANDBOX_NODE`、PATH 上の `node`）。`sandbox.allowNetworkWithoutIsolation` を設定した場合を除く                                   |
-| OS             | Linux、macOS、Windows                                                                                                                                                                                                                                    |
-| テストランナー | Vitest。mutation テストには Vitest 4 以降が必要です。`@mizchi/mutator` が対応を宣言しているのは Vitest 5 で、Vitest 4 のプロジェクトも警告付きで実行します。Vitest 3 以前では `mutate` を `unsupported` として報告し、ほかのステージはそのまま実行します |
-| 依存パッケージ | `node_modules` にインストールされていること（npm、pnpm、`nodeLinker: node-modules` の Yarn、Bun）。Yarn Plug'n'Play には対応していません                                                                                                                 |
-| 言語           | TypeScript、JavaScript（ESM）                                                                                                                                                                                                                            |
+| 項目           | 対応                                                                                                                                                                                                                   |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Node.js        | 24 以上。プロジェクトのコードを実行するのは Node.js 25 以上（ネットワークを遮断）があるときだけ（実行中のもの、`VERITAS_SANDBOX_NODE`、PATH 上の `node`）。`sandbox.allowNetworkWithoutIsolation` を設定した場合を除く |
+| OS             | Linux、macOS、Windows                                                                                                                                                                                                  |
+| テストランナー | Vitest または Jest。`analysis.testFramework` で指定します（`veritas init` が検出して設定します）。[テストランナー](#テストランナー)を参照してください                                                                  |
+| 依存パッケージ | `node_modules` にインストールされていること（npm、pnpm、`nodeLinker: node-modules` の Yarn、Bun）。Yarn Plug'n'Play には対応していません                                                                               |
+| 言語           | TypeScript、JavaScript（ESM）                                                                                                                                                                                          |
+
+## テストランナー
+
+| ランナー | 検出の手がかり                                                                                                    | テストの実行                                              | mutation テスト                                                                                                                                                                                                                                                                                                                                      |
+| -------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Vitest   | `vitest.config.*`、package.json の `vitest`、`vitest` を実行する test スクリプト                                  | JSON レポーターを付けた `vitest run`                      | Vitest 4 以降が必要です。`@mizchi/mutator` が対応を宣言しているのは Vitest 5 で、Vitest 4 のプロジェクトも警告付きで実行します。Vitest 3 以前では `mutate` を `unsupported` として報告し、ほかのステージはそのまま実行します                                                                                                                         |
+| Jest     | `jest.config.{js,ts,mjs,cjs,cts,json}`、package.json の `"jest"` キーや `jest`、`jest` を実行する test スクリプト | `node --experimental-vm-modules` で起動した `jest --json` | 実験的です。`@mizchi/mutator` 自身が Jest への対応を実験的としているためです。Jest 30 で、ネイティブ ESM のプロジェクト（`"type": "module"`）だけが対象で、Jest の `projects` には対応しません。それ以外のプロジェクトでは理由を付けて `unsupported` と報告します。`doctor` は mutator を `degraded` と表示し、mutation の実行には毎回警告が付きます |
+
+両方を使っているプロジェクトでは、`init` は `test` スクリプトが実行するほうを選びます。スクリプトから判断できないときは Vitest を選んでそのことを伝え、ターミナルではどちらを使うか尋ねます。`analysis.testFramework` のない設定は Vitest として扱います。
 
 ## 外部ツールとライセンス
 

@@ -8,7 +8,7 @@
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | Node.js                              | 24 以上                                                                                                                                       |
 | プロジェクトのコードを動かす Node.js | 25 以上（26 を推奨）。property-based testing と反例の再実行で、ネットワークを遮断して関数を動かすのに使います                                 |
-| テストランナー                       | プロジェクトに入っている Vitest                                                                                                               |
+| テストランナー                       | プロジェクトに入っている Vitest または Jest                                                                                                   |
 | 言語                                 | TypeScript または JavaScript（ESM）                                                                                                           |
 | OS                                   | Linux、macOS、Windows                                                                                                                         |
 | 任意                                 | git（`--since` とコミット情報に使います）、`prove --engine lean` 用の Lean 4 と Lake（[elan](https://github.com/leanprover/elan) で入れます） |
@@ -47,7 +47,7 @@ bun add -d @under18dev/veritas
 npm install -g @under18dev/veritas
 ```
 
-`veritas` と `veritas-mcp` が `PATH` から使えるようになります。プロジェクトで実行すると、Vitest、`@mizchi/mutator`、fast-check は、プロジェクトに入っていればそれを使います。Veritas に同梱の `@mizchi/mutator` は、プロジェクトの Vitest でテストを実行しますが、自分のファイルの一部を Veritas のインストール先から読み込みます。テストは単独では通るのに、mutation testing で「mutant がなくても失敗する」と出る場合は、`@mizchi/mutator` もプロジェクトに入れてください（`npm install -D @mizchi/mutator`）。
+`veritas` と `veritas-mcp` が `PATH` から使えるようになります。プロジェクトで実行すると、テストランナー、`@mizchi/mutator`、fast-check は、プロジェクトに入っていればそれを使います。Veritas に同梱の `@mizchi/mutator` は、プロジェクトのテストランナーでテストを実行しますが、自分のファイルの一部を Veritas のインストール先から読み込みます。テストは単独では通るのに、mutation testing で「mutant がなくても失敗する」と出る場合は、`@mizchi/mutator` もプロジェクトに入れてください（`npm install -D @mizchi/mutator`）。
 
 ## 設定ファイルを作る
 
@@ -58,6 +58,7 @@ npx veritas init --yes
 ```text
 wrote /path/to/project/.veritas/config.json
 detected: package manager=npm, tsconfig=none, vitest=5.1.1, git=true
+test runner: vitest (Vitest is the only test runner found (vitest.config.ts, vitest in package.json))
 next:
   veritas doctor
   veritas discover --offline
@@ -70,7 +71,7 @@ next:
 | `--force`   | 既存の `.veritas/config.json` を上書きする |
 | `--dry-run` | 書き出さずに設定を表示する                 |
 
-プロジェクトが Vitest を使っていなければ、`init` は `VITEST_NOT_FOUND` で止まります。既定の設定では、ネットワーク上の出典と LLM はオフで、形式検証の整数の範囲は `[-10000, 10000]` です。すべての設定項目は[設定リファレンス](/ja/reference/configuration)にあります。
+`init` はプロジェクトのテストランナーを見つけて `analysis.testFramework` に書き込みます。対象は Vitest と Jest で、それぞれの設定ファイル、package.json、`test` スクリプトから判断し、どちらをなぜ選んだかを表示します。両方が入っていて `test` スクリプトが片方だけを実行しているなら、そちらを選びます。判断できないときは Vitest を選び、設定を確かめるよう伝えます（ターミナルではどちらを使うか尋ねます）。どちらも見つからなければ `VITEST_NOT_FOUND` で、渡した設定が Jest を指定しているのにプロジェクトに Jest がなければ `JEST_NOT_FOUND` で止まります。既定の設定では、ネットワーク上の出典と LLM はオフで、形式検証の整数の範囲は `[-10000, 10000]` です。すべての設定項目は[設定リファレンス](/ja/reference/configuration)にあります。
 
 ### 端末で質問に答える
 
@@ -78,6 +79,7 @@ next:
 
 | 質問                                                               | y と答えたときの動作                                                                                                                                                                                                       |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| テストランナー（`init` が両方を見つけて判断できなかったときだけ）  | 選んだランナーを `analysis.testFramework` に設定する                                                                                                                                                                       |
 | LLM プロバイダー                                                   | `llm.provider` を設定する（`claude`、`claude-code`、`codex`、`openai`）。それぞれ使える状態かどうかを表示する。`codex` は、読み取り専用のシェルがローカルのファイルを読むことの許可（`llm.allowCodexFileReads`）も確認する |
 | GitHub の issue と PR                                              | そのリポジトリの `sources.github` を有効にする（`origin` リモートを候補として表示）。`--offline` なしの実行でだけ読む                                                                                                      |
 | web ページ                                                         | 入力したドメインについて `sources.web` を有効にする。`--offline` なしの実行でだけ取得する                                                                                                                                  |

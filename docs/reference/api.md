@@ -129,11 +129,11 @@ const markdown = renderReport(buildReportInput('/path/to/project'), 'markdown');
 
 ## Property-based tests
 
-| Export                                                                    | CLI equivalent          | Purpose                                                                                        |
-| ------------------------------------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------- |
-| `generateTests(root, { propertyId?, dryRun?, force?, allowCodeConfig? })` | `veritas test generate` | Generate Vitest and fast-check files under `.veritas/generated-tests/`; returns the files      |
-| `replayPbt(root, pbtId, { runId?, signal? })`                             | `veritas test replay`   | Replay a recorded property-based test; `reproduced` says whether the recorded result came back |
-| `defaultSeed(propertyId)`                                                 | none                    | The seed used for a property when `pbt.seed` is not set                                        |
+| Export                                                                    | CLI equivalent          | Purpose                                                                                                           |
+| ------------------------------------------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `generateTests(root, { propertyId?, dryRun?, force?, allowCodeConfig? })` | `veritas test generate` | Generate fast-check test files, in the test runner's syntax, under `.veritas/generated-tests/`; returns the files |
+| `replayPbt(root, pbtId, { runId?, signal? })`                             | `veritas test replay`   | Replay a recorded property-based test; `reproduced` says whether the recorded result came back                    |
+| `defaultSeed(propertyId)`                                                 | none                    | The seed used for a property when `pbt.seed` is not set                                                           |
 
 ## Improvements
 
