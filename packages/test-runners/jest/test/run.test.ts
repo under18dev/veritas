@@ -1,5 +1,4 @@
 import {
-  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -13,9 +12,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { longPath, parseJestReport, relativeKey, runJest } from '../src/run.js';
+import { copyJestFixture, FIXTURE } from './helpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURE = path.resolve(here, '../../../../fixtures/jest-app');
 
 /** A report Jest 30.5 wrote with --json for the jest-app fixture plus a failing and a broken test file. */
 function recordedReport(root: string): unknown {
@@ -152,12 +151,11 @@ describe.skipIf(!existsSync(path.join(FIXTURE, 'node_modules', 'jest')))(
   'runJest on the jest-app fixture',
   () => {
     it('runs the project Jest and reads its report, for some files or all', async () => {
-      const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-jest-run-')));
-      cpSync(FIXTURE, root, { recursive: true, filter: (src) => !src.includes('node_modules') });
-      symlinkSync(path.join(FIXTURE, 'node_modules'), path.join(root, 'node_modules'), 'junction');
+      const root = copyJestFixture('jest-run');
       const all = await runJest(root, { timeoutMs: 120_000, label: 'all' });
 
-      expect(all.status).toBe('ok');
+      // The detail says why, should the run fail on some platform.
+      expect(all, JSON.stringify(all.status === 'ok' ? all.failures : all)).toMatchObject({ status: 'ok' });
 
       if (all.status !== 'ok') return;
       expect(all.failed).toBe(0);
@@ -169,6 +167,7 @@ describe.skipIf(!existsSync(path.join(FIXTURE, 'node_modules', 'jest')))(
         files: ['test/discount-weak.test.ts'],
       });
 
+      expect(one, JSON.stringify(one.status === 'ok' ? one.failures : one)).toMatchObject({ status: 'ok' });
       expect(one.status === 'ok' && [...one.tests.keys()]).toEqual([
         'test/discount-weak.test.ts::discountAmount gives a discount on large orders',
         'test/discount-weak.test.ts::discountAmount gives no discount on small orders',
