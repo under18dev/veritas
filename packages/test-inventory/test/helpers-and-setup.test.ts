@@ -135,6 +135,17 @@ export function asMock<T>(fn: ReturnType<typeof vi.fn>): T { return fn as unknow
     expect(test.asserted).toBe(false);
   });
 
+  it('treats a project file that imports all of Vitest as a namespace as test code too', () => {
+    const test = inventory(
+      `${header}
+      import { stub } from '../src/stubs.js';
+      it('stub', () => { expect(stub()).toBe(1); });
+    `,
+      { 'src/stubs.ts': "import * as vitest from 'vitest';\nexport const stub = () => (vitest ? 1 : 0);\n" },
+    )('stub');
+    expect(test.symbols).toEqual([]);
+  });
+
   it('keeps the call a describe-level value comes from when a helper that calls project code receives it', () => {
     const get = inventory(
       `import { describe, it } from 'vitest';

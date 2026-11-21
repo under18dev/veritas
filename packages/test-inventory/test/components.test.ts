@@ -361,6 +361,118 @@ describe('rendered components', () => {
   });
 });
 
+describe('links that are not there', () => {
+  it('matches the property of a mock object that was handed over', () => {
+    const byName = inventory(`${header}
+      it('other member', () => {
+        const mocks = { onSave: vi.fn(), track: vi.fn() };
+        render(<Dialog onSave={mocks.onSave} />);
+        mocks.track();
+        expect(mocks.track).toHaveBeenCalled();
+      });
+      it('same member', () => {
+        const mocks = { onSave: vi.fn(), track: vi.fn() };
+        render(<Dialog onSave={mocks.onSave} />);
+        expect(mocks.onSave).not.toHaveBeenCalled();
+      });
+      it('only a plain value handed over', () => {
+        const props = { title: 'Hi', onSave: vi.fn() };
+        render(<Dialog title={props.title} />);
+        expect(props.onSave).not.toHaveBeenCalled();
+      });
+    `);
+
+    expect(byName('other member').asserted).toBe(false);
+    expect(byName('same member').asserted).toBe(true);
+    expect(byName('only a plain value handed over').asserted).toBe(false);
+  });
+
+  it('counts JSX as a call only once it is mounted', () => {
+    const byName = inventory(`${header}
+      import { isValidElement } from 'react';
+      it('element compared', () => { expect(<Dialog open />).toBeTruthy(); });
+      it('element checked', () => { expect(isValidElement(<Dialog open />)).toBe(true); });
+      it('element props', () => { const element = <Dialog open />; expect(element.props.open).toBe(true); });
+      it('created, another rendered', () => {
+        const unused = <Dialog />;
+        render(<p>Hi</p>);
+        expect(screen.getByText('Hi')).toBeTruthy();
+      });
+      it('kept in a local, then rendered', () => {
+        const ui = <Dialog open title="Hi" />;
+        render(ui);
+        expect(screen.getByText('Hi')).toBeTruthy();
+      });
+    `);
+
+    for (const name of ['element compared', 'element checked', 'element props', 'created, another rendered'])
+      expect(byName(name), name).toMatchObject({ symbols: [], asserted: false });
+    expect(byName('kept in a local, then rendered')).toMatchObject({
+      symbols: ['src/Dialog.tsx#Dialog'],
+      asserted: true,
+    });
+  });
+
+  it('does not credit a wrapper with a page query that may only find the children the test supplied', () => {
+    const byName = inventory(
+      `${header}
+      import { Providers } from '../src/Providers';
+      const renderWithProviders = (ui: JSX.Element) => render(<Providers>{ui}</Providers>);
+      it('third-party child', () => {
+        render(<Providers><Button>Go</Button></Providers>);
+        expect(screen.getByText('Go')).toBeInTheDocument();
+      });
+      it('through a provider helper', () => {
+        renderWithProviders(<Button>Go</Button>);
+        expect(screen.getByText('Go')).toBeInTheDocument();
+      });
+      it('project child', () => {
+        render(<Providers><Dialog open title="Hi" /></Providers>);
+        expect(screen.getByText('Hi')).toBeInTheDocument();
+      });
+    `,
+      {
+        'src/Providers.tsx':
+          'export function Providers(props: { children?: unknown }) { return props.children; }\n',
+      },
+    );
+
+    expect(byName('third-party child')).toMatchObject({
+      symbols: ['src/Providers.tsx#Providers'],
+      asserted: false,
+    });
+    expect(byName('through a provider helper')).toMatchObject({
+      symbols: ['src/Providers.tsx#Providers'],
+      asserted: false,
+    });
+    expect(byName('project child').asserted).toBe(true);
+  });
+
+  it('skips page reads made before the render or of what the test wrote, and mocks the test calls itself', () => {
+    const byName = inventory(`${header}
+      it('read before the render', () => {
+        const before = screen.queryByText('Hi');
+        render(<Dialog open title="Hi" />);
+        expect(before).toBeNull();
+      });
+      it('value the test wrote', () => {
+        document.body.className = 'dark';
+        render(<Dialog open />);
+        expect(document.body.className).toBe('dark');
+      });
+      it('mock called by the test', () => {
+        const onSave = vi.fn();
+        render(<Dialog onSave={onSave} />);
+        onSave();
+        expect(onSave).toHaveBeenCalled();
+      });
+    `);
+
+    for (const name of ['read before the render', 'value the test wrote', 'mock called by the test'])
+      expect(byName(name), name).toMatchObject({ symbols: ['src/Dialog.tsx#Dialog'], asserted: false });
+  });
+});
+
 describe('large component test files', () => {
   it('analyses many tests sharing a mock of the file without slowing down per test', () => {
     let source = `${header}

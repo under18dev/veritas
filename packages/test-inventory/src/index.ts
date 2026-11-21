@@ -181,6 +181,20 @@ interface Ctx {
 }
 
 /**
+ * A mock, or the part of an object holding mocks, by the variable at its root and the property path below it:
+ * `onSave` is `{ onSave, [] }`, `props.onSave` is `{ props, ['onSave'] }`. An empty path is the whole value.
+ */
+interface MockReference {
+  symbol: ts.Symbol;
+  path: string[];
+}
+
+/** Whether handing over `given` hands over the mock `read` checks: the whole value, or a property above it. */
+function covers(given: MockReference, read: MockReference): boolean {
+  return given.symbol === read.symbol && given.path.every((name, index) => read.path[index] === name);
+}
+
+/**
  * Code that runs a function: a call, a constructor call (`new X()`), a tagged template (`` tag`...` ``) or a JSX
  * element, which renders the component its tag names with the attributes as props.
  */
@@ -254,7 +268,12 @@ interface Target {
    * renderDialog = () => render(<Dialog onSave={onSave} />)`): asserting on how they were called checks what the
    * call did with them.
    */
-  observedBy?: ts.Symbol[];
+  observedBy?: MockReference[];
+  /**
+   * A rendered component whose content in the test is only what the test itself supplies as children (`<Providers>
+   * <Button>Go</Button></Providers>`): a query of the page may find just that content, so it does not observe it.
+   */
+  passThrough?: boolean;
   /**
    * The helper returns mocks (or an object holding them) it handed to this project call (`const props = { onNever:
    * vi.fn() }; render(<Card {...props} />); return props;`).
@@ -293,9 +312,9 @@ interface BodyAnalysis {
    */
   observed: Set<BodyAnalysis['calls'][number]>;
   /** Mocks (or objects holding mocks) declared outside the body that the body hands to project calls, by call. */
-  handed: Map<Invocation, Set<ts.Symbol>>;
-  /** Variables holding mocks or objects holding mocks, by the calls the body hands them to. */
-  mockHolders: Map<ts.Symbol, Set<Invocation>>;
+  handed: Map<Invocation, MockReference[]>;
+  /** Variables holding mocks or objects holding mocks, with the part handed over, by the calls they are handed to. */
+  mockHolders: Map<Invocation, MockReference[]>;
   /** An assertion of the body (or of a helper it calls) checks a Testing Library query of the document. */
   observesDocument: boolean;
 }
@@ -488,19 +507,22 @@ function analyzeBody(
       if (declaration.getSourceFile() === source) bind(bindingIdentifiers(declaration.name), [call], true);
 
     // An object holding mocks (`render(<Dialog {...props} />)`) is not followed as a value: only an assertion on how
-    // one of its mocks was called checks the call (`expect(props.onSave).toHaveBeenCalled()`).
-    for (const declaration of [...holders.mocks, ...holders.containers]) {
+    // one of the mocks handed over was called checks the call (`expect(props.onSave).toHaveBeenCalled()`).
+    for (const { declaration, path } of [
+      ...holders.mocks.map((declaration) => ({ declaration, path: [] as string[] })),
+      ...holders.containers,
+    ]) {
       if (declaration.getSourceFile() !== source) continue;
 
       for (const identifier of bindingIdentifiers(declaration.name)) {
         const symbol = checker.getSymbolAtLocation(identifier);
 
         if (!symbol) continue;
-        mockHolders.set(symbol, new Set([...(mockHolders.get(symbol) ?? []), call]));
+        mockHolders.set(call, [...(mockHolders.get(call) ?? []), { symbol, path }]);
 
         // A mock of an enclosing scope that a helper hands over (`const renderDialog = () => render(<Dialog
         // onSave={onSave} />)`) is checked where the helper is called, which this body's caller sees.
-        if (!contains(body, declaration)) handed.set(call, new Set([...(handed.get(call) ?? []), symbol]));
+        if (!contains(body, declaration)) handed.set(call, [...(handed.get(call) ?? []), { symbol, path }]);
       }
     }
 
@@ -614,8 +636,39 @@ function analyzeBody(
   );
   const asserted = new Set<Invocation>();
 
+  // Mocks the body calls itself (`onSave(); expect(onSave).toHaveBeenCalled()`): a call count on them may count the
+  // test's own calls, so it is not taken as checking project code.
+  const selfCalled: MockReference[] = [];
+
+  for (const node of descendants(body))
+    if (ts.isCallExpression(node) && !inNestedFunction(node, body)) {
+      const reference = mockReference(node.expression, checker);
+
+      if (reference) selfCalled.push(reference);
+    }
+  const checksSelfCalled = (assertion: ts.CallExpression): boolean => {
+    const subject = assertion.arguments[0];
+
+    if (
+      !subject ||
+      !isExpectCall(assertion) ||
+      !matcherNames(assertion).some((name) => MOCK_MATCHER.test(name))
+    )
+      return false;
+    const reference = mockReference(subject, checker);
+
+    return (
+      reference !== undefined &&
+      selfCalled.some(
+        (called) => called.symbol === reference.symbol && called.path.join('.') === reference.path.join('.'),
+      )
+    );
+  };
+
   // Either side of a comparison counts: `expect(['a', 'b']).toContain(result.status)` checks the result.
   for (const assertion of assertions) {
+    if (checksSelfCalled(assertion)) continue;
+
     const runsSubject = matcherNames(assertion).some((name) => name.startsWith('toThrow'));
 
     for (const value of comparedValues(assertion)) {
@@ -686,29 +739,45 @@ function analyzeBody(
   // observed by an assertion on that mock (`renderDialog(); expect(onSave).toHaveBeenCalled()`).
   const observed: BodyAnalysis['observed'] = new Set();
 
-  for (const assertion of assertions) {
-    const reached = assertionReach(assertion, checker);
+  // `document.body.className = 'dark'`: what the test writes to the page itself is not what a component rendered.
+  const documentWrites = descendants(body)
+    .filter(
+      (node): node is ts.BinaryExpression =>
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+        documentChain(node.left, checker) !== undefined,
+    )
+    .map((node) => ({ chain: documentChain(node.left, checker) as string, end: node.getEnd() }));
 
-    if (reached.document) documentChecks.push(assertion.getEnd());
+  for (const assertion of assertions) {
+    if (checksSelfCalled(assertion)) continue;
+    const reached = assertionReach(assertion, checker, documentWrites);
+
+    // Where the page was read: a query kept in a local before the render (`const before = screen.queryByText('x');
+    // render(<Dialog />); expect(before)…`) did not see what rendered after it.
+    documentChecks.push(...reached.documentReads);
 
     for (const root of reached.mockRoots) {
-      const symbol = checker.getSymbolAtLocation(root);
-      const handedTo = (symbol && mockHolders.get(symbol)) || new Set<Invocation>();
-      const results = new Set(trackedCalls(root));
+      const results = new Set(trackedCalls(root.identifier));
 
       for (const entry of calls)
         if (
-          (symbol && entry.target.observedBy?.includes(symbol)) ||
-          handedTo.has(entry.node) ||
+          entry.target.observedBy?.some((given) => covers(given, root)) ||
+          mockHolders.get(entry.node)?.some((given) => covers(given, root)) ||
           (entry.target.returnsMocks && results.has(entry.node))
         )
           observed.add(entry);
     }
   }
-  const lastDocumentCheck = Math.max(...documentChecks);
 
   for (const entry of calls)
-    if (entry.target.rendered && entry.node.getStart() < lastDocumentCheck) observed.add(entry);
+    if (
+      entry.target.rendered &&
+      !entry.target.passThrough &&
+      documentChecks.some((position) => entry.node.getStart() < position)
+    )
+      observed.add(entry);
   const awaitedProject = awaited.filter((node) => sourcesOf([node.expression]).length > 0);
   const checks = assertions.filter(
     (assertion) => !isAssertionCountCall(assertion) && !isTypeLevelAssertion(assertion),
@@ -740,60 +809,137 @@ const MOCK_MATCHER =
   /^(?:toHaveBeenCalled|toBeCalled|toHaveBeenLastCalledWith|toHaveBeenNthCalledWith|lastCalledWith|nthCalledWith|toHaveReturned|toReturn|toHaveLastReturned|toHaveNthReturned)/;
 
 /**
- * What an assertion reads, through local variables of its file: whether it checks the rendered document through a
- * Testing Library query or the global `document` (`const button = screen.getByRole('button'); expect(button)…`), and
- * the variables at the root of the
+ * What an assertion reads, through local variables of its file: where it reads the rendered page through a Testing
+ * Library query or the global `document` (`const button = screen.getByRole('button'); expect(button)…`), and the
  * mocks whose calls it checks (`expect(props.onSave).toHaveBeenCalled()`, `const calls = onSave.mock.calls`).
+ * A read kept in a local happens where the local is set, unless it sits in a function, which runs when called.
+ * Reads of what the test wrote to the page itself (`documentWrites`, before the read) do not count.
  */
 function assertionReach(
   assertion: ts.CallExpression,
   checker: ts.TypeChecker,
-): { document: boolean; mockRoots: ts.Identifier[] } {
+  documentWrites: { chain: string; end: number }[] = [],
+): { documentReads: number[]; mockRoots: (MockReference & { identifier: ts.Identifier })[] } {
   const seen = new Set<ts.Symbol>();
-  const mockRoots: ts.Identifier[] = [];
-  let readsDocument = false;
-  const symbolOf = (item: ts.Identifier) => valueSymbol(item, checker);
+  const mockRoots: (MockReference & { identifier: ts.Identifier })[] = [];
+  const documentReads: number[] = [];
   // `const onSave = props.onSave; expect(onSave)…` reads the mock of `props`.
-  const addRoot = (expression: ts.Expression, depth: number) => {
+  const addRoot = (expression: ts.Expression, below: string[], depth: number) => {
+    const path: string[] = [];
     let current = skipParens(expression);
 
-    while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current))
-      current = skipParens(current.expression);
+    while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
+      const name = memberName(current);
 
-    if (!ts.isIdentifier(current) || mockRoots.includes(current)) return;
-    mockRoots.push(current);
-    const initializer = variableInitializer(symbolOf(current)?.valueDeclaration);
+      // A computed member (`mocks[key]`) could be any of them: only the whole object covers it.
+      if (name === undefined) path.length = 0;
+      else path.unshift(name);
+      current = skipParens(current.expression);
+    }
+
+    if (!ts.isIdentifier(current)) return;
+    const symbol = valueSymbol(current, checker);
+
+    if (!symbol) return;
+    mockRoots.push({ identifier: current, symbol, path: [...path, ...below] });
+    const initializer = variableInitializer(symbol.valueDeclaration);
 
     if (initializer && depth < 5 && initializer.getSourceFile() === assertion.getSourceFile())
-      addRoot(initializer, depth + 1);
+      addRoot(initializer, [...path, ...below], depth + 1);
   };
-  const visit = (node: ts.Node, depth: number) => {
+  const visit = (node: ts.Node, depth: number, position: number) => {
     for (const item of [node, ...descendants(node)]) {
-      if ((ts.isCallExpression(item) && isDocumentQuery(item, checker)) || isDocumentRead(item, checker))
-        readsDocument = true;
+      if ((ts.isCallExpression(item) && isDocumentQuery(item, checker)) || isDocumentRead(item, checker)) {
+        const at = item !== node && inNestedFunction(item, node) ? assertion.getEnd() : position;
+        const chain = documentChain(item as ts.Expression, checker, true);
+        const written = documentWrites.some(
+          (write) =>
+            write.end < at &&
+            chain !== undefined &&
+            (chain === write.chain || chain.startsWith(`${write.chain}.`)),
+        );
 
-      if (ts.isPropertyAccessExpression(item) && item.name.text === 'mock') addRoot(item.expression, 0);
+        if (!written) documentReads.push(at);
+      }
+
+      if (ts.isPropertyAccessExpression(item) && item.name.text === 'mock') addRoot(item.expression, [], 0);
 
       if (!ts.isIdentifier(item)) continue;
-      const symbol = symbolOf(item);
+      const symbol = valueSymbol(item, checker);
 
       if (!symbol || seen.has(symbol)) continue;
       seen.add(symbol);
       const initializer = variableInitializer(symbol.valueDeclaration);
 
       if (initializer && depth < 20 && initializer.getSourceFile() === node.getSourceFile())
-        visit(initializer, depth + 1);
+        visit(initializer, depth + 1, initializer.getEnd());
     }
   };
-  const values = comparedValues(assertion);
 
-  for (const value of values) visit(value, 0);
+  for (const value of comparedValues(assertion)) visit(value, 0, assertion.getEnd());
   const subject = assertion.arguments[0];
 
   if (subject && isExpectCall(assertion) && matcherNames(assertion).some((name) => MOCK_MATCHER.test(name)))
-    addRoot(subject, 0);
+    addRoot(subject, [], 0);
 
-  return { document: readsDocument, mockRoots };
+  return { documentReads, mockRoots };
+}
+
+/** The name of a member access: `a.b` and `a['b']` name `b`; a computed `a[key]` names none. */
+function memberName(access: ts.PropertyAccessExpression | ts.ElementAccessExpression): string | undefined {
+  if (ts.isPropertyAccessExpression(access)) return access.name.text;
+  const argument = access.argumentExpression;
+
+  return ts.isStringLiteralLike(argument) || ts.isNumericLiteral(argument) ? argument.text : undefined;
+}
+
+/** The variable and property path a callee or assertion subject names (`onSave`, `props.onSave`), if plain. */
+function mockReference(expression: ts.Expression, checker: ts.TypeChecker): MockReference | undefined {
+  const path: string[] = [];
+  let current = skipParens(expression);
+
+  while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
+    const name = memberName(current);
+
+    if (name === undefined) return undefined;
+    path.unshift(name);
+    current = skipParens(current.expression);
+  }
+
+  if (!ts.isIdentifier(current)) return undefined;
+  const symbol = valueSymbol(current, checker);
+
+  return symbol ? { symbol, path } : undefined;
+}
+
+/**
+ * The member chain of the global `document` an expression reads or writes (`document.body.className`), without
+ * spaces. With `outermost`, the chain is extended over the accesses made on the expression.
+ */
+function documentChain(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  outermost = false,
+): string | undefined {
+  let top: ts.Node = expression;
+
+  while (
+    outermost &&
+    (ts.isPropertyAccessExpression(top.parent) || ts.isElementAccessExpression(top.parent)) &&
+    top.parent.expression === top
+  )
+    top = top.parent;
+  let root: ts.Expression = skipParens(top as ts.Expression);
+
+  while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root))
+    root = skipParens(root.expression);
+
+  if (!ts.isIdentifier(root) || root.text !== 'document' || root === top) return undefined;
+  const declarations = checker.getSymbolAtLocation(root)?.declarations ?? [];
+
+  if (!declarations.every((declaration) => declaration.getSourceFile().isDeclarationFile)) return undefined;
+
+  return top.getText().replace(/\s+/g, '');
 }
 
 /** What the global `document` exposes of the rendered page: `document.body`, `document.querySelector(...)`. */
@@ -1016,14 +1162,24 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
   const direct = resolveProjectCall(node, ctx.checker, ctx.projectSet, ctx.root);
   let info: CallInfo;
 
-  // A JSX element renders the component its tag names: what that component (or a local component of the test file
-  // and whatever it calls) produces is in the document.
+  // A JSX element renders the component its tag names once it is mounted: what that component (or a local component
+  // of the test file and whatever it calls) produces is in the document. An element that is only created
+  // (`expect(<Dialog />).toBeTruthy()`, `const unused = <Dialog />`) runs nothing.
   const rendered = isJsxInvocation(node);
+
+  if (rendered && !mountedJsx(node, ctx)) {
+    ctx.callInfo.set(node, none);
+
+    return none;
+  }
+  const passThrough = rendered && suppliesOnlyForeignChildren(node, ctx);
 
   if (direct)
     info = {
       ...none,
-      targets: [{ symbol: direct, ownArgs: true, assertedInside: false, flowsToResult: true, rendered }],
+      targets: [
+        { symbol: direct, ownArgs: true, assertedInside: false, flowsToResult: true, rendered, passThrough },
+      ],
     };
   else {
     const helper = helperBody(node, ctx);
@@ -1081,6 +1237,149 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
   ctx.callInfo.set(node, info);
 
   return info;
+}
+
+/** Functions that mount the element they are given: Testing Library, react-dom, react-test-renderer, Enzyme. */
+const MOUNTING_FUNCTIONS = new Set([
+  'render',
+  'rerender',
+  'hydrate',
+  'hydrateRoot',
+  'mount',
+  'shallow',
+  'create',
+  'renderToString',
+  'renderToStaticMarkup',
+]);
+
+/**
+ * Whether a JSX element is mounted: it (or the JSX tree it sits in) is given to a function that mounts it, to a
+ * function of the test code or the project (a render helper), or is returned by a function (a component or a helper,
+ * judged where that is used), directly or through a local variable that is.
+ */
+function mountedJsx(node: ts.JsxSelfClosingElement | ts.JsxOpeningElement, ctx: Ctx): boolean {
+  return mountedExpression(ts.isJsxOpeningElement(node) ? node.parent : node, ctx, 0);
+}
+
+function mountedExpression(expression: ts.Node, ctx: Ctx, depth: number): boolean {
+  let current = expression;
+
+  for (;;) {
+    const parent = current.parent;
+
+    if (
+      ts.isJsxElement(parent) ||
+      ts.isJsxFragment(parent) ||
+      ts.isJsxExpression(parent) ||
+      ts.isJsxAttribute(parent) ||
+      ts.isJsxAttributes(parent) ||
+      ts.isJsxOpeningElement(parent) ||
+      ts.isJsxSelfClosingElement(parent) ||
+      ts.isParenthesizedExpression(parent) ||
+      ts.isAsExpression(parent) ||
+      ts.isArrayLiteralExpression(parent) ||
+      (ts.isConditionalExpression(parent) && parent.condition !== current) ||
+      (ts.isBinaryExpression(parent) &&
+        [
+          ts.SyntaxKind.AmpersandAmpersandToken,
+          ts.SyntaxKind.BarBarToken,
+          ts.SyntaxKind.QuestionQuestionToken,
+        ].includes(parent.operatorToken.kind))
+    ) {
+      current = parent;
+      continue;
+    }
+    break;
+  }
+  const parent = current.parent;
+
+  if (ts.isReturnStatement(parent) || (ts.isArrowFunction(parent) && parent.body === current)) return true;
+
+  if (
+    (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
+    parent.arguments?.includes(current as ts.Expression)
+  ) {
+    const callee = skipParens(parent.expression);
+    const name = ts.isIdentifier(callee)
+      ? callee.text
+      : ts.isPropertyAccessExpression(callee)
+        ? callee.name.text
+        : undefined;
+
+    return (
+      (name !== undefined && MOUNTING_FUNCTIONS.has(name)) ||
+      helperBody(parent, ctx) !== undefined ||
+      resolveProjectCall(parent, ctx.checker, ctx.projectSet, ctx.root) !== undefined
+    );
+  }
+
+  // `const ui = <Dialog />; render(ui)`.
+  if (
+    ts.isVariableDeclaration(parent) &&
+    parent.initializer === current &&
+    ts.isIdentifier(parent.name) &&
+    depth < 3
+  ) {
+    const symbol = ctx.checker.getSymbolAtLocation(parent.name);
+
+    return (symbol ? referencesOf(symbol, parent.getSourceFile(), ctx.checker) : []).some(
+      (item) => item !== parent.name && mountedExpression(item, ctx, depth + 1),
+    );
+  }
+
+  return false;
+}
+
+const referencesCache = new WeakMap<ts.SourceFile, Map<ts.Symbol, ts.Identifier[]>>();
+
+/** The identifiers of a file that name a symbol, indexed once per file. */
+function referencesOf(symbol: ts.Symbol, source: ts.SourceFile, checker: ts.TypeChecker): ts.Identifier[] {
+  let references = referencesCache.get(source);
+
+  if (!references) {
+    references = new Map();
+
+    for (const item of descendants(source)) {
+      if (!ts.isIdentifier(item)) continue;
+      const named = checker.getSymbolAtLocation(item);
+
+      if (named) {
+        const list = references.get(named);
+
+        if (list) list.push(item);
+        else references.set(named, [item]);
+      }
+    }
+    referencesCache.set(source, references);
+  }
+
+  return references.get(symbol) ?? [];
+}
+
+/**
+ * Whether a rendered element's own children hold no component of the project or the test: only text, intrinsic or
+ * third-party elements and values (`<Providers><Button>Go</Button></Providers>`, `<Providers>{children}</Providers>`).
+ * Without children, the content is the component's own.
+ */
+function suppliesOnlyForeignChildren(
+  node: ts.JsxSelfClosingElement | ts.JsxOpeningElement,
+  ctx: Ctx,
+): boolean {
+  if (!ts.isJsxOpeningElement(node)) return false;
+  const children = node.parent.children.filter(
+    (child) => !(ts.isJsxText(child) && child.containsOnlyTriviaWhiteSpaces),
+  );
+
+  if (children.length === 0) return false;
+
+  return !children.some((child) =>
+    [child, ...descendants(child)].some(
+      (item) =>
+        isJsxInvocation(item) &&
+        (resolveProjectCall(item, ctx.checker, ctx.projectSet, ctx.root) !== undefined ||
+          helperBody(item, ctx) !== undefined),
+    ),
+  );
 }
 
 /** `X.method(...)` or `X.a.b(...)` where `X` is a value declared in a project file. */
@@ -1209,10 +1508,11 @@ function helperInfo(body: ts.Node, ctx: Ctx): CallInfo {
       if (ts.isIdentifier(item)) {
         const symbol = valueSymbol(item, ctx.checker);
 
-        for (const call of (symbol && analysis.mockHolders.get(symbol)) || []) returnedMocks.add(call);
+        for (const [call, given] of analysis.mockHolders)
+          if (given.some((reference) => reference.symbol === symbol)) returnedMocks.add(call);
       }
   // Mocks the caller can see: declared outside this helper.
-  const outside = (symbol: ts.Symbol) =>
+  const outside = ({ symbol }: MockReference) =>
     !(symbol.declarations ?? []).some((declaration) => contains(body, declaration));
 
   for (const entry of analysis.calls) {
@@ -1223,17 +1523,19 @@ function helperInfo(body: ts.Node, ctx: Ctx): CallInfo {
       analysis.observed.has(entry);
     const flowsToResult = target.flowsToResult && analysis.returned.has(node);
     // What a nested helper does with a mock it is given is decided inside it, where its own targets record it.
-    const handed = helperBody(node, ctx) ? [] : [...(analysis.handed.get(node) ?? [])];
+    const handed = helperBody(node, ctx) ? [] : (analysis.handed.get(node) ?? []);
     const previous = bySymbol.get(target.symbol);
-    const observedBy = [
-      ...new Set([...(previous?.observedBy ?? []), ...(target.observedBy ?? []), ...handed]),
-    ].filter(outside);
+    const observedBy = [...(previous?.observedBy ?? []), ...(target.observedBy ?? []), ...handed].filter(
+      outside,
+    );
     bySymbol.set(target.symbol, {
       symbol: target.symbol,
       ownArgs: false,
       assertedInside: assertedInside || previous?.assertedInside === true,
       flowsToResult: flowsToResult || previous?.flowsToResult === true,
       rendered: target.rendered === true || previous?.rendered === true,
+      // Pass-through only if every rendering of it in the helper is.
+      passThrough: target.passThrough === true && (previous === undefined || previous.passThrough === true),
       returnsMocks: returnedMocks.has(node) || previous?.returnsMocks === true,
       ...(observedBy.length > 0 ? { observedBy } : {}),
     });
@@ -1275,6 +1577,9 @@ function importsVitestRuntime(source: ts.SourceFile): boolean {
     if (!ts.isStringLiteral(statement.moduleSpecifier) || statement.moduleSpecifier.text !== 'vitest')
       return false;
     const bindings = statement.importClause?.namedBindings;
+
+    // `import * as vitest from 'vitest'` brings in all of it.
+    if (bindings && ts.isNamespaceImport(bindings)) return true;
 
     return (
       bindings !== undefined &&
@@ -1386,7 +1691,7 @@ function mockHoldersPassed(call: Invocation, checker: ts.TypeChecker): MockHolde
 /** What `mockHoldersPassed` finds; a member path names the property of a container that was passed. */
 interface MockHolders {
   mocks: ts.VariableDeclaration[];
-  containers: ts.VariableDeclaration[];
+  containers: { declaration: ts.VariableDeclaration; path: string[] }[];
 }
 
 const mockHoldersCache = new WeakMap<Invocation, MockHolders>();
@@ -1406,8 +1711,12 @@ function invocationsGiven(declaration: ts.VariableDeclaration, checker: ts.TypeC
     // Only shared setup can run before a test body (see `runsBefore`); calls inside tests are left out here.
     for (const node of descendants(source))
       if (isInvocation(node) && runsBefore(node, undefined))
-        for (const mock of mockHoldersPassed(node, checker).mocks)
-          given.set(mock, [...(given.get(mock) ?? []), node]);
+        for (const mock of mockHoldersPassed(node, checker).mocks) {
+          const list = given.get(mock);
+
+          if (list) list.push(node);
+          else given.set(mock, [node]);
+        }
     invocationsGivenCache.set(source, given);
   }
 
@@ -1416,12 +1725,16 @@ function invocationsGiven(declaration: ts.VariableDeclaration, checker: ts.TypeC
 
 function findMockHolders(call: Invocation, checker: ts.TypeChecker): MockHolders {
   const mocks = new Set<ts.VariableDeclaration>();
-  const containers = new Set<ts.VariableDeclaration>();
-  const followed = new Set<ts.Node>();
+  const containers = new Map<string, { declaration: ts.VariableDeclaration; path: string[] }>();
+  const followed = new Set<string>();
+  const ids = new Map<ts.Node, number>();
   const values = [...argumentsOf(call)];
-  const follow = (node: ts.Node, expressions: ts.Expression[]) => {
-    if (followed.has(node) || followed.size >= 20) return;
-    followed.add(node);
+  const follow = (node: ts.Node, key: string, expressions: ts.Expression[]) => {
+    if (!ids.has(node)) ids.set(node, ids.size);
+    const id = `${ids.get(node)}:${key}`;
+
+    if (followed.has(id) || followed.size >= 20) return;
+    followed.add(id);
     values.push(...expressions);
   };
 
@@ -1433,7 +1746,7 @@ function findMockHolders(call: Invocation, checker: ts.TypeChecker): MockHolders
         const fn = localFunction(skipParens(item.expression), checker);
 
         if (fn && isFunctionLike(fn) && fn.body)
-          follow(fn, ts.isBlock(fn.body) ? returnedExpressions(fn.body) : [fn.body as ts.Expression]);
+          follow(fn, '', ts.isBlock(fn.body) ? returnedExpressions(fn.body) : [fn.body as ts.Expression]);
       }
 
       if (!ts.isIdentifier(item)) continue;
@@ -1446,14 +1759,16 @@ function findMockHolders(call: Invocation, checker: ts.TypeChecker): MockHolders
       if (holding === 'mock') mocks.add(declaration as ts.VariableDeclaration);
 
       if (holding === 'container' && declaration && ts.isVariableDeclaration(declaration)) {
-        containers.add(declaration);
-        follow(declaration, valuesOf(declaration, checker));
+        // `title={props.title}` hands over only `title`; `{...props}` or `props` hands over all of it.
+        const path = memberPath(item);
+        containers.set(`${ids.get(declaration) ?? declaration.pos}:${path.join('.')}`, { declaration, path });
+        follow(declaration, path.join('.'), memberValues(valuesOf(declaration, checker), path));
       }
 
       // `renderHook((props) => useAutoSave(props), { initialProps: params })` calls the hook with `params`.
       const initialProps = declaration && renderHookInitialProps(declaration, checker);
 
-      if (declaration && initialProps) follow(declaration, [initialProps]);
+      if (declaration && initialProps) follow(declaration, '', [initialProps]);
 
       // `const run = vi.spyOn(source, 'run'); wrap(source)`: the spy watches a method of what is passed.
       for (const spy of symbol ? (spiesOn(item.getSourceFile(), checker).get(symbol) ?? []) : [])
@@ -1461,7 +1776,54 @@ function findMockHolders(call: Invocation, checker: ts.TypeChecker): MockHolders
     }
   }
 
-  return { mocks: [...mocks], containers: [...containers] };
+  return { mocks: [...mocks], containers: [...containers.values()] };
+}
+
+/** The plain member path read below an identifier: `props.a.b` gives `['a', 'b']`; a computed member ends it. */
+function memberPath(identifier: ts.Identifier): string[] {
+  const path: string[] = [];
+  let current: ts.Node = identifier;
+
+  while (
+    (ts.isPropertyAccessExpression(current.parent) || ts.isElementAccessExpression(current.parent)) &&
+    current.parent.expression === current
+  ) {
+    const name = memberName(current.parent);
+
+    if (name === undefined) break;
+    path.push(name);
+    current = current.parent;
+  }
+
+  return path;
+}
+
+/**
+ * The values below a member path of what a variable is given: in `{ current: editor }`, `current` is `editor`. A value
+ * whose shape is not an object literal is kept whole.
+ */
+function memberValues(values: ts.Expression[], path: string[]): ts.Expression[] {
+  if (path.length === 0) return values;
+  const [name, ...rest] = path;
+
+  return values.flatMap((value) => {
+    const object = skipParens(value);
+
+    if (!ts.isObjectLiteralExpression(object)) return [value];
+    const found = object.properties.flatMap((property) =>
+      ts.isSpreadAssignment(property)
+        ? [property.expression]
+        : property.name && ts.isIdentifier(property.name) && property.name.text === name
+          ? ts.isPropertyAssignment(property)
+            ? [property.initializer]
+            : ts.isShorthandPropertyAssignment(property)
+              ? [property.name]
+              : []
+          : [],
+    );
+
+    return memberValues(found, rest);
+  });
 }
 
 /**
@@ -1513,6 +1875,8 @@ function holdsMock(declaration: ts.VariableDeclaration, checker: ts.TypeChecker)
 }
 
 const mockHoldingCache = new WeakMap<ts.VariableDeclaration, 'mock' | 'container' | null>();
+const deciding = new Set<ts.VariableDeclaration>();
+let cycleSeen = false;
 
 /**
  * What a variable holds: a Vitest mock (`const onSave = vi.fn()`, or a `let` only ever assigned mocks in a hook), an
@@ -1525,8 +1889,17 @@ function mockHolding(
   const cached = mockHoldingCache.get(declaration);
 
   if (cached !== undefined) return cached ?? undefined;
-  // Cycles (`a = { b }; b = { a }`) see the variable as holding nothing while it is decided.
-  mockHoldingCache.set(declaration, null);
+
+  // Cycles (`a = { b }; b = { a }`) see a variable being decided as holding nothing. What is decided meanwhile
+  // depends on that guess, so it is not kept; the variable the cycle started from is decided in full.
+  if (deciding.has(declaration)) {
+    cycleSeen = true;
+
+    return undefined;
+  }
+  deciding.add(declaration);
+  const outerCycle = cycleSeen;
+  cycleSeen = false;
   const kinds = valuesOf(declaration, checker).map((value) => mockValue(value, checker, 0));
   const result =
     kinds.length > 0 && kinds.every((kind) => kind === 'mock')
@@ -1534,7 +1907,10 @@ function mockHolding(
       : kinds.some((kind) => kind !== undefined)
         ? 'container'
         : undefined;
-  mockHoldingCache.set(declaration, result ?? null);
+  deciding.delete(declaration);
+
+  if (!cycleSeen || deciding.size === 0) mockHoldingCache.set(declaration, result ?? null);
+  cycleSeen = outerCycle || (cycleSeen && deciding.size > 0);
 
   return result;
 }
@@ -1779,7 +2155,12 @@ function assignmentsTo(symbol: ts.Symbol, source: ts.SourceFile, checker: ts.Typ
         continue;
       const target = checker.getSymbolAtLocation(node.left);
 
-      if (target) found.set(target, [...(found.get(target) ?? []), node.right]);
+      if (target) {
+        const list = found.get(target);
+
+        if (list) list.push(node.right);
+        else found.set(target, [node.right]);
+      }
     }
     assignments = found;
     assignmentsCache.set(source, assignments);
