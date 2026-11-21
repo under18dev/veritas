@@ -41,8 +41,121 @@ describe('run context', () => {
       runCommand(process.execPath, ['-e', 'process.exit(3)'], { cwd: root, timeoutMs: 20_000 }),
     );
     expect(events).toEqual([
+      expect.objectContaining({ event: 'process-start', cwd: '.', level: 'debug' }),
       expect.objectContaining({ event: 'process', cwd: '.', exitCode: 3, timedOut: false, level: 'debug' }),
     ]);
+  });
+
+  it('sends output lines as events only when asked, without terminal escapes', async () => {
+    const root = tmp();
+    const script = "process.stdout.write('one\\n\\u001b[32mtwo\\u001b[0m\\n'); process.stderr.write('three')";
+    const run = async (logOutput: boolean) => {
+      const events: LogEvent[] = [];
+      await withRunContext({ root, sinks: [(e) => events.push(e)] }, () =>
+        runCommand(process.execPath, ['-e', script], { cwd: root, timeoutMs: 20_000, logOutput }),
+      );
+
+      return events.filter((e) => e.event === 'process-output').map((e) => [e.stream, e.message]);
+    };
+    expect(await run(false)).toEqual([]);
+    expect(await run(true)).toEqual([
+      ['stdout', expect.stringMatching(/: one$/)],
+      ['stdout', expect.stringMatching(/: two$/)],
+      ['stderr', expect.stringMatching(/: three$/)],
+    ]);
+  });
+
+  it('never sends a private key spread over lines, even split between chunks, and cuts long lines', async () => {
+    const root = tmp();
+    const script = [
+      'const w = (t) => process.stdout.write(t);',
+      "w('before\\n-----BEGIN PRIV');",
+      'setTimeout(() => {',
+      "  w('ATE KEY-----\\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\\n-----END PRIVATE KEY-----\\nafter\\n');",
+      "  w('x'.repeat(100000));",
+      "  w('y'.repeat(100000) + '\\nlast');",
+      '}, 100);',
+    ].join('\n');
+    const events: LogEvent[] = [];
+    await withRunContext({ root, sinks: [(e) => events.push(e)] }, () =>
+      runCommand(process.execPath, ['-e', script], { cwd: root, timeoutMs: 20_000, logOutput: true }),
+    );
+    const messages = events
+      .filter((e) => e.event === 'process-output')
+      .map((e) => e.message.replace(/^\S+: /, ''));
+    // The long line is one word that runs past the cut, so none of it is shown.
+    expect(messages).toEqual(['before', '[REDACTED]', 'after', '...', 'last']);
+  });
+
+  /** The process-output messages of a Node.js script run with logOutput, without the `node: ` prefix. */
+  const outputOf = async (script: string, env?: Record<string, string>) => {
+    const root = tmp();
+    const events: LogEvent[] = [];
+    await withRunContext({ root, sinks: [(e) => events.push(e)] }, () =>
+      runCommand(process.execPath, ['-e', script], {
+        cwd: root,
+        timeoutMs: 20_000,
+        logOutput: true,
+        ...(env ? { env } : {}),
+      }),
+    );
+
+    return events.filter((e) => e.event === 'process-output').map((e) => e.message.replace(/^\S+: /, ''));
+  };
+
+  it('never shows part of a secret that crosses the cut of a long line', async () => {
+    const ghp = `ghp_${'A'.repeat(36)}`;
+    const sk = `sk-${'b'.repeat(40)}`;
+    const name = 'VERITAS_TEST_CUT_TOKEN';
+    const secret = 'Zq9vWm2xRt7yPk4sLc8n';
+    const lines = [
+      `${'f '.repeat(145)}${ghp} tail`,
+      `${'g'.repeat(290)} ${sk} tail`,
+      `${'h '.repeat(146)}${secret}x`,
+    ];
+    process.env[name] = secret;
+
+    try {
+      const messages = await outputOf(
+        `process.stdout.write(${JSON.stringify(lines.join('\n'))} + '\\n' + process.env.SHOWN)`,
+        { SHOWN: `${'i '.repeat(147)}${secret} end` },
+      );
+      expect(messages).toHaveLength(4);
+
+      for (const message of messages) {
+        expect(message.length).toBeLessThanOrEqual(303);
+        expect(message).not.toMatch(/ghp_A|sk-b|Zq9v/);
+      }
+      expect(messages[0]).toBe(`${'f '.repeat(145).trimEnd()} [REDACTED]...`);
+      expect(messages[1]).toBe(`${'g'.repeat(290)}...`);
+      expect(messages[2]).toBe(`${'h '.repeat(146).trimEnd()}...`);
+    } finally {
+      delete process.env[name];
+    }
+  });
+
+  it('redacts a secret whose value is on the line after its key', async () => {
+    const token = 'abcDEF0123456789ghiJKL';
+    const messages = await outputOf(
+      `process.stdout.write('password:\\n  hunter2secretvalue\\nAuthorization: Bearer\\n${token}\\nplain\\n')`,
+    );
+    expect(messages).toEqual(['password:', '[REDACTED]', 'Authorization: Bearer', '[REDACTED]', 'plain']);
+  });
+
+  it('removes every terminal escape and control character, keeps the last redraw of a line and whole characters', async () => {
+    const script = [
+      'const w = (t) => process.stdout.write(t);',
+      "w('a\\u001b]52;c;c2VjcmV0\\u0007b\\u001b]0;title\\u001b\\\\c\\u001b[>cd\\u0007e\\u001b[1;2Hf\\u001b(Bg\\n');",
+      "w('10%\\r20%\\r30%\\r\\n');",
+      "w('crlf\\r');",
+      'setTimeout(() => {',
+      "  w('\\nhalf');",
+      "  const bytes = Buffer.from('é字');",
+      '  w(bytes.subarray(0, 1));',
+      '  setTimeout(() => { w(bytes.subarray(1, 4)); setTimeout(() => w(bytes.subarray(4)), 50); }, 50);',
+      '}, 50);',
+    ].join('\n');
+    expect(await outputOf(script)).toEqual(['abcdefg', '30%', 'crlf', 'halfé字']);
   });
 
   it('never writes a trace larger than its cap in UTF-8 bytes, truncation line included', () => {

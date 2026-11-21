@@ -128,7 +128,7 @@ async function runWasm(smt: string, options: SolveOptions): Promise<SolverRun> {
   const result = await runCommand(
     process.execPath,
     [...(memoryMb ? [`--max-old-space-size=${memoryMb}`] : []), script],
-    { cwd: process.cwd(), timeoutMs: options.timeoutMs, input: smt, signal: options.signal },
+    { label: 'z3', cwd: process.cwd(), timeoutMs: options.timeoutMs, input: smt, signal: options.signal },
   );
   const base = {
     engine: 'z3-wasm' as const,

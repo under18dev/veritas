@@ -26,6 +26,7 @@ import {
   type FormalClaim,
   hashValue,
   initProject,
+  type LogEvent,
   leanToolCandidates,
   loadConfig,
   newRunId,
@@ -47,6 +48,7 @@ import {
   stableId,
   VeritasConfig,
   VeritasError,
+  withRunContext,
   workspacePackages,
 } from '../src/index.js';
 
@@ -450,6 +452,22 @@ describe('pipeline', () => {
     ];
     await runStages(stages, baseCtx());
     expect(seen).toBe(42);
+  });
+
+  it('sends at most 200 stage messages as events per stage, and keeps them all in the result', async () => {
+    const ctx = baseCtx();
+    const events: LogEvent[] = [];
+    const messages = Array.from({ length: 250 }, (_, i) => `message ${i}`);
+    const stages: Stage[] = [
+      { name: 'index', dependsOn: [], run: async () => ({ status: 'succeeded', messages }) },
+    ];
+    const results = await withRunContext({ root: ctx.root, sinks: [(e) => events.push(e)] }, () =>
+      runStages(stages, ctx),
+    );
+    const sent = events.filter((e) => e.event === 'stage-message').map((e) => e.message);
+    expect(results[0]?.messages).toHaveLength(250);
+    expect(sent).toHaveLength(201);
+    expect(sent.at(-1)).toBe('50 more message(s) not sent as events');
   });
 });
 

@@ -153,6 +153,7 @@ async function sandboxCall(options: Parameters<typeof callInSandbox>[0]): Promis
     runner,
   ];
   const result = await runCommand(sandbox.node, args, {
+    label: 'sandbox',
     cwd: root,
     timeoutMs: options.timeoutMs,
     input: JSON.stringify({
