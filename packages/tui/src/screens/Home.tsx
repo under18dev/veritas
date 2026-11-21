@@ -83,5 +83,8 @@ export function abbreviateHome(file: string, home = homedir()): string {
   if (!home || home === path.sep) return file;
   if (file === home) return '~';
 
-  return file.startsWith(home + path.sep) ? `~${file.slice(home.length)}` : file;
+  const rest = file.slice(home.length);
+
+  // Either separator follows the home directory: `/` everywhere, `\` on Windows too.
+  return file.startsWith(home) && (rest.startsWith('/') || rest.startsWith(path.sep)) ? `~${rest}` : file;
 }

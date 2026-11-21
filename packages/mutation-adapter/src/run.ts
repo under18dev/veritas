@@ -462,7 +462,12 @@ export function baselineFailure(stderr: string, root: string): string {
     .find((match) => match !== null);
 
   if (!first) return summary;
-  const file = path.isAbsolute(first[1] as string) ? path.relative(root, first[1] as string) : first[1];
+  // Project-relative with `/`, as the other paths in the detail.
+  const file = (
+    path.isAbsolute(first[1] as string) ? path.relative(root, first[1] as string) : (first[1] as string)
+  )
+    .split(path.sep)
+    .join('/');
   const message = (first[2] as string).length > 300 ? `${(first[2] as string).slice(0, 300)}…` : first[2];
 
   return `${summary}\nfirst error: ${file}: ${message}`;
