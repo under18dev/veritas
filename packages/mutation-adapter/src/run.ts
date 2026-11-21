@@ -154,22 +154,22 @@ export function rootTsconfigHasNoFiles(root: string): boolean {
 }
 
 /**
- * What to add to the detail of a timed-out run, from what mutator printed: when the baseline finished but mutator
- * had not started running mutants, the time went to the work in between (most likely type-checking the mutants,
- * unless that was off), which `--time-budget` does not limit.
+ * What to add to the detail of a timed-out run, from what mutator printed: when the baseline finished but no mutant
+ * had finished, `--time-budget` (which only stops new mutants from starting) did not help. When mutator had not yet
+ * printed its plan of mutants to run, the time most likely went to type-checking them, unless that was off.
  */
-function timeoutHint(stderr: string, noTypecheck: boolean): string {
-  const progress = mutatorProgress(stderr);
+function timeoutHint(run: { stderr: string; stderrTail?: string }, noTypecheck: boolean): string {
+  const progress = mutatorProgress(`${run.stderr}\n${run.stderrTail ?? ''}`);
 
-  if (!progress.pastBaseline || progress.mutantsStarted) return '';
+  if (!progress.pastBaseline || progress.baselineFailed || progress.mutantFinished) return '';
 
   const before =
-    '. mutator finished the baseline ("dry run finished") but had not started running mutants when it was killed; its --time-budget only limits starting new mutants, so it did not apply';
+    '. mutator finished the baseline ("dry run finished") but no mutant had finished when it was killed; its --time-budget only stops new mutants from starting, so it did not end the run in time';
 
-  if (!noTypecheck && !progress.typecheckFinished)
-    return `${before}: it most likely spent the time type-checking the mutants. Set mutation.typecheck to "off" to skip that, or narrow the run with --since <ref>`;
+  if (!noTypecheck && !progress.mutantsPlanned)
+    return `${before}. mutator had not printed its plan of mutants to run, so it most likely spent the time type-checking the mutants. Set mutation.typecheck to "off" to skip that, or narrow the run with --since <ref>`;
 
-  return `${before}: the time went to preparing the mutants after the baseline. Narrow the run with --since <ref>, or raise mutation.timeoutMs`;
+  return `${before}. Narrow the run with --since <ref>, or raise mutation.timeoutMs`;
 }
 
 /**
@@ -452,7 +452,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
         options.testFiles === undefined
           ? ' (it ran every test the project config selects)'
           : ` (it ran ${options.testFiles.length} test file(s) that import the code in scope)`
-      }${timeoutHint(run.stderr, noTypecheck)}`,
+      }${timeoutHint(run, noTypecheck)}`,
     });
   }
 
@@ -514,11 +514,12 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     warnings.push('--kill-matrix was requested but the agent report has no killMatrix');
   }
   const counts = countMutants(mutants);
-  const budget = timeBudgetExhausted(run.stderr);
+  // On a very long run the head of stderr can fill up before mutator's last lines; its tail keeps them.
+  const budget = timeBudgetExhausted(run.stderr) ?? timeBudgetExhausted(run.stderrTail ?? '');
 
   if (budget !== null) {
     warnings.push(
-      `mutator's time budget of ${budget.seconds}s (75% of mutation.timeoutMs) ran out: ${budget.notRun} mutant(s) were not run, so the results cover only part of the code in scope. Narrow the run with --since <ref>, or raise mutation.timeoutMs`,
+      `mutator's time budget of ${budget.seconds}s ran out (75% of mutation.timeoutMs, or of what was left of it when mutator ran a second time): ${budget.notRun} mutant(s) were not run, so the results cover only part of the code in scope and mutation results are partial. Narrow the run with --since <ref>, or raise mutation.timeoutMs`,
     );
   } else if (counts.pending > 0) {
     warnings.push(

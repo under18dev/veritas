@@ -629,21 +629,16 @@ async function runInContext(
           ...(cacheMessage ? [cacheMessage] : []),
           `mutator ${result.backend.version ?? 'unknown'}: ${result.status}${result.detail ? ` (${result.detail})` : ''}`,
           ...(result.typecheck === 'off'
-            ? ['mutants were not type-checked (mutator ran with --no-typecheck)']
+            ? ['mutator ran with --no-typecheck: mutants were not type-checked']
             : result.typecheck === 'auto'
               ? [
-                  "mutator type-checked mutants with the project's TypeScript when it found it (typecheck: auto), and left out those that do not compile",
+                  "mutator was allowed to type-check mutants with the project's TypeScript (typecheck: auto) and leave out those that do not compile",
                 ]
               : []),
           `counts: ${JSON.stringify(Object.fromEntries(Object.entries(result.counts).filter(([, n]) => n > 0)))}`,
           ...result.warnings,
           ...(undecided > 0
             ? [`${undecided} mutant(s) not decided (pending or unknown); mutation results are partial`]
-            : []),
-          ...(result.timeBudgetExhausted?.notRun
-            ? [
-                `${result.timeBudgetExhausted.notRun} mutant(s) not run because mutator's time budget ran out; mutation results are partial`,
-              ]
             : []),
           ...(result.excludedFiles?.length
             ? [

@@ -219,30 +219,41 @@ export function transformErrorLine(stderr: string): string {
   return [line?.trim(), plugin && `plugin ${plugin}`].filter(Boolean).join(', ') || 'transform error';
 }
 
-/** `dry run finished in 21.4s`: mutator ran the tests without mutants and they passed. */
+/** `dry run finished in 21.4s`: mutator ran the tests without mutants. */
 const DRY_RUN_FINISHED = /^dry run finished in [\d.]+s/m;
-/** `[1538/12577] Killed   src/a.ts:3 ...` for each mutant run, or `progress: 1538/12577, ...` every 15 seconds. */
-const MUTANT_PROGRESS = /^(?:\[\d+\/\d+\] |progress: \d+\/\d+)/m;
-/** `typecheck (TypeScript 5.9.3): 1200 mutants in 81.0s`, printed when mutator has type-checked the mutants. */
-const TYPECHECK_FINISHED = /^typecheck \(TypeScript [^)]*\): \d+ mutants in /m;
+/** `tests fail without mutants: ...`: the baseline failed, so no mutant is going to run. */
+const BASELINE_FAILED = /^tests fail without mutants/m;
+/**
+ * `120 mutants, 100 to run (3 do not type-check)` and `estimated mutant execution: ~2m ...`: mutator printed its
+ * plan, which comes after it type-checked the mutants (when it does) and before it runs the first one.
+ */
+const MUTANTS_PLANNED = /^(?:\d+ mutants, \d+ to run|estimated mutant execution:)/m;
+/**
+ * `[1538/12577] Killed   src/a.ts:3 ...`, printed when a mutant finishes, or `progress: 1538/12577, ...`, printed
+ * every 15 seconds during a large run.
+ */
+const MUTANT_FINISHED = /^(?:\[\d+\/\d+\] |progress: \d+\/\d+)/m;
 /** `time budget of 450s exhausted: 11039 mutants not run`. */
 const BUDGET_EXHAUSTED = /^time budget of (\d+)s exhausted: (\d+) mutants not run/m;
 
 /**
  * How far a mutation run got, read from mutator's progress output on stderr: whether the baseline (dry run)
- * finished, whether mutator started running mutants, and whether the type check of the mutants finished.
+ * finished or failed, whether mutator printed its plan of mutants to run (past type-checking them), and whether
+ * any mutant had finished (or a progress line was printed).
  */
 export function mutatorProgress(stderr: string): {
   pastBaseline: boolean;
-  mutantsStarted: boolean;
-  typecheckFinished: boolean;
+  baselineFailed: boolean;
+  mutantsPlanned: boolean;
+  mutantFinished: boolean;
 } {
   const text = withoutDebug(stderr);
 
   return {
     pastBaseline: DRY_RUN_FINISHED.test(text),
-    mutantsStarted: MUTANT_PROGRESS.test(text),
-    typecheckFinished: TYPECHECK_FINISHED.test(text),
+    baselineFailed: BASELINE_FAILED.test(text),
+    mutantsPlanned: MUTANTS_PLANNED.test(text),
+    mutantFinished: MUTANT_FINISHED.test(text),
   };
 }
 

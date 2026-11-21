@@ -102,116 +102,142 @@ describe('mutation.typecheck', () => {
   });
 });
 
-describe('a timeout before any mutant ran', () => {
+describe('a timeout before any mutant had finished', () => {
   const hang = 'setInterval(() => {}, 1000);';
-
-  it('says mutator most likely spent the time type-checking, and how to avoid it', async () => {
-    const { root, bin } = stubCli(`console.error('generated 12577 mutants'); ${BASELINE} ${hang}`);
+  const timedOut = async (lines: string[], mutation: Record<string, unknown> = {}) => {
+    const { root, bin } = stubCli(
+      [...lines.map((l) => `console.error(${JSON.stringify(l)});`), hang].join('\n'),
+    );
     const r = await runMutation({
       root,
-      config: config({ timeoutMs: 1500 }),
+      config: config({ timeoutMs: 1500, ...mutation }),
       reportDir: path.join(root, 'out'),
       mutatorBin: bin,
     });
     expect(r.status).toBe('timeout');
     expect(r.mutants).toEqual([]);
-    expect(r.detail).toMatch(/had not started running mutants/);
-    expect(r.detail).toMatch(/most likely spent the time type-checking the mutants/);
-    expect(r.detail).toMatch(/mutation\.typecheck to "off"/);
-    expect(r.detail).toMatch(/--since <ref>/);
+
+    return r.detail ?? '';
+  };
+
+  it('blames type-checking, as most likely, when mutator had not printed its plan', async () => {
+    const detail = await timedOut(['generated 12577 mutants', 'dry run finished in 0.1s']);
+    expect(detail).toMatch(/no mutant had finished when it was killed/);
+    expect(detail).toMatch(/most likely spent the time type-checking the mutants/);
+    expect(detail).toMatch(/mutation\.typecheck to "off"/);
+    expect(detail).toMatch(/--since <ref>/);
   }, 30_000);
+
+  it('does not blame type-checking once mutator printed its plan of mutants to run', async () => {
+    for (const plan of [
+      ['120 mutants, 100 to run'],
+      ['120 mutants, 100 to run (3 do not type-check)', 'estimated mutant execution: ~2m (4 sessions)'],
+      [
+        'estimated mutant execution: ~2m (4 sessions; 0/100 historical timings, remaining costs from dry run)',
+      ],
+    ]) {
+      // The early type check alongside the dry run (with --since) says nothing about the main one.
+      const detail = await timedOut([
+        'typecheck (TypeScript 5.9.3): 40 mutants in 2.0s, alongside the dry run',
+        'dry run finished in 0.1s',
+        ...plan,
+      ]);
+      expect(detail).toMatch(/no mutant had finished when it was killed/);
+      expect(detail).not.toMatch(/type-checking/);
+      expect(detail).toMatch(/--since <ref>, or raise mutation\.timeoutMs/);
+    }
+  }, 60_000);
 
   it('does not blame type-checking when it was off', async () => {
-    const { root, bin } = stubCli(`${BASELINE} ${hang}`);
-    const r = await runMutation({
-      root,
-      config: config({ timeoutMs: 1500, typecheck: 'off' }),
-      reportDir: path.join(root, 'out'),
-      mutatorBin: bin,
-    });
-    expect(r.status).toBe('timeout');
-    expect(r.detail).toMatch(/had not started running mutants/);
-    expect(r.detail).not.toMatch(/type-checking/);
+    const detail = await timedOut(['dry run finished in 0.1s'], { typecheck: 'off' });
+    expect(detail).toMatch(/no mutant had finished/);
+    expect(detail).not.toMatch(/type-checking/);
   }, 30_000);
 
-  it('adds no hint when mutants were running, or the baseline never finished', async () => {
-    const running = stubCli(
-      `${BASELINE} console.error('[1/12577] Killed   src/a.ts:3 a > b -> a >= b'); ${hang}`,
-    );
-    const r = await runMutation({
-      root: running.root,
-      config: config({ timeoutMs: 1500 }),
-      reportDir: path.join(running.root, 'out'),
-      mutatorBin: running.bin,
-    });
-    expect(r.status).toBe('timeout');
-    expect(r.detail).not.toMatch(/had not started running mutants/);
-
-    const baseline = stubCli(hang);
-    const b = await runMutation({
-      root: baseline.root,
-      config: config({ timeoutMs: 1500 }),
-      reportDir: path.join(baseline.root, 'out'),
-      mutatorBin: baseline.bin,
-    });
-    expect(b.status).toBe('timeout');
-    expect(b.detail).not.toMatch(/had not started running mutants/);
-  }, 30_000);
+  it('adds no hint when a mutant had finished, the baseline failed or never finished', async () => {
+    for (const lines of [
+      ['dry run finished in 0.1s', '[1/12577] Killed   src/a.ts:3 a > b -> a >= b'],
+      ['dry run finished in 0.1s', 'progress: 0/12577, elapsed 15s, eta 18h'],
+      ['dry run finished in 0.1s', 'tests fail without mutants: test/a.test.ts'],
+      [],
+    ]) {
+      expect(await timedOut(lines)).not.toMatch(/no mutant had finished/);
+    }
+  }, 60_000);
 });
 
 describe('an exhausted time budget', () => {
-  it('records how many mutants were not run and suggests narrowing the run', async () => {
+  const budgetRun = async (noise: string) => {
     const { root, bin } = stubCli(
       [
         BASELINE,
+        noise,
         "console.error('[1/3] Killed   src/f.ts:2 a > 10 -> a >= 10');",
         "console.error('time budget of 45s exhausted: 2 mutants not run');",
         `fs.writeFileSync(dir + '/mutation.json', ${JSON.stringify(REPORT)});`,
         "console.log('{}');",
       ].join('\n'),
     );
-    const r = await runMutation({
+
+    return runMutation({
       root,
       config: config({ timeoutMs: 60_000 }),
       reportDir: path.join(root, 'out'),
       mutatorBin: bin,
       since: 'origin/main',
     });
+  };
+
+  it('records how many mutants were not run and suggests narrowing the run', async () => {
+    const r = await budgetRun('');
     expect(r.status).toBe('succeeded');
     expect(MutationRunResult.parse(r)).toEqual(r);
     expect(r.timeBudgetExhausted).toEqual({ seconds: 45, notRun: 2 });
     expect(r.counts.pending).toBe(2);
-    expect(r.warnings.join('\n')).toMatch(
-      /time budget of 45s .* ran out: 2 mutant\(s\) were not run.*--since <ref>, or raise mutation\.timeoutMs/,
+    const warnings = r.warnings.join('\n');
+    expect(warnings).toMatch(
+      /time budget of 45s ran out \(75% of mutation\.timeoutMs, or of what was left of it .*\): 2 mutant\(s\) were not run.*partial.*--since <ref>, or raise mutation\.timeoutMs/,
     );
+    // One message about the mutants not run, not a second generic one about pending mutants.
+    expect(warnings).not.toMatch(/are pending/);
   });
+
+  it('still finds the budget line after more stderr than the head buffer keeps', async () => {
+    // 11 MiB of output before the last lines: more than the 10 MiB kept from the head of stderr.
+    const r = await budgetRun(
+      "const chunk = 'x'.repeat(1023) + '\\n'; for (let i = 0; i < 11 * 1024; i++) process.stderr.write(chunk);",
+    );
+    expect(r.timeBudgetExhausted).toEqual({ seconds: 45, notRun: 2 });
+  }, 60_000);
 });
 
 describe('reading mutator progress', () => {
-  it('tells the baseline, mutant progress and the finished type check apart', () => {
+  it('tells the baseline, its failure, the plan and finished mutants apart', () => {
     expect(mutatorProgress('dry run finished in 21.4s\n')).toEqual({
       pastBaseline: true,
-      mutantsStarted: false,
-      typecheckFinished: false,
+      baselineFailed: false,
+      mutantsPlanned: false,
+      mutantFinished: false,
     });
     expect(
       mutatorProgress(
-        'dry run finished in 21.4s\ntypecheck (TypeScript 5.9.3): 1200 mutants in 81.0s\nprogress: 0/12577, elapsed 15s, eta 18h\n',
+        'dry run finished in 21.4s\n12577 mutants, 12000 to run\nprogress: 0/12000, elapsed 15s, eta 18h\n',
       ),
-    ).toEqual({ pastBaseline: true, mutantsStarted: true, typecheckFinished: true });
+    ).toEqual({ pastBaseline: true, baselineFailed: false, mutantsPlanned: true, mutantFinished: true });
     expect(
-      mutatorProgress('\u001b[2mdry run finished in 1.0s\u001b[22m\n[3/9] Survived src/a.ts:1 x -> y')
-        .mutantsStarted,
+      mutatorProgress('dry run finished in 0.1s\ntests fail without mutants: a.test.ts').baselineFailed,
     ).toBe(true);
+    const colored = mutatorProgress(
+      '\u001b[2mdry run finished in 1.0s\u001b[22m\n[3/9] Survived src/a.ts:1 x -> y',
+    );
+    expect(colored.pastBaseline).toBe(true);
+    expect(colored.mutantFinished).toBe(true);
   });
 
   it('reads the exhausted time budget', () => {
     expect(
       timeBudgetExhausted('x\ntime budget of 450s exhausted: 11039 mutants not run\nreport written'),
-    ).toEqual({
-      seconds: 450,
-      notRun: 11039,
-    });
+    ).toEqual({ seconds: 450, notRun: 11039 });
     expect(timeBudgetExhausted('report written to out')).toBeNull();
   });
 });
