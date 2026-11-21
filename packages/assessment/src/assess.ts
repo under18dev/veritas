@@ -256,7 +256,9 @@ export function assessTest(test: TestCase, input: AssessInput): TestAssessment {
   } else {
     outcome = 'inconclusive';
     rationale.push(
-      'linked to properties but killed no specification-relevant mutant or boundary coverage is partial',
+      ranMutants
+        ? 'linked to properties but killed no specification-relevant mutant or boundary coverage is partial'
+        : 'linked to properties, but it ran no mutant of this run (outside the mutation scope, or coverage not reported)',
     );
   }
 

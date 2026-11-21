@@ -107,6 +107,15 @@ describe('assessTest', () => {
     expect(killedOnly.vector.unknowns.join(' ')).not.toMatch(/no mutant of this run/);
   });
 
+  it('does not say a test outside the mutation scope killed no specification-relevant mutant', () => {
+    const t = testCase({ id: 'T-a', targetCalls: [call(['1000'])] });
+    const outside = assessTest(t, input({ mutants: [mutant('M-1', 'survived', [], ['T-b'])] }));
+    expect(outside.outcome).toBe('inconclusive');
+    expect(outside.rationale.join(' ')).toMatch(/ran no mutant of this run/);
+    const ran = assessTest(t, input({ mutants: [mutant('M-1', 'killed', ['T-b'], ['T-a', 'T-b'])] }));
+    expect(ran.rationale.join(' ')).toMatch(/killed no specification-relevant mutant/);
+  });
+
   it('is inconclusive, not disconnected, when the asserted call goes through an unresolved import', () => {
     const t = testCase({ id: 'T-a', calledSymbols: [], suspicions: ['unresolved_import'] });
     const a = assessTest(t, input());
