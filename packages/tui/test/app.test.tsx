@@ -7,6 +7,7 @@ import { App } from '../src/App.js';
 import type { TuiApi } from '../src/api.js';
 import { ago, duration } from '../src/components.js';
 import { abbreviateHome, nextSteps } from '../src/screens/Home.js';
+import { sortFindings } from '../src/screens/Results.js';
 import { appendLog, applyStageEvent, clock } from '../src/screens/Run.js';
 import { leaves, parseValue, setAt, validate } from '../src/screens/Settings.js';
 
@@ -338,17 +339,66 @@ describe('the TUI', () => {
     await until(app, 'Profile: quick');
   });
 
-  it('follows a run to a finding and its evidence', async () => {
+  it('lists runs with a verdict badge, finding count and time, and a run with sorted, colored findings', async () => {
+    const app = await open(fakeApi(), 1);
+    await until(app, ' inconclusive ');
+    expect(app.lastFrame()).toMatch(/inconclusive\s+2 findings\s+quick\s+\S+ ago\s+12\.3 s/);
+    await press(app, KEY.enter);
+    await until(app, 'boundary is not checked');
+    const frame = app.lastFrame() ?? '';
+    expect(frame).toMatch(/Run\s+inconclusive/);
+    expect(frame).toContain('1 test is weak');
+    expect(frame).toMatch(/✔ index 4 ms/);
+    expect(frame).toMatch(/! mutate partial 1\.6 s/);
+    expect(frame).toMatch(/1 counterexample\s+1 weak_test/);
+    // Most severe first, with the certainty.
+    const lines = frame.split('\n');
+    const high = lines.findIndex((l) => /HIGH\s+confirmed\s+returns 0 for 1000/.test(l));
+    const medium = lines.findIndex((l) => /MEDIUM\s+suspected\s+boundary is not checked/.test(l));
+    expect(high).toBeGreaterThan(-1);
+    expect(medium).toBeGreaterThan(high);
+    await press(app, 'e');
+    await until(app, 'counts per status');
+    expect(app.lastFrame()).toContain('1 proven_within_model');
+  });
+
+  it('follows a run to a finding, its evidence in sections, and the suggested next actions apart', async () => {
     const app = await open(fakeApi(), 1);
     await until(app, 'R-1');
     await press(app, KEY.enter);
     await until(app, 'boundary is not checked');
+    await press(app, KEY.down, KEY.enter);
+    await until(app, 'Why it was reported');
+    const frame = app.lastFrame() ?? '';
+    expect(frame).toMatch(/MEDIUM\s+suspected\s+weak_test/);
+    expect(frame).toContain('the test never uses 1000');
+    expect(frame).toContain('EVIDENCE recorded by the run');
+    expect(frame).toContain('Locations (1)');
+    expect(frame).toContain('test/a.test.ts');
+    // The rest is further down; the view scrolls.
+    for (let i = 0; i < 20; i++) await press(app, KEY.down);
+    await until(app, 'SUGGESTED next actions, not verified');
+    const end = app.lastFrame() ?? '';
+    expect(end).toContain('> add a test at 1000');
+    expect(end).toContain('T-1: weak_or_incomplete no boundary input');
+    expect(end).toContain('P-1 [proposed, docs] discount above 1000');
+  });
+
+  it('shows the finding and its IDs when the evidence of an older run cannot be read', async () => {
+    const app = await open(
+      fakeApi({
+        explain: () => {
+          throw new VeritasError('user', 'FINDING_NOT_FOUND', 'no finding F-1 in run R-2');
+        },
+      }),
+      1,
+    );
+    await until(app, 'R-1');
     await press(app, KEY.enter);
-    await until(app, 'next: add a test at 1000');
-    // The same lines as `veritas explain`, statements and assessments included.
-    expect(app.lastFrame()).toContain('quote   line 3: "orders over 1000 get a discount"');
-    expect(app.lastFrame()).toContain('assess  T-1: weak_or_incomplete - no boundary input');
-    expect(app.lastFrame()).toContain('property P-1 [proposed, docs] discount above 1000');
+    await until(app, 'boundary is not checked');
+    await press(app, KEY.down, KEY.enter);
+    await until(app, 'The linked evidence could not be read');
+    expect(app.lastFrame()).toContain('FINDING_NOT_FOUND');
   });
 
   it('records a decision only with a reason', async () => {
@@ -557,6 +607,15 @@ describe('helpers', () => {
     expect(appendLog(log, [])).toBe(log);
     expect(clock(0)).toBe('0:00');
     expect(clock(65_400)).toBe('1:05');
+  });
+
+  it('sorts findings by severity, then certainty', () => {
+    const f = (severity: string, certainty: string) => ({ ...FINDING, severity, certainty }) as Finding;
+    expect(
+      sortFindings([f('low', 'confirmed'), f('high', 'suspected'), f('high', 'confirmed')]).map(
+        (x) => `${x.severity}/${x.certainty}`,
+      ),
+    ).toEqual(['high/confirmed', 'high/suspected', 'low/confirmed']);
   });
 
   it('says what to do next, and formats durations and times', () => {
