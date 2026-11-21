@@ -67,6 +67,7 @@ export const jestTestRunner: TestRunnerProvider = {
     tests: ['it', 'test', 'xit', 'xtest', 'fit'],
     suites: ['describe', 'xdescribe', 'fdescribe'],
     modifiers: ['skip', 'only', 'todo', 'concurrent', 'each'],
+    expectedFailure: ['failing'],
     shorthands: { xit: 'skip', xtest: 'skip', xdescribe: 'skip', fit: 'only', fdescribe: 'only' },
     registrationFactories: ['each'],
     tableFactories: ['each'],

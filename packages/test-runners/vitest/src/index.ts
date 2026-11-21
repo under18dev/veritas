@@ -42,6 +42,7 @@ export const vitestTestRunner: TestRunnerProvider = {
     suites: ['describe'],
     modifiers: ['skip', 'only', 'todo', 'concurrent', 'each'],
     shorthands: {},
+    expectedFailure: ['fails'],
     registrationFactories: ['each', 'for', 'skipIf', 'runIf'],
     tableFactories: ['each', 'for'],
     hooks: {

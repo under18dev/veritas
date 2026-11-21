@@ -44,6 +44,7 @@ interface RunnerApi {
   suites: Set<string>;
   modifiers: Set<string>;
   shorthands: Map<string, TestCaseType['modifiers'][number]>;
+  expectedFailure: Set<string>;
   registrationFactories: Set<string>;
   tableFactories: Set<string>;
   beforeEach: Set<string>;
@@ -69,6 +70,7 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
     suites: new Set(recognition.suites),
     modifiers: new Set(recognition.modifiers),
     shorthands: new Map(Object.entries(recognition.shorthands)),
+    expectedFailure: new Set(recognition.expectedFailure),
     registrationFactories: new Set(recognition.registrationFactories),
     tableFactories: new Set(recognition.tableFactories),
     beforeEach: new Set(hooks.beforeEach),
@@ -96,6 +98,7 @@ let runner: RunnerApi = runnerApi({
   suites: [],
   modifiers: [],
   shorthands: {},
+  expectedFailure: [],
   registrationFactories: [],
   tableFactories: [],
   hooks: { beforeEach: [], beforeAll: [], afterEach: [], afterAll: [] },
@@ -4245,6 +4248,8 @@ function testRegistration(node: ts.CallExpression): Registration | undefined {
 
       if (implied !== undefined && !eachModifiers.includes(implied)) eachModifiers.unshift(implied);
 
+      if (chain.some((name) => runner.expectedFailure.has(name))) eachModifiers.push('expected_failure');
+
       return {
         name: literalString(node.arguments[0]),
         callback: callbackArgument(node),
@@ -4340,6 +4345,8 @@ function registration(node: ts.CallExpression, names: Set<string>): TestCaseType
   );
   // `xit(...)` is `it.skip(...)`.
   const implied = runner.shorthands.get(name);
+
+  if (chain.some((member) => runner.expectedFailure.has(member))) found.push('expected_failure');
 
   return implied !== undefined && !found.includes(implied) ? [implied, ...found] : found;
 }

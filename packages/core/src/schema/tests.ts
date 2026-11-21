@@ -8,7 +8,8 @@ export const TestCase = z.object({
   name: z.string(),
   suitePath: z.array(z.string()),
   location: Location,
-  modifiers: z.array(z.enum(['skip', 'only', 'todo', 'concurrent', 'each'])),
+  /** `expected_failure`: the test passes only when it fails (Vitest's `it.fails`, Jest's `it.failing`). */
+  modifiers: z.array(z.enum(['skip', 'only', 'todo', 'concurrent', 'each', 'expected_failure'])),
   assertionCount: z.number().int().nonnegative(),
   calledSymbols: z.array(z.string()),
   /** Calls to project symbols with their literal arguments (null when not a literal), used for boundary coverage. */

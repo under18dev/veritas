@@ -194,7 +194,14 @@ export function assessTest(
       test.suspicions.includes('no_assertion') ||
       (!assertedCall && !linkUnknown));
 
-  if (typeLevelOnly) {
+  if (test.modifiers.includes('expected_failure')) {
+    // An inverted test passes only when what it asserts fails, so a kill, a survivor or a passing run says the
+    // opposite of what its assertions read as; Veritas does not turn that around.
+    outcome = 'inconclusive';
+    rationale.push(
+      'marked as expected to fail (it.fails, test.failing): it passes only when its assertions fail, so its results do not show what its assertions check',
+    );
+  } else if (typeLevelOnly) {
     // A type check is a real check of the project, but of its types: no run, mutant or solver here evaluates it.
     outcome = 'inconclusive';
     rationale.push(

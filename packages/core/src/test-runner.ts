@@ -109,6 +109,11 @@ export interface TestRunnerRecognition {
   readonly suites: readonly string[];
   /** Members chained on a registration function that are recorded as modifiers (`it.skip`, `describe.only`). */
   readonly modifiers: readonly TestModifier[];
+  /**
+   * Members chained on a test registration that invert its outcome, so the test passes only when it fails (Vitest's
+   * `it.fails`, Jest's `it.failing`); recorded as the `expected_failure` modifier.
+   */
+  readonly expectedFailure: readonly string[];
   /** Registration functions that carry a modifier in their name (Jest's `xit` skips, `fdescribe` focuses). */
   readonly shorthands: Readonly<Record<string, TestModifier>>;
   /** Members returning a registration function instead of registering (`it.each(table)`, `test.skipIf(cond)`). */

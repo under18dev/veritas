@@ -181,6 +181,25 @@ describe('Jest tests', () => {
     expect(byName(inventory(babel).tests, 'static import')).toMatchObject({ usesMocks: true });
   });
 
+  it('records it.failing and test.failing as expected to fail', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/failing.test.ts': `
+        import { value } from '../src/value.js';
+        it.failing('inverted', () => expect(value(1)).toBe(2));
+        test.failing.each([[1]])('inverted row %i', (n) => expect(value(n)).toBe(0));
+        test('ordinary', () => expect(value(1)).toBe(1));
+      `,
+    });
+    const { tests } = inventory(root);
+
+    expect(byName(tests, 'inverted').modifiers).toContain('expected_failure');
+    expect(byName(tests, 'inverted row %i').modifiers).toEqual(
+      expect.arrayContaining(['each', 'expected_failure']),
+    );
+    expect(byName(tests, 'ordinary').modifiers).toEqual([]);
+  });
+
   it('does not take vi for a mock in a Jest project, nor jest in a Vitest one', () => {
     const root = tempProject({
       'src/value.ts': 'export function fn(value: number): number { return value; }\n',

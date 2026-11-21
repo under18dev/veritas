@@ -89,6 +89,24 @@ describe('Vitest registration modifiers', () => {
     expect(inventory.tests.every((t) => t.targetCalls.some((call) => call.asserted))).toBe(true);
   });
 
+  it('records it.fails as expected to fail', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/fails.test.ts': `
+        import { expect, it } from 'vitest';
+        import { value } from '../src/value.js';
+        it.fails('inverted', () => expect(value(1)).toBe(2));
+      `,
+    });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
+
+    expect(inventory.tests[0]?.modifiers).toEqual(['expected_failure']);
+  });
+
   it('registers tests and suites of a tagged template table', () => {
     const root = tempProject({
       'src/value.ts': 'export const value = (input: number) => input;\n',
