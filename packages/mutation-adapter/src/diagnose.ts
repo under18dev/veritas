@@ -218,3 +218,28 @@ export function transformErrorLine(stderr: string): string {
 
   return [line?.trim(), plugin && `plugin ${plugin}`].filter(Boolean).join(', ') || 'transform error';
 }
+
+/** `dry run finished in 21.4s`: mutator ran the tests without mutants and they passed. */
+const DRY_RUN_FINISHED = /^dry run finished in [\d.]+s/m;
+/** `[1538/12577] Killed   src/a.ts:3 ...` for each mutant run, or `progress: 1538/12577, ...` every 15 seconds. */
+const MUTANT_PROGRESS = /^(?:\[\d+\/\d+\] |progress: \d+\/\d+)/m;
+/** `typecheck (TypeScript 5.9.3): 1200 mutants in 81.0s`, printed when mutator has type-checked the mutants. */
+const TYPECHECK_FINISHED = /^typecheck \(TypeScript [^)]*\): \d+ mutants in /m;
+
+/**
+ * How far a mutation run got, read from mutator's progress output on stderr: whether the baseline (dry run)
+ * finished, whether mutator started running mutants, and whether the type check of the mutants finished.
+ */
+export function mutatorProgress(stderr: string): {
+  pastBaseline: boolean;
+  mutantsStarted: boolean;
+  typecheckFinished: boolean;
+} {
+  const text = withoutDebug(stderr);
+
+  return {
+    pastBaseline: DRY_RUN_FINISHED.test(text),
+    mutantsStarted: MUTANT_PROGRESS.test(text),
+    typecheckFinished: TYPECHECK_FINISHED.test(text),
+  };
+}

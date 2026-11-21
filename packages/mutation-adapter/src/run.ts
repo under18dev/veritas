@@ -20,6 +20,7 @@ import {
   instrumentationFailures,
   isRelativeGlob,
   listSome,
+  mutatorProgress,
   transformErrorLine,
   withoutDebug,
 } from './diagnose.js';
@@ -149,6 +150,25 @@ export function rootTsconfigHasNoFiles(root: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * What to add to the detail of a timed-out run, from what mutator printed: when the baseline finished but mutator
+ * had not started running mutants, the time went to the work in between (most likely type-checking the mutants,
+ * unless that was off), which `--time-budget` does not limit.
+ */
+function timeoutHint(stderr: string, noTypecheck: boolean): string {
+  const progress = mutatorProgress(stderr);
+
+  if (!progress.pastBaseline || progress.mutantsStarted) return '';
+
+  const before =
+    '. mutator finished the baseline ("dry run finished") but had not started running mutants when it was killed; its --time-budget only limits starting new mutants, so it did not apply';
+
+  if (!noTypecheck && !progress.typecheckFinished)
+    return `${before}: it most likely spent the time type-checking the mutants. Set mutation.typecheck to "off" to skip that, or narrow the run with --since <ref>`;
+
+  return `${before}: the time went to preparing the mutants after the baseline. Narrow the run with --since <ref>, or raise mutation.timeoutMs`;
 }
 
 /**
@@ -431,7 +451,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
         options.testFiles === undefined
           ? ' (it ran every test the project config selects)'
           : ` (it ran ${options.testFiles.length} test file(s) that import the code in scope)`
-      }`,
+      }${timeoutHint(run.stderr, noTypecheck)}`,
     });
   }
 
