@@ -19,7 +19,20 @@ export const FunctionParam = z.object({
    * Declared properties of a record-typed parameter (`state.daysUsed: number`), with types as printed by the checker.
    * Absent for primitives, arrays, unions of records and types the checker cannot resolve.
    */
-  fields: z.array(z.object({ name: z.string(), type: z.string() })).optional(),
+  fields: z
+    .array(
+      z.object({
+        name: z.string(),
+        type: z.string(),
+        /**
+         * Whether the field holds only numbers, from the checker's type flags: numbers, numeric literals and enums,
+         * branded numbers (`number & {...}`), optionally with null or undefined. `unknown` for any, unknown,
+         * unresolved and generic types. Absent in code indexes written before it was recorded.
+         */
+        numeric: z.union([z.boolean(), z.literal('unknown')]).optional(),
+      }),
+    )
+    .optional(),
 });
 export type FunctionParam = z.infer<typeof FunctionParam>;
 

@@ -571,6 +571,10 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
   const paramPath = (expr: ts.Expression): string | null => {
     const e = skipParens(expr);
 
+    // `(state.daysUsed ?? 0) >= 5` compares state.daysUsed whenever it is set.
+    if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
+      return paramPath(e.left);
+
     if (ts.isPropertyAccessExpression(e) && !e.questionDotToken && ts.isIdentifier(e.name)) {
       const base = isOwnParam(e.expression);
 
@@ -1089,7 +1093,7 @@ function recordFieldsOf(
   checker: ts.TypeChecker,
   param: ts.ParameterDeclaration,
   node: FunctionNode,
-): { name: string; type: string }[] | undefined {
+): { name: string; type: string; numeric: boolean | 'unknown' }[] | undefined {
   const type = checker.getNonNullableType(checker.getTypeAtLocation(param));
 
   if (!(type.flags & (ts.TypeFlags.Object | ts.TypeFlags.Intersection))) return undefined;
@@ -1100,14 +1104,50 @@ function recordFieldsOf(
 
   if (props.length === 0 || props.length > MAX_RECORD_FIELDS) return undefined;
 
-  return props.map((prop) => ({
-    name: prop.name,
-    type: checker.typeToString(
-      checker.getTypeOfSymbolAtLocation(prop, param),
-      node,
-      ts.TypeFormatFlags.NoTruncation,
-    ),
-  }));
+  return props.map((prop) => {
+    const fieldType = checker.getTypeOfSymbolAtLocation(prop, param);
+
+    return {
+      name: prop.name,
+      type: checker.typeToString(fieldType, node, ts.TypeFormatFlags.NoTruncation),
+      numeric: numericType(fieldType),
+    };
+  });
+}
+
+/**
+ * Whether a type holds only numbers, read from its flags rather than its printed name: numbers, numeric literals and
+ * numeric enums are, and so is an intersection with a number member (a branded number). A union is numeric when
+ * every member other than null and undefined is. Any, unknown, unresolved and generic types are `unknown`.
+ */
+function numericType(type: ts.Type): boolean | 'unknown' {
+  const F = ts.TypeFlags;
+
+  if (type.flags & (F.Any | F.Unknown | F.TypeParameter | F.IndexedAccess | F.Conditional | F.Substitution))
+    return 'unknown';
+
+  if (type.flags & F.NumberLike) return true;
+
+  if (type.isUnion()) {
+    const members = type.types.filter((t) => !(t.flags & (F.Null | F.Undefined | F.Void)));
+
+    if (members.length === 0) return false;
+    const kinds = members.map(numericType);
+
+    if (kinds.includes(false)) return false;
+
+    return kinds.includes('unknown') ? 'unknown' : true;
+  }
+
+  if (type.isIntersection()) {
+    const kinds = type.types.map(numericType);
+
+    if (kinds.includes(true)) return true;
+
+    return kinds.includes('unknown') ? 'unknown' : false;
+  }
+
+  return false;
 }
 
 function returnTypeOf(checker: ts.TypeChecker, node: FunctionNode): string {
@@ -1163,7 +1203,13 @@ function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
 function skipParens(expr: ts.Expression): ts.Expression {
   let e = expr;
 
-  while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e))
+  while (
+    ts.isParenthesizedExpression(e) ||
+    ts.isAsExpression(e) ||
+    ts.isSatisfiesExpression(e) ||
+    ts.isTypeAssertionExpression(e) ||
+    ts.isNonNullExpression(e)
+  )
     e = e.expression;
 
   return e;

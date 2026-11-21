@@ -200,9 +200,9 @@ export function maybe(state: PromptState | null, xs: number[], cb: () => void): 
   it('lists each property of a record parameter with its declared type', () => {
     const [state, now] = fn(index, symbolId('src/prompt.ts', 'record')).params;
     expect(state?.fields).toEqual([
-      { name: 'daysUsed', type: 'number' },
-      { name: 'lastUsedDay', type: 'string | null' },
-      { name: 'declineCount', type: expect.stringMatching(/^number( \| undefined)?$/) },
+      { name: 'daysUsed', type: 'number', numeric: true },
+      { name: 'lastUsedDay', type: 'string | null', numeric: false },
+      { name: 'declineCount', type: expect.stringMatching(/^number( \| undefined)?$/), numeric: true },
     ]);
     expect(now?.fields).toBeUndefined();
   });
@@ -212,5 +212,64 @@ export function maybe(state: PromptState | null, xs: number[], cb: () => void): 
     expect(state?.fields?.map((f) => f.name)).toEqual(['daysUsed', 'lastUsedDay', 'declineCount']);
     expect(xs?.fields).toBeUndefined();
     expect(cb?.fields).toBeUndefined();
+  });
+});
+
+describe('whether a record field holds numbers', () => {
+  const index = analyze({
+    'src/kinds.ts': `import type { Count } from 'missing-pkg';
+export enum Tier { Free = 0, Pro = 1 }
+export enum Mode { Light = 'light', Dark = 'dark' }
+export type Cents = number & { readonly __brand: 'cents' };
+export type Days = number;
+export interface Kinds {
+  tier: Tier;
+  mode: Mode;
+  total: Cents;
+  days?: Days;
+  level: 1 | 2 | 3;
+  mixed: 1 | 'one';
+  flag: boolean;
+  items: Count;
+  label: string;
+  nested: { a: number };
+}
+export function f<T>(k: Kinds, g: { value: T }): number {
+  return k.total + (g.value ? 1 : 0);
+}
+`,
+  });
+
+  it('reads numeric enums, branded numbers, aliases, optional fields and literal unions as numbers', () => {
+    const [k, g] = fn(index, symbolId('src/kinds.ts', 'f')).params;
+    const numeric = Object.fromEntries((k?.fields ?? []).map((field) => [field.name, field.numeric]));
+    expect(numeric).toEqual({
+      tier: true,
+      mode: false,
+      total: true,
+      days: true,
+      level: true,
+      mixed: false,
+      flag: false,
+      items: 'unknown',
+      label: false,
+      nested: false,
+    });
+    expect(g?.fields).toEqual([{ name: 'value', type: 'T', numeric: 'unknown' }]);
+  });
+});
+
+describe('comparisons on a record field behind a default or an assertion', () => {
+  const index = analyze({
+    'src/state.ts': `export interface State { daysUsed?: number; level: number }
+export function canPrompt(state: State): boolean {
+  return (state.daysUsed ?? 0) >= 5 && (state.level as number) >= 2 && state.daysUsed! < 100;
+}
+`,
+  });
+
+  it('records the field compared, not null', () => {
+    const params = fn(index, symbolId('src/state.ts', 'canPrompt')).comparisons.map((c) => c.param);
+    expect(params).toEqual(['state.daysUsed', 'state.level', 'state.daysUsed']);
   });
 });
