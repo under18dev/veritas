@@ -1047,9 +1047,44 @@ function mocksPassed(call: Invocation, checker: ts.TypeChecker): ts.VariableDecl
         isMockCreation(declaration.initializer, checker)
       )
         found.add(declaration);
+
+      // `const run = vi.spyOn(source, 'run'); wrap(source)`: the spy watches a method of what is passed.
+      for (const spy of symbol ? (spiesOn(item.getSourceFile(), checker).get(symbol) ?? []) : [])
+        found.add(spy);
     }
 
   return [...found];
+}
+
+const spiesCache = new WeakMap<ts.SourceFile, Map<ts.Symbol, ts.VariableDeclaration[]>>();
+
+/** The variables of a file holding `vi.spyOn(object, …)`, by the variable `object` names. */
+function spiesOn(source: ts.SourceFile, checker: ts.TypeChecker): Map<ts.Symbol, ts.VariableDeclaration[]> {
+  const cached = spiesCache.get(source);
+  if (cached) return cached;
+  const spies = new Map<ts.Symbol, ts.VariableDeclaration[]>();
+
+  for (const node of descendants(source)) {
+    if (!ts.isVariableDeclaration(node) || !node.initializer) continue;
+    let spy = skipParens(node.initializer);
+
+    // Configured further: `vi.spyOn(o, 'm').mockReturnValue(1)`.
+    while (
+      ts.isCallExpression(spy) &&
+      viCall(spy, checker) !== 'spyOn' &&
+      ts.isPropertyAccessExpression(spy.expression)
+    )
+      spy = skipParens(spy.expression.expression);
+    const watched =
+      ts.isCallExpression(spy) && viCall(spy, checker) === 'spyOn' ? spy.arguments[0] : undefined;
+    const symbol = watched && ts.isIdentifier(watched) ? checker.getSymbolAtLocation(watched) : undefined;
+
+    if (symbol && symbol.valueDeclaration?.getSourceFile() === source)
+      spies.set(symbol, [...(spies.get(symbol) ?? []), node]);
+  }
+  spiesCache.set(source, spies);
+
+  return spies;
 }
 
 /**

@@ -391,6 +391,40 @@ export function debounce(options: { delay?: number }, f: () => void): () => void
     expect(get('mock handed over only in another test').asserted).toBe(false);
   });
 
+  it('links a spy on a method of an object handed to project code', () => {
+    const get = inventory(
+      `import { expect, it, vi } from 'vitest';
+      import { cached, fn } from '../src/cache.js';
+      it('spied object passed', () => {
+        const source = { run: (x: number) => x };
+        const run = vi.spyOn(source, 'run').mockName('run');
+        const wrapped = cached(source);
+        wrapped(1);
+        wrapped(1);
+        expect(run).toHaveBeenCalledTimes(1);
+      });
+      it('spied object kept', () => {
+        const source = { run: (x: number) => x };
+        const run = vi.spyOn(source, 'run');
+        fn(1);
+        source.run(1);
+        expect(run).toHaveBeenCalledTimes(1);
+      });
+    `,
+      {
+        'src/cache.ts': `
+export function cached(source: { run: (x: number) => number }) {
+  const seen = new Map<number, number>();
+  return (x: number) => seen.get(x) ?? seen.set(x, source.run(x)).get(x);
+}
+export const fn = (x: number) => x;
+`,
+      },
+    );
+    expect(get('spied object passed').asserted).toBe(true);
+    expect(get('spied object kept').asserted).toBe(false);
+  });
+
   it('links what the traps of a proxy handed to project code record', () => {
     const get = inventory(`${header}
       it('inline proxy', () => {
