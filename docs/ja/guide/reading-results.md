@@ -44,7 +44,7 @@ finding には ID、確度（certainty）、重大度（severity）、種類（k
 | 確度            | 意味                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------ |
 | `confirmed`     | 実際の実行（mutation testing、JavaScript で再実行した反例）で示された。仕様違反の場合は Property が accepted |
-| `suspected`     | 確認が必要。たとえば Property がまだ proposed                                                                |
+| `suspected`     | 確認が必要。たとえば Property がまだ proposed、または矛盾に LLM が読んだしきい値や曖昧な対応付けが含まれる   |
 | `informational` | 解析の限界の説明                                                                                             |
 
 重大度は `critical`、`high`、`medium`、`low`、`info` のどれかです。

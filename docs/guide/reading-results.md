@@ -44,7 +44,7 @@ Each finding has an ID, a certainty, a severity and a kind.
 | Certainty       | Meaning                                                                                                                                   |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `confirmed`     | Shown by a real run (a mutation run, or a counterexample replayed in JavaScript); for a specification violation, the property is accepted |
-| `suspected`     | Needs your review, for example because the property is only proposed                                                                      |
+| `suspected`     | Needs your review, for example because the property is only proposed or a conflict involves an LLM-read threshold or ambiguous binding    |
 | `informational` | Describes a limitation of the analysis                                                                                                    |
 
 Severity is `critical`, `high`, `medium`, `low` or `info`.
