@@ -1,5 +1,9 @@
-import type { Property } from '@under18dev/veritas-core';
-import { AMBIGUOUS_BINDING, type ConflictGroup } from '@under18dev/veritas-property-engine';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { analyzeCode } from '@under18dev/veritas-code-intelligence';
+import { type Property, sha256, VeritasConfig } from '@under18dev/veritas-core';
+import { AMBIGUOUS_BINDING, buildRegistry, type ConflictGroup } from '@under18dev/veritas-property-engine';
 import { describe, expect, it } from 'vitest';
 import { deriveFindings } from '../src/index.js';
 
@@ -56,5 +60,68 @@ describe('spec_conflict certainty', () => {
     });
     const [finding] = conflictFindings([property('P-a'), ambiguous]);
     expect(finding?.certainty).toBe('suspected');
+  });
+});
+
+describe('spec_conflict certainty from a real registry', { timeout: 60_000 }, () => {
+  it('stays confirmed for a clear conflict next to an unrelated function with the same parameter name', () => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-findings-')));
+    mkdirSync(path.join(root, 'src'));
+    writeFileSync(
+      path.join(root, 'src/pricing.ts'),
+      `export function discountAmount(total: number): number { return total >= 1000 ? 100 : 0; }
+export function shippingFee(total: number): number { return total >= 5000 ? 0 : 500; }
+`,
+    );
+    const code = analyzeCode({ root, config: VeritasConfig.parse({}) });
+    const source = (id: string, kind: 'readme' | 'docs', locator: string) => ({
+      id,
+      kind,
+      locator,
+      capturedAt: '2026-11-19T00:00:00.000Z',
+      contentHash: sha256(id),
+      derivedFrom: [],
+      summary: '',
+      trust: 'untrusted_data' as const,
+    });
+    const statement = (id: string, sourceId: string, value: string) => {
+      const quote = `Orders with a total of ${value} or more receive a flat discount of 100.`;
+
+      return {
+        id,
+        sourceId,
+        range: { start: 1, end: 1 },
+        quote,
+        modality: 'descriptive' as const,
+        subjects: ['total'],
+        relation: {
+          kind: 'threshold' as const,
+          quantity: 'total',
+          operator: '>=' as const,
+          value,
+          consequence: quote,
+        },
+        flags: [],
+      };
+    };
+    const registry = buildRegistry({
+      discovery: {
+        sources: [source('S-readme', 'readme', 'README.md'), source('S-docs', 'docs', 'docs/pricing.md')],
+        statements: [statement('ST-a', 'S-readme', '1000'), statement('ST-b', 'S-docs', '2000')],
+        provenance: [],
+      },
+      code,
+      candidates: [],
+    });
+    const findings = deriveFindings({
+      properties: registry.properties,
+      conflicts: registry.conflicts,
+      claims: [],
+      mutants: [],
+      tests: [],
+      assessments: [],
+      functions: code.functions,
+    }).filter((f) => f.kind === 'spec_conflict');
+    expect(findings.map((f) => f.certainty)).toEqual(['confirmed']);
   });
 });
