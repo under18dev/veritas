@@ -182,32 +182,26 @@ export function withoutCodeBlocks(text: string): string {
     .join('\n');
 }
 
-/** Words whose dot is part of the word, not the end of a sentence (`e.g. with a token`). */
-const ABBREVIATIONS = new Set([
-  'e.g',
-  'i.e',
-  'eg',
-  'ie',
-  'vs',
-  'cf',
-  'approx',
-  'incl',
-  'fig',
-  'mr',
-  'mrs',
-  'ms',
-  'dr',
-]);
+/** Words whose dot is part of the word, not the end of a sentence (`e.g. with a token`). Units such as `ms` are not. */
+const ABBREVIATIONS = new Set(['e.g', 'i.e', 'eg', 'ie', 'vs', 'cf', 'approx', 'incl']);
 const TERMINATORS = '。！？.!?';
-/** Closing brackets and quotes that stay with the sentence they close (`「設定は必須です。」`). */
-const CLOSERS = '」』）】)]"\'”’';
+/**
+ * What may follow the end of a sentence and still belong to it: closing brackets and quotes (`「設定は必須です。」`),
+ * the end of Markdown emphasis or code (`**Must be below 10.**`), and a footnote reference (`at most 50.[^1]`).
+ */
+const CLOSERS = '」』）】)]"\'”’*_`';
+const FOOTNOTE = /^\[\^[^\]\s]+\]/;
+/** A line that ends a sentence, perhaps followed by closing punctuation or a footnote, though a cut was skipped. */
+const ENDS_SENTENCE = /[。！？.!?](?:[^\p{L}\p{N}\s]|\[\^[^\]\s]+\])*$/u;
 
 /**
  * Splits text into sentences: after `。`, `！` or `？`, and after `.`, `!` or `?` that a space or the end of the text
  * follows. A dot inside a word or a number (`3.2.4`, `libwebkit2gtk-4.1`, `Node.js`, a URL) does not end a sentence,
- * nor does the dot of an abbreviation (`e.g.`). A sentence never spans a line break, and text left at the end of a
- * line without ending a sentence is dropped (the last line of the text excepted). A piece without a letter (`1.` of
- * a numbered list, a `---` rule) is joined to the text after it on the same line, or dropped.
+ * nor does the dot of an abbreviation (`e.g.`); so `must be > 0.Next` stays one piece. A sentence never spans a line
+ * break. Text left at the end of a line is a sentence only when it ends like one (`500 ms.`, `**at most 5.**`,
+ * `at most 50.[^1]`); otherwise (a heading, a line of code, one line of a wrapped paragraph) it is dropped, the last
+ * line of the text excepted. A piece without a letter (`1.` of a numbered list, a `---` rule) is joined to the text
+ * after it on the same line, or dropped.
  */
 export function splitSentences(text: string): Array<{ text: string; start: number }> {
   const output: Array<{ text: string; start: number }> = [];
@@ -225,8 +219,8 @@ export function splitSentences(text: string): Array<{ text: string; start: numbe
     const ch = text.charAt(i);
 
     if (ch === '\n') {
-      // Text that runs to a line break without ending a sentence (a heading, a line of code under a JSDoc block,
-      // one line of a wrapped paragraph) is not a statement on its own.
+      // A skipped cut (an abbreviation-like word, a dot before emphasis) must not lose a sentence that ends the line.
+      if (ENDS_SENTENCE.test(text.slice(Math.max(start, i - 80), i).trimEnd())) cut(i, true);
       start = i + 1;
       continue;
     }
@@ -236,7 +230,13 @@ export function splitSentences(text: string): Array<{ text: string; start: numbe
 
     while (end < text.length && TERMINATORS.includes(text.charAt(end))) end++;
 
-    while (end < text.length && CLOSERS.includes(text.charAt(end))) end++;
+    for (;;) {
+      while (end < text.length && CLOSERS.includes(text.charAt(end))) end++;
+      const footnote = FOOTNOTE.exec(text.slice(end, end + 40))?.[0];
+
+      if (!footnote) break;
+      end += footnote.length;
+    }
     const run = text.slice(i, end);
     const next = text.charAt(end);
 

@@ -201,6 +201,68 @@ describe('sentence splitting', () => {
     expect(result.sources.map((s) => s.locator).sort()).toEqual(['CHANGELOG.md', 'RELEASE_NOTES']);
   });
 
+  it('keeps a sentence closed by emphasis, code or a footnote, and a unit before the dot', () => {
+    expect(
+      quotes(
+        [
+          '**The port must be below 65536.**',
+          '*Uploads must be at most 5 MB.*',
+          '_Retries must be at most 3._',
+          'The batch must be at most 50.[^1]',
+          'Use `npm ci.` Then build.',
+          'The timeout must be at most 500 ms.',
+          'Retries must be at most 3.',
+        ].join('\n'),
+      ),
+    ).toEqual([
+      '**The port must be below 65536.**',
+      '*Uploads must be at most 5 MB.*',
+      '_Retries must be at most 3._',
+      'The batch must be at most 50.[^1]',
+      'Use `npm ci.`',
+      'Then build.',
+      'The timeout must be at most 500 ms.',
+      'Retries must be at most 3.',
+    ]);
+    expect(quotes('The timeout must be at least 10 ms. Retries must be at least 1.')).toEqual([
+      'The timeout must be at least 10 ms.',
+      'Retries must be at least 1.',
+    ]);
+    // An abbreviation at the end of a line still ends the sentence there.
+    expect(quotes('Use any token, e.g.\nThe limit is 3.')).toEqual([
+      'Use any token, e.g.',
+      'The limit is 3.',
+    ]);
+  });
+
+  it('does not split where no space follows the dot', () => {
+    // Accepted: without a space after it, a dot is read as part of a word or a number.
+    expect(quotes('The value must be > 0.Next must be < 5.')).toEqual([
+      'The value must be > 0.Next must be < 5.',
+    ]);
+  });
+
+  it('extracts every threshold of a document with emphasis, units and footnotes', async () => {
+    const root = tempProject('emphasis');
+    writeProjectFile(
+      root,
+      'docs/limits.md',
+      [
+        '**Uploads must be at most 5 MB.**',
+        '_Retries must be at most 3._',
+        'The timeout must be at most 500 ms.',
+        'The queue must hold at most 100 items.',
+        'The timeout must be at least 10 ms. Retries must be at least 1.',
+        'The batch must be at most 50.[^1]',
+        '',
+      ].join('\n'),
+    );
+    const result = await discoverEvidence({ root, config: config(), offline: true });
+    expect(
+      result.statements.flatMap((s) => (s.relation.kind === 'threshold' ? [s.relation.value] : [])),
+    ).toEqual(['5', '3', '500', '100', '10', '1', '50']);
+  });
+
   it('extracts no fragment statements from version-heavy documents', async () => {
     const root = tempProject('versions');
     writeProjectFile(
