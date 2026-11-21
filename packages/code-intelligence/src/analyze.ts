@@ -491,11 +491,16 @@ function analyzeFunction(target: FunctionTarget, sf: ts.SourceFile, file: string
     file,
     exported,
     location: loc(sf, file, target.declaration === node ? node : outerStatement(target.declaration)),
-    params: node.parameters.map((p) => ({
-      name: p.name.getText(sf),
-      type: checker.typeToString(checker.getTypeAtLocation(p), node, ts.TypeFormatFlags.NoTruncation),
-      optional: Boolean(p.questionToken || p.initializer),
-    })),
+    params: node.parameters.map((p) => {
+      const fields = recordFieldsOf(checker, p, node);
+
+      return {
+        name: p.name.getText(sf),
+        type: checker.typeToString(checker.getTypeAtLocation(p), node, ts.TypeFormatFlags.NoTruncation),
+        optional: Boolean(p.questionToken || p.initializer),
+        ...(fields ? { fields } : {}),
+      };
+    }),
     returnType: returnTypeOf(checker, node),
     jsdoc: jsdocOf(sf, target),
     async: hasModifier(node, ts.SyntaxKind.AsyncKeyword),
@@ -1070,6 +1075,39 @@ function isExpressionIdentifier(n: ts.Identifier): boolean {
   if ((p as { name?: ts.Node }).name === n && !ts.isShorthandPropertyAssignment(p)) return false;
 
   return true;
+}
+
+/** Records with more properties than this (DOM nodes, framework objects) are not listed field by field. */
+const MAX_RECORD_FIELDS = 64;
+
+/**
+ * Declared properties of a parameter whose type is one object type (an interface, type literal or alias, optionally
+ * `| null | undefined`), so a statement can be checked against the type of the field it names. Arrays, functions,
+ * unions of several object types and very large types are left out.
+ */
+function recordFieldsOf(
+  checker: ts.TypeChecker,
+  param: ts.ParameterDeclaration,
+  node: FunctionNode,
+): { name: string; type: string }[] | undefined {
+  const type = checker.getNonNullableType(checker.getTypeAtLocation(param));
+
+  if (!(type.flags & (ts.TypeFlags.Object | ts.TypeFlags.Intersection))) return undefined;
+
+  if (checker.isArrayType(type) || checker.isTupleType(type) || type.getCallSignatures().length > 0)
+    return undefined;
+  const props = checker.getPropertiesOfType(type);
+
+  if (props.length === 0 || props.length > MAX_RECORD_FIELDS) return undefined;
+
+  return props.map((prop) => ({
+    name: prop.name,
+    type: checker.typeToString(
+      checker.getTypeOfSymbolAtLocation(prop, param),
+      node,
+      ts.TypeFormatFlags.NoTruncation,
+    ),
+  }));
 }
 
 function returnTypeOf(checker: ts.TypeChecker, node: FunctionNode): string {

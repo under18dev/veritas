@@ -179,3 +179,38 @@ describe('tsconfig extends', () => {
     expect(index.functions.map((f) => f.name)).toEqual(['f']);
   });
 });
+
+describe('declared field types of record parameters', () => {
+  const index = analyze({
+    'src/prompt.ts': `export interface PromptState {
+  daysUsed: number;
+  lastUsedDay: string | null;
+  declineCount?: number;
+}
+export function record(state: PromptState, now: number): number {
+  return state.lastUsedDay !== String(now) ? state.daysUsed + 1 : state.daysUsed;
+}
+export function maybe(state: PromptState | null, xs: number[], cb: () => void): number {
+  cb();
+  return (state?.daysUsed ?? 0) + xs.length;
+}
+`,
+  });
+
+  it('lists each property of a record parameter with its declared type', () => {
+    const [state, now] = fn(index, symbolId('src/prompt.ts', 'record')).params;
+    expect(state?.fields).toEqual([
+      { name: 'daysUsed', type: 'number' },
+      { name: 'lastUsedDay', type: 'string | null' },
+      { name: 'declineCount', type: expect.stringMatching(/^number( \| undefined)?$/) },
+    ]);
+    expect(now?.fields).toBeUndefined();
+  });
+
+  it('looks through null for a nullable record and leaves arrays and functions alone', () => {
+    const [state, xs, cb] = fn(index, symbolId('src/prompt.ts', 'maybe')).params;
+    expect(state?.fields?.map((f) => f.name)).toEqual(['daysUsed', 'lastUsedDay', 'declineCount']);
+    expect(xs?.fields).toBeUndefined();
+    expect(cb?.fields).toBeUndefined();
+  });
+});

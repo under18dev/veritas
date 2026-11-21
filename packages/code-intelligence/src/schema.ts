@@ -15,6 +15,11 @@ export const FunctionParam = z.object({
   /** Type as printed by the TypeScript checker. */
   type: z.string(),
   optional: z.boolean(),
+  /**
+   * Declared properties of a record-typed parameter (`state.daysUsed: number`), with types as printed by the checker.
+   * Absent for primitives, arrays, unions of records and types the checker cannot resolve.
+   */
+  fields: z.array(z.object({ name: z.string(), type: z.string() })).optional(),
 });
 export type FunctionParam = z.infer<typeof FunctionParam>;
 
