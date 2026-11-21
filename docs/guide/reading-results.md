@@ -87,7 +87,7 @@ The outcome summarizes the evidence vector below; it is not a grade.
 
 A test checks project code when an assertion looks at what project code produced. For a plain function that is its return value, an object it changed, or how it called a callback or a `vi.fn()` mock the test handed to it.
 
-Component and hook tests are read the same way. A project component counts as called once its JSX element is mounted: given to `render` (or `rerender`, `mount`, a render helper of the test code or the project), returned by a component or helper, or kept in a local that is. This holds whether the test writes `render(<Dialog />)` itself, calls a local helper such as `renderDialog()` that does, or renders a local wrapper component. An element that is only created, as in `expect(<Dialog />).toBeTruthy()`, does not count. A project hook called inside `renderHook` counts too. After that, these assertions count as checking the component or hook:
+Component and hook tests are read the same way. A project component counts as called once its JSX element is mounted: given to `render` (or `rerender`, `mount`, a render helper of the test code or the project), returned by a component or helper, or kept in a local that is. This holds whether the test writes `render(<Dialog />)` itself, renders in a `beforeEach` of an enclosing `describe`, calls a local helper such as `renderDialog()` that does, or renders a local wrapper component. For a local wrapper component, only what reaches the JSX it returns counts as rendered. Server rendering with `renderToString` runs the component, but only its returned HTML counts, not later reads of the page. An element that is only created, as in `expect(<Dialog />).toBeTruthy()`, does not count. A project hook called inside `renderHook` counts too. After that, these assertions count as checking the component or hook:
 
 - a Testing Library query of the page (`screen.getByText`, `within(...)`, the queries returned by `render`), or a read of the global `document`, made after a project component rendered
 - `result.current` from `renderHook`
@@ -97,8 +97,8 @@ Some assertions still do not count:
 
 - a mock that was never handed to project code, or a different member of a mock object than the one handed over (`onSave={mocks.onSave}` does not cover `mocks.track`)
 - a value of a props object that the test set itself
-- a call count on a mock the test also calls itself
-- a page read made before the component rendered (`const before = screen.queryByText('x')` before `render`), or a read of something the test wrote to the page itself (`document.body.className = 'dark'`)
+- the calls of a mock the test also calls itself, whether through a matcher such as `toHaveBeenCalled` or through `.mock.calls`
+- a page read made before the component rendered (`const before = screen.queryByText('x')` before `render`), or a read of something the test wrote to the page itself (`document.body.className = 'dark'`). Once the test puts content into the page itself (`innerHTML`, `appendChild` and the like), no later read of the page counts, because it may find that content
 - a page query when nothing from the project rendered, so a test that renders only third-party components is still reported
 
 A page query also does not credit a project component whose children in the test hold no project component, such as `<Providers><Button>Go</Button></Providers>` or a provider helper that wraps whatever it is given: the query may find only what the test supplied. This also leaves out a component like `<Card>Body</Card>` when the query looks for something the card renders itself; such a test is reported unless another assertion links it.
