@@ -837,6 +837,38 @@ describe('the TUI', { timeout: 20_000 }, () => {
     expect(app.lastFrame()).toContain('› lib');
   });
 
+  it('keeps the problems banner, the selected entry and the entry field apart in a long list', async () => {
+    const exclude = Array.from({ length: 15 }, (_, i) => `ex${i}/**`);
+    const api = fakeApi({
+      readConfig: () => ({
+        kind: 'json',
+        file: '/projects/shop/.veritas/config.json',
+        raw: { pbt: { numRuns: 0 }, extra: true, analysis: { exclude } },
+      }),
+    });
+    const app = await open(api, 5);
+    await until(app, '2 problems to fix before saving (p lists them)');
+    await press(app, KEY.down, KEY.down, KEY.down, KEY.enter, KEY.down, KEY.down, KEY.enter);
+    await until(app, 'entries 1-6 of 15');
+    const intact = (frame: string, selected: string) => {
+      const lines = frame.split('\n');
+      const banner = lines.findIndex((l) => l.includes('2 problems to fix before saving (p lists them):'));
+      const row = lines.findIndex((l) => l.includes(`› ${selected}`));
+      expect(banner).toBeGreaterThan(-1);
+      expect(row).toBeGreaterThan(banner);
+      // The panel's bottom border is drawn: nothing ran past the screen.
+      expect(lines.filter((l) => l.includes('╰')).length).toBeGreaterThanOrEqual(3);
+    };
+    intact(app.lastFrame() ?? '', 'ex0/**');
+    await press(app, ...Array(14).fill(KEY.down));
+    await until(app, 'entries 10-15 of 15');
+    intact(app.lastFrame() ?? '', 'ex14/**');
+    await press(app, 'a');
+    await until(app, 'New entry:');
+    expect(app.lastFrame()).toContain('Enter to confirm, Esc to cancel');
+    intact(app.lastFrame() ?? '', 'ex14/**');
+  });
+
   it('fixes a file with problems one setting at a time and saves only once it is valid', async () => {
     const api = fakeApi({
       readConfig: () => ({

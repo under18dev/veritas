@@ -12,6 +12,7 @@ import {
   Card,
   Confirm,
   ErrorView,
+  errorText,
   type Hints,
   numbered,
   ScrollView,
@@ -562,6 +563,11 @@ export function Settings({ api, active, onBack, onChange, height, width, version
       />
     );
 
+  // Rows drawn besides the list and the panel: the problems banner above, and the message and save error below
+  // (an error line may wrap to two). The list editor must leave them room.
+  const reserved =
+    (problems.length ? 1 : 0) + (message ? 1 : 0) + (saveError ? errorText(saveError).length * 2 : 0);
+
   if (mode.kind === 'problems')
     return (
       <Problems
@@ -589,10 +595,12 @@ export function Settings({ api, active, onBack, onChange, height, width, version
         ) : null}
       </Box>
       {problems.length ? (
-        <Text color="yellow" wrap="truncate-end">
-          {problems.length} problem{problems.length === 1 ? '' : 's'} to fix before saving (p lists them):{' '}
-          {problems[0]}
-        </Text>
+        <Box flexShrink={0}>
+          <Text color="yellow" wrap="truncate-end">
+            {problems.length} problem{problems.length === 1 ? '' : 's'} to fix before saving (p lists them):{' '}
+            {problems[0]}
+          </Text>
+        </Box>
       ) : null}
       <Box ref={listBox} flexDirection="column" flexGrow={1} flexShrink={1} minHeight={1} overflow="hidden">
         {visible.map((r, i) => (
@@ -637,7 +645,7 @@ export function Settings({ api, active, onBack, onChange, height, width, version
             onApply={(next) => apply(row.field, next)}
             onError={(messages) => setErrors({ path: key(row.field), messages })}
             onMode={setMode}
-            height={height}
+            height={height - reserved}
           />
         ) : row?.kind === 'section' ? (
           <Card title={sectionTitle(row.section)}>
