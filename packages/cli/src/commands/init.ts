@@ -17,7 +17,6 @@ import {
   detectTestRunner,
   initProject,
   runDoctor,
-  TEST_RUNNERS,
 } from '@under18dev/veritas-engine';
 import { isCi } from '@under18dev/veritas-improvement';
 import { emitJson, emitText, type GlobalOptions, log } from '../output.js';
@@ -101,14 +100,21 @@ async function installLean(root: string): Promise<boolean> {
   }
 }
 
-/** The runners detection found evidence for, as choices for the wizard: `Jest (jest.config.mjs, ...)`. */
+/** The runners detection could not tell apart, as choices for the wizard: `Jest (jest.config.mjs, ...)`. */
 function ambiguousRunners(root: string): NonNullable<WizardEnvironment['ambiguousTestRunners']> {
-  return detectTestRunner(root)
-    .installations.filter((installation) => installation.evidence.length > 0)
-    .map((installation) => ({
-      name: installation.name,
-      label: `${TEST_RUNNERS.find((runner) => runner.name === installation.name)?.displayName ?? installation.name} (${installation.evidence.join(', ')})`,
-    }));
+  const choice = detectTestRunner(root);
+
+  return choice.candidates.map((runner) => {
+    const installation = choice.installations.find((candidate) => candidate.name === runner.name);
+    const found = [
+      ...(installation?.evidence ?? []),
+      ...(installation?.installedVersion
+        ? [`${runner.detection.packageName} ${installation.installedVersion} installed`]
+        : []),
+    ];
+
+    return { name: runner.name, label: `${runner.displayName} (${found.join(', ') || 'nothing found'})` };
+  });
 }
 
 /** Whether `init` asks its questions: only for a person at a terminal, never with --json or in CI. */

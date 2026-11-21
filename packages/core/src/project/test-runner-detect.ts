@@ -28,16 +28,69 @@ export interface InstallationSignals {
   readonly commands: readonly string[];
 }
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Commands that run another command given after them, with their own options before it. */
+const LAUNCHERS = new Set(['npx', 'bunx', 'pnpx', 'cross-env', 'dotenv', 'env', 'time', 'nyc', 'c8']);
+/** Package managers, which run a binary directly or after `exec`, `run`, `dlx` or `x`. */
+const MANAGERS = new Set(['pnpm', 'yarn', 'npm', 'bun']);
+const MANAGER_VERBS = new Set(['exec', 'run', 'dlx', 'x']);
+
+/** The base name of a command word without a script extension (`node_modules/.bin/jest.cmd` is `jest`). */
+function commandName(word: string): string {
+  return (word.split(/[\\/]/).pop() ?? word).replace(/\.(?:[cm]?js|cmd|ps1)$/, '');
 }
 
-/** Whether a package.json script runs one of `commands`, as a word or as the path of the command's file. */
+/** Whether one command segment (no `&&`, `;` or `|` in it) runs one of `wanted`. */
+function segmentRuns(words: string[], wanted: ReadonlySet<string>): boolean {
+  let i = 0;
+  const skipOptions = () => {
+    while (i < words.length && (words[i] as string).startsWith('-')) i++;
+  };
+
+  for (;;) {
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++;
+    const word = words[i];
+
+    if (word === undefined) return false;
+    const name = commandName(word);
+    i++;
+
+    if (LAUNCHERS.has(name)) {
+      skipOptions();
+      continue;
+    }
+
+    if (MANAGERS.has(name)) {
+      if (MANAGER_VERBS.has(words[i] ?? '')) i++;
+      skipOptions();
+      continue;
+    }
+
+    if (name === 'node') {
+      skipOptions();
+      const file = words[i];
+
+      return file !== undefined && wanted.has(commandName(file));
+    }
+
+    return wanted.has(name);
+  }
+}
+
+/**
+ * Whether a package.json script runs one of `commands` as a command: the first word of a command segment (after
+ * `&&`, `||`, `;` or `|`), after environment assignments and launchers such as `npx`, `cross-env` or `pnpm exec`, or
+ * the file `node` runs (`node --flag node_modules/jest/bin/jest.js`). A command named only as an argument
+ * (`eslint --plugin=jest`) or in quotes (`echo "migrated from jest"`) does not count.
+ */
 export function scriptRuns(script: unknown, commands: readonly string[]): boolean {
   if (typeof script !== 'string' || commands.length === 0) return false;
-  const names = commands.map(escapeRegExp).join('|');
+  const wanted = new Set(commands);
+  // Quoted text is an argument of its segment, never the command.
+  const unquoted = script.replace(/"[^"]*"|'[^']*'/g, '""');
 
-  return new RegExp(`(?:^|[\\s;&|()'"/=])(?:${names})(?:\\.[cm]?js)?(?=$|[\\s;&|()'"])`).test(script);
+  return unquoted
+    .split(/&&|\|\||[;|&]/)
+    .some((segment) => segmentRuns(segment.trim().split(/\s+/).filter(Boolean), wanted));
 }
 
 /** Detect a runner from the usual signals: dependencies, `node_modules`, config files, package.json and scripts. */
@@ -57,7 +110,9 @@ export function detectInstallation(
   const ownConfig = present(signals.configFiles);
   const sharedConfig = declared || installedVersion ? present(signals.sharedConfigFiles) : null;
   const scripts = packageJson?.scripts as Record<string, unknown> | undefined;
-  const testScript = scriptRuns(scripts?.test, signals.commands);
+  // The test script is evidence only for a runner the project also declares or installs: a script that runs a
+  // runner the project does not have cannot be how its tests run.
+  const testScript = (declared || installedVersion !== null) && scriptRuns(scripts?.test, signals.commands);
   const keyed =
     signals.packageJsonKey !== undefined &&
     packageJson !== null &&
@@ -87,20 +142,41 @@ export interface TestRunnerChoice {
   /** Why this runner was chosen, for people. */
   reason: string;
   /**
-   * More than one runner shows up and the test script does not tell them apart: the order of the providers decided,
-   * and the user should confirm or set `analysis.testFramework`.
+   * More than one runner was equally likely (see `chooseTestRunner`): the order of the providers decided, and the
+   * user should confirm or set `analysis.testFramework`.
    */
   ambiguous: boolean;
+  /** The equally likely runners when the choice is ambiguous, in the providers' order; otherwise the chosen one. */
+  candidates: TestRunnerProvider[];
   /** What detection found for every available runner, in the providers' order. */
   installations: TestRunnerInstallation[];
 }
 
+interface Entry {
+  provider: TestRunnerProvider;
+  installation: TestRunnerInstallation;
+}
+
+const shows = ({ installation }: Entry) =>
+  installation.evidence.length > 0 || installation.installedVersion !== null;
+
+function describe({ installation }: Entry): string {
+  if (installation.evidence.length === 0)
+    return installation.installedVersion
+      ? 'installed, with nothing in package.json or config files'
+      : 'nothing';
+
+  return `${installation.evidence.join(', ')}${installation.installedVersion ? '' : ', but not installed'}`;
+}
+
 /**
- * The runner a project uses, from what detection finds, without running anything. Runners with evidence (a config
- * file, a package.json key or dependency, the test script) are candidates; without any, those installed are. Among
- * several, the one the `test` script runs wins; if that does not decide, the first in `providers` is chosen and the
- * choice is marked ambiguous. With no candidate at all the first provider is returned, so that its NOT_FOUND error
- * says what is missing.
+ * The runner a project uses, from what detection finds, without running anything. Runners the project can run come
+ * first: installed ones, then (when none is installed) declared ones, then those only a config file or a package.json
+ * key points at. Among the runners of the first group that has any, the one the `test` script runs wins, then the
+ * only one with evidence (config file, package.json key or dependency); if that does not decide, the first in
+ * `providers` is chosen and the choice is marked ambiguous. So a runner that is neither declared nor installed is
+ * never chosen over one that is installed. With nothing found at all the first provider is returned, so that its
+ * NOT_FOUND error says what is missing.
  */
 export function chooseTestRunner(
   providers: readonly TestRunnerProvider[],
@@ -109,52 +185,69 @@ export function chooseTestRunner(
 ): TestRunnerChoice {
   const first = providers[0] ?? selectTestRunner(providers, 'vitest');
   const installations = providers.map((provider) => provider.detection.detect(root, packageJson));
-  const all = providers.map((provider, index) => ({
+  const all: Entry[] = providers.map((provider, index) => ({
     provider,
     installation: installations[index] as TestRunnerInstallation,
   }));
-  const withEvidence = all.filter(({ installation }) => installation.evidence.length > 0);
-  const candidates =
-    withEvidence.length > 0 ? withEvidence : all.filter(({ installation }) => installation.installedVersion);
-  const found = (installation: TestRunnerInstallation) =>
-    installation.evidence.length > 0
-      ? installation.evidence.join(', ')
-      : `${installation.installedVersion ? 'installed' : 'not installed'}, with nothing in package.json or config files`;
-  const [chosen, second] = candidates;
+  const groups: [string, Entry[]][] = [
+    ['installed', all.filter(({ installation }) => installation.installedVersion !== null)],
+    ['declared in package.json', all.filter(({ installation }) => installation.declared)],
+    ['configured', all.filter(({ installation }) => installation.evidence.length > 0)],
+  ];
+  const [state, group] = groups.find(([, entries]) => entries.length > 0) ?? ['', []];
+  const others = (chosen: Entry) =>
+    all
+      .filter((entry) => entry !== chosen && shows(entry))
+      .map((entry) => `; ${entry.provider.displayName} also shows up (${describe(entry)})`)
+      .join('');
+  const decided = (chosen: Entry, why: string): TestRunnerChoice => ({
+    provider: chosen.provider,
+    reason: `${why}${others(chosen)}`,
+    ambiguous: false,
+    candidates: [chosen.provider],
+    installations,
+  });
+  const [only, second] = group;
 
-  if (!chosen) {
+  if (!only) {
     return {
       provider: first,
       reason: `no supported test runner (${providers.map((p) => p.displayName).join(', ')}) was found`,
       ambiguous: false,
+      candidates: [first],
       installations,
     };
   }
 
   if (!second) {
-    return {
-      provider: chosen.provider,
-      reason: `${chosen.provider.displayName} is the only test runner found (${found(chosen.installation)})`,
-      ambiguous: false,
-      installations,
-    };
-  }
-  const names = candidates.map(({ provider }) => provider.displayName).join(' and ');
-  const scripted = candidates.filter(({ installation }) => installation.testScript);
+    const alone = all.every((entry) => entry === only || !shows(entry));
 
-  if (scripted.length === 1 && scripted[0]) {
-    return {
-      provider: scripted[0].provider,
-      reason: `${names} were found; the test script runs ${scripted[0].provider.displayName}`,
-      ambiguous: false,
-      installations,
-    };
+    return decided(
+      only,
+      `${only.provider.displayName} is the only test runner ${alone ? 'found' : state} (${describe(only)})`,
+    );
   }
+  const names = group.map(({ provider }) => provider.displayName).join(' and ');
+  const scripted = group.filter(({ installation }) => installation.testScript);
+
+  if (scripted.length === 1 && scripted[0])
+    return decided(
+      scripted[0],
+      `${names} are ${state}; the test script runs ${scripted[0].provider.displayName}`,
+    );
+  const withEvidence = group.filter(({ installation }) => installation.evidence.length > 0);
+
+  if (withEvidence.length === 1 && withEvidence[0])
+    return decided(
+      withEvidence[0],
+      `${names} are ${state}; only ${withEvidence[0].provider.displayName} has a config file or a dependency (${describe(withEvidence[0])})`,
+    );
 
   return {
-    provider: chosen.provider,
-    reason: `${names} were found and the test script does not tell them apart, so ${chosen.provider.displayName} was chosen as the default; set analysis.testFramework if the project runs its tests with another`,
+    provider: only.provider,
+    reason: `${names} are ${state} and nothing tells them apart, so ${only.provider.displayName} was chosen as the default; set analysis.testFramework if the project runs its tests with another`,
     ambiguous: true,
+    candidates: group.map(({ provider }) => provider),
     installations,
   };
 }

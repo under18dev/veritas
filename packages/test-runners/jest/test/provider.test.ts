@@ -70,11 +70,35 @@ describe('jestTestRunner detection', () => {
       'node --experimental-vm-modules node_modules/jest/bin/jest.js',
       'tsc && jest',
     ]) {
-      const found = detect(project({ 'package.json': manifest({ scripts: { test: script } }) }));
+      const found = detect(
+        project({ 'package.json': manifest({ scripts: { test: script } }), ...installed('jest', '30.5.2') }),
+      );
 
       expect(found.testScript, script).toBe(true);
       expect(found.evidence).toEqual(['the test script runs jest']);
     }
+  });
+
+  it('counts the test script only when it runs jest as a command, for a project that has Jest', () => {
+    for (const script of [
+      'echo migrated from jest && vitest run',
+      'echo "migrated from jest" && vitest run',
+      'eslint --plugin=jest src',
+      'eslint --plugin jest src',
+      'vitest run --reporter=jest',
+    ])
+      expect(scriptRuns(script, ['jest']), script).toBe(false);
+
+    for (const script of [
+      'cross-env CI=1 jest',
+      'pnpm exec jest --ci',
+      'yarn jest',
+      'npm exec -- jest',
+      'c8 jest',
+    ])
+      expect(scriptRuns(script, ['jest']), script).toBe(true);
+    // A script that runs jest in a project that neither declares nor installs it is not evidence.
+    expect(detect(project({ 'package.json': manifest({ scripts: { test: 'jest' } }) })).evidence).toEqual([]);
   });
 
   it('does not take ts-jest, jest-cli or an installed copy alone for evidence', () => {
@@ -98,7 +122,56 @@ describe('choosing the runner', () => {
 
     expect(choice.provider).toBe(jestTestRunner);
     expect(choice.ambiguous).toBe(false);
-    expect(choice.reason).toBe('Jest is the only test runner found (jest.config.mjs, jest in package.json)');
+    expect(choice.reason).toBe(
+      'Jest is the only test runner found (jest.config.mjs, jest in package.json, but not installed)',
+    );
+  });
+
+  it('never chooses a runner the project neither declares nor installs over an installed one', () => {
+    // A monorepo package: Vitest installed from the root's devDependencies, a Vite config, a turbo test script,
+    // and a Jest config (or "jest" key) left from a migration.
+    const leftovers: [Record<string, unknown>, Record<string, string>][] = [
+      [{}, { 'jest.config.js': 'module.exports = {};' }],
+      [{ jest: { testEnvironment: 'node' } }, {}],
+    ];
+
+    for (const [fields, files] of leftovers) {
+      const root = project({
+        'package.json': manifest({ scripts: { test: 'turbo run test' }, ...fields }),
+        'vite.config.ts': 'export default {};',
+        ...installed('vitest', '5.1.1'),
+        ...files,
+      });
+      const choice = chooseTestRunner(providers, root, readPackageJson(root));
+
+      expect(choice.provider).toBe(vitestTestRunner);
+      expect(choice.ambiguous).toBe(false);
+      expect(choice.reason).toContain('Vitest is the only test runner installed');
+      expect(choice.reason).toContain('Jest also shows up');
+      expect(choice.reason).not.toContain('only test runner found');
+    }
+  });
+
+  it('prefers the installed runner with evidence, and marks a real tie between installed runners', () => {
+    const configured = project({
+      'package.json': manifest({}),
+      'jest.config.mjs': '',
+      ...installed('vitest', '5.1.1'),
+      ...installed('jest', '30.5.2'),
+    });
+
+    expect(chooseTestRunner(providers, configured, readPackageJson(configured)).provider).toBe(
+      jestTestRunner,
+    );
+    const tie = project({
+      'package.json': manifest({}),
+      ...installed('vitest', '5.1.1'),
+      ...installed('jest', '30.5.2'),
+    });
+    const choice = chooseTestRunner(providers, tie, readPackageJson(tie));
+
+    expect(choice).toMatchObject({ provider: vitestTestRunner, ambiguous: true });
+    expect(choice.candidates).toEqual([vitestTestRunner, jestTestRunner]);
   });
 
   it('prefers the runner the test script runs when both are present', () => {
