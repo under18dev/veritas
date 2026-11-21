@@ -49,6 +49,13 @@ describe('mutationStageStatus', () => {
     ).toEqual({ status: 'partial', undecided: 1, empty: false });
   });
 
+  it('is partial when source files were left out of the run, even an incremental one', () => {
+    const run = { status: 'succeeded' as const, mutants: [mutant('killed')], excludedFiles: ['src/a.ts'] };
+    expect(mutationStageStatus(run).status).toBe('partial');
+    expect(mutationStageStatus(run, { incremental: true }).status).toBe('partial');
+    expect(mutationStageStatus({ ...run, status: 'failed' }).status).toBe('failed');
+  });
+
   it('is partial when a complete run has no mutant at all, except in an incremental run', () => {
     expect(mutationStageStatus({ status: 'succeeded', mutants: [] })).toEqual({
       status: 'partial',

@@ -620,6 +620,11 @@ async function runInContext(
           ...(undecided > 0
             ? [`${undecided} mutant(s) not decided (pending or unknown); mutation results are partial`]
             : []),
+          ...(result.excludedFiles?.length
+            ? [
+                `${result.excludedFiles.length} source file(s) left out of mutation (${result.excludedFiles.join(', ')}); mutation results are partial`,
+              ]
+            : []),
           ...(empty && result.status === 'succeeded'
             ? ['no mutant was generated; mutation results are partial']
             : []),
@@ -1353,10 +1358,11 @@ export function literalInput(
  * Stage status for a mutation run. Mutants whose backend status was not recognized (`unknown`) leave the stage
  * `partial`, and so do mutants that were not run (`pending`) unless the run was incremental (`--since`), where
  * mutants outside the change are left out on purpose. A complete run without a single mutant is `partial` too:
- * it is no evidence about the tests. A `partial` stage means the run cannot report `pass`.
+ * it is no evidence about the tests. So is a run that left source files out because their instrumented copy did
+ * not parse. A `partial` stage means the run cannot report `pass`.
  */
 export function mutationStageStatus(
-  result: { status: StageResult['status'] | 'unsupported'; mutants: Mutant[] },
+  result: { status: StageResult['status'] | 'unsupported'; mutants: Mutant[]; excludedFiles?: string[] },
   options: { incremental?: boolean } = {},
 ): { status: StageResult['status']; undecided: number; empty: boolean } {
   const undecided = result.mutants.filter(
@@ -1366,5 +1372,7 @@ export function mutationStageStatus(
 
   if (result.status !== 'succeeded') return { status: result.status, undecided, empty };
 
-  return { status: undecided > 0 || empty ? 'partial' : 'succeeded', undecided, empty };
+  const excluded = (result.excludedFiles?.length ?? 0) > 0;
+
+  return { status: undecided > 0 || empty || excluded ? 'partial' : 'succeeded', undecided, empty };
 }
