@@ -194,7 +194,10 @@ export function detectProject(root: string): ProjectInfo {
   // Only when such a file uses Vitest: a `src/test.ts` utility or a `__tests__/fixtures.ts` alone is not a test.
   const usesVitest = (name: string, parent: string) => {
     try {
-      return /from\s+['"]vitest['"]/.test(readFileSync(path.join(parent, name), 'utf8'));
+      // `import { it } from 'vitest'`, `import 'vitest'` or `require('vitest')`.
+      return /(?:from\s+|import\s+|require\(\s*)['"]vitest['"]/.test(
+        readFileSync(path.join(parent, name), 'utf8'),
+      );
     } catch {
       return false;
     }
@@ -209,7 +212,7 @@ export function detectProject(root: string): ProjectInfo {
     hasFileNamed(
       root,
       (name, parent) =>
-        path.basename(parent) === '__tests__' &&
+        parent.split(path.sep).includes('__tests__') &&
         /\.(?:ts|tsx|js|mjs)$/.test(name) &&
         !/\.(?:test|spec)\./.test(name) &&
         usesVitest(name, parent),

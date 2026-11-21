@@ -661,6 +661,19 @@ describe('doctor', { timeout: 30_000 }, () => {
     expect(detectProject(root).testGlobs).toEqual(['**/*.{test,spec}.{ts,tsx,js,mjs}']);
   });
 
+  it('finds Vitest files deeper under __tests__ and side-effect imports of vitest', () => {
+    const root = tmp();
+    writeFileSync(path.join(root, 'package.json'), '{"name":"p","devDependencies":{"vitest":"^4.0.0"}}');
+    mkdirSync(path.join(root, 'src/__tests__/unit'), { recursive: true });
+    writeFileSync(path.join(root, 'src/__tests__/unit/foo.ts'), "import { it } from 'vitest';\n");
+    writeFileSync(path.join(root, 'src/test.ts'), "import 'vitest';\n");
+    expect(detectProject(root).testGlobs).toEqual([
+      '**/*.{test,spec}.{ts,tsx,js,mjs}',
+      '**/test.{ts,tsx,js,mjs}',
+      '**/__tests__/**/*.{ts,tsx,js,mjs}',
+    ]);
+  });
+
   it("explains that Yarn Plug'n'Play is not supported instead of asking to install again", async () => {
     const root = tmp();
     writeFileSync(path.join(root, 'package.json'), '{"name":"p","devDependencies":{"vitest":"^4.0.0"}}');
