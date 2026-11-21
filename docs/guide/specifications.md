@@ -36,7 +36,7 @@ quote   line 7: "Orders with a total of 1000 or more receive a flat discount of 
 property P-ee03e6e8b749 [proposed, normative] discountAmount: total >= 1000 -> Orders with a total of 1000 or more receive a flat discount of 100.
 ```
 
-A numeric threshold is bound only to a parameter or record field declared as a number. A field such as `lastUsedDay: string | null` is skipped even when its name matches the wording. When other parameters also match the statement, the property lists them in its assumptions so you can check the binding before accepting it.
+A numeric threshold is bound only to a parameter or record field declared as a number. A field such as `lastUsedDay: string | null` is skipped even when its name matches the wording. Numeric enums, branded numbers such as `number & { __brand: "cents" }` and literal unions such as `1 | 2 | 3` count as numbers, and a field whose type Veritas cannot resolve is kept as a candidate. If a number field of the same record fits the statement as well as the compared field but the function never compares it, the statement stays unmapped. When other parameters also match the statement, the property lists them in its assumptions so you can check the binding before accepting it.
 
 A statement that matches no single function stays unmapped and is reported as such, together with the candidates that tied. An optional [LLM provider](/guide/llm-providers) can read statements that the phrase rules do not cover.
 
@@ -91,7 +91,7 @@ veritas spec reject <property-id> --reason "outdated"
 
 When two sources state different rules for the same function and parameter, for example the README says "1000 or more" and an issue says "more than 1000", both properties become `conflicted` and the tests related to them are assessed `spec_conflict`. Veritas shows both sources and, unless they rank equally, names a preferred reading (a statement from a newer release ranks higher, for example). It does not merge the properties or accept one for you. Accept the property that is right and reject the other.
 
-The `spec_conflict` finding is `confirmed` only when every reading in it was extracted by the phrase rules and bound to the parameter without another plausible candidate. If one reading is a threshold an LLM read from free text, or its binding is ambiguous, the finding is `suspected`, and its explanation says which reading is the doubtful one.
+The `spec_conflict` finding is `confirmed` only when every reading in it was extracted by the phrase rules and bound to the parameter without another plausible candidate. If one reading is a threshold an LLM read from free text, comes from text containing instruction-like content, or has an ambiguous binding, the finding is `suspected`, and its explanation says which reading is the doubtful one.
 
 Veritas never edits your README, docs or issues, and never changes a specification or an expected value to match the code.
 
