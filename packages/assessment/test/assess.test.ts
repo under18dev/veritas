@@ -99,14 +99,16 @@ describe('assessTest', () => {
     const a = assessTest(t, unlinked);
     expect(a.outcome).toBe('inconclusive');
     expect(a.rationale[0]).toMatch(
-      /static analysis could not link an assertion to project code, but it killed 1 mutant\(s\), so it does observe project behaviour; which specification it checks is not known/,
+      /static analysis could not link an assertion to project code, but it failed when project code was mutated \(1 mutant\(s\)\); which specification it checks is not known/,
     );
     expect(a.killedMutantIds).toEqual(['M-1']);
 
     // The same holds for a test static analysis thinks never calls its target.
     const notCalled = testCase({ id: 'T-a', suspicions: ['target_not_called'] });
     expect(assessTest(notCalled, unlinked).outcome).toBe('inconclusive');
-    expect(assessTest(notCalled, unlinked).rationale[0]).toMatch(/\(target_not_called\), but it killed 1/);
+    expect(assessTest(notCalled, unlinked).rationale[0]).toMatch(
+      /\(target_not_called\), but it failed when project code was mutated \(1/,
+    );
   });
 
   it('keeps a killing test static analysis could not link inconclusive, even with relevant kills', () => {
@@ -114,7 +116,9 @@ describe('assessTest', () => {
     const a = assessTest(t, input({ mutants: [mutant('M-1', 'killed', ['T-a'], ['T-a'])] }));
     // The kill is spec-relevant and a property is linked, but no assertion is: which property it checks is not known.
     expect(a.outcome).toBe('inconclusive');
-    expect(a.rationale[0]).toMatch(/killed 1 mutant\(s\).*not judged meaningful or weak/);
+    expect(a.rationale[0]).toMatch(
+      /failed when project code was mutated \(1 mutant\(s\)\).*not judged meaningful or weak/,
+    );
   });
 
   it('counts as run only the mutants a disconnected test is known to have run', () => {
@@ -134,6 +138,33 @@ describe('assessTest', () => {
     const full = assessTest(t, input({ mutants, ranMutantIds: new Map([['T-a', new Set(['M-2'])]]) }));
     expect(full.rationale).toContain('killed none of the 2 mutant(s) it runs');
     expect(full.rationale.join(' ')).not.toMatch(/another test first/);
+  });
+
+  it('counts every covered mutant as run under a kill matrix', () => {
+    const t = testCase({ id: 'T-a', targetCalls: [call(['1'], false)] });
+    const mutants = [
+      mutant('M-1', 'survived', [], ['T-a']),
+      mutant('M-2', 'killed', ['T-b'], ['T-a', 'T-b']),
+    ];
+    const a = assessTest(t, input({ mutants, killMatrix: true }));
+    expect(a.rationale).toContain('killed none of the 2 mutant(s) it runs');
+    expect(a.rationale.join(' ')).not.toMatch(/another test first/);
+  });
+
+  it('keeps a test whose project code only could reach what it reads inconclusive, naming the route', () => {
+    const t = testCase({
+      id: 'T-a',
+      suspicions: ['reachable_by_name'],
+      targetCalls: [{ ...call(['1'], false), reachedVia: ['mocked module src/api.ts'] }],
+    });
+    const a = assessTest(t, input({ mutants: [mutant('M-1', 'survived', [], ['T-a'])] }));
+    expect(a.outcome).toBe('inconclusive');
+    expect(a.vector.assertionRelevance).toBe('unknown');
+    expect(a.rationale.join(' ')).toMatch(
+      /can reach what it reads \(mocked module src\/api.ts\); not shown to be what the assertion checks/,
+    );
+    expect(a.rationale.join(' ')).not.toMatch(/asserts a project result/);
+    expect(unlinkedByInference(t)).toBe(false);
   });
 
   it('tells which tests a killed mutant can show to be linked', () => {

@@ -42,6 +42,8 @@ export interface AssessInput {
    * may never have run it; only survivors are known to have run against every test covering them.
    */
   ranMutantIds?: ReadonlyMap<string, ReadonlySet<string>>;
+  /** The run used `--kill-matrix`: every test covering a mutant ran it, so no kill hides another test's verdict. */
+  killMatrix?: boolean;
 }
 
 /**
@@ -58,7 +60,8 @@ export function unlinkedByInference(test: TestCase): boolean {
     s.includes('unresolved_import') ||
     s.includes('opaque_call') ||
     s.includes('progress_only') ||
-    s.includes('caller_supplied');
+    s.includes('caller_supplied') ||
+    s.includes('reachable_by_name');
 
   return s.includes('target_not_called') || (!test.targetCalls.some((c) => c.asserted) && !linkUnknown);
 }
@@ -125,9 +128,13 @@ export function assessTest(
   const opaque = test.suspicions.includes('opaque_call');
   const progressOnly = test.suspicions.includes('progress_only');
   const callerSupplied = test.suspicions.includes('caller_supplied');
+  // Project code could reach what the test reads without being handed it (a mocked module, a global): possible, not
+  // shown, so the link is unknown rather than absent.
+  const reachable = test.suspicions.includes('reachable_by_name');
+  const routes = [...new Set(test.targetCalls.flatMap((c) => c.reachedVia ?? []))];
   // Static analysis could not see everything the test reaches, or the test checks when a call settles rather than
   // what it returns: either way a missing link is not proof of none.
-  const linkUnknown = unresolved || opaque || progressOnly || callerSupplied;
+  const linkUnknown = unresolved || opaque || progressOnly || callerSupplied || reachable;
 
   const boundaryCoverage: EvidenceVector['boundaryCoverage'] = [];
 
@@ -241,7 +248,7 @@ export function assessTest(
     if (input.mutationAvailable && covered.length > 0 && killed.length === 0) {
       const known = input.ranMutantIds?.get(test.id);
       const decided = covered.filter((m) => m.status === 'killed' || m.status === 'survived');
-      const ran = decided.filter((m) => m.status === 'survived' || known?.has(m.id));
+      const ran = decided.filter((m) => input.killMatrix || m.status === 'survived' || known?.has(m.id));
       const unchecked = decided.length - ran.length;
 
       if (ran.length > 0) rationale.push(`killed none of the ${ran.length} mutant(s) it runs`);
@@ -268,6 +275,11 @@ export function assessTest(
     if (progressOnly)
       rationale.push(
         'asserts only on constants recorded after awaiting a project call: it checks that the call settles (does not block), which static analysis cannot link to the call',
+      );
+
+    if (reachable)
+      rationale.push(
+        `project code it calls can reach what it reads (${routes.join('; ') || 'by name'}); not shown to be what the assertion checks`,
       );
 
     if (callerSupplied)
@@ -310,14 +322,10 @@ export function assessTest(
     }
   } else if (!input.mutationAvailable) {
     outcome = 'inconclusive';
-    rationale.push(
-      `${assertedCall ? 'asserts a project result' : 'kills mutants'}, but detection power was not measured (no mutation results)`,
-    );
+    rationale.push('asserts a project result, but detection power was not measured (no mutation results)');
   } else if (properties.length === 0) {
     outcome = 'inconclusive';
-    rationale.push(
-      `${assertedCall ? 'asserts a project result' : 'kills mutants'}, but no property is linked to the functions it calls`,
-    );
+    rationale.push('asserts a project result, but no property is linked to the functions it calls');
   } else if (
     linkUnknown &&
     relevantKilled.length > 0 &&
@@ -348,7 +356,7 @@ export function assessTest(
 
   if (killEvidence)
     rationale.unshift(
-      `static analysis could not link an assertion to project code${test.suspicions.length ? ` (${test.suspicions.join(', ')})` : ''}, but it killed ${killed.length} mutant(s), so it does observe project behaviour; which specification it checks is not known without an assertion linked to project code, so it is not judged meaningful or weak`,
+      `static analysis could not link an assertion to project code${test.suspicions.length ? ` (${test.suspicions.join(', ')})` : ''}, but it failed when project code was mutated (${killed.length} mutant(s)); which specification it checks is not known without an assertion linked to project code, so it is not judged meaningful or weak`,
     );
 
   const limitations = [...unknowns];

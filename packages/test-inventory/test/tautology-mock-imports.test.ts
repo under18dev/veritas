@@ -88,7 +88,7 @@ describe('tautology, mocks, and imports', () => {
     ]);
   });
 
-  it('links a mock of a module project code imports when project code called before the assertion loads it', () => {
+  it('records that project code loading a mocked module could have called its mock, without calling it asserted', () => {
     const root = tempProject({
       'src/api.ts': 'export function send(message: string): void { void message; }\n',
       'src/log.ts':
@@ -129,8 +129,19 @@ describe('tautology, mocks, and imports', () => {
       return test.targetCalls.some((call) => call.asserted);
     };
 
-    expect(asserted('named')).toBe(true);
-    expect(asserted('namespace')).toBe(true);
+    // Project code that loads the mocked module could have called the mock: recorded as a route, never as asserted.
+    expect(asserted('named')).toBe(false);
+    expect(asserted('namespace')).toBe(false);
+    for (const name of ['named', 'namespace'])
+      expect(tests.find((test) => test.name === name)?.suspicions).toContain('reachable_by_name');
+    for (const name of [
+      'not loading',
+      'before the call',
+      'self called',
+      'mocked module itself',
+      'not mocked',
+    ])
+      expect(tests.find((test) => test.name === name)?.suspicions).not.toContain('reachable_by_name');
     // The project code called does not load the mocked module, so it cannot have called the mock.
     expect(asserted('not loading')).toBe(false);
     // Read before project code ran.

@@ -4,8 +4,14 @@ import { describe, expect, it } from 'vitest';
 import { inventoryTests } from '../src/index.js';
 import { tempProject } from './helpers.js';
 
-/** Whether each named test has an asserted project call, for a project and one test file. */
-function asserted(files: Record<string, string>, test: string): (name: string) => boolean {
+/**
+ * For a project and one test file, whether each named test has an asserted project call (`asserted`), only a call
+ * whose code could reach what it reads (`reachable`, never counted as asserted), or neither (`none`).
+ */
+function asserted(
+  files: Record<string, string>,
+  test: string,
+): (name: string) => 'asserted' | 'reachable' | 'none' {
   const root = tempProject({ ...files, 'test/subject.test.ts': test });
   const tests = inventoryTests({
     recognition: vitest.recognition,
@@ -18,7 +24,15 @@ function asserted(files: Record<string, string>, test: string): (name: string) =
 
     if (!found) throw new Error(`missing test: ${name}`);
 
-    return found.targetCalls.some((call) => call.asserted);
+    if (found.targetCalls.some((call) => call.asserted)) return 'asserted';
+
+    if (found.suspicions.includes('reachable_by_name')) {
+      expect(found.targetCalls.some((call) => call.reachedVia?.length)).toBe(true);
+
+      return 'reachable';
+    }
+
+    return 'none';
   };
 }
 
@@ -55,10 +69,10 @@ describe('links through globals and mocked modules', () => {
       `,
     );
 
-    expect(byName('after the call')).toBe(true);
-    expect(byName('before the call')).toBe(false);
-    expect(byName('code without document')).toBe(false);
-    expect(byName('what the test wrote')).toBe(false);
+    expect(byName('after the call')).toBe('reachable');
+    expect(byName('before the call')).toBe('none');
+    expect(byName('code without document')).toBe('none');
+    expect(byName('what the test wrote')).toBe('none');
   });
 
   it('links a spy on a global object or prototype when project code uses that API', () => {
@@ -102,11 +116,11 @@ describe('links through globals and mocked modules', () => {
       `,
     );
 
-    expect(byName('prototype spy')).toBe(true);
-    expect(byName('document spy')).toBe(true);
-    expect(byName('code without the API')).toBe(false);
-    expect(byName('self-called spy')).toBe(false);
-    expect(byName('read before the call')).toBe(false);
+    expect(byName('prototype spy')).toBe('reachable');
+    expect(byName('document spy')).toBe('reachable');
+    expect(byName('code without the API')).toBe('none');
+    expect(byName('self-called spy')).toBe('none');
+    expect(byName('read before the call')).toBe('none');
   });
 
   it('links a mock the test puts into a global that project code reads', () => {
@@ -158,11 +172,11 @@ describe('links through globals and mocked modules', () => {
       `,
     );
 
-    expect(byName('assigned')).toBe(true);
-    expect(byName('through a helper')).toBe(true);
-    expect(byName('stubbed')).toBe(true);
-    expect(byName('code without the global')).toBe(false);
-    expect(byName('kept out of the global')).toBe(false);
+    expect(byName('assigned')).toBe('reachable');
+    expect(byName('through a helper')).toBe('reachable');
+    expect(byName('stubbed')).toBe('reachable');
+    expect(byName('code without the global')).toBe('none');
+    expect(byName('kept out of the global')).toBe('none');
   });
 
   it('links a mock a mocked function returns, or a module mock factory holds, to code that loads the module', () => {
@@ -222,12 +236,111 @@ describe('links through globals and mocked modules', () => {
       `,
     );
 
-    expect(byName('alias of a mocked export')).toBe(true);
-    expect(byName('plain alias of a mocked export')).toBe(true);
-    expect(byName('alias, code not loading the module')).toBe(false);
-    expect(byName('returned object')).toBe(true);
-    expect(byName('returned object, code not loading the module')).toBe(false);
-    expect(byName('factory')).toBe(true);
-    expect(byName('factory, member not handed over')).toBe(false);
+    // `vi.mocked(load)` itself counts as a call of `load` whose result the assertion reads.
+    expect(byName('alias of a mocked export')).toBe('asserted');
+    expect(byName('plain alias of a mocked export')).toBe('reachable');
+    expect(byName('alias, code not loading the module')).toBe('none');
+    expect(byName('returned object')).toBe('reachable');
+    expect(byName('returned object, code not loading the module')).toBe('none');
+    expect(byName('factory')).toBe('reachable');
+    expect(byName('factory, member not handed over')).toBe('none');
+  });
+
+  it('records no route where project code reachable from the call does not use the global, API or module', () => {
+    const byName = asserted(
+      {
+        'src/math.ts':
+          'export function add(a: number, b: number): number { return a + b; }\nexport function setTitle(t: string): void { document.title = t; }\n',
+        'src/calc.ts':
+          "import { fmt } from './util.js';\nexport function area(r: number): number { return Math.log(r) + r; }\nexport function label(x: number) { return fmt(x); }\n",
+        'src/util.ts':
+          'export function fmt(x: number): string { return String(x); }\nexport function unrelated(): void { document.body.focus(); }\n',
+        'src/widget.ts':
+          'const foo = { focus(): number { return 1; } };\nexport function pick(): number { return foo.focus(); }\n',
+        'src/api.ts':
+          "export function send(x: string): void { void x; }\nexport function get(): string { return 'g'; }\n",
+        'src/format.ts':
+          "import { send } from './api.js';\nexport function format(x: string): string { return x.trim(); }\nexport function ship(x: string): void { send(x); }\n",
+        'src/store.ts':
+          'export class Store { fetch(): number { return 1; } }\nexport function count(): number { return new Store().fetch(); }\n',
+        'src/flag.ts':
+          "declare global { interface Window { analytics?: { track(e: string): void } } }\nexport function maybeTrack(on: boolean): void { if (on) window.analytics?.track('x'); }\n",
+        'test/helpers.ts':
+          "import { send } from '../src/api.js';\nexport function fill(): void { document.body.innerHTML = '<p>x</p>'; }\nexport function logIt(m: string): void { console.log(m); }\nexport function sendIt(m: string): void { send(m); }\nexport function doFetch(): void { void fetch('u'); }\nexport function track(): void { window.analytics?.track('x'); }\n",
+      },
+      `
+        import { expect, it, vi } from 'vitest';
+        import { add } from '../src/math.js';
+        import { label, area } from '../src/calc.js';
+        import { pick } from '../src/widget.js';
+        import { format } from '../src/format.js';
+        import { send } from '../src/api.js';
+        import { count } from '../src/store.js';
+        import { maybeTrack } from '../src/flag.js';
+        import { fill, logIt, sendIt, doFetch, track } from './helpers.js';
+        vi.mock('../src/api.js');
+        it('document in another function of the same file', () => {
+          add(1, 2);
+          expect(document.body.children.length).toBe(0);
+        });
+        it('document in an unrelated function of an imported file', () => {
+          label(1);
+          expect(document.body.children.length).toBe(0);
+        });
+        it('prototype spy, member of the same name on a plain object', () => {
+          const spy = vi.spyOn(HTMLElement.prototype, 'focus');
+          pick();
+          expect(spy).not.toHaveBeenCalled();
+        });
+        it('console.log spy, project uses Math.log and a helper logs', () => {
+          const spy = vi.spyOn(console, 'log');
+          area(2);
+          logIt('x');
+          expect(spy).toHaveBeenCalledWith('x');
+        });
+        it('mocked export called by the test', () => {
+          format(' a ');
+          send('y');
+          expect(send).toHaveBeenCalledWith('y');
+        });
+        it('mocked export called by a test helper', () => {
+          format(' a ');
+          sendIt('y');
+          expect(send).toHaveBeenCalledWith('y');
+        });
+        it('stubbed fetch, project has a method named fetch and a helper fetches', () => {
+          const f = vi.fn();
+          vi.stubGlobal('fetch', f);
+          count();
+          doFetch();
+          expect(f).toHaveBeenCalledWith('u');
+        });
+        it('global read under a branch the test does not take, and by a helper', () => {
+          const t = vi.fn();
+          window.analytics = { track: t };
+          maybeTrack(false);
+          track();
+          expect(t).toHaveBeenCalled();
+        });
+        it('page written by a test helper', () => {
+          add(1, 2);
+          fill();
+          expect(document.body.innerHTML).toContain('x');
+        });
+      `,
+    );
+
+    for (const name of [
+      'document in another function of the same file',
+      'document in an unrelated function of an imported file',
+      'prototype spy, member of the same name on a plain object',
+      'console.log spy, project uses Math.log and a helper logs',
+      'mocked export called by the test',
+      'mocked export called by a test helper',
+      'stubbed fetch, project has a method named fetch and a helper fetches',
+      'global read under a branch the test does not take, and by a helper',
+      'page written by a test helper',
+    ])
+      expect(byName(name), name).toBe('none');
   });
 });
