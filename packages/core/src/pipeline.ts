@@ -41,6 +41,9 @@ export function addUsage(a: UsageCounters, b: Partial<UsageCounters>): UsageCoun
   };
 }
 
+/** Stage messages sent as events per stage, so a stage with many messages cannot flood a trace (all stay in the run). */
+const STAGE_MESSAGE_EVENT_LIMIT = 200;
+
 /**
  * Runs stages in order. A thrown error becomes an `error` stage result instead of aborting silently;
  * a stage never reports `succeeded` on behalf of another. Dependents of a failed stage are `skipped`.
@@ -94,8 +97,16 @@ export async function runStages(stages: Stage[], ctx: Omit<StageContext, 'output
       },
     );
 
-    for (const message of outcome.messages ?? [])
+    const messages = outcome.messages ?? [];
+
+    for (const message of messages.slice(0, STAGE_MESSAGE_EVENT_LIMIT))
       logEvent('debug', message, { event: 'stage-message', stage: stage.name });
+
+    if (messages.length > STAGE_MESSAGE_EVENT_LIMIT)
+      logEvent('debug', `${messages.length - STAGE_MESSAGE_EVENT_LIMIT} more message(s) not sent as events`, {
+        event: 'stage-message',
+        stage: stage.name,
+      });
     statusOf.set(stage.name, outcome.status);
     results.push({
       stage: stage.name,
