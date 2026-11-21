@@ -181,7 +181,7 @@ export async function runInitWizard(
     if (
       yes(
         await prompter.ask(
-          `Add @mizchi/mutator to the project (\`${command.join(' ')}\`)? Mutation testing then uses the project's Vitest, test environments and plugins. [y/N] `,
+          `Add @mizchi/mutator to the project (\`${command.join(' ')}\`)? Mutation testing then loads all of mutator's files from the project instead of from where Veritas is installed. [y/N] `,
         ),
       )
     )
