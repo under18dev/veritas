@@ -376,6 +376,32 @@ export function debounce(options: { delay?: number }, f: () => void): () => void
     expect(get('mock handed over only in another test').asserted).toBe(false);
   });
 
+  it('links what the traps of a proxy handed to project code record', () => {
+    const get = inventory(`${header}
+      it('inline proxy', () => {
+        const keys: PropertyKey[] = [];
+        fn(new Proxy({}, { get(t, k) { keys.push(k); return 1; } }) as never);
+        expect(keys).toEqual(['valueOf']);
+      });
+      it('proxy in a variable', () => {
+        const keys: PropertyKey[] = [];
+        const entry = new Proxy({ a: 1 }, { get: (t, k) => { keys.push(k); return 1; } });
+        fn(entry as never);
+        expect(keys).toEqual(['a']);
+      });
+      it('proxy never handed over', () => {
+        const keys: PropertyKey[] = [];
+        const entry = new Proxy({ a: 1 }, { get: (t, k) => { keys.push(k); return 1; } });
+        fn(1);
+        void entry.a;
+        expect(keys).toEqual(['a']);
+      });
+    `);
+    expect(get('inline proxy').asserted).toBe(true);
+    expect(get('proxy in a variable').asserted).toBe(true);
+    expect(get('proxy never handed over').asserted).toBe(false);
+  });
+
   it('links counters a callback increments and locals that store project results', () => {
     const extra = {
       'src/fns.ts': `export function each(items: number[], cb: () => void) { for (const _ of items) cb(); }

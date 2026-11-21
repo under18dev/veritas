@@ -781,7 +781,8 @@ function handedOver(fn: ts.Node, value: ts.Node): boolean {
 
     if (
       (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
-      parent.arguments?.includes(current as ts.Expression)
+      parent.arguments?.includes(current as ts.Expression) &&
+      !isProxyHandler(parent, current)
     )
       return false;
 
@@ -860,6 +861,19 @@ function runsBefore(node: ts.Node, body: ts.Node): boolean {
   }
 
   return true;
+}
+
+/**
+ * Whether `node` is the handler of `new Proxy(target, handler)`: its traps run whenever whoever receives the proxy
+ * uses it, so they are handed over with the proxy.
+ */
+function isProxyHandler(invocation: ts.CallExpression | ts.NewExpression, node: ts.Node): boolean {
+  return (
+    ts.isNewExpression(invocation) &&
+    ts.isIdentifier(invocation.expression) &&
+    invocation.expression.text === 'Proxy' &&
+    invocation.arguments?.[1] === node
+  );
 }
 
 /** Variables declared outside a callback that it assigns (`x = …`, `x.y = …`) or mutates (`x.push(…)`). */
