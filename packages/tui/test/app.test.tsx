@@ -193,29 +193,49 @@ function fakeApi(overrides: Partial<TuiApi> = {}): TuiApi {
 let unmount: (() => void) | undefined;
 afterEach(() => unmount?.());
 
+/** Press ↓ until the screen shows `text`, as a user scrolls to it; fails when it never appears. */
+async function scrollUntil(app: ReturnType<typeof render>, text: string, limit = 40) {
+  for (let i = 0; i < limit && !app.lastFrame()?.includes(text); i++) await press(app, KEY.down);
+  await until(app, text);
+}
+
+/** Open the screen at menu position `screen` (0 is Home) with its number key, once the menu is drawn. */
 async function open(api: TuiApi, screen: number) {
   const app = render(<App api={api} />);
   unmount = app.unmount;
-  await tick();
-  for (let i = 0; i < screen; i++) app.stdin.write(KEY.down);
-  await tick();
-  app.stdin.write(KEY.enter);
-  await tick();
+  await until(app, '6 Settings');
+  await press(app, String(screen + 1));
 
   return app;
 }
 
+/** How long a wait for the screen may take: generous, for slow CI runners, and well inside the test timeout. */
+const WAIT_MS = 10_000;
+/** A key that changes nothing on the screen draws no frame; a press waits this long for one before going on. */
+const KEY_FRAME_MS = 1_000;
+
 /** Wait until the screen shows `text`; loads are asynchronous, so a key sent earlier would be lost. */
 async function until(app: ReturnType<typeof render>, text: string) {
-  for (let i = 0; i < 200 && !app.lastFrame()?.includes(text); i++) await tick(10);
+  const end = Date.now() + WAIT_MS;
+
+  while (!app.lastFrame()?.includes(text) && Date.now() < end) await tick(10);
   expect(app.lastFrame()).toContain(text);
   // Input handlers subscribe in effects, after the frame is drawn.
   await tick();
 }
 
+/**
+ * Press keys one at a time. Each key waits for the frame it causes, then for the effects that subscribe the next
+ * input handlers, so the next key is handled by a screen that has seen the previous one. A fixed sleep would race on
+ * a slow runner.
+ */
 async function press(app: ReturnType<typeof render>, ...keys: string[]) {
   for (const k of keys) {
+    const before = app.frames.length;
+    const end = Date.now() + KEY_FRAME_MS;
+
     app.stdin.write(k);
+    while (app.frames.length === before && Date.now() < end) await tick(5);
     await tick();
   }
 }
@@ -332,12 +352,12 @@ describe('the TUI', { timeout: 20_000 }, () => {
     expect(frame).toContain('1 weak_or_incomplete');
     expect(frame).toContain('2 survived');
     // The cards scroll; the next steps and the tools are further down.
-    for (let i = 0; i < 8; i++) await press(app, KEY.down);
-    await until(app, 'Next steps');
+    await scrollUntil(app, 'Review 1 proposed specification');
+    expect(app.lastFrame()).toContain('Next steps');
     expect(app.lastFrame()).toContain('Read 2 findings of the latest run');
     expect(app.lastFrame()).toContain('Review 1 proposed specification');
-    for (let i = 0; i < 12; i++) await press(app, KEY.down);
-    await until(app, 'Tools');
+    await scrollUntil(app, 'no llm limits improve');
+    expect(app.lastFrame()).toContain('Tools');
     expect(app.lastFrame()).toContain('✔ mutate');
     expect(app.lastFrame()).toContain('! improve');
     expect(app.lastFrame()).toContain('no llm limits improve');
@@ -410,8 +430,8 @@ describe('the TUI', { timeout: 20_000 }, () => {
     expect(frame).toContain('Locations (1)');
     expect(frame).toContain('test/a.test.ts');
     // The rest is further down; the view scrolls.
-    for (let i = 0; i < 20; i++) await press(app, KEY.down);
-    await until(app, 'SUGGESTED next actions, not verified');
+    await scrollUntil(app, '> add a test at 1000');
+    expect(app.lastFrame()).toContain('SUGGESTED next actions, not verified');
     const end = app.lastFrame() ?? '';
     expect(end).toContain('> add a test at 1000');
     expect(end).toContain('T-1: weak_or_incomplete no boundary input');
@@ -650,7 +670,7 @@ describe('the TUI', { timeout: 20_000 }, () => {
     await until(app, '1 unsaved');
     expect(app.lastFrame()).toMatch(/\* Local\s+off\s+changed/);
     await press(app, KEY.enter);
-    await tick();
+    await until(app, 'now on (default)');
     expect(app.lastFrame()).not.toContain('unsaved');
     // Network sources are marked and explained.
     await press(app, KEY.down);
