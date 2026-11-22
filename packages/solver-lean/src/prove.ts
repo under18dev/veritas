@@ -31,9 +31,16 @@ export interface ProveWithLeanOptions extends LeanToolOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * A Lean check outcome, or `skipped` for a strategy abandoned before Lean ran (its script hit a generation budget).
+ * A skipped strategy never wins and never counts towards the claim's status; its reason is kept for the record.
+ */
+export const LeanAttemptStatus = z.enum([...LeanCheckStatus.options, 'skipped']);
+export type LeanAttemptStatus = z.infer<typeof LeanAttemptStatus>;
+
 export const LeanAttempt = z.object({
   strategy: z.string(),
-  status: LeanCheckStatus,
+  status: LeanAttemptStatus,
   reasons: z.array(z.string()),
   durationMs: z.number().nonnegative(),
   source: z.string(),
@@ -199,8 +206,17 @@ export async function proveWithLean(options: ProveWithLeanOptions): Promise<Lean
     let input: string | undefined;
 
     for (const strategy of strategies) {
-      // A strategy whose script hit its generation budget has nothing to try.
-      if (strategy.script.length === 0) continue;
+      // A strategy whose script hit its generation budget has nothing to try: record why, without running Lean.
+      if (strategy.script.length === 0) {
+        attempts.push({
+          strategy: strategy.name,
+          status: 'skipped',
+          reasons: [strategy.skipReason ?? 'generated script exceeded the size budget'],
+          durationMs: 0,
+          source: '',
+        });
+        continue;
+      }
       const source = irToLean(options.ir, { theoremName, strategy });
       input = write(`${PROOF_NAMESPACE}.lean`, source);
       const check = await checkLeanProject(dir, {
