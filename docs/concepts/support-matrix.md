@@ -26,19 +26,21 @@ What the current release supports: features, the formal subset, environments and
 
 ## Formal subset
 
-| Construct                                                                                                                                             | Supported                                            |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| Parameters/results of type `number` (as bounded safe integers) or `boolean`                                                                           | Yes                                                  |
-| Record parameters: object types (literal, `interface` or `type` in the same file) whose properties are all `number` or `boolean`; read as `p.field`   | Yes (not as results)                                 |
-| Array parameters (`number[]`, `boolean[]`, `readonly`, `Array<T>`) up to `formal.maxArrayLength` elements; `xs.length` and `xs[k]` with a literal `k` | Yes (not as results)                                 |
-| Nested records, optional properties, passing or returning a record/array, computed indexes, array methods, spread                                     | Unsupported                                          |
-| `if`/`else`, ternary, `return`, `const`                                                                                                               | Yes                                                  |
-| `+ - *`, comparisons, `=== !==`, `&&`, `\|\|`, `!`, unary `-`                                                                                         | Yes                                                  |
-| Calls to other supported functions in the same file                                                                                                   | Yes (no recursion; not with record/array parameters) |
-| `/`, `%`, `**`, floats, `NaN`, `Infinity`, `==`, `??`, casts                                                                                          | Unsupported                                          |
-| Loops, `let`/`var`, side effects, async, generators, `this`, external state                                                                           | Unsupported                                          |
+| Construct                                                                                                                                                                           | Supported            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| Parameters/results of type `number` (as bounded safe integers) or `boolean`                                                                                                         | Yes                  |
+| Record parameters: object types (literal, `interface` or `type` in the same file) whose properties are all `number` or `boolean`; read as `p.field`                                 | Yes (not as results) |
+| Array parameters (`number[]`, `boolean[]`, `readonly`, `Array<T>`) up to `formal.maxArrayLength` elements; `xs.length` and `xs[k]` with a literal `k`                               | Yes (not as results) |
+| Passing a record to a function in the same file: a record parameter with exactly the same fields, or an object literal listing each field once (`g({ total: o.total, vip: true })`) | Yes                  |
+| Passing an array parameter with the same element type to a function in the same file                                                                                                | Yes                  |
+| Nested records, optional properties, returning or copying a record/array, extra or missing fields, spread, computed keys, array literals, computed indexes, array methods           | Unsupported          |
+| `if`/`else`, ternary, `return`, `const`                                                                                                                                             | Yes                  |
+| `+ - *`, comparisons, `=== !==`, `&&`, `\|\|`, `!`, unary `-`                                                                                                                       | Yes                  |
+| Calls to other supported functions in the same file                                                                                                                                 | Yes (no recursion)   |
+| `/`, `%`, `**`, floats, `NaN`, `Infinity`, `==`, `??`, casts                                                                                                                        | Unsupported          |
+| Loops, `let`/`var`, side effects, async, generators, `this`, external state                                                                                                         | Unsupported          |
 
-Lean proofs cover integer and boolean parameters only; a property over records or arrays is `unsupported` with the Lean backend. Property-based tests draw inputs from the same subset (bounded integers, booleans, and records and arrays of them); strings, floats, `NaN`, `Infinity` and Unicode text are never generated.
+Lean proofs cover integer, boolean and record parameters; a property over arrays is `unsupported` with the Lean backend. Property-based tests draw inputs from the same subset (bounded integers, booleans, and records and arrays of them); strings, floats, `NaN`, `Infinity` and Unicode text are never generated.
 
 ## Environments
 
