@@ -5168,6 +5168,25 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) return false;
 
+    // A mock made here (`vi.fn(impl)`, `vi.spyOn(o, 'm').mockImplementation(impl)`) runs its implementation when
+    // what it is given to calls it.
+    if (ts.isCallExpression(expression)) {
+      for (let call: ts.Expression = expression; ; ) {
+        call = skipParens(call);
+
+        if (ts.isCallExpression(call)) {
+          if (
+            DEFERRING.has(accessedMember(skipParens(call.expression)) ?? '') &&
+            !call.arguments.every(passable)
+          )
+            return false;
+          call = call.expression;
+        } else if (ts.isPropertyAccessExpression(call) || ts.isElementAccessExpression(call))
+          call = call.expression;
+        else break;
+      }
+    }
+
     return inert(expression);
   };
   /** An expression run as a statement at collection level: a directive, or a call of the runner's API. */

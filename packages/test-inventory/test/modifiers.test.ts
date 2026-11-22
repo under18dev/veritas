@@ -240,6 +240,10 @@ describe('full names static analysis cannot read', () => {
       assertNullish: 'assert.throws(null ?? sharedSuite);',
       waitForComma: 'vi.waitFor((0, sharedSuite));',
       expectAs: 'expect(sharedSuite as any).toBeDefined();',
+      expectMockOf: 'expect(vi.fn(sharedSuite)).not.toThrow();',
+      expectMockImplementation: 'expect(vi.fn().mockImplementation(sharedSuite)).not.toThrow();',
+      expectSpyImplementation:
+        "expect(vi.spyOn(console, 'log').mockImplementation(() => sharedSuite())).not.toThrow();",
       expectImport: 'expect(sharedSuite).toBeDefined();',
       mockedPathNotLiteral: "const where = './x.js'; vi.mock(where);",
       testArgument: "it('x', sharedSuite());",
@@ -291,6 +295,7 @@ describe('full names static analysis cannot read', () => {
         "const g = vi.fn().mockImplementation(() => double(1)); it('g', () => { g(); });",
       expectValue: "const n = 1; const row = { a: [1, 'x'] }; expect(n).toBe(1); expect(row).toEqual(row);",
       expectChoice: 'const flag = true; expect(flag ? 1 : 2).toBe(1); expect(() => flag).not.toThrow();',
+      expectMockOfInline: 'expect(vi.fn(() => 1)).not.toThrow();',
       spyOn: "vi.spyOn(console, 'log'); it('s', () => {});",
       expectExtend:
         "expect.extend({ toBeTwo(received: number) { return { pass: received === 2, message: () => 'two' }; } });",
