@@ -224,12 +224,22 @@ describe('full names static analysis cannot read', () => {
       expectFunction: 'expect(() => sharedSuite()).toThrow();',
       assertFunction: 'assert.throws(() => sharedSuite());',
       waitFor: 'vi.waitFor(() => sharedSuite());',
-      expectFunctionReference: 'const f = () => sharedSuite(); expect(f).toThrow();',
-      expectFunctionDeclaration: 'function f2() { sharedSuite(); } expect(f2).toThrow();',
+      expectFunctionReference:
+        "import { pkgRun } from 'external-test-package'; const f = () => pkgRun(); expect(f).toThrow();",
+      expectFunctionDeclaration:
+        "import { pkgRun } from 'external-test-package'; function f2() { pkgRun(); } expect(f2).toThrow();",
       expectMock: 'const m = vi.fn(() => sharedSuite()); expect(m).toThrow();',
       assertMember: 'assert.throws(helpers.run);',
-      waitForReference: 'const g = () => sharedSuite(); vi.waitFor(g);',
+      waitForReference:
+        "import { pkgRun } from 'external-test-package'; const g = () => pkgRun(); vi.waitFor(g);",
       pollImport: 'expect.poll(sharedSuite);',
+      callbackDefault: 'expect((run = sharedSuite) => run()).not.toThrow();',
+      callbackParameter: 'expect((run: () => void) => run()).not.toThrow();',
+      expectConditional: 'expect(true ? sharedSuite : sharedSuite).not.toThrow();',
+      expectAnd: 'expect(true && sharedSuite).toBeDefined();',
+      assertNullish: 'assert.throws(null ?? sharedSuite);',
+      waitForComma: 'vi.waitFor((0, sharedSuite));',
+      expectAs: 'expect(sharedSuite as any).toBeDefined();',
       expectImport: 'expect(sharedSuite).toBeDefined();',
       mockedPathNotLiteral: "const where = './x.js'; vi.mock(where);",
       testArgument: "it('x', sharedSuite());",
@@ -280,6 +290,7 @@ describe('full names static analysis cannot read', () => {
       implementationNotCalled:
         "const g = vi.fn().mockImplementation(() => double(1)); it('g', () => { g(); });",
       expectValue: "const n = 1; const row = { a: [1, 'x'] }; expect(n).toBe(1); expect(row).toEqual(row);",
+      expectChoice: 'const flag = true; expect(flag ? 1 : 2).toBe(1); expect(() => flag).not.toThrow();',
       spyOn: "vi.spyOn(console, 'log'); it('s', () => {});",
       expectExtend:
         "expect.extend({ toBeTwo(received: number) { return { pass: received === 2, message: () => 'two' }; } });",
@@ -370,8 +381,11 @@ describe('full names static analysis cannot read', () => {
     });
     const marked = (file: string) => inventory.files.find((f) => f.path === file)?.inexactNames;
 
-    for (const name of Object.keys(open))
-      expect(marked(`test/open-${name}.test.ts`), name).toBe('open_collection');
+    expect(
+      Object.keys(open)
+        .map((name) => [name, marked(`test/open-${name}.test.ts`)])
+        .filter(([, reason]) => reason !== 'open_collection'),
+    ).toEqual([]);
     for (const name of Object.keys(closed))
       expect(marked(`test/closed-${name}.test.ts`), name).toBeUndefined();
     for (const name of Object.keys(loadsRegistering))

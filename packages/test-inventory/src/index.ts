@@ -4679,7 +4679,7 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
         runner.hooks.has(runnerExport(skipParens(call.expression))?.name ?? ''));
 
     return call.arguments.every((argument) => {
-      if (isFunction(argument)) return defers || closedFunction(argument, true);
+      if (isFunction(argument)) return defers || closedFunction(argument, factory ? 'factory' : 'immediate');
 
       // A factory passed by reference (`vi.mock(path, factory)`) is not checked: only data may be passed.
       if (factory)
@@ -4690,17 +4690,9 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
         );
 
       // An API that may call what it is given (`expect(f).toThrow()`, `assert.throws(f)`, `vi.waitFor(f)`) must not
-      // be given anything that may be a function, unless it only stores values (`it.each(rows)`, `vi.spyOn`).
-      const argumentNode = skipParens(argument);
-
-      if (
-        !defers &&
-        !(member !== undefined && NON_CALLING.has(member)) &&
-        ((ts.isIdentifier(argumentNode) && !dataConstants.has(argumentNode.text)) ||
-          ts.isPropertyAccessExpression(argumentNode) ||
-          ts.isElementAccessExpression(argumentNode))
-      )
-        return false;
+      // be given anything that may be a function, through any branch (`cond ? f : g`, `a && f`), unless it only
+      // stores values (`it.each(rows)`, `vi.spyOn`).
+      if (!defers && !(member !== undefined && NON_CALLING.has(member))) return passable(argument);
 
       return inert(argument);
     });
@@ -5040,23 +5032,35 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
    * A function the runner calls while collecting: a `describe` callback, or a mock factory (`factory`), which may
    * call its own parameters (`importOriginal()`), await, and return.
    */
-  const closedFunction = (fn: ts.ArrowFunction | ts.FunctionExpression, factory: boolean): boolean => {
+  const closedFunction = (
+    fn: ts.ArrowFunction | ts.FunctionExpression,
+    mode: 'describe' | 'factory' | 'immediate',
+  ): boolean => {
+    // Default values are used when the caller passes nothing, and the function may call them
+    // (`expect((run = sharedSuite) => run()).not.toThrow()`).
     if (
       !fn.parameters.every(
         (parameter) =>
-          (!parameter.initializer || inert(parameter.initializer)) && inertBinding(parameter.name),
+          (!parameter.initializer || passable(parameter.initializer)) && inertBinding(parameter.name),
       )
     )
       return false;
     const saved = { callable, inFactory, factoryValues };
+    const factory = mode === 'factory';
 
-    if (factory) {
+    if (mode !== 'describe') {
       // A parameter the body declares again or assigns may no longer be the factory's own.
+      // Only a mock factory's parameters are the runner's (`importOriginal`); a function run by another API, or by
+      // a local function, gets them from code not checked here.
       const shadowed = rebound(fn.body);
       callable = new Set(
-        fn.parameters.flatMap((parameter) =>
-          ts.isIdentifier(parameter.name) && !shadowed.has(parameter.name.text) ? [parameter.name.text] : [],
-        ),
+        factory
+          ? fn.parameters.flatMap((parameter) =>
+              ts.isIdentifier(parameter.name) && !shadowed.has(parameter.name.text)
+                ? [parameter.name.text]
+                : [],
+            )
+          : [],
       );
       inFactory = true;
       factoryValues = new Set();
@@ -5092,7 +5096,7 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
     try {
       return ts.isBlock(fn.body)
         ? fn.body.statements.every(closed)
-        : factory
+        : mode !== 'describe'
           ? inert(fn.body)
           : closedExpression(fn.body);
     } finally {
@@ -5113,7 +5117,7 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
   const passable = (node: ts.Expression): boolean => {
     const expression = skipParens(node);
 
-    if (isFunction(expression)) return closedFunction(expression, true);
+    if (isFunction(expression)) return closedFunction(expression, 'immediate');
 
     if (ts.isIdentifier(expression))
       return dataConstants.has(expression.text) || (local?.functionValue(expression) ?? false);
@@ -5186,7 +5190,7 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
     if (callback === undefined || !isFunction(callback))
       return callback === undefined || callback === expression.arguments[0];
 
-    return closedFunction(callback, false);
+    return closedFunction(callback, 'describe');
   };
 
   return source.statements.every(closed);
