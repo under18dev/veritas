@@ -316,6 +316,26 @@ describe('check-self-verification', () => {
     expect(malformed.stderr).toMatch(/not a Veritas run artifact of the expected shape/);
   }, 600_000);
 
+  it('notices an edit of a declared target outside analysis.include', () => {
+    // A copy outside git: no commit to compare, so only the hashes can tell the run is stale.
+    const dir = copyFixture('declared-properties');
+    writeFileSync(
+      path.join(dir, 'src/other.ts'),
+      'export function other(x: number): number {\n  return x;\n}\n',
+    );
+    editConfig(dir, (c) => {
+      (c as unknown as { analysis: { include: string[] } }).analysis.include = ['src/other.ts'];
+    });
+    const control = ['--expect-counterexample', 'stage.unguarded-succeeded-needs-tests'];
+    expect(runCli(['prove', '--engine', 'both', '--json'], dir).status).toBe(1);
+    expect(check(dir, ...control).status).toBe(0);
+    const source = path.join(dir, 'src/stage.ts');
+    writeFileSync(source, readFileSync(source, 'utf8').replace('if (e.testsRan <= 0) return 1;', ''));
+    const broken = check(dir, ...control);
+    expect(broken.status).toBe(1);
+    expect(broken.stdout).toContain('FAIL the run analyzed other source files');
+  }, 600_000);
+
   it('fails on usage errors and on a project without declarations or runs', () => {
     expect(check(REPO_ROOT, '--bogus', 'x').status).toBe(2);
     expect(check(REPO_ROOT, '--run').status).toBe(2);

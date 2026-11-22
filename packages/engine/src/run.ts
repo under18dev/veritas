@@ -181,6 +181,35 @@ export function leanSkipReason(z3Status: VerificationStatus, translatable: boole
 }
 
 /**
+ * The source hash recorded on every artifact of a run: the analyzed files and, when the configuration declares
+ * properties, the content of each declared target file, which may lie outside `analysis.include`. The target file
+ * alone is enough: the translator follows calls only to functions of the same file. Without declarations the hash
+ * is that of the analyzed files, as before. `scripts/check-self-verification.mjs` computes it the same way.
+ */
+export function runSourceHash(
+  root: string,
+  config: Pick<VeritasConfig, 'properties'>,
+  files: readonly unknown[],
+): string {
+  if (config.properties.length === 0) return hashValue(files);
+  const targets = [...new Set(config.properties.map((p) => p.target.slice(0, p.target.lastIndexOf('#'))))]
+    .sort()
+    .map((file) => {
+      let content: string | null = null;
+
+      try {
+        content = sha256(readFileSync(resolveInsideRoot(root, file)));
+      } catch {
+        // A missing or escaping target is reported as unsupported by the prove stage; here it is just absent.
+      }
+
+      return { file, content };
+    });
+
+  return hashValue({ files, declaredTargets: targets });
+}
+
+/**
  * The integer domain and array bound a property is modelled with: the declaration's own for a declared property,
  * otherwise the formal settings. Models compared with the property's (mutants) must use the same ones.
  */
@@ -325,7 +354,7 @@ async function runInContext(
     functions: fullIndex.functions.filter((f) => inScope(f.file)),
     files: fullIndex.files.filter((f) => inScope(f.path)),
   };
-  const sourceHash = hashValue(code0.files);
+  const sourceHash = runSourceHash(root, config, code0.files);
   const store = new RunStore(root, runId, {
     configHash,
     sourceHash,

@@ -201,6 +201,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const core = await load('core');
   const { analyzeCode } = await load('code-intelligence');
+  const { runSourceHash } = await load('engine');
   const { declaredProperties } = await load('property-engine');
   let loaded;
 
@@ -220,7 +221,8 @@ async function main() {
   const clean = core.gitOutput(args.root, ['status', '--porcelain'])?.trim() === '';
   const current = {
     configHash: loaded.hash,
-    sourceHash: core.hashValue(analyzeCode({ root: args.root, config }).files),
+    // The analyzed files and the declared target files, as the run computed it.
+    sourceHash: runSourceHash(args.root, config, analyzeCode({ root: args.root, config }).files),
     gitCommit: clean ? core.gitCommit(args.root) : null,
   };
   const dir = runDir(args.root, args.run);

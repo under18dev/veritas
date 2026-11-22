@@ -1,4 +1,7 @@
-import { VeritasConfig } from '@under18dev/veritas-core';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { hashValue, VeritasConfig } from '@under18dev/veritas-core';
 import {
   applyMutation,
   detectionProperty,
@@ -7,7 +10,27 @@ import {
 } from '@under18dev/veritas-formal-core';
 import { declaredProperties } from '@under18dev/veritas-property-engine';
 import { describe, expect, it } from 'vitest';
-import { formalBounds } from '../src/index.js';
+import { formalBounds, runSourceHash } from '../src/index.js';
+
+describe('runSourceHash', () => {
+  it('covers declared target files, and stays the hash of the analyzed files without declarations', () => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-source-hash-')));
+    mkdirSync(path.join(root, 'src'));
+    const target = path.join(root, 'src/a.ts');
+    writeFileSync(target, 'export function invariant_short(): boolean {\n  return true;\n}\n');
+    const files = [{ path: 'src/other.ts', hash: 'x' }];
+    expect(runSourceHash(root, VeritasConfig.parse({}), files)).toBe(hashValue(files));
+    const declaring = VeritasConfig.parse({
+      properties: [
+        { id: 'short', kind: 'holds_for_all', target: 'src/a.ts#invariant_short', description: 'short' },
+      ],
+    });
+    const before = runSourceHash(root, declaring, files);
+    expect(before).not.toBe(hashValue(files));
+    writeFileSync(target, 'export function invariant_short(): boolean {\n  return false;\n}\n');
+    expect(runSourceHash(root, declaring, files)).not.toBe(before);
+  });
+});
 
 const SOURCE = `export function invariant_short(xs: number[]): boolean {
   return xs.length <= 5;

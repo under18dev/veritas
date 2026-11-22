@@ -225,7 +225,7 @@ accept されていない宣言（一度も accept していないもの、承�
 
 宣言した Property だけを検査したいときは、文書を読むこととコードから規則を推測することを止めます。`sources.local` と `analysis.inferSpecsFromCode` を `false` にしてください。
 
-Veritas のリポジトリも、この方法で自分自身を検査しています。リポジトリの `.veritas/config.json` は、`packages/core/src/policy-decision.ts` にある実行ポリシーの不変条件（「何も残っていないときだけ判定が `pass` になる」「終了コード 1 はポリシー違反のときだけ」など）を宣言しています。宣言はメンテナーがレビューし、`veritas spec accept` で決定を記録します。記録先の `.veritas/approvals.json` は、設定と一緒にコミットします。`node scripts/check-self-verification.mjs`（`pnpm build` と `veritas prove --engine both` のあとに実行）は、最新の実行で、宣言したすべての Property が accept され、Z3 で証明されて再実行でも確かめられ、Lean のカーネルでも検査されていなければ失敗します。その実行が今のチェックアウトのものであることも確かめます。設定とソースが同じであること、作業ツリーに変更がなければコミットが同じであること、どの宣言も今のバージョンであることです。結果を記録しないまま終わった実行も失敗にします。`fixtures/declared-properties` には陰性対照として、わざと偽にした不変条件を置いてあり、これは反例が出なければいけません（`--expect-counterexample`）。証明の対象は判定の規則だけです。Veritas が規則に渡す証拠をどう数えるかは、テストで確かめていて、証明はしていません。
+Veritas のリポジトリも、この方法で自分自身を検査しています。リポジトリの `.veritas/config.json` は、`packages/core/src/policy-decision.ts` にある実行ポリシーの不変条件（「何も残っていないときだけ判定が `pass` になる」「終了コード 1 はポリシー違反のときだけ」など）を宣言しています。宣言はメンテナーがレビューし、`veritas spec accept` で決定を記録します。記録先の `.veritas/approvals.json` は、設定と一緒にコミットします。`node scripts/check-self-verification.mjs`（`pnpm build` と `veritas prove --engine both` のあとに実行）は、最新の実行で、宣言したすべての Property が accept され、Z3 で証明されて再実行でも確かめられ、Lean のカーネルでも検査されていなければ失敗します。その実行が今のチェックアウトのものであることも確かめます。設定とソース（解析したファイルと、宣言した対象のファイルすべて）が同じであること、作業ツリーに変更がなければコミットが同じであること、どの宣言も今のバージョンであることです。結果を記録しないまま終わった実行も失敗にします。`fixtures/declared-properties` には陰性対照として、わざと偽にした不変条件を置いてあり、これは反例が出なければいけません（`--expect-counterexample`）。証明の対象は判定の規則だけです。Veritas が規則に渡す証拠をどう数えるかは、テストで確かめていて、証明はしていません。
 
 ## `proven_within_model` の意味
 
