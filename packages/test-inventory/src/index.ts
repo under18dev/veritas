@@ -5692,7 +5692,9 @@ function surelyHasRows(node: ts.CallExpression): boolean {
   return (
     table !== undefined &&
     ts.isArrayLiteralExpression(skipParens(table)) &&
-    (skipParens(table) as ts.ArrayLiteralExpression).elements.some((element) => !ts.isSpreadElement(element))
+    (skipParens(table) as ts.ArrayLiteralExpression).elements.some(
+      (element) => !ts.isSpreadElement(element) && !ts.isOmittedExpression(element),
+    )
   );
 }
 
@@ -5708,7 +5710,10 @@ function emptyTableRegistration(node: ts.CallExpression): boolean {
     return ts.isNoSubstitutionTemplateLiteral(maker.template) || maker.template.templateSpans.length === 0;
   const table = ts.isCallExpression(maker) && maker.arguments[0] ? skipParens(maker.arguments[0]) : undefined;
 
-  return table !== undefined && ts.isArrayLiteralExpression(table) && table.elements.length === 0;
+  // A hole (`[,]`) is no row.
+  return (
+    table !== undefined && ts.isArrayLiteralExpression(table) && table.elements.every(ts.isOmittedExpression)
+  );
 }
 
 /** A number written as a literal (`1000`, `-1`), as a timeout is. */

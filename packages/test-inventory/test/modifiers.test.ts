@@ -915,6 +915,8 @@ describe('full names static analysis cannot read', () => {
         `it.each\`\n  a\n  \${1}\n\`('tagged $a', () => {});`,
         "it.each`\n  a\n`('no rows $a', () => {});",
         "describe.only.each([])('suite %s', () => { it('inside', () => {}); });",
+        "it.only.each([,])('holes %s', () => {});",
+        "it.each([, 1])('hole then one %s', () => {});",
         '',
       ].join('\n'),
     });
@@ -932,6 +934,8 @@ describe('full names static analysis cannot read', () => {
       ['tagged $a', undefined, undefined],
       ['no rows $a', true, true],
       ['inside', true, true],
+      ['holes %s', true, true],
+      ['hole then one %s', undefined, undefined],
     ]);
   });
 
