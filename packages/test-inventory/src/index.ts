@@ -5740,6 +5740,45 @@ function runnerName(identifier: ts.Identifier): string {
   if (!aliases) {
     aliases = new Map();
 
+    // A name the file binds itself, or imports from elsewhere, is not the runner's even when it has a runner name
+    // (`import { beforeEach } from './support.js'`, `function it() {}`); ambient declarations bind nothing.
+    for (const statement of source.statements) {
+      if (
+        ts.isImportDeclaration(statement) &&
+        !(
+          ts.isStringLiteral(statement.moduleSpecifier) && runner.modules.has(statement.moduleSpecifier.text)
+        ) &&
+        statement.importClause &&
+        !statement.importClause.isTypeOnly
+      ) {
+        const clause = statement.importClause;
+
+        if (clause.name) aliases.set(clause.name.text, NOT_RUNNER);
+
+        if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings))
+          aliases.set(clause.namedBindings.name.text, NOT_RUNNER);
+        else if (clause.namedBindings)
+          for (const element of clause.namedBindings.elements)
+            if (!element.isTypeOnly) aliases.set(element.name.text, NOT_RUNNER);
+      } else if (
+        (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
+        statement.name &&
+        (ts.getCombinedModifierFlags(statement) & ts.ModifierFlags.Ambient) === 0
+      )
+        aliases.set(statement.name.text, NOT_RUNNER);
+      else if (
+        ts.isVariableStatement(statement) &&
+        !statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword)
+      ) {
+        const bind = (name: ts.BindingName): void => {
+          if (ts.isIdentifier(name)) aliases?.set(name.text, NOT_RUNNER);
+          else for (const element of name.elements) if (!ts.isOmittedExpression(element)) bind(element.name);
+        };
+
+        for (const declaration of statement.declarationList.declarations) bind(declaration.name);
+      }
+    }
+
     for (const statement of source.statements) {
       const bindings = ts.isImportDeclaration(statement) ? statement.importClause?.namedBindings : undefined;
 
@@ -5760,6 +5799,9 @@ function runnerName(identifier: ts.Identifier): string {
 
   return aliases.get(identifier.text) ?? identifier.text;
 }
+
+/** What `runnerName` returns for a name the file binds to something other than the runner's API. */
+const NOT_RUNNER = '#not-runner';
 
 /** What `runnerName` returns for a namespace import of the runner (`import * as vitest from 'vitest'`). */
 const NAMESPACE = '*';

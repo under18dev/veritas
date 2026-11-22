@@ -249,6 +249,11 @@ describe('full names static analysis cannot read', () => {
         "expect.extend({ toBe() { sharedSuite(); return { pass: true, message: () => '' }; } });\nexpect(1).toBe(1);",
       matchersFromPackage: "import { matchers } from 'external-test-package';\nexpect.extend(matchers);",
       matchersSpread: 'expect.extend({ ...helpers });',
+      matcherByReference: 'expect.extend({ toBe: sharedSuite });\nexpect(0).toBe(0);',
+      matcherFromPackage:
+        "import { pkgRun } from 'external-test-package';\nexpect.extend({ toBe: pkgRun });\nexpect(0).toBe(0);",
+      supportHook: "import { beforeEach as setup } from './support-hooks.js';\nsetup(() => {});",
+      supportHookSameName: "import { afterAll } from './support-hooks.js';\nafterAll(() => {});",
       returnsFunction: 'expect(() => sharedSuite).not.toThrow();',
       returnsFunctionFromBlock: 'expect(() => { return sharedSuite; }).not.toThrow();',
       expectSpyOnce: "expect(vi.spyOn(helpers, 'run').mockImplementationOnce(() => [1])).not.toThrow();",
@@ -334,6 +339,12 @@ describe('full names static analysis cannot read', () => {
         'export const helpers = { run: sharedSuite };',
       ].join('\n'),
       'test/pure-helper.ts': 'export const double = (n: number) => n * 2;\n',
+      // A support module whose functions have hook names but call a package.
+      'test/support-hooks.ts': [
+        "import { pkgRun } from 'external-test-package';",
+        'export function beforeEach(fn: () => void) { pkgRun(); fn(); }',
+        'export function afterAll(fn: () => void) { pkgRun(); fn(); }',
+      ].join('\n'),
       'test/imports-registering.test.ts': `${header}\nit('own', () => {});\n`,
       // A helper that runs a package's shared suite when it loads; project code may build values at load.
       'test/open-helper.ts': [
