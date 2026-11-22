@@ -13,7 +13,14 @@ import { SEMANTIC_GAPS } from '@under18dev/veritas-formal-core';
 import { z } from 'zod';
 import { checkLeanProject, LeanCheck, LeanCheckStatus } from './check.js';
 import { detectLean, type LeanToolOptions } from './detect.js';
-import { irToLean, irUsesDivision, type LeanStrategy, leanProofStrategies, PROOF_NAMESPACE } from './emit.js';
+import {
+  checkLeanModel,
+  irToLean,
+  irUsesDivision,
+  type LeanStrategy,
+  leanProofStrategies,
+  PROOF_NAMESPACE,
+} from './emit.js';
 
 export interface ProveWithLeanOptions extends LeanToolOptions {
   propertyId: string;
@@ -67,7 +74,7 @@ const CLAIM_STATUS: Record<LeanCheckStatus, VerificationStatus> = {
 export function leanTranslatable(ir: PropertyIR): boolean {
   try {
     leanProofStrategies(ir);
-    irToLean(ir, { theoremName: 'translatable' });
+    checkLeanModel(ir, 'translatable');
 
     return true;
   } catch (error) {
@@ -155,7 +162,7 @@ export async function proveWithLean(options: ProveWithLeanOptions): Promise<Lean
 
   try {
     strategies = leanProofStrategies(options.ir);
-    irToLean(options.ir, { theoremName });
+    checkLeanModel(options.ir, theoremName);
   } catch (error) {
     if (!(error instanceof VeritasError)) throw error;
     semanticGaps.push(`not translated to Lean: ${error.message}`);
@@ -192,6 +199,8 @@ export async function proveWithLean(options: ProveWithLeanOptions): Promise<Lean
     let input: string | undefined;
 
     for (const strategy of strategies) {
+      // A strategy whose script hit its generation budget has nothing to try.
+      if (strategy.script.length === 0) continue;
       const source = irToLean(options.ir, { theoremName, strategy });
       input = write(`${PROOF_NAMESPACE}.lean`, source);
       const check = await checkLeanProject(dir, {

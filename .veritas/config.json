@@ -5,12 +5,16 @@
     "local": false
   },
   "analysis": {
-    "include": ["packages/core/src/policy-decision.ts"],
-    "testInclude": ["packages/core/test/policy-decision.test.ts"],
+    "include": ["packages/core/src/policy-decision.ts", "packages/assessment/src/decision.ts"],
+    "testInclude": [
+      "packages/core/test/policy-decision.test.ts",
+      "packages/assessment/test/decision.test.ts"
+    ],
     "inferSpecsFromCode": false
   },
   "formal": {
-    "backend": "both"
+    "backend": "both",
+    "maxSolverMs": 180000
   },
   "policy": {
     "confirmedViolation": "fail",
@@ -82,6 +86,102 @@
       "kind": "holds_for_all",
       "target": "packages/core/src/policy-decision.ts#invariant_openFindingsNeverFail",
       "description": "Open findings never make the exit code non-zero without a failed threshold, a failing confirmed violation, a tool error or a failing inconclusive item."
+    },
+    {
+      "id": "assessment.meaningful-needs-evidence",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_meaningfulNeedsEvidence",
+      "description": "meaningful_with_evidence only with the full evidence: an asserted project call, a relevant kill, mutation results, a linked property, no unexercised boundary, no relevant survivor, no conflicted property, a known link, and a test that runs normally (not expected to fail, type-level only, asserting nothing, skipped or todo)."
+    },
+    {
+      "id": "assessment.reachable-by-name-never-meaningful",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_reachableByNameNeverMeaningful",
+      "description": "A test whose link is only possible by name (reachable_by_name) is never meaningful_with_evidence."
+    },
+    {
+      "id": "assessment.reachable-by-name-without-asserted-call-is-inconclusive",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_reachableByNameWithoutAssertedCallIsInconclusive",
+      "description": "A test reachable only by name, with no asserted call and no certainty that it asserts nothing or calls no target, is inconclusive, whether or not it killed mutants."
+    },
+    {
+      "id": "assessment.killed-is-not-tautological",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_killedIsNotTautological",
+      "description": "A test that killed a mutant is never tautological_or_disconnected, unless it asserts nothing or is skipped or todo."
+    },
+    {
+      "id": "assessment.asserts-nothing-is-tautological",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_assertsNothingIsTautological",
+      "description": "A test that asserts nothing or only constants is tautological_or_disconnected, unless it is expected to fail or type-level only."
+    },
+    {
+      "id": "assessment.expected-failure-is-inconclusive",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_expectedFailureIsInconclusive",
+      "description": "A test expected to fail is always inconclusive."
+    },
+    {
+      "id": "assessment.type-level-only-is-inconclusive",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_typeLevelOnlyIsInconclusive",
+      "description": "A test that checks only types is always inconclusive."
+    },
+    {
+      "id": "assessment.skipped-never-meaningful",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_skippedNeverMeaningful",
+      "description": "A skipped or todo test is never meaningful_with_evidence, whatever mutation results are credited to it."
+    },
+    {
+      "id": "assessment.killed-without-link-is-inconclusive",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_killedWithoutLinkIsInconclusive",
+      "description": "A test that runs, that static analysis found unlinked and that killed a mutant is inconclusive: neither meaningful, weak nor tautological."
+    },
+    {
+      "id": "assessment.no-mutation-never-meaningful",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_noMutationNeverMeaningful",
+      "description": "Without mutation results a test is never meaningful_with_evidence."
+    },
+    {
+      "id": "assessment.outcome-in-range",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_outcomeInRange",
+      "description": "Every evidence record is decided to one of the five test outcomes."
+    },
+    {
+      "id": "assessment.spec-conflict-needs-conflict",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_specConflictNeedsConflict",
+      "description": "spec_conflict only for a test that asserts a project call and is linked to a conflicted property."
+    },
+    {
+      "id": "assessment.weak-needs-gap",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_weakNeedsGap",
+      "description": "weak_or_incomplete only for a test that asserts a project call, has no conflicted property, and has a relevant surviving mutant (not credited to a skipped or todo test) or an unexercised boundary."
+    },
+    {
+      "id": "assessment.tautological-needs-static-finding",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_tautologicalNeedsStaticFinding",
+      "description": "tautological_or_disconnected only from static analysis: the test is not expected to fail or type-level only, and it asserts nothing or no link from it to project code was found."
+    },
+    {
+      "id": "assessment.unknown-link-without-asserted-call-is-inconclusive",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_unknownLinkWithoutAssertedCallIsInconclusive",
+      "description": "A test with no asserted call whose link is unknown (an unresolved import, an opaque call, a progress-only check, a caller-supplied suite or name reach) is inconclusive, unless static analysis is certain it asserts nothing or calls no target."
+    },
+    {
+      "id": "assessment.skipped-ignores-mutation-results",
+      "kind": "holds_for_all",
+      "target": "packages/assessment/src/decision.ts#invariant_skippedIgnoresMutationResults",
+      "description": "A skipped or todo test gets the same outcome as it would with no kill, no relevant survivor and no mutation results at all."
     }
   ]
 }

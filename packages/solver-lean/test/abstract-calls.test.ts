@@ -82,6 +82,7 @@ describe('abstract-calls-split', () => {
       'abstract-calls-split',
       'unfold-split-omega',
       'simp-split-omega',
+      'name-int-calls-cases',
     ]);
     expect(leanProofStrategies(holds('plain')).map((s) => s.name)).toEqual([
       'unfold-split-omega',
