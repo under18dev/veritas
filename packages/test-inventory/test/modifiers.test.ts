@@ -241,6 +241,8 @@ describe('full names static analysis cannot read', () => {
       waitForComma: 'vi.waitFor((0, sharedSuite));',
       expectAs: 'expect(sharedSuite as any).toBeDefined();',
       expectMockOf: 'expect(vi.fn(sharedSuite)).not.toThrow();',
+      expectMocked: 'expect(vi.mocked(sharedSuite)).not.toThrow();',
+      expectMockedDeep: 'expect(vi.mocked(helpers.run, true)).not.toThrow();',
       expectSpyOriginal: "expect(vi.spyOn(helpers, 'run')).not.toThrow();",
       customMatcher:
         "expect.extend({ toRegister() { sharedSuite(); return { pass: true, message: () => '' }; } });\nexpect(0).toRegister();",
@@ -316,6 +318,8 @@ describe('full names static analysis cannot read', () => {
       expectValue: "const n = 1; const row = { a: [1, 'x'] }; expect(n).toBe(1); expect(row).toEqual(row);",
       expectChoice: 'const flag = true; expect(flag ? 1 : 2).toBe(1); expect(() => flag).not.toThrow();',
       expectMockOfInline: 'expect(vi.fn(() => 1)).not.toThrow();',
+      expectFreshMatcher:
+        'const n = 1; expect(n).toEqual(expect.any(Number)); expect({ a: n }).toEqual(expect.objectContaining({ a: n }));',
       expectSpyOnData: "const plain = { m: 1 }; expect(vi.spyOn(plain, 'm')).toBeDefined();",
       expectSpyReplaced:
         "const n = 1; expect(vi.spyOn(console, 'log').mockImplementation(() => n)).toBeDefined();",

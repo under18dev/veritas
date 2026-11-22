@@ -4803,7 +4803,8 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
       // An API that may call what it is given (`expect(f).toThrow()`, `assert.throws(f)`, `vi.waitFor(f)`) must not
       // be given anything that may be a function, through any branch (`cond ? f : g`, `a && f`), unless it only
       // stores values (`it.each(rows)`, `vi.spyOn`).
-      if (!defers && !(member !== undefined && NON_CALLING.has(member))) return passable(argument);
+      if (!defers && !(member !== undefined && (NON_CALLING.has(member) || FRESH_VALUES.has(member))))
+        return passable(argument);
 
       return inert(argument);
     });
@@ -5370,6 +5371,16 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
             if (!spied || !plainRoot(spied)) return false;
           }
+
+          // Any other call may hand back what it is given (`vi.mocked(fn)` returns `fn`), unless it makes a fresh
+          // matcher (`expect.any(Number)`).
+          if (
+            !DEFERRING.has(member) &&
+            member !== 'spyOn' &&
+            !FRESH_VALUES.has(member) &&
+            !call.arguments.every(passable)
+          )
+            return false;
           call = call.expression;
         } else if (ts.isPropertyAccessExpression(call) || ts.isElementAccessExpression(call))
           call = call.expression;
@@ -5526,6 +5537,17 @@ const NON_CALLING = new Set([
   'restoreAllMocks',
   'unstubAllGlobals',
   'unstubAllEnvs',
+]);
+
+/** Members of the runner's API that return a new asymmetric matcher rather than anything they are given. */
+const FRESH_VALUES = new Set([
+  'any',
+  'anything',
+  'objectContaining',
+  'arrayContaining',
+  'stringContaining',
+  'stringMatching',
+  'closeTo',
 ]);
 
 /** Members of the runner's mock API that replace a spied method for every later call. */
