@@ -67,6 +67,12 @@ export const TestCase = z.object({
    * suite or a loop callback), so the suites it runs in are those of the call site, which may differ from `suitePath`.
    */
   inexactName: z.enum(['dynamic_title', 'dynamic_suite', 'registered_in_function']).optional(),
+  /**
+   * The test is registered on a condition, so it may not run even when its file does: under `if`, a loop, `switch`,
+   * `try`, `?:`, `&&`, `||` or `??`, or through `skipIf`/`runIf` (its own or an enclosing `describe`'s). Absent
+   * otherwise.
+   */
+  conditional: z.literal(true).optional(),
 });
 export type TestCase = z.infer<typeof TestCase>;
 

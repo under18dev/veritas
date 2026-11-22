@@ -184,6 +184,10 @@
         "dynamic_suite",
         "registered_in_function"
       ]
+    },
+    "conditional": {
+      "type": "boolean",
+      "const": true
     }
   },
   "required": [

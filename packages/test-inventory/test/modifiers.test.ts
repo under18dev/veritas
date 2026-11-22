@@ -167,5 +167,85 @@ describe('full names static analysis cannot read', () => {
     ]);
     // Test ids stay as they were: the suite title that is not a literal is still left out of the suite path.
     expect(inventory.tests[2]?.id).toBe(testId('test/names.test.ts', ['inner'], 'works'));
+    // `shared()` in the describe callback is a call that registers tests.
+    expect(inventory.files.find((f) => f.path === 'test/names.test.ts')?.inexactNames).toBe(
+      'registered_by_call',
+    );
+  });
+
+  it('marks a file that calls a function which may register tests where tests are registered', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/shared-suite.ts': `
+        import { expect, it } from 'vitest';
+        import { value } from '../src/value.js';
+        export function sharedSuite() { it('is shared', () => expect(value(1)).toBe(1)); }
+        export const helpers = { run: sharedSuite };
+      `,
+      'test/top.test.ts': `
+        import { it, vi } from 'vitest';
+        import { sharedSuite } from './shared-suite.js';
+        vi.mock('../src/value.js');
+        it('own', () => {});
+        sharedSuite();
+      `,
+      'test/nested.test.ts': `
+        import { describe, it } from 'vitest';
+        import { helpers } from './shared-suite.js';
+        describe('outer', () => { if (true) { helpers.run(); } });
+      `,
+      'test/passed.test.ts': `
+        import { describe } from 'vitest';
+        import { sharedSuite } from './shared-suite.js';
+        describe('outer', sharedSuite);
+      `,
+      'test/clean.test.ts': `
+        import { beforeEach, describe, expect, it } from 'vitest';
+        import { value } from '../src/value.js';
+        const app = { get: (_path: string) => {} };
+        app.get('/x');
+        describe('suite', () => {
+          beforeEach(() => { value(1); });
+          it('works', () => { value(2); expect(1).toBe(1); });
+        });
+      `,
+    });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
+    const marked = (file: string) => inventory.files.find((f) => f.path === file)?.inexactNames;
+
+    expect(marked('test/top.test.ts')).toBe('registered_by_call');
+    expect(marked('test/nested.test.ts')).toBe('registered_by_call');
+    expect(marked('test/passed.test.ts')).toBe('registered_by_call');
+    expect(marked('test/clean.test.ts')).toBeUndefined();
+  });
+
+  it('records tests registered on a condition', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/conditional.test.ts': `
+        import { describe, expect, it, test } from 'vitest';
+        import { value } from '../src/value.js';
+        it('always', () => expect(value(1)).toBe(1));
+        if (process.env.CI) it('in ci', () => expect(value(1)).toBe(1));
+        test.skipIf(true)('skip if', () => expect(value(1)).toBe(1));
+        describe.runIf(true)('run if', () => { it('inside', () => expect(value(1)).toBe(1)); });
+      `,
+    });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
+
+    expect(inventory.tests.map((t) => [t.name, t.conditional])).toEqual([
+      ['always', undefined],
+      ['in ci', true],
+      ['skip if', true],
+      ['inside', true],
+    ]);
   });
 });

@@ -31,6 +31,13 @@ export const TestInventory = z.object({
        * dynamic import) or imports a relative module that does not resolve, anywhere, recognized test or not.
        */
       unseenReach: z.boolean().default(false),
+      /**
+       * Why the file may run tests under names static analysis did not read, beyond what `TestCase.inexactName`
+       * says of the tests recorded in it. `registered_by_call`: at the top level or in a `describe` callback, the
+       * file calls a function that is not the runner's (an imported shared suite such as `runTests()`), which may
+       * register tests the runner reports under this file. Absent when there is no such call.
+       */
+      inexactNames: z.enum(['registered_by_call']).optional(),
     }),
   ),
   diagnostics: z.array(z.object({ file: z.string(), message: z.string() })),
@@ -167,6 +174,8 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
   );
   const tests: TestCaseType[] = [];
   const diagnostics: { file: string; message: string }[] = [];
+  /** Test files that call, where tests are registered, a function that may register more (see `registersByCall`). */
+  const byCall = new Set<string>();
 
   const callInfoCache = new Map<Invocation, CallInfo>();
   const helperInfoCache = new Map<ts.Node, CallInfo>();
@@ -197,6 +206,8 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
     };
     const mocks = collectMocks(source, ctx);
     visitTests(source, [], [], file, mocks, ctx, tests);
+
+    if (registersByCall(source)) byCall.add(file);
   }
 
   const edges: TestPropertyEdgeType[] = [];
@@ -249,6 +260,7 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
       // An unparsed file is unknown too.
       unseenReach:
         !source || reached.some((reachedFile) => reachedFile && hasUnseenReach(reachedFile, checker)),
+      ...(byCall.has(file) ? { inexactNames: 'registered_by_call' as const } : {}),
     };
   });
 
@@ -4230,6 +4242,7 @@ function visitTests(
     currentSuite: string[],
     currentModifiers: TestCaseType['modifiers'],
     inexact: TestCaseType['inexactName'],
+    conditional: boolean,
   ) => {
     if (ts.isCallExpression(node)) {
       const describe = describeRegistration(node);
@@ -4240,14 +4253,23 @@ function visitTests(
 
         if (name !== undefined && callback && isFunction(callback)) {
           const childModifiers = [...new Set([...currentModifiers, ...describe.modifiers])];
-          ts.forEachChild(callback, (child) => walk(child, [...currentSuite, name], childModifiers, inexact));
+          const childConditional = conditional || conditionalRegistration(node);
+          ts.forEachChild(callback, (child) =>
+            walk(child, [...currentSuite, name], childModifiers, inexact, childConditional),
+          );
 
           return;
         }
 
         if (name === undefined) {
           ts.forEachChild(node, (child) =>
-            walk(child, currentSuite, currentModifiers, inexact ?? 'dynamic_suite'),
+            walk(
+              child,
+              currentSuite,
+              currentModifiers,
+              inexact ?? 'dynamic_suite',
+              conditional || conditionalRegistration(node),
+            ),
           );
 
           return;
@@ -4265,6 +4287,7 @@ function visitTests(
             mocks,
             ctx,
             inexact,
+            conditional || conditionalRegistration(node),
           ),
         );
 
@@ -4272,12 +4295,120 @@ function visitTests(
       }
     }
     const inner = ts.isFunctionLike(node) ? (inexact ?? 'registered_in_function') : inexact;
-    ts.forEachChild(node, (child) => walk(child, currentSuite, currentModifiers, inner));
+    const innerConditional =
+      conditional ||
+      ts.isIfStatement(node) ||
+      ts.isConditionalExpression(node) ||
+      ts.isIterationStatement(node, false) ||
+      ts.isSwitchStatement(node) ||
+      ts.isTryStatement(node) ||
+      (ts.isBinaryExpression(node) &&
+        [
+          ts.SyntaxKind.AmpersandAmpersandToken,
+          ts.SyntaxKind.BarBarToken,
+          ts.SyntaxKind.QuestionQuestionToken,
+        ].includes(node.operatorToken.kind));
+    ts.forEachChild(node, (child) => walk(child, currentSuite, currentModifiers, inner, innerConditional));
   };
-  walk(source, suitePath, inheritedModifiers, undefined);
+  walk(source, suitePath, inheritedModifiers, undefined, false);
+}
+
+/**
+ * Whether a test file, at the top level or in a `describe` callback (directly or under `if`, loops and blocks), calls
+ * a function that may register tests static analysis does not see: a function called by its bare name that is not
+ * the runner's (`runTests()`, imported or local), or a method of an imported binding (`shared.run()`). Calls of the
+ * runner's API, and methods of local values (`app.get(...)`), are not counted.
+ */
+function registersByCall(source: ts.SourceFile): boolean {
+  const imported = new Set<string>();
+
+  for (const statement of source.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      runner.modules.has(statement.moduleSpecifier.text)
+    )
+      continue;
+    const clause = statement.importClause;
+
+    if (!clause || clause.isTypeOnly) continue;
+
+    if (clause.name) imported.add(clause.name.text);
+    const bindings = clause.namedBindings;
+
+    if (bindings && ts.isNamespaceImport(bindings)) imported.add(bindings.name.text);
+    else if (bindings)
+      for (const element of bindings.elements) if (!element.isTypeOnly) imported.add(element.name.text);
+  }
+  const runnerOwn = (name: string) =>
+    runner.tests.has(name) ||
+    runner.suites.has(name) ||
+    runner.hooks.has(name) ||
+    runner.expect.has(name) ||
+    runner.typeLevel.has(name) ||
+    runner.assertObjects.has(name) ||
+    runner.mockObjects.has(name) ||
+    runner.runtimeExports.has(name);
+  const mayRegister = (call: ts.CallExpression): boolean => {
+    let callee = skipParens(call.expression);
+
+    while (ts.isCallExpression(callee)) callee = skipParens(callee.expression);
+
+    if (ts.isIdentifier(callee)) return !runnerOwn(runnerName(callee));
+    const root = rootIdentifier(callee);
+
+    return root !== undefined && imported.has(root) && !runnerOwn(root);
+  };
+  const visit = (node: ts.Node): boolean => {
+    if (ts.isBlock(node)) return node.statements.some(visit);
+
+    if (ts.isIfStatement(node))
+      return visit(node.thenStatement) || (node.elseStatement ? visit(node.elseStatement) : false);
+
+    if (ts.isIterationStatement(node, false)) return visit(node.statement);
+
+    let expression = ts.isExpressionStatement(node)
+      ? node.expression
+      : ts.isExpression(node)
+        ? node
+        : undefined;
+
+    if (expression === undefined) return false;
+    expression = skipParens(expression);
+
+    if (ts.isAwaitExpression(expression)) expression = skipParens(expression.expression);
+
+    if (!ts.isCallExpression(expression)) return false;
+
+    if (describeRegistration(expression)) {
+      const callback = callbackArgument(expression);
+
+      if (callback === undefined || callback === expression.arguments[0]) return false;
+
+      // `describe('suite', sharedSuite)`: the function passed registers what static analysis does not follow.
+      return isFunction(callback)
+        ? visit(callback.body)
+        : ts.isIdentifier(callback) ||
+            ts.isPropertyAccessExpression(callback) ||
+            ts.isCallExpression(callback);
+    }
+
+    return testRegistration(expression) === undefined && mayRegister(expression);
+  };
+
+  return source.statements.some(visit);
 }
 
 type Registration = { name?: string; callback?: ts.Expression; modifiers: TestCaseType['modifiers'] };
+
+/** Whether a registration runs only on a condition the runner checks: `test.skipIf(cond)(...)`, `describe.runIf(cond)(...)`. */
+function conditionalRegistration(node: ts.CallExpression): boolean {
+  const factory = registrationFactory(node);
+
+  return (
+    factory !== undefined && propertyChain(factory).some((name) => name === 'skipIf' || name === 'runIf')
+  );
+}
 
 /** Vitest takes `(name, fn, timeout | options)` as well as `(name, options, fn)`: the callback is the last function. */
 function callbackArgument(node: ts.CallExpression): ts.Expression | undefined {
@@ -4440,6 +4571,7 @@ function analyzeTest(
   mocks: MockRecord[],
   ctx: Ctx,
   inexact?: TestCaseType['inexactName'],
+  conditional = false,
 ): TestCaseType {
   const { checker, root } = ctx;
   const source = registrationCall.getSourceFile();
@@ -4614,6 +4746,7 @@ function analyzeTest(
       : inexact === undefined
         ? {}
         : { inexactName: inexact }),
+    ...(conditional ? { conditional: true as const } : {}),
   };
 }
 
