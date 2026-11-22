@@ -276,17 +276,20 @@ export class TestNameIndex implements TestNameLookup {
       test.conditional === true ||
       ((test.modifiers?.includes('only') ?? false) &&
         (test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false));
-    const conditionalFiles = new Set(tests.filter(uncertain).map((test) => test.file));
+    /**
+     * Whether a test may focus its file or not, which leaves the focus of the file unknown: focused but uncertain (on
+     * a condition, also skipped, registered inside a function or with a name not read), or with options not read,
+     * which may hold `only`. An unfocused test, conditional or not, cannot focus its file.
+     */
+    const focusUnknown = (test: NamedTest) =>
+      test.optionsUnknown === true ||
+      ((test.modifiers?.includes('only') ?? false) && (uncertain(test) || test.inexactName !== undefined));
+    const unknownFocusFiles = new Set(tests.filter(focusUnknown).map((test) => test.file));
     const focusedFiles = new Set(
       tests
         .filter(
           (test) =>
-            test.modifiers?.includes('only') &&
-            !uncertain(test) &&
-            // Registered at collection level: a `.only` inside a function runs only if the function is called.
-            test.inexactName === undefined &&
-            !conditionalFiles.has(test.file) &&
-            !test.modifiers.some((modifier) => modifier === 'skip' || modifier === 'todo'),
+            test.modifiers?.includes('only') && !focusUnknown(test) && !unknownFocusFiles.has(test.file),
         )
         .map((test) => test.file),
     );
@@ -305,7 +308,7 @@ export class TestNameIndex implements TestNameLookup {
         ((test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false) &&
           !focused &&
           !test.optionsUnknown) ||
-        (!uncertain(test) && focusedFiles.has(test.file) && !focused);
+        (focusedFiles.has(test.file) && !focused && !test.optionsUnknown);
 
       if (skipped) this.skipped.add(test.id);
 

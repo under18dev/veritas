@@ -362,8 +362,12 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     // A focused test registered on a condition may not run, and then the others run: the template stays.
     const conditional = new TestNameIndex([{ ...focused, conditional: true as const }, rows], ' > ');
     expect([focused.id, rows.id]).not.toContain(mutatorTestId(`${FILE}#case 1`, ' > ', conditional));
-    // A test whose options cannot be read (conditional) may be focused: no test of its file counts as unfocused.
-    const unknownOptions = { ...entry([], 'handles empty', []), conditional: true as const };
+    // A test whose options cannot be read may be focused: no test of its file counts as unfocused.
+    const unknownOptions = {
+      ...entry([], 'handles empty', []),
+      conditional: true as const,
+      optionsUnknown: true as const,
+    };
     const focusedHandles = entry([], 'handles %s', ['each', 'only']);
     const withUnknown = new TestNameIndex([unknownOptions, focusedHandles], ' > ');
     expect([unknownOptions.id, focusedHandles.id]).not.toContain(
@@ -375,6 +379,16 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect(mutatorTestId(`${FILE}#case 2`, ' > ', new TestNameIndex([focusedRows, plain], ' > '))).toBe(
       focusedRows.id,
     );
+  });
+
+  it('lets an unfocused conditional test not stop a focused test from focusing its file', () => {
+    // `const cases = [1]; it.only('case 1'); it.each(cases)('case %s')`: the table cannot focus the file.
+    const focused = entry([], 'case 1', ['only']);
+    const rows = { ...entry([], 'case %s'), conditional: true as const };
+    const index = new TestNameIndex([focused, rows], ' > ');
+
+    expect(mutatorTestId(`${FILE}#case 1`, ' > ', index)).toBe(focused.id);
+    expect(index.withheld.size).toBe(0);
   });
 
   it('keeps a skipped table out of the candidates even when its table may be empty', () => {
