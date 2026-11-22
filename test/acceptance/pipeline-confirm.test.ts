@@ -168,6 +168,16 @@ describe('table-driven tests end to end', () => {
       "it.each([{ name: 'small order', total: 10 }])('$name', ({ total }) => { shippingFee(total); expect(true).toBe(true); });",
       'sharedShipping();',
     ]);
+    // The same shared suite called in other shapes.
+    for (const [file, call] of [
+      ['test/probe-assigned.test.ts', 'const registered = sharedShipping();'],
+      ['test/probe-foreach.test.ts', '[sharedShipping].forEach((f) => f());'],
+    ] as const)
+      write(file, [
+        "import { sharedShipping } from './shared-suite.js';",
+        "it.each([{ name: 'small order', total: 10 }])('$name', ({ total }) => { shippingFee(total); expect(true).toBe(true); });",
+        call,
+      ]);
     // A broad it.each next to a plain test in a describe: the template cannot take the plain test's two titles.
     write('test/broad-each.test.ts', [
       "it.each([{ name: 'small order', total: 10 }])('$name', ({ total }) => { shippingFee(total); expect(true).toBe(true); });",
@@ -196,6 +206,8 @@ describe('table-driven tests end to end', () => {
     expect(killers.has(id('test/exact-and-row.test.ts', 'case %s'))).toBe(false);
     expect(killers.has(id('test/exact-and-row.test.ts', 'case 1'))).toBe(false);
     expect(killers.has(id('test/probe.test.ts', '$name'))).toBe(false);
+    expect(killers.has(id('test/probe-assigned.test.ts', '$name'))).toBe(false);
+    expect(killers.has(id('test/probe-foreach.test.ts', '$name'))).toBe(false);
     expect(killers.has(id('test/broad-each.test.ts', '$name'))).toBe(false);
     expect(killers.has(id('test/broad-each.test.ts', 'is free at 5000', ['threshold']))).toBe(true);
     const messages = stage?.messages.join('\n') ?? '';
@@ -207,7 +219,7 @@ describe('table-driven tests end to end', () => {
       /\(a describe title that is not a literal\)[^\n]*test\/dynamic-describe\.test\.ts#dyn 1 > works/,
     );
     expect(messages).toMatch(
-      /\(a call that may register tests, such as a shared suite\)[^\n]*test\/probe\.test\.ts#is free at 5000/,
+      /\(code at the top level or in a describe callback that may register tests, such as a call of a shared suite\)[^\n]*test\/probe-assigned\.test\.ts#is free at 5000[^\n]*test\/probe-foreach\.test\.ts#is free at 5000[^\n]*test\/probe\.test\.ts#is free at 5000/,
     );
     expect(messages).toMatch(
       /are the title of one test and also match the title of a table-driven test[^\n]*test\/exact-and-row\.test\.ts#case 1, test\/exact-and-row\.test\.ts#case 1#2/,
