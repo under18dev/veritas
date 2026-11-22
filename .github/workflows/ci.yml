@@ -112,3 +112,63 @@ jobs:
       - name: documentation site builds (no dead links)
         if: matrix.os == 'ubuntu-latest' && matrix.node == 26 && matrix.part == 'static'
         run: pnpm docs:build
+
+  # Veritas checks its own policy invariants (the properties declared in .veritas/config.json): each one must be
+  # accepted, proven within the model by Z3 with the result replayed in JavaScript, and kernel-checked by Lean.
+  # No Veritas result is cached between workflow runs (no .veritas/cache, no earlier runs), so a stale result cannot
+  # pass.
+  self-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - name: Install Lean (elan)
+        shell: bash
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
+          sh elan-init.sh -y --default-toolchain stable --no-modify-path
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Download the Lean toolchain
+        run: lean --version && lake --version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      # prove exits 0 only when the run passed the policy; any other exit code fails the job here.
+      - name: Prove the declared invariants (Z3 and Lean)
+        run: node packages/cli/dist/bin.js --json prove --engine both
+      - name: Every invariant is proven by Z3 (replayed) and kernel-checked by Lean
+        run: node scripts/check-self-verification.mjs
+      # Negative control: a declaration that does not hold must come back with a counterexample reproduced in
+      # JavaScript, so a solver or translator that proves anything cannot pass the check above unnoticed.
+      - name: Negative control (declared-properties fixture)
+        shell: bash
+        run: |
+          fixture="$RUNNER_TEMP/declared-properties"
+          cp -R fixtures/declared-properties "$fixture"
+          status=0
+          node packages/cli/dist/bin.js --root "$fixture" --json prove --engine both || status=$?
+          # The control is accepted and refuted: a confirmed policy failure, exit 1. Any other code is a broken run.
+          if [ "$status" -ne 1 ]; then
+            echo "expected exit 1 (confirmed violation), got $status"
+            exit 1
+          fi
+          node scripts/check-self-verification.mjs --root "$fixture" \
+            --expect-counterexample stage.unguarded-succeeded-needs-tests
+      # The runs (claims, solver input and output, Lean files) are kept for reproduction.
+      - name: Upload the self-verification runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-verification-runs
+          path: |
+            .veritas/runs
+            ${{ runner.temp }}/declared-properties/.veritas/runs
+          retention-days: 14
+          if-no-files-found: warn
