@@ -71,6 +71,8 @@ import {
 import {
   applyApprovals,
   buildRegistry,
+  declaredProperties,
+  formalizeDeclared,
   formalizeProperty,
   loadApprovals,
 } from '@under18dev/veritas-property-engine';
@@ -611,7 +613,12 @@ async function runInContext(
         candidates: index.candidates,
         previous: previousProperties(root),
       });
-      const applied = applyApprovals(registry.properties, loadApprovals(root));
+      // Declared properties join the discovered ones and go through the same approvals: none is accepted here.
+      const declared = declaredProperties(config.properties, {
+        integerDomain: domain,
+        maxArrayLength: config.formal.maxArrayLength,
+      });
+      const applied = applyApprovals([...registry.properties, ...declared], loadApprovals(root));
       const formalized: SpecOutput['formalized'] = new Map();
       const notFormalized: SpecOutput['notFormalized'] = new Map();
       const formalization: {
@@ -620,20 +627,30 @@ async function runInContext(
         detail: string;
       }[] = [];
 
-      for (const p of applied.properties) {
-        if (!p.predicate || p.targetSymbols.length !== 1) continue;
-        const fn = index.code.functions.find((f) => f.symbol === p.targetSymbols[0]);
+      const declaredIds = new Set(declared.map((p) => p.id));
 
-        if (!fn) continue;
-        const quote = discovery.statements.find((s) => p.statementIds.includes(s.id))?.quote;
-        const result = formalizeProperty({
-          root,
-          property: p,
-          fn,
-          domain,
-          maxArrayLength: config.formal.maxArrayLength,
-          ...(quote ? { quote } : {}),
-        });
+      for (const p of applied.properties) {
+        let result: ReturnType<typeof formalizeProperty>;
+
+        if (declaredIds.has(p.id)) {
+          // A declared target is read from its file even outside analysis.include; one that is missing or cannot
+          // be translated is recorded as not formalizable, so the prove stage reports it as unsupported.
+          result = formalizeDeclared({ root, property: p });
+        } else {
+          if (!p.predicate || p.targetSymbols.length !== 1) continue;
+          const fn = index.code.functions.find((f) => f.symbol === p.targetSymbols[0]);
+
+          if (!fn) continue;
+          const quote = discovery.statements.find((s) => p.statementIds.includes(s.id))?.quote;
+          result = formalizeProperty({
+            root,
+            property: p,
+            fn,
+            domain,
+            maxArrayLength: config.formal.maxArrayLength,
+            ...(quote ? { quote } : {}),
+          });
+        }
 
         if (result.status === 'formalized') {
           formalized.set(p.id, result);
@@ -1014,6 +1031,20 @@ async function runInContext(
         messages.push(
           `${skipped.length} formalized propert(y/ies) not verified: not accepted (use --include-proposed)`,
         );
+
+      // A declared property is named when it is left out, whether or not it could be formalized: a declaration is
+      // never passed over without a word.
+      for (const p of spec.properties) {
+        if (p.origin !== 'human' || wantedStatus(p)) continue;
+
+        if (options.propertyIds && !options.propertyIds.includes(p.id)) continue;
+        messages.push(
+          `${p.id}: declared property not verified, it is ${p.status}` +
+            (p.status === 'proposed' || p.status === 'reviewed'
+              ? ` (accept it with \`veritas spec accept ${p.id} --reason "<why>"\`, or pass --include-proposed)`
+              : ''),
+        );
+      }
       // Survived mutants in translatable functions: bounded equivalence or a distinguishing input.
       const functions =
         (ctx.outputs.get('index') as { code: CodeIndex } | undefined)?.code.functions ?? code0.functions;
