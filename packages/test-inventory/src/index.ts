@@ -62,6 +62,7 @@ interface RunnerApi {
   expectedFailure: Set<string>;
   registrationFactories: Set<string>;
   tableFactories: Set<string>;
+  testOptions: boolean;
   beforeEach: Set<string>;
   /** Hooks that run before a test: `beforeEach` and `beforeAll`. */
   setup: Set<string>;
@@ -88,6 +89,7 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
     expectedFailure: new Set(recognition.expectedFailure),
     registrationFactories: new Set(recognition.registrationFactories),
     tableFactories: new Set(recognition.tableFactories),
+    testOptions: recognition.testOptions === true,
     beforeEach: new Set(hooks.beforeEach),
     setup: new Set([...hooks.beforeEach, ...hooks.beforeAll]),
     hooks: new Set([...hooks.beforeEach, ...hooks.beforeAll, ...hooks.afterEach, ...hooks.afterAll]),
@@ -4601,6 +4603,34 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
   /** The member a property or element access names, when written as a name or a literal key. */
   const accessedMember = (node: ts.Expression): string | undefined =>
     ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) ? memberName(node) : undefined;
+  /**
+   * Whether a call in a mock factory obtains a module namespace: a call of the factory's own parameter
+   * (`importOriginal()`), or the runner's module loader (`vi.importActual(path)`), whose module is followed apart.
+   */
+  const obtainsModule = (call: ts.CallExpression): boolean => {
+    const callee = skipParens(call.expression);
+
+    if (ts.isIdentifier(callee)) return callable.has(callee.text);
+
+    return (
+      (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
+      MODULE_LOADERS.has(memberName(callee) ?? '') &&
+      runner.mockObjects.has(runnerExport(skipParens(callee.expression))?.name ?? '')
+    );
+  };
+  /** How many times a function body declares a name, in any scope it contains. */
+  const declarationsOf = (body: ts.Node, name: string): number =>
+    descendants(body).filter(
+      (node) =>
+        (ts.isVariableDeclaration(node) ||
+          ts.isParameter(node) ||
+          ts.isBindingElement(node) ||
+          ts.isFunctionDeclaration(node) ||
+          ts.isClassDeclaration(node)) &&
+        node.name !== undefined &&
+        ts.isIdentifier(node.name) &&
+        node.name.text === name,
+    ).length;
   /** Names a function body declares or assigns anywhere, which may then stand for something other than a parameter. */
   const rebound = (body: ts.Node): Set<string> => {
     const names = new Set<string>();
@@ -4702,7 +4732,9 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
     if (ts.isObjectLiteralExpression(node))
       return node.properties.every((property) => {
-        if (ts.isSpreadAssignment(property)) return inert(property.expression);
+        // Spreading reads every property of what is spread.
+        if (ts.isSpreadAssignment(property))
+          return readable(property.expression) && inert(property.expression);
 
         if (property.name && ts.isComputedPropertyName(property.name) && !inert(property.name.expression))
           return false;
@@ -4748,11 +4780,7 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
       if (ts.isAwaitExpression(obtained)) obtained = skipParens(obtained.expression);
 
-      if (ts.isCallExpression(obtained)) {
-        const callee = skipParens(obtained.expression);
-
-        if (ts.isIdentifier(callee) && callable.has(callee.text)) return true;
-      }
+      if (ts.isCallExpression(obtained) && obtainsModule(obtained)) return true;
 
       if (ts.isIdentifier(root) && factoryValues.has(root.text)) return true;
     }
@@ -4868,11 +4896,12 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
               if (
                 ts.isIdentifier(declaration.name) &&
-                !shadowed.has(declaration.name.text) &&
+                // A `const` cannot be assigned again; a second declaration of the name (in a nested scope) could
+                // stand for something else.
+                declarationsOf(fn.body, declaration.name.text) === 1 &&
                 value &&
                 ts.isCallExpression(value) &&
-                ts.isIdentifier(skipParens(value.expression)) &&
-                callable.has((skipParens(value.expression) as ts.Identifier).text)
+                obtainsModule(value)
               )
                 factoryValues.add(declaration.name.text);
             }
@@ -5034,6 +5063,9 @@ function registrationOptions(node: ts.CallExpression): {
 } {
   const modifiers: TestCaseType['modifiers'] = [];
   let unknown = false;
+
+  // Only a runner that reads an options object (Vitest); Jest's extra argument is a timeout.
+  if (!runner.testOptions) return { modifiers, unknown };
 
   for (const argument of node.arguments.slice(1)) {
     const value = skipParens(argument);

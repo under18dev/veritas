@@ -120,6 +120,11 @@ export interface TestRunnerRecognition {
   readonly registrationFactories: readonly string[];
   /** Those of `registrationFactories` that register one test per row of a table, recorded as `each`. */
   readonly tableFactories: readonly string[];
+  /**
+   * Whether a registration takes an options object that sets modifiers (Vitest's `it(name, { only: true }, fn)`).
+   * Without it, arguments after the name other than the callback are ignored (Jest's timeout).
+   */
+  readonly testOptions?: boolean;
   /** Hook functions, by when they run. */
   readonly hooks: {
     readonly beforeEach: readonly string[];

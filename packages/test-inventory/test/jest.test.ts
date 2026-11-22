@@ -341,6 +341,27 @@ describe('Jest tests', () => {
   });
 });
 
+describe('Jest registration arguments', () => {
+  it('ignores arguments after the callback, which Jest takes as a timeout', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/args.test.ts': [
+        "it('options-like', () => {}, { only: true } as any);",
+        "it('timed', () => {}, 5000);",
+        'const limit = 5000;',
+        "it('named timeout', () => {}, limit);",
+        '',
+      ].join('\n'),
+    });
+
+    expect(inventory(root).tests.map((t) => [t.name, t.modifiers, t.conditional])).toEqual([
+      ['options-like', [], undefined],
+      ['timed', [], undefined],
+      ['named timeout', [], undefined],
+    ]);
+  });
+});
+
 describe('Jest modules obtained at run time', () => {
   it('opens a file whose helper gets the runner API from jest.requireActual', () => {
     const root = tempProject({

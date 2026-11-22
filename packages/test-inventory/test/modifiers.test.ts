@@ -210,6 +210,8 @@ describe('full names static analysis cannot read', () => {
       mockReassigned:
         "vi.mock('../src/value.js', async (orig) => { orig = sharedSuite; await orig(); return {}; });",
       mockFactoryReadsImport: "vi.mock('../src/value.js', () => ({ ...helpers, value: helpers.run }));",
+      mockFactorySpreadsImport: "vi.mock('../src/value.js', () => ({ ...helpers }));",
+      objectSpreadImport: 'const merged = { ...helpers };',
       mockBracket: "vi['mock']('../src/value.js', () => { sharedSuite(); return {}; });",
       mockComputedKey: "const key = 'mock'; vi[key]('../src/value.js', () => ({}));",
       mockByReference:
@@ -270,6 +272,10 @@ describe('full names static analysis cannot read', () => {
       mockOriginalBlock:
         "vi.mock('../src/value.js', async (importOriginal) => { const actual = await importOriginal<object>(); return { ...actual, value: vi.fn() }; }); it('m', () => {});",
       hoistedFn: "const mocks = vi.hoisted(() => ({ value: vi.fn() })); it('h', () => { mocks.value(); });",
+      mockOriginalMembers:
+        "vi.mock('../src/value.js', async (importOriginal) => { const mod = await importOriginal<any>(); return { ...mod, f: vi.fn(), g: mod.value, h: mod.nested.deep }; }); it('m', () => {});",
+      mockOriginalInline:
+        "vi.mock('../src/value.js', async (importOriginal) => ({ ...(await importOriginal<any>()), g: (await importOriginal<any>()).value })); it('m', () => {});",
       mockNotCalled: "const f = vi.fn(() => double(1)); it('f', () => { f(); });",
       implementationNotCalled:
         "const g = vi.fn().mockImplementation(() => double(1)); it('g', () => { g(); });",
