@@ -209,6 +209,12 @@ export interface TestRunnerMutation {
    * is dropped when its names are matched to inventoried tests; false when it never does (Jest).
    */
   readonly projectPrefix: boolean;
+  /**
+   * How the runner reads `$key` in the title of a table-driven test, when mutator's names are matched to it:
+   * `'identifier'` up to the next whitespace (Vitest), or `'object_key'` as any key of the row object, spaces
+   * included (Jest), so that the literal text after a key may be part of it.
+   */
+  readonly titleKeys: 'identifier' | 'object_key';
   /** The mutator option that passes the config `writeConfig` writes (`--config`, `--jest-config`). */
   readonly configFlag: string;
   /**

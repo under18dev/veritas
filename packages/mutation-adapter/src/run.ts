@@ -592,7 +592,12 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   const testIds =
     options.tests === undefined
       ? undefined
-      : new TestNameIndex(options.tests, runner.fullNameSeparator, options.testFileInfo);
+      : new TestNameIndex(
+          options.tests,
+          runner.fullNameSeparator,
+          options.testFileInfo,
+          runner.mutation.titleKeys,
+        );
 
   try {
     const json: unknown = JSON.parse(readFileSync(rawReportPath, 'utf8'));

@@ -15,6 +15,7 @@ import {
   literalTitle,
   matchesTitleTemplate,
   TemplateSet,
+  type TitleKeys,
   type TitleTemplate,
 } from './each-title.js';
 
@@ -269,6 +270,8 @@ export class TestNameIndex implements TestNameLookup {
     allTests: readonly NamedTest[],
     private readonly separator: string,
     files: readonly NamedTestFile[] = [],
+    /** How the runner reads `$key` in titles; by default as Jest does, which reads them more widely. */
+    keys: TitleKeys = 'object_key',
   ) {
     // A registration with a table empty as written registers no test: it is neither a candidate nor a test that
     // may run.
@@ -339,7 +342,7 @@ export class TestNameIndex implements TestNameLookup {
       // Only the titles the runner formats have placeholders; a `%s` in a plain suite title is text.
       const formatted = test.tableTitles ? new Set(test.tableTitles) : undefined;
       const segments = titles.map((title, k) =>
-        formatted === undefined || formatted.has(k) ? compileTitleTemplate(title) : literalTitle(title),
+        formatted === undefined || formatted.has(k) ? compileTitleTemplate(title, keys) : literalTitle(title),
       );
       const set = this.templates.get(test.file) ?? new TemplateSet();
       // Kept even without placeholders: a title with escapes only (`100%% sure`) is reported changed (`100% sure`).

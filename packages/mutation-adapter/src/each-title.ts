@@ -13,7 +13,18 @@
  * - every other conversion prints at least one character (`NaN`, `''` in quotes, `undefined`).
  * A placeholder may also stay as its own text: Jest leaves the placeholders after the row's last value in place
  * (`it.each([[1]])('case %s %c')` reports `case 1 %c`), so `%c` prints nothing or `%c`, and is read as any text.
+ *
+ * Jest interpolates `$key` with any key of a row object, spaces included (`$first name` for a key `first name`
+ * reports `Ada`): with `'object_key'` keys (see `TitleKeys`), a key may take in the literal text after it, up to the
+ * next placeholder, so that text is read as part of what the key prints. This holds as long as a key holds no regular
+ * expression syntax (Jest builds a `RegExp` from it) and runs into no placeholder.
  */
+
+/**
+ * How the runner reads a `$key` in a title: `'identifier'` up to the next whitespace or `|` (Vitest), or
+ * `'object_key'` as any key of the row object, spaces included (Jest).
+ */
+export type TitleKeys = 'identifier' | 'object_key';
 
 /** One step of a compiled title: a literal character, or text a placeholder prints. */
 type Token =
@@ -66,13 +77,16 @@ export function literalTitle(text: string): TitleTemplate {
  * A title with only escapes (`100%% sure`) compiles to the literal text the runner reports (`100% sure`). Runs in one
  * pass over the template and builds no regular expression.
  */
-export function compileTitleTemplate(template: string): TitleTemplate {
+export function compileTitleTemplate(template: string, keys: TitleKeys = 'object_key'): TitleTemplate {
   const tokens: Token[] = [];
   let placeholders = 0;
   // `%#` and `%$` met so far: Jest replaces only the first of each.
   const indexes = new Set<string>();
   // Whether the title interpolates `$` keys (see `keyCharacter`).
   const interpolates = [...template].some((char, k) => char === '$' && keyCharacter(template[k + 1]));
+  // Whether the title has a placeholder Jest formats from an array row. Without one, Jest formats an object row by
+  // its keys, which leaves `%$` in place.
+  const printf = hasPrintfPlaceholder(template);
   let styled = false;
   let repeatedIndex = false;
   let appended = false;
@@ -92,9 +106,10 @@ export function compileTitleTemplate(template: string): TitleTemplate {
         if (next === '#' || next === '$') {
           const first = !indexes.has(next);
           indexes.add(next);
-          // Jest formats a title with `$` keys and no other placeholder from an object row, which leaves `%$` in
-          // place (`it.each([{ name: 'a' }])('case $name %$')` reports `case a %$`).
-          const literalToo = !first || (next === '$' && interpolates);
+          // Jest formats a title with no printf placeholder from an object row, which leaves `%$` in place, with or
+          // without `$` keys (`it.each([{ name: 'a' }])('case $name %$')` reports `case a %$`, and
+          // `it.each([{ x: 1 }])('case %% %$')` reports `case % %$`); whether the rows are objects is not known.
+          const literalToo = !first || (next === '$' && (interpolates || !printf));
           tokens.push(...(literalToo ? [ONE, ANY] : [DIGIT, DIGITS]));
 
           if (!first) repeatedIndex = true;
@@ -116,6 +131,12 @@ export function compileTitleTemplate(template: string): TitleTemplate {
       let end = i + 1;
 
       while (keyCharacter(template[end])) end++;
+
+      // A Jest key may go on past whitespace (`$first name`): the literal text up to the next placeholder may be
+      // part of it.
+      if (keys === 'object_key')
+        while (end < template.length && !placeholderAt(template, end))
+          end += template.startsWith('%%', end) ? 2 : 1;
       // A key (or Jest's `$#`, literal text in Vitest) may print anything, an empty string included.
       tokens.push(ANY);
       placeholders++;
@@ -130,6 +151,33 @@ export function compileTitleTemplate(template: string): TitleTemplate {
   if (appended) tokens.push(ANY);
 
   return { tokens, placeholders, styled, repeatedIndex };
+}
+
+/** Whether a placeholder (not `%%`) starts at `i`: a conversion, `%#`, `%$`, or a `$` key. */
+function placeholderAt(template: string, i: number): boolean {
+  const char = template[i];
+  const next = template[i + 1];
+
+  if (char === '$') return keyCharacter(next);
+
+  return (
+    char === '%' &&
+    next !== undefined &&
+    (next === 's' || next === 'c' || next === '#' || next === '$' || PRINTF.has(next))
+  );
+}
+
+/** Whether a title has a placeholder Jest formats from an array row (`%s %d %i %f %j %o %O %p %#`). */
+function hasPrintfPlaceholder(template: string): boolean {
+  for (let i = 0; i < template.length; i++) {
+    if (template[i] !== '%') continue;
+    const next = template[i + 1];
+
+    if (next === '%') i++;
+    else if (next !== undefined && (next === 's' || next === '#' || PRINTF.has(next))) return true;
+  }
+
+  return false;
 }
 
 /** Titles joined into one full name with the runner's separator between them. */

@@ -1,9 +1,15 @@
 import { stableId } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
-import { compileTitleTemplate, matchesTitleTemplate, mutatorTestId, TestNameIndex } from '../src/index.js';
+import {
+  compileTitleTemplate,
+  matchesTitleTemplate,
+  mutatorTestId,
+  TestNameIndex,
+  type TitleKeys,
+} from '../src/index.js';
 
-const matches = (template: string, name: string): boolean =>
-  matchesTitleTemplate(compileTitleTemplate(template), name);
+const matches = (template: string, name: string, keys?: TitleKeys): boolean =>
+  matchesTitleTemplate(compileTitleTemplate(template, keys), name);
 
 describe('title templates of table-driven tests', () => {
   it('matches printf-style placeholders to the text they format', () => {
@@ -62,7 +68,7 @@ describe('title templates of table-driven tests', () => {
     expect(matches('x $-a', 'x 5')).toBe(true);
     expect(matches('costs 5$ total', 'costs 5$ total')).toBe(true);
     expect(matches('x $a-b done', 'x 5 not done')).toBe(true);
-    expect(matches('x $a-b done', 'x 5 gone')).toBe(false);
+    expect(matches('x $a-b done', 'x 5 gone', 'identifier')).toBe(false);
 
     for (const separator of [' ', ' > ']) {
       const file = 'test/a.test.ts';
@@ -103,8 +109,15 @@ describe('title templates of table-driven tests', () => {
     // jest-each: `it.each([{ name: 'a' }])('case $name %$')` reports `case a %$`.
     expect(matches('case $name %$', 'case a %$')).toBe(true);
     expect(matches('case $name %$', 'case a 1')).toBe(true);
-    // Without $ keys, %$ is the row number.
+    // With a printf placeholder and no $ keys, %$ is the row number.
     expect(matches('case %s %$', 'case a %$')).toBe(false);
+    // Without any, Jest may format the title from an object row too: `it.each([{ x: 1 }])('case %% %$')` reports
+    // `case % %$`.
+    expect(matches('case %% %$', 'case % %$')).toBe(true);
+    expect(matches('case %% %$', 'case % 1')).toBe(true);
+    expect(matches('case %$', 'case %$')).toBe(true);
+    expect(matches('case %c %$', 'case %c %$')).toBe(true);
+    expect(matches('case %#: %$', 'case 0: %$')).toBe(false);
 
     const file = 'test/a.test.ts';
     const own = { id: 'T-own', file, suitePath: [], name: 'case $name %$', modifiers: ['each'] };
@@ -141,7 +154,11 @@ describe('title templates of table-driven tests', () => {
     expect(matches('first is $0', 'first is 1')).toBe(true);
     expect(matches('row $#', 'row 2')).toBe(true);
     expect(
-      matches('convertIPv4ToString($input) === $expected', 'convertIPv4ToString(0.0.0.1) == 0.0.0.1'),
+      matches(
+        'convertIPv4ToString($input) === $expected',
+        'convertIPv4ToString(0.0.0.1) == 0.0.0.1',
+        'identifier',
+      ),
     ).toBe(false);
     expect(compileTitleTemplate('costs 5$').placeholders).toBe(0);
   });
@@ -151,7 +168,27 @@ describe('title templates of table-driven tests', () => {
     expect(matches('$número items', '3 items')).toBe(true);
     expect(matches('$a𝑥 done', '1 done')).toBe(true);
     expect(matches('$número items', '3 número items')).toBe(true);
-    expect(matches('$número items', '3 items!')).toBe(false);
+    expect(matches('$número items', '3 items!', 'identifier')).toBe(false);
+  });
+
+  it('lets a Jest key take in the literal text after it, as a key of the row object may hold spaces', () => {
+    // jest-each: `it.each([{ 'first name': 'Ada' }])('case $first name')` reports `case Ada`.
+    expect(matches('case $first name', 'case Ada')).toBe(true);
+    expect(matches('case $first name', 'case Ada', 'identifier')).toBe(false);
+    expect(matches('case $first name', 'case Ada name', 'identifier')).toBe(true);
+    // Up to the next placeholder, which still has to fit.
+    expect(matches('case $first name is %d', 'case Ada is 5')).toBe(true);
+    expect(matches('case $first name is %d', 'case ')).toBe(false);
+    expect(matches('case $first name, $last end', 'case Ada')).toBe(true);
+    // The literal text before the key still has to be there.
+    expect(matches('case $first name', 'test Ada')).toBe(false);
+
+    const file = 'test/a.test.ts';
+    const spaced = { id: 'T-spaced', file, suitePath: [], name: 'case $first name', modifiers: ['each'] };
+    expect(mutatorTestId(`${file}#case Ada`, ' ', new TestNameIndex([spaced], ' '), false)).toBe(spaced.id);
+    expect(
+      mutatorTestId(`${file}#case Ada`, ' > ', new TestNameIndex([spaced], ' > ', [], 'identifier'), false),
+    ).not.toBe(spaced.id);
   });
 
   it('treats regular expression characters literally', () => {
