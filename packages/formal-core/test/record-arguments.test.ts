@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest';
 import {
   outOfBoundsProperty,
   proveProperty,
+  shapeInput,
   type TranslationResult,
+  thresholdProperty,
   translateFunction,
 } from '../src/index.js';
 
@@ -360,4 +362,34 @@ export function lengthNamed(xs__length: number, ys: number[]): boolean {
       if (result.status === 'unsupported') expect(result.reasons[0]?.reason, source).toMatch(reason);
     }
   });
+
+  it("shapes a counterexample by the root function even when a callee's parameter names occur in it", async () => {
+    const source = `function g(r: { a: number }): number {
+  return r.a > 1 ? 100 : 0;
+}
+export function f(r: { a: number; b: boolean }): number {
+  return r.b ? g({ a: r.a }) : 0;
+}
+`;
+    const t = translated(translate('f', source));
+    const ir = thresholdProperty({
+      implementation: t,
+      param: 'r__a',
+      operator: '>=',
+      value: '1',
+      whenTrue: '100',
+      domain: DOMAIN,
+    });
+    // The callee comes first in the IR and its only parameter, r__a, also names a field of the root's record.
+    expect(ir.functions[0]?.name).toBe('f__g');
+    expect(shapeInput(ir, { r__a: '1', r__b: true })).toEqual({ r: { a: '1', b: true } });
+    const root = project(source);
+    const { claim, replay } = await prove(root, ir, 'f');
+    expect(claim.status).toBe('counterexample_found');
+    expect(claim.semanticValidation).toBe('confirmed');
+    const ce = claim.counterexample as Record<string, unknown>;
+    expect(Object.keys(ce)).toEqual(['r']);
+    expect(Object.keys(ce.r as object).sort()).toEqual(['a', 'b']);
+    expect(replay[0]?.agrees).toBe(true);
+  }, 60_000);
 });
