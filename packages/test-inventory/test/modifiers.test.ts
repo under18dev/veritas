@@ -572,6 +572,24 @@ describe('full names static analysis cannot read', () => {
         "export async function shared() { const { createRequire } = await import('node:module'); const cr = createRequire; cr(import.meta.url)('vitest').it('x', () => {}); }",
       importedModuleThen:
         "export function shared() { import('node:module').then((m: any) => m.createRequire(import.meta.url)('vitest').it('x', () => {})); }",
+      moduleClassLoad:
+        "import { Module } from 'node:module';\nexport function shared() { (Module as any)._load('node:vm').runInThisContext(\"it('hidden', () => {})\"); }",
+      moduleDefaultLoad:
+        "import m from 'module';\nexport function shared() { (m as any)._load('vitest').it('x', () => {}); }",
+      moduleNamespaceLoad:
+        "import * as m from 'module';\nexport function shared() { (m as any).Module._load('vitest').it('x', () => {}); }",
+      moduleImportEqualsLoad:
+        "import m = require('module');\nexport function shared() { (m as any)._load('vitest').it('x', () => {}); }",
+      moduleRequireLoad: "export function shared() { require('module')._load('vitest').it('x', () => {}); }",
+      moduleRequireDestructured:
+        "export function shared() { const { Module } = require('node:module'); Module._load('vitest').it('x', () => {}); }",
+      moduleImportedLoad:
+        "export async function shared() { const { Module }: any = await import('node:module'); Module._load('vitest').it('x', () => {}); }",
+      moduleBuiltinLoad:
+        "export function shared() { (process as any).getBuiltinModule('module').Module._load('vitest').it('x', () => {}); }",
+      moduleRegister:
+        "import { register } from 'node:module';\nexport function shared() { register('./hooks.mjs', import.meta.url); }",
+      moduleReexport: "export { Module } from 'node:module';\nexport const shared = () => 1;",
       vmRun:
         "import { runInThisContext } from 'node:vm';\nexport function shared() { runInThisContext(\"it('hidden', () => {})\"); }",
       vmScript:
@@ -692,7 +710,8 @@ describe('full names static analysis cannot read', () => {
         "import { it } from 'vitest';\nimport { shared } from './plain-indexing.js';\nshared([], {}, 'a');\nit('r', () => {});\n",
       // A helper loading builtins at run time, and a local module through a require made from an imported module.
       'test/builtin-loads.ts': [
-        "export function exists() { return (process as any).getBuiltinModule('node:fs').existsSync('x'); }",
+        "import { builtinModules, isBuiltin } from 'node:module';",
+        "export function exists() { return (process as any).getBuiltinModule('node:fs').existsSync('x') || isBuiltin('fs') || builtinModules.length > 0; }",
         'export async function local() {',
         "  const { createRequire } = await import('node:module');",
         "  return createRequire(import.meta.url)('./plain-reflection.js');",

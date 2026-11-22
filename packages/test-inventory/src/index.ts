@@ -4403,19 +4403,71 @@ function visitTests(
 }
 
 /**
+ * Exports of `module` that only describe modules and load none. Every other export loads or runs code in some way
+ * (`Module._load`, `Module.prototype.require`, `register`, `syncBuiltinESMExports`, …).
+ */
+const MODULE_DATA_EXPORTS = new Set(['builtinModules', 'isBuiltin']);
+
+/** Whether a module name is `module` (`node:module`), which can load other modules. */
+const isModuleModule = (name: string) => name === 'module' || name === 'node:module';
+
+/**
  * The `require` functions a module makes with `createRequire` (from `module` or `node:module`, by name, alias or
  * namespace): each call with a literal module name is handed to `load`; a call with any other argument, a
- * `createRequire` whose result is not kept in a name, or any other use of such a function, to `unknown`.
+ * `createRequire` whose result is not kept in a name, or any other use of such a function, to `unknown`. Any export
+ * of `module` other than `createRequire` and those in `MODULE_DATA_EXPORTS` (`Module._load('node:vm')`) is handed to
+ * `unknown` too, however the module is obtained.
  */
 function requiresCreated(source: ts.SourceFile, load: (name: string) => void, unknown: () => void): void {
   const named = new Set<string>();
   const namespaces = new Set<string>();
+  /** An export of `module` taken by name: `createRequire` is followed, data exports are harmless. */
+  const takeExport = (exported: string, local: ts.BindingName | ts.Identifier) => {
+    if (exported === 'createRequire') {
+      if (ts.isIdentifier(local)) named.add(local.text);
+      else unknown();
+    } else if (!MODULE_DATA_EXPORTS.has(exported)) unknown();
+  };
 
   for (const statement of source.statements) {
+    // `import Module = require('module')`.
+    if (
+      ts.isImportEqualsDeclaration(statement) &&
+      !statement.isTypeOnly &&
+      ts.isExternalModuleReference(statement.moduleReference) &&
+      ts.isStringLiteralLike(statement.moduleReference.expression) &&
+      isModuleModule(statement.moduleReference.expression.text)
+    ) {
+      namespaces.add(statement.name.text);
+      continue;
+    }
+
+    // `export { Module } from 'module'`, `export * from 'module'` hand its exports to other modules.
+    if (
+      ts.isExportDeclaration(statement) &&
+      !statement.isTypeOnly &&
+      statement.moduleSpecifier &&
+      ts.isStringLiteralLike(statement.moduleSpecifier) &&
+      isModuleModule(statement.moduleSpecifier.text)
+    ) {
+      const clause = statement.exportClause;
+
+      if (
+        !clause ||
+        !ts.isNamedExports(clause) ||
+        clause.elements.some(
+          (element) =>
+            !element.isTypeOnly && !MODULE_DATA_EXPORTS.has((element.propertyName ?? element.name).text),
+        )
+      )
+        unknown();
+      continue;
+    }
+
     if (
       !ts.isImportDeclaration(statement) ||
       !ts.isStringLiteral(statement.moduleSpecifier) ||
-      (statement.moduleSpecifier.text !== 'module' && statement.moduleSpecifier.text !== 'node:module')
+      !isModuleModule(statement.moduleSpecifier.text)
     )
       continue;
     const clause = statement.importClause;
@@ -4428,7 +4480,7 @@ function requiresCreated(source: ts.SourceFile, load: (name: string) => void, un
     if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
     else if (bindings)
       for (const element of bindings.elements)
-        if ((element.propertyName ?? element.name).text === 'createRequire') named.add(element.name.text);
+        if (!element.isTypeOnly) takeExport((element.propertyName ?? element.name).text, element.name);
   }
 
   // The same module obtained at run time: with CommonJS (`const { createRequire } = require('node:module')`,
@@ -4445,7 +4497,7 @@ function requiresCreated(source: ts.SourceFile, load: (name: string) => void, un
         getsBuiltinModule(callee)) &&
       argument !== undefined &&
       ts.isStringLiteralLike(argument) &&
-      (argument.text === 'module' || argument.text === 'node:module')
+      isModuleModule(argument.text)
     );
   };
   /** Whether an expression is the module object: a call that loads it, or a dynamic import of it awaited. */
@@ -4489,6 +4541,14 @@ function requiresCreated(source: ts.SourceFile, load: (name: string) => void, un
   const moduleObjects = descendants(source).filter(
     (node) => (ts.isCallExpression(node) || ts.isAwaitExpression(node)) && requiresModule(node),
   ) as ts.Expression[];
+  /** A member read on the module object: `createRequire` called, or a data export; anything else is not followed. */
+  const moduleMember = (access: ts.PropertyAccessExpression | ts.ElementAccessExpression) => {
+    const member = memberName(access);
+
+    if (member === 'createRequire') {
+      if (!(ts.isCallExpression(access.parent) && access.parent.expression === access)) unknown();
+    } else if (member === undefined || !MODULE_DATA_EXPORTS.has(member)) unknown();
+  };
 
   for (const object of moduleObjects) {
     const call = outermost(object);
@@ -4500,11 +4560,8 @@ function requiresCreated(source: ts.SourceFile, load: (name: string) => void, un
         for (const element of parent.name.elements) {
           const key = element.propertyName ?? element.name;
 
-          if (!ts.isIdentifier(key) && !ts.isStringLiteral(key)) unknown();
-          else if (key.text === 'createRequire') {
-            if (ts.isIdentifier(element.name)) named.add(element.name.text);
-            else unknown();
-          } else if (element.dotDotDotToken) unknown();
+          if (element.dotDotDotToken || (!ts.isIdentifier(key) && !ts.isStringLiteral(key))) unknown();
+          else takeExport(key.text, element.name);
         }
       else unknown();
     } else if (
@@ -4514,11 +4571,7 @@ function requiresCreated(source: ts.SourceFile, load: (name: string) => void, un
       )
     )
       unknown();
-    else if (
-      memberName(parent) === 'createRequire' &&
-      !(ts.isCallExpression(parent.parent) && parent.parent.expression === parent)
-    )
-      unknown();
+    else moduleMember(parent);
   }
 
   if (named.size === 0 && namespaces.size === 0 && moduleObjects.length === 0) return;
@@ -4585,11 +4638,7 @@ function requiresCreated(source: ts.SourceFile, load: (name: string) => void, un
           : undefined;
 
       if (member === undefined) unknown();
-      else if (
-        member === 'createRequire' &&
-        !(ts.isCallExpression(parent.parent) && parent.parent.expression === parent)
-      )
-        unknown();
+      else moduleMember(parent as ts.PropertyAccessExpression | ts.ElementAccessExpression);
     }
   }
 }
