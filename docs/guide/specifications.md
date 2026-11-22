@@ -31,6 +31,8 @@ The web crawl reads only text documents: HTML, plain text and Markdown. A respon
 
 Text from these sources is stored as untrusted data. Instructions written inside a README, an issue or a web page are quoted, never followed.
 
+You can also state a rule yourself, as a function that returns `true` when the rule holds, and declare it under `properties` in `.veritas/config.json`. A declared property gets the ID `D-<id>` and goes through the same review as the others: it is `proposed` until you accept it. See [Declare a property](/guide/verification#declare-a-property).
+
 ## How a rule becomes a property
 
 Veritas reads threshold phrases in English and Japanese, such as "1000 or more", "at most", "less than", "1000 以上" and "未満". When a statement matches one exported function and one parameter, it becomes a property:
@@ -126,5 +128,7 @@ Commit this file so that everyone, including CI, works from the same decisions. 
 ## When a property needs review again
 
 A decision applies to one property ID. The ID is derived from the content of the source file and the statement, so it stays the same across commits while that file is unchanged. When you edit the file that contains a statement, its properties get new IDs and appear as `proposed`. Run `veritas spec diff` to see the old and new IDs, and accept or reject the new ones.
+
+A declared property keeps its ID (`D-<id>`) when you edit it. Its version changes instead, with its description, target, kind or domain, so the earlier decision no longer applies and the property is `proposed` again until you decide on it again.
 
 Approvals cannot be changed through the MCP server.

@@ -31,6 +31,8 @@ Web の収集で読むのは、HTML、プレーンテキスト、Markdown のテ
 
 読んだテキストは、信頼しないデータとして保存します。README や Issue や Web ページの中に指示が書かれていても、引用するだけで従いません。
 
+規則を自分で書くこともできます。規則が成り立つときに `true` を返す関数を用意し、`.veritas/config.json` の `properties` で宣言します。宣言した Property の ID は `D-<id>` になり、ほかの Property と同じレビューを通ります。accept するまでは `proposed` のままです。詳しくは[Property を宣言する](/ja/guide/verification#declare-a-property)を見てください。
+
 ## 規則が Property になるまで
 
 Veritas は「1000 or more」「at most」「less than」「1000 以上」「未満」のような、英語と日本語のしきい値の言い回しを読みます。記述が export された関数一つと引数一つに対応すると、Property になります。
@@ -126,5 +128,7 @@ Veritas が README や docs や Issue を書き換えることはなく、コー
 ## もう一度レビューが必要になるとき
 
 決定は Property の ID ごとに適用されます。ID は出典のファイルと記述の内容から決まるので、ファイルが変わらない限り、コミットしても同じです。記述のあるファイルを編集すると、その Property には新しい ID が付き、`proposed` として表示されます。`veritas spec diff` で古い ID と新しい ID を確かめ、新しいほうを accept か reject してください。
+
+宣言した Property は、編集しても ID（`D-<id>`）が変わりません。代わりに、説明、対象、種類、範囲のどれかを変えるとバージョンが変わります。そのため前の決定は適用されなくなり、改めて決めるまで `proposed` に戻ります。
 
 MCP サーバーからは承認を変更できません。

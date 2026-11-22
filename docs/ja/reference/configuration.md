@@ -82,6 +82,35 @@ export default {
 
 判定できない結果とは、`unknown`、`timeout`、`unsupported`、`semantic_mismatch`、`error` の主張と、`partial`、`skipped`、`unsupported`、`timeout`、`cancelled` のステージのことです。
 
+## 宣言した Property {#declared-properties}
+
+`properties` には、自分で書いた規則を並べます。それぞれ、規則が成り立つときに `true` を返す、export した関数です。これは設定項目ではなく一覧なので、[TUI](/ja/guide/tui) の設定画面には出てきません。ファイルを直接編集してください。
+
+```json
+{
+  "properties": [
+    {
+      "id": "stage.succeeded-needs-tests",
+      "kind": "holds_for_all",
+      "target": "src/stage.ts#invariant_succeededNeedsTests",
+      "description": "The stage succeeds only after at least one test ran.",
+      "domain": { "integer": { "min": "0", "max": "1000" }, "maxArrayLength": 2 }
+    }
+  ]
+}
+```
+
+| 項目                    | 必須   | 意味                                                                                                                              |
+| ----------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                    | はい   | 英数字、`.`、`_`、`-` からなり、一覧の中で重複しない名前です。Property の ID は `D-<id>` になります                               |
+| `kind`                  | はい   | `holds_for_all`：範囲内のすべての入力で、対象の関数が `true` を返す                                                               |
+| `target`                | はい   | `<プロジェクトのルートからの相対パス>#<export した関数>`。関数は `boolean` を返し、形式検証の対象範囲に収まっている必要があります |
+| `description`           | はい   | 規則の意味（500 文字まで）                                                                                                        |
+| `domain.integer`        | いいえ | すべての整数の入力の `min` と `max`（10 進数の文字列）。既定値は `formal.integerDomain`                                           |
+| `domain.maxArrayLength` | いいえ | モデル化する配列の最大の長さ（1〜8）。既定値は `formal.maxArrayLength`                                                            |
+
+宣言した Property は、`veritas spec accept` で accept するまで `proposed` です。宣言の内容や、宣言が使う形式検証の設定を変えると、承認は適用されなくなります。Veritas が検査できない対象は、理由を添えた `unsupported` の結果になります。詳しくは[Property を宣言する](/ja/guide/verification#declare-a-property)を見てください。
+
 ## 値が 1 つしかない設定
 
 次の設定は規則を明示するためのもので、受け付ける値は 1 つだけです。ほかの値を書くと、不正な設定になります。

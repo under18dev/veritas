@@ -141,6 +141,86 @@ Veritas は関数の Lean モデルと Property の定理を生成し、`lake bu
 
 `--engine` を付けなければ、`prove` は `formal.backend` に従います。以前の `veritas init` が書いた `formal.backend: lean` の設定では、`prove` が Lean を使うようになります。Z3 だけで確かめたいときは `--engine z3` を付けてください。`both` に対応する前の Veritas は、`both` を使った設定を読み込めません。
 
+Veritas は、決まった手順のタクティクを順に試し、カーネルが最初に受け入れた証明を採用します。どの手順で証明できたかは結果に記録されます。Property が呼ぶ関数がさらに別の関数を呼ぶとき（たとえば、規則から判定を、判定から終了コードを決める関数）は、最初に `abstract-calls-split` を試します。内側の呼び出しの結果に一度だけ名前を付け、その呼び出しを場合分けする方法で、結果を使う箇所ごとに呼び出しの中身を複製することはしません。
+
+## Property を宣言する {#declare-a-property}
+
+文書から見つけた規則のほかに、自分で書いた規則も Property にできます。規則が成り立つときに `true` を返す関数を export し、`.veritas/config.json` で宣言します。
+
+```ts
+// src/stage.ts
+export interface StageEvidence {
+  failed: boolean;
+  undecided: number;
+  testsRan: number;
+}
+
+export function status(e: StageEvidence): number {
+  if (e.failed) return 2;
+  if (e.undecided > 0 || e.testsRan <= 0) return 1;
+  return 0;
+}
+
+export function invariant_succeededNeedsTests(e: StageEvidence): boolean {
+  return status(e) !== 0 || e.testsRan >= 1;
+}
+```
+
+```json
+{
+  "properties": [
+    {
+      "id": "stage.succeeded-needs-tests",
+      "kind": "holds_for_all",
+      "target": "src/stage.ts#invariant_succeededNeedsTests",
+      "description": "The stage succeeds only after at least one test ran.",
+      "domain": { "integer": { "min": "0", "max": "1000" } }
+    }
+  ]
+}
+```
+
+`holds_for_all` の Property は、「範囲内のすべての入力で、対象の関数が `true` を返す」という主張です。項目の一覧は[設定のリファレンス](/ja/reference/configuration#declared-properties)にあります。
+
+| 項目          | 意味                                                                                                                                                                                                                 |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`          | 変わらない名前です。Property の ID は `D-<id>` になるので、宣言の順番を入れ替えたり内容を直したりしても変わりません                                                                                                  |
+| `target`      | `<ファイル>#<export 名>`。プロジェクト内のファイルが export する関数で、`boolean` を返し、[対応しているコード](#対応しているコード)に収まっている必要があります。`analysis.include` に含まれていなくてもかまいません |
+| `description` | 規則の意味です。レビュー、指摘、レポートに表示されます                                                                                                                                                               |
+| `domain`      | 省略可能です。`integer` の範囲（`min`、`max`）と `maxArrayLength` を指定します。省略した部分は `formal.integerDomain` と `formal.maxArrayLength` を使います                                                          |
+
+宣言した Property も、文書から見つけた Property と同じレビューを通ります。最初は origin が `human` の `proposed` で、accept して初めて検査の対象になります（`--include-proposed` を付ければ検査しますが、結果は `suspected` のままです）。accept されていないために検査しなかった宣言は、prove ステージのメッセージで一つずつ名前を挙げます。
+
+```text
+succeeded   prove
+            D-stage.succeeded-needs-tests: declared property not verified, it is proposed (accept it with `veritas spec accept D-stage.succeeded-needs-tests --reason "<why>"`, or pass --include-proposed)
+```
+
+```bash
+veritas spec accept D-stage.succeeded-needs-tests --reason "the stage rule we rely on"
+veritas prove --engine both
+```
+
+```text
+succeeded   prove
+            D-stage.succeeded-needs-tests: proven_within_model
+            D-stage.succeeded-needs-tests (lean): proven_within_model [kernel_checked]
+```
+
+宣言した Property のバージョンは、説明、対象、種類、範囲（範囲の既定値として使う形式検証の設定を含む）から決まります。どれかを変えると承認は適用されなくなり、もう一度 accept するまで `proposed` に戻ります。バージョンは過去の実行に左右されないので、新しく clone した環境や CI でも同じように扱われます。
+
+結果の意味は、ほかの Property と変わりません。
+
+- Z3 は範囲内のすべての入力を調べ、反例は JavaScript で実際の関数に対して再実行します。再実行の結果が食い違えば `semantic_mismatch` になり、反例としては扱いません。
+- accept した宣言に対して再実行で確かめた反例が出ると、`confirmed` の `spec_implementation_mismatch` の指摘になります。`policy.confirmedViolation: fail` なら実行は失敗します。
+- `--engine both` では、Z3 が証明した Property について Lean がカーネルで検査した証明を加えます。
+- Veritas が検査できない宣言は、理由を添えた `unsupported` の結果になり、黙って無視されることはありません。対象のファイルがない、プロジェクトの外にある、その名前の関数を export していない、関数が数値を返す、対応していないコードを使っている、といった場合です。ほかの `unsupported` と同じく判定できない結果なので、`policy.inconclusiveBehavior: fail` なら終了コードは `4` です。
+- 宣言そのものが不正なとき（ID の重複、`#<export 名>` のない対象、`min` が `max` より大きい範囲など）は、`CONFIG_INVALID` で終了コード 2 になります。
+
+宣言した Property だけを検査したいときは、文書を読むこととコードから規則を推測することを止めます。`sources.local` と `analysis.inferSpecsFromCode` を `false` にしてください。
+
+Veritas のリポジトリも、この方法で自分自身を検査しています。リポジトリの `.veritas/config.json` は、`packages/core/src/policy-decision.ts` にある実行ポリシーの不変条件（「何も残っていないときだけ判定が `pass` になる」「終了コード 1 はポリシー違反のときだけ」など）を宣言しています。`node scripts/check-self-verification.mjs` は、宣言したすべての Property が accept され、Z3 で証明されて再実行でも確かめられ、Lean のカーネルでも検査されていなければ失敗します。`fixtures/declared-properties` には陰性対照として、わざと偽にした不変条件を置いてあり、これは反例が出なければいけません（`--expect-counterexample`）。証明の対象は判定の規則だけです。Veritas が規則に渡す証拠をどう数えるかは、テストで確かめていて、証明はしていません。
+
 ## `proven_within_model` の意味
 
 示したモデル、値の範囲、前提の中では、Property を破る入力がない、という意味です。どの結果にも、それらが記載されます。
