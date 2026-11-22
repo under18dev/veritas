@@ -81,3 +81,49 @@ describe('discount-boundary end to end: confirmation and cache', () => {
     expect(mutate(third)?.messages.join(' ')).not.toMatch(/reused from cache/);
   });
 });
+
+describe('table-driven tests end to end', () => {
+  it('credits kills by the rows of it.each and describe.each to the tests that register them', () => {
+    const dir = setup('discount-boundary');
+    writeFileSync(
+      path.join(dir, 'test/shipping-each.test.ts'),
+      [
+        "import { describe, expect, it } from 'vitest';",
+        "import { shippingFee } from '../src/pricing.js';",
+        '',
+        'it.each`',
+        '  total   | fee',
+        `  \${4999} | \${500}`,
+        `  \${5000} | \${0}`,
+        "`('ships an order of $total for $fee', ({ total, fee }) => {",
+        '  expect(shippingFee(total)).toBe(fee);',
+        '});',
+        '',
+        "describe.each([['below', 4999, 500], ['at', 5000, 0]])('an order %s the threshold', (_where, total, fee) => {",
+        "  it('costs %s to ship', () => {",
+        '    expect(shippingFee(total as number)).toBe(fee);',
+        '  });',
+        '});',
+        '',
+      ].join('\n'),
+    );
+    const run = json<RunJson>(runCli(['mutate', '--kill-matrix', '--json'], dir));
+    expect(run.stages.find((s) => s.stage === 'mutate')?.status).toBe('succeeded');
+    const tests = readRunArtifact<{ tests: { id: string; file: string; name: string }[] }>(
+      dir,
+      run.runId,
+      'test-map.json',
+    ).tests.filter((t) => t.file === 'test/shipping-each.test.ts');
+    const killers = new Set(
+      readRunArtifact<{ mutants: { killedBy: string[] }[] }>(dir, run.runId, 'mutation.json').mutants.flatMap(
+        (m) => m.killedBy,
+      ),
+    );
+
+    expect(tests.map((t) => t.name).sort()).toEqual([
+      'costs %s to ship',
+      'ships an order of $total for $fee',
+    ]);
+    for (const test of tests) expect(killers.has(test.id), test.name).toBe(true);
+  });
+});
