@@ -230,6 +230,25 @@ describe('writeMutationVitestConfig', () => {
     );
   });
 
+  it('stops when a projects glob matches a file that is not a Vitest config, as Vitest does', async () => {
+    const root = tempDir('glob-non-config');
+    write(root, {
+      'vitest.config.mjs': "export default { test: { projects: ['packages/*', 'tools/*.mjs'] } };",
+      'packages/a/vitest.config.mjs': "export default { test: { name: 'a' } };",
+      'packages/a/a.test.mjs': '',
+      'tools/helper.mjs': '',
+    });
+    const configPath = writeMutationVitestConfig({
+      root,
+      dir: mutationDir(root),
+      testFiles: ['packages/a/a.test.mjs'],
+      toolchain,
+    });
+    await expect((await import(pathToFileURL(configPath).href)).default({})).rejects.toThrow(
+      /projects glob .* matched tools\/helper\.mjs, which is not a Vitest config file/,
+    );
+  });
+
   /** The config the generated one resolves to, without running Vitest. */
   const resolve = async (configPath: string, env = {}) =>
     (await import(`${pathToFileURL(configPath).href}?${Math.random()}`)).default(env) as Promise<{

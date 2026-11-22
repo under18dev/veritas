@@ -299,7 +299,10 @@ export async function mutationConfig(
     /** Config files and directories already turned into a project: Vitest resolves each once. */
     const seen = new Set<string>();
 
-    for (const { path: found, entry } of await projectPaths(strings, vitestRoot, tinyglobby)) {
+    const resolvedPaths = await projectPaths(strings, vitestRoot, tinyglobby);
+    const globbed = new Set(resolvedPaths.filter((p) => !strings.includes(p.entry)).map((p) => p.entry));
+
+    for (const { path: found, entry } of resolvedPaths) {
       const isDir = found.endsWith('/');
       const configFile = !existsSync(found)
         ? found
@@ -309,6 +312,13 @@ export async function mutationConfig(
       const file = isDir && configFile ? path.join(found, configFile) : configFile;
 
       if (!existsSync(found) || (file && !CONFIG_NAME.test(path.basename(file)))) {
+        // Vitest stops when a glob matches a file that is not a config. The globs were expanded together, so their
+        // joined text matches nothing and Vitest would skip it silently: stop here instead.
+        if (globbed.has(entry))
+          throw cannotNarrow(
+            'projects',
+            `the projects glob ${entry} matched ${posix(path.relative(vitestRoot, found))}, which is not a Vitest config file`,
+          );
         // Vitest itself refuses this entry; keep it so that Vitest says why.
         if (!projects.includes(entry)) projects.push(entry);
         continue;
