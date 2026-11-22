@@ -216,6 +216,8 @@ interface SpecOutput {
   conflicts: import('@under18dev/veritas-property-engine').ConflictGroup[];
   /** Properties with a predicate that could not be formalized, with the reason. */
   notFormalized: Map<string, string>;
+  /** Decisions recorded for an earlier version of a property; they no longer apply. */
+  staleApprovals: import('@under18dev/veritas-core').Approval[];
 }
 
 function previousProperties(root: string): Property[] {
@@ -700,6 +702,7 @@ async function runInContext(
           formalized,
           notFormalized,
           conflicts: registry.conflicts,
+          staleApprovals: applied.staleApprovals,
         } satisfies SpecOutput,
         artifacts: [artifact],
         messages: [`properties: ${JSON.stringify(counts)}; ${registry.conflicts.length} conflict(s)`],
@@ -1052,10 +1055,20 @@ async function runInContext(
 
       // A declared property is named when it is left out, whether or not it could be formalized: a declaration is
       // never passed over without a word.
+      // An approval of an earlier version of the declaration is named too: editing a declaration, or a formal
+      // setting it takes its bounds from, is what makes it stale.
       for (const p of spec.properties) {
-        if (p.origin !== 'human' || wantedStatus(p)) continue;
+        if (p.origin !== 'human') continue;
 
         if (options.propertyIds && !options.propertyIds.includes(p.id)) continue;
+        const stale = spec.staleApprovals.filter((a) => a.propertyId === p.id).at(-1);
+
+        if (stale)
+          messages.push(
+            `${p.id}: the ${stale.decision} recorded by ${stale.actor} (${stale.id}) was for version ${stale.propertyVersion} of the declaration; it is now version ${p.version} and needs a new decision`,
+          );
+
+        if (wantedStatus(p)) continue;
         messages.push(
           `${p.id}: declared property not verified, it is ${p.status}` +
             (p.status === 'proposed' || p.status === 'reviewed'

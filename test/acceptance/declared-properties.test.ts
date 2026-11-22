@@ -125,6 +125,18 @@ describe('declared properties', () => {
     expect(properties.properties.find((p) => p.id === GUARDED)?.status).toBe('proposed');
     expect(properties.properties.find((p) => p.id === UNGUARDED)?.status).toBe('accepted');
     expect(properties.staleApprovals).toHaveLength(1);
+    // The prove stage names the stale approval and that the property is not verified.
+    const rerunMessages = json<Summary>(rerun).stages.find((s) => s.stage === 'prove')?.messages ?? [];
+    expect(rerunMessages).toContainEqual(
+      expect.stringMatching(
+        new RegExp(
+          `^${GUARDED.replaceAll('.', '\\.')}: the accept recorded by fixture \\(A-\\w+\\) was for version \\d+ of the declaration; it is now version \\d+`,
+        ),
+      ),
+    );
+    expect(rerunMessages).toContainEqual(
+      expect.stringContaining(`${GUARDED}: declared property not verified, it is proposed`),
+    );
   }, 600_000);
 
   it('reports a declaration it cannot check as unsupported, with the reason, never dropping it', () => {
