@@ -14,9 +14,13 @@ import {
 import {
   exitCodeOfVerdict,
   invariant_exitCodeFollowsVerdict,
+  invariant_exitFourMeansInconclusiveFail,
+  invariant_exitOneMeansPolicyFailure,
+  invariant_exitThreeMeansToolError,
   invariant_failuresExitOne,
   invariant_inconclusiveFailExitsFour,
   invariant_inconclusiveIsNeverPass,
+  invariant_openFindingsNeverFail,
   invariant_passMeansNothingOpen,
   invariant_successExitOnlyWhenPassing,
   invariant_toolErrorNeverSucceeds,
@@ -428,6 +432,10 @@ describe('policy decision kernel', () => {
       invariant_failuresExitOne,
       invariant_toolErrorNeverSucceeds,
       invariant_inconclusiveFailExitsFour,
+      invariant_exitOneMeansPolicyFailure,
+      invariant_exitThreeMeansToolError,
+      invariant_exitFourMeansInconclusiveFail,
+      invariant_openFindingsNeverFail,
     };
     expect(records).toHaveLength(4 ** 7 * 4);
 

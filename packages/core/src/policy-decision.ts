@@ -232,3 +232,42 @@ export function invariant_inconclusiveFailExitsFour(c: PolicyCounts): boolean {
 
   return !c.failOnInconclusive || !inconclusive || precedes || exit === 4;
 }
+
+/** Exit code 1 only for a failed threshold or a confirmed violation with `confirmedViolation: fail`. */
+export function invariant_exitOneMeansPolicyFailure(c: PolicyCounts): boolean {
+  const exit = exitCodeOfVerdict(verdictOfRule(policyRule(c)));
+
+  return exit !== 1 || c.thresholdFailures > 0 || (c.confirmedViolations > 0 && c.failOnConfirmedViolation);
+}
+
+/** Exit code 3 only for a stage that failed or errored. */
+export function invariant_exitThreeMeansToolError(c: PolicyCounts): boolean {
+  const exit = exitCodeOfVerdict(verdictOfRule(policyRule(c)));
+
+  return exit !== 3 || c.toolErrors > 0;
+}
+
+/** Exit code 4 only with `inconclusiveBehavior: fail` and something inconclusive. */
+export function invariant_exitFourMeansInconclusiveFail(c: PolicyCounts): boolean {
+  const exit = exitCodeOfVerdict(verdictOfRule(policyRule(c)));
+  const inconclusive = c.inconclusiveStages > 0 || c.inconclusiveClaims > 0 || c.thresholdUndecided > 0;
+
+  return exit !== 4 || (c.failOnInconclusive && inconclusive);
+}
+
+/**
+ * Open findings (suspected findings, confirmed findings of a kind that is not a violation, and violations
+ * reported as warnings) never make the exit code non-zero: without a failed threshold, a failing confirmed
+ * violation, a tool error or a failing inconclusive item, the exit code is 0 whatever `openFindings` is.
+ */
+export function invariant_openFindingsNeverFail(c: PolicyCounts): boolean {
+  const exit = exitCodeOfVerdict(verdictOfRule(policyRule(c)));
+  const inconclusive = c.inconclusiveStages > 0 || c.inconclusiveClaims > 0 || c.thresholdUndecided > 0;
+  const failing =
+    c.thresholdFailures > 0 ||
+    (c.confirmedViolations > 0 && c.failOnConfirmedViolation) ||
+    c.toolErrors > 0 ||
+    (c.failOnInconclusive && inconclusive);
+
+  return failing || exit === 0;
+}
