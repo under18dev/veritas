@@ -333,11 +333,67 @@ function itesOnlyOver(expr: Expr, allowed: ReadonlySet<string>): boolean {
  * boolean parameters are then split one at a time, simplifying after each split so that decided branches close
  * early; what remains is a linear integer problem for `omega`.
  */
-function namedIntCallsStrategy(ir: PropertyIR, introLine: string[], bools: string[]): LeanStrategy | null {
+/**
+ * Size of `expr` once its boolean calls are inlined, computed without building it (memoized per function), so that
+ * a chain of helpers that each call the previous one several times is turned down before anything is expanded.
+ */
+function inlinedSize(ir: PropertyIR, expr: Expr): number {
+  const byName = new Map(ir.functions.map((f) => [f.name, f]));
+  const memo = new Map<string, number>();
+  const occurrences = (body: Expr, name: string): number => {
+    if (body.kind === 'var') return body.name === name ? 1 : 0;
+    let n = 0;
+    mapExpr(body, (e) => {
+      n += occurrences(e, name);
+
+      return e;
+    });
+
+    return n;
+  };
+  const size = (e: Expr): number => {
+    let children = 0;
+    mapExpr(e, (c) => {
+      children += size(c);
+
+      return c;
+    });
+    const f = e.kind === 'call' ? byName.get(e.fn) : undefined;
+
+    if (e.kind !== 'call' || f?.returns !== 'bool' || !f.body) return 1 + children;
+    const body = f.body;
+    let own = memo.get(f.name);
+
+    if (own === undefined) {
+      own = size(body);
+      memo.set(f.name, own);
+    }
+    // Each use of a parameter in the body becomes a copy of the argument.
+    return own + e.args.reduce((sum, a, i) => sum + size(a) * occurrences(body, f.params[i]?.name ?? ''), 0);
+  };
+
+  return size(expr);
+}
+
+/** The largest term (in IR nodes) the named-calls strategy inlines; beyond it the strategy is not offered. */
+const NAMED_CALLS_MAX_TERM = 20_000;
+
+/**
+ * Whether the named-calls strategy applies: some function returns an integer, every function has a body (opaque
+ * ones are left to the model check, which rejects them), and inlining the boolean helpers stays small.
+ */
+function namedIntCallsApplies(ir: PropertyIR): boolean {
+  if (!ir.functions.some((f) => f.returns === 'int') || ir.functions.some((f) => f.body === null))
+    return false;
+
+  return [ir.body, ...ir.functions.filter((f) => f.returns === 'int').map((f) => f.body as Expr)].every(
+    (e) => inlinedSize(ir, e) <= NAMED_CALLS_MAX_TERM,
+  );
+}
+
+function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[]): string[] {
   const byName = new Map(ir.functions.map((f) => [f.name, f]));
   const returnsOf = (fn: string) => byName.get(fn)?.returns;
-
-  if (!ir.functions.some((f) => f.returns === 'int')) return null;
   const boolDefs = ir.functions.filter((f) => f.returns === 'bool').map((f) => qualified(f.name));
   const lines = [...introLine];
   const named = new Map<string, { h: string; ref: Expr }>();
@@ -452,9 +508,24 @@ function namedIntCallsStrategy(ir: PropertyIR, introLine: string[], bools: strin
     lines.push(...finish);
   }
 
+  return lines;
+}
+
+/**
+ * The named-calls strategy, or null when it does not apply. Its script is only generated when an attempt reads it,
+ * so a proof found by an earlier strategy never pays for it.
+ */
+function namedIntCallsStrategy(ir: PropertyIR, introLine: string[], bools: string[]): LeanStrategy | null {
+  if (!namedIntCallsApplies(ir)) return null;
+  let script: string[] | undefined;
+
   return {
     name: 'name-int-calls-cases',
-    script: lines,
+    get script() {
+      script ??= namedIntCallsScript(ir, introLine, bools);
+
+      return script;
+    },
     lemmas: ITE_EQ_LEMMA,
     options: [`set_option maxHeartbeats ${NAMED_CALLS_HEARTBEATS} in`],
   };
@@ -633,6 +704,14 @@ export function leanProofStrategies(ir: PropertyIR): LeanStrategy[] {
  * `def`s over `Int`/`Bool`. The proof is the given strategy (default: the first one).
  * Throws `VeritasError` for IR that `checkIR` rejects, opaque functions, or an invalid theorem name.
  */
+/**
+ * Checks that the IR translates to a Lean model (the same checks as `irToLean`) without generating any proof
+ * script. Throws `VeritasError` otherwise.
+ */
+export function checkLeanModel(ir: PropertyIR, theoremName: string): void {
+  prepare(ir, theoremName);
+}
+
 export function irToLean(ir: PropertyIR, options: { theoremName: string; strategy?: LeanStrategy }): string {
   const prepared = prepare(ir, options.theoremName);
   const strategy = options.strategy ?? (leanProofStrategies(ir)[0] as LeanStrategy);

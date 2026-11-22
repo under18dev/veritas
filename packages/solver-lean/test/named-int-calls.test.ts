@@ -1,3 +1,4 @@
+import type { Expr, PropertyIR } from '@under18dev/veritas-core';
 import { holdsForAllProperty, translateFunction } from '@under18dev/veritas-formal-core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -5,6 +6,7 @@ import {
   irToLean,
   type LeanInstallation,
   leanProofStrategies,
+  leanTranslatable,
   proveWithLean,
 } from '../src/index.js';
 
@@ -98,6 +100,96 @@ describe('name-int-calls-cases', () => {
     expect(source).toContain('theorem veritas_ite_eq');
     expect(source.indexOf('theorem veritas_ite_eq')).toBeLessThan(source.indexOf('theorem «t»'));
     expect(source).toMatch(/set_option maxHeartbeats \d+ in\nopen VeritasModel in\ntheorem «t»/);
+  });
+
+  it('turns down opaque functions with a VeritasError, without generating a script', async () => {
+    const flags = Array.from({ length: 9 }, (_, i) => ({ name: `b${i}`, sort: 'bool' as const }));
+    const ir: PropertyIR = {
+      irVersion: 1,
+      params: [...flags, { name: 'x', sort: 'int', domain: { min: '-5', max: '5' } }],
+      preconditions: [],
+      functions: [
+        { name: 'g', symbol: 's#g', params: [{ name: 'a', sort: 'int' }], returns: 'int', body: null },
+      ],
+      body: {
+        kind: 'binary',
+        op: '>=',
+        left: { kind: 'call', fn: 'g', args: [{ kind: 'var', name: 'x' }] },
+        right: { kind: 'int', value: '0' },
+      },
+    };
+    expect(leanProofStrategies(ir).map((s) => s.name)).not.toContain('name-int-calls-cases');
+    expect(leanTranslatable(ir)).toBe(false);
+    const { claim } = await proveWithLean({ propertyId: 'D-opaque', ir, timeoutMs: LEAN_TIMEOUT });
+    expect(claim.status).toBe('unsupported');
+  });
+
+  it('is not offered when inlining the boolean helpers would blow up, and decides that quickly', () => {
+    // h0(p) = p.b0 && p.b1; h_k(p) = h_{k-1}(p) || !h_{k-1}(p): each level doubles the inlined term.
+    const flags = Array.from({ length: 9 }, (_, i) => ({ name: `b${i}`, sort: 'bool' as const }));
+    const args: Expr[] = [
+      ...flags.map((f) => ({ kind: 'var', name: f.name }) as Expr),
+      { kind: 'var', name: 'x' },
+    ];
+    const params = [
+      ...flags.map((f) => ({ name: f.name, sort: 'bool' as const })),
+      { name: 'x', sort: 'int' as const },
+    ];
+    const levels = 40;
+    const functions: PropertyIR['functions'] = [
+      {
+        name: 'h0',
+        symbol: 's#h0',
+        params,
+        returns: 'bool',
+        body: { kind: 'binary', op: 'and', left: args[0] as Expr, right: args[1] as Expr },
+      },
+    ];
+
+    for (let k = 1; k < levels; k++) {
+      const prev: Expr = { kind: 'call', fn: `h${k - 1}`, args };
+      functions.push({
+        name: `h${k}`,
+        symbol: `s#h${k}`,
+        params,
+        returns: 'bool',
+        body: { kind: 'binary', op: 'or', left: prev, right: { kind: 'unary', op: 'not', arg: prev } },
+      });
+    }
+    functions.push({
+      name: 'code',
+      symbol: 's#code',
+      params,
+      returns: 'int',
+      body: {
+        kind: 'ite',
+        cond: { kind: 'call', fn: `h${levels - 1}`, args },
+        whenTrue: { kind: 'int', value: '1' },
+        whenFalse: { kind: 'int', value: '0' },
+      },
+    });
+    const ir: PropertyIR = {
+      irVersion: 1,
+      params: [...flags, { name: 'x', sort: 'int', domain: { min: '-5', max: '5' } }],
+      preconditions: [],
+      functions,
+      body: {
+        kind: 'binary',
+        op: '>=',
+        left: { kind: 'call', fn: 'code', args },
+        right: { kind: 'int', value: '0' },
+      },
+    };
+    const started = Date.now();
+    const names = leanProofStrategies(ir).map((s) => s.name);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(names).not.toContain('name-int-calls-cases');
+  });
+
+  it('generates its script only when an attempt reads it', () => {
+    const strategy = leanProofStrategies(holds('invariant_zeroNeedsAll'))[0];
+    const descriptor = strategy ? Object.getOwnPropertyDescriptor(strategy, 'script') : undefined;
+    expect(typeof descriptor?.get).toBe('function');
   });
 
   it(
