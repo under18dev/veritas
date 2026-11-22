@@ -22,9 +22,9 @@ export function diffRegistries(before: Property[], after: Property[]): RegistryD
     }
 
     if (contentHash(old) !== contentHash(p)) {
-      const fields = (['description', 'predicate', 'targetSymbols', 'sourceIds', 'template'] as const).filter(
-        (f) => JSON.stringify(old[f]) !== JSON.stringify(p[f]),
-      );
+      const fields = (
+        ['description', 'predicate', 'targetSymbols', 'sourceIds', 'template', 'inputDomain'] as const
+      ).filter((f) => JSON.stringify(old[f]) !== JSON.stringify(p[f]));
       diff.changed.push({ before: old, after: p, fields });
     }
 
