@@ -6093,7 +6093,8 @@ function runnerName(identifier: ts.Identifier): string {
   );
 
   if (own !== undefined && !ts.isSourceFile(own.parent?.parent?.parent ?? own)) {
-    if (!ts.isVariableDeclaration(own) || resolvingDeclarations.has(own)) return NOT_RUNNER;
+    if ((!ts.isVariableDeclaration(own) && !ts.isBindingElement(own)) || resolvingDeclarations.has(own))
+      return NOT_RUNNER;
     resolvingDeclarations.add(own);
 
     try {
@@ -6220,7 +6221,7 @@ function resolveBinding(name: ts.Identifier): string {
   try {
     const parent = name.parent;
 
-    if (ts.isVariableDeclaration(parent)) return resolveDeclaration(parent);
+    if (ts.isVariableDeclaration(parent) || ts.isBindingElement(parent)) return resolveDeclaration(parent);
 
     if (!ts.isImportSpecifier(parent) && !ts.isImportClause(parent)) return NOT_RUNNER;
     const exported = ts.isImportSpecifier(parent) ? (parent.propertyName ?? parent.name).text : 'default';
@@ -6279,8 +6280,42 @@ function resolveBinding(name: ts.Identifier): string {
   }
 }
 
+/**
+ * What a name destructured from the runner's namespace stands for (`const { it: check } = v`, also through a name
+ * bound to the namespace): the export its key names. Anything else (a default, a rest element, a key not written
+ * as a name, a pattern over another value) is `NOT_RUNNER`.
+ */
+function resolveBindingElement(element: ts.BindingElement): string {
+  const key = element.propertyName ?? element.name;
+  const pattern = element.parent;
+
+  if (
+    element.dotDotDotToken ||
+    element.initializer ||
+    !(ts.isIdentifier(key) || ts.isStringLiteral(key)) ||
+    !ts.isObjectBindingPattern(pattern)
+  )
+    return NOT_RUNNER;
+  const holder = pattern.parent;
+  let source: string;
+
+  if (ts.isBindingElement(holder)) source = resolveBindingElement(holder);
+  else if (
+    ts.isVariableDeclaration(holder) &&
+    (ts.getCombinedNodeFlags(holder) & ts.NodeFlags.Const) !== 0 &&
+    holder.initializer &&
+    ts.isIdentifier(skipParens(holder.initializer))
+  )
+    source = runnerName(skipParens(holder.initializer) as ts.Identifier);
+  else return NOT_RUNNER;
+
+  return source === NAMESPACE ? key.text : NOT_RUNNER;
+}
+
 /** What a declaration a name resolves to stands for (see `resolveBinding`). */
 function resolveDeclaration(declaration: ts.Declaration): string {
+  if (ts.isBindingElement(declaration)) return resolveBindingElement(declaration);
+
   if (ts.isExportSpecifier(declaration)) {
     const exportDeclaration = declaration.parent.parent;
     const local = declaration.propertyName ?? declaration.name;

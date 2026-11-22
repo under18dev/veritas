@@ -1,4 +1,4 @@
-import { VeritasConfig } from '@under18dev/veritas-core';
+import { stableId, VeritasConfig } from '@under18dev/veritas-core';
 import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { inventoryTests } from '../src/index.js';
@@ -280,5 +280,32 @@ describe('registration functions taken from a namespace import of the runner', (
     expect(byName(result, 'row %s').modifiers).toContain('each');
     expect(byName(result, 'with fixtures')).toBeDefined();
     expect(byName(result, 'by a literal key')).toBeDefined();
+  });
+
+  it('keeps the suite path of tests in a suite destructured from the namespace', () => {
+    const file = 'test/destructured.test.ts';
+    const result = inventory({
+      [file]: [
+        "import * as v from 'vitest';",
+        'const test = v.test;',
+        'const { describe } = v;',
+        'const { it: check } = v;',
+        'const ns = v;',
+        "const { 'test': quoted } = ns;",
+        "describe('D', () => {",
+        "  test('ns const', () => {});",
+        "  check('ns destructured', () => {});",
+        "  quoted('through an alias', () => {});",
+        '});',
+        '',
+      ].join('\n'),
+    });
+
+    for (const name of ['ns const', 'ns destructured', 'through an alias']) {
+      const test = byName(result, name);
+      expect(test.suitePath, name).toEqual(['D']);
+      // The id main gives the test: from its file, suite path and title.
+      expect(test.id, name).toBe(stableId('T', { file, suitePath: ['D'], name }));
+    }
   });
 });
