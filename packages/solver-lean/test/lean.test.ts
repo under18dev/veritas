@@ -608,7 +608,11 @@ describe('proveWithLean (real Lean)', () => {
       expect(claim.assurance).toBe('none');
       expect(check.status).toBe('failed');
       expect(strategy).toBeNull();
-      expect(attempts.map((a) => a.strategy)).toEqual(['unfold-split-omega', 'simp-split-omega']);
+      expect(attempts.map((a) => a.strategy)).toEqual([
+        'unfold-split-omega',
+        'simp-split-omega',
+        'name-int-calls-cases',
+      ]);
       expect(attempts.every((a) => a.status === 'failed')).toBe(true);
       expect(check.reasons.join('\n')).toMatch(/error/);
     },

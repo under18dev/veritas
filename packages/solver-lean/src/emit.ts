@@ -233,9 +233,231 @@ function reachable(ir: PropertyIR, name: string): string[] {
 }
 
 export interface LeanStrategy {
-  name: 'abstract-calls-split' | 'unfold-split-omega' | 'simp-split-omega' | 'decide-enumerate';
+  name:
+    | 'abstract-calls-split'
+    | 'unfold-split-omega'
+    | 'simp-split-omega'
+    | 'decide-enumerate'
+    | 'name-int-calls-cases';
   /** Tactic script lines placed after `:= by`, already indented. */
   script: string[];
+  /** Lemmas the script uses, proved in the same file before the theorem (no axioms beyond Lean's own). */
+  lemmas?: string[];
+  /** `set_option ... in` lines placed right before the theorem (only options the project check allows). */
+  options?: string[];
+}
+
+/** Rewrites an equation on an `if` into the two cases, so that `omega` can read what is left of a decision list. */
+const ITE_EQ_LEMMA = [
+  'theorem veritas_ite_eq {α : Type} {P : Prop} [Decidable P] {a b c : α} :',
+  '    ((if P then a else b) = c) = ((P ∧ a = c) ∨ (¬P ∧ b = c)) := by',
+  '  by_cases h : P <;> simp [h]',
+];
+
+/**
+ * Lean's elaboration budget for the named-calls strategy (eight times the default). Splitting many booleans one at
+ * a time is more work than the default allows, but the budget stays bounded and deterministic.
+ */
+const NAMED_CALLS_HEARTBEATS = 1_600_000;
+
+/** Bool parameters above which splitting all of them up front (2^n goals) is not attempted first. */
+const UPFRONT_CASES_MAX_BOOLS = 8;
+
+const qualified = (name: string) => `${MODEL_NAMESPACE}.${fnName(name)}`;
+
+function mapExpr(expr: Expr, f: (e: Expr) => Expr): Expr {
+  switch (expr.kind) {
+    case 'unary':
+      return { ...expr, arg: f(expr.arg) };
+    case 'binary':
+      return { ...expr, left: f(expr.left), right: f(expr.right) };
+    case 'ite':
+      return { ...expr, cond: f(expr.cond), whenTrue: f(expr.whenTrue), whenFalse: f(expr.whenFalse) };
+    case 'call':
+      return { ...expr, args: expr.args.map(f) };
+    default:
+      return expr;
+  }
+}
+
+function varsOf(expr: Expr, out: Set<string> = new Set()): Set<string> {
+  if (expr.kind === 'var') out.add(expr.name);
+  else
+    mapExpr(expr, (e) => {
+      varsOf(e, out);
+
+      return e;
+    });
+
+  return out;
+}
+
+/** The distinct integer literals at the leaves of a tree of `if`s, or null when a leaf is anything else. */
+function literalLeaves(expr: Expr): bigint[] | null {
+  const out = new Set<bigint>();
+  const visit = (e: Expr): boolean => {
+    if (e.kind === 'ite') return visit(e.whenTrue) && visit(e.whenFalse);
+
+    if (e.kind !== 'int') return false;
+    out.add(BigInt(e.value));
+
+    return true;
+  };
+
+  return visit(expr) && expr.kind === 'ite' ? [...out] : null;
+}
+
+/** True when `expr` has an `if` and every condition reads only the given variables (and no call). */
+function itesOnlyOver(expr: Expr, allowed: ReadonlySet<string>): boolean {
+  let found = false;
+  let ok = true;
+  const visit = (e: Expr): Expr => {
+    if (e.kind === 'ite') {
+      found = true;
+
+      if (calls(e.cond).length > 0 || [...varsOf(e.cond)].some((v) => !allowed.has(v))) ok = false;
+    }
+
+    return mapExpr(e, visit);
+  };
+  visit(expr);
+
+  return found && ok;
+}
+
+/**
+ * Names the result of every call to an integer-valued function (`r_k`, with `hr_k : call = r_k`), unfolds each
+ * such function only in its own equation, and inlines the boolean-valued functions. A helper whose result is
+ * used several times (a code mapped by another decision list) is then one variable instead of a copy of its
+ * whole decision tree per use. The equations of functions that only branch on such named results are split; the
+ * boolean parameters are then split one at a time, simplifying after each split so that decided branches close
+ * early; what remains is a linear integer problem for `omega`.
+ */
+function namedIntCallsStrategy(ir: PropertyIR, introLine: string[], bools: string[]): LeanStrategy | null {
+  const byName = new Map(ir.functions.map((f) => [f.name, f]));
+  const returnsOf = (fn: string) => byName.get(fn)?.returns;
+
+  if (!ir.functions.some((f) => f.returns === 'int')) return null;
+  const boolDefs = ir.functions.filter((f) => f.returns === 'bool').map((f) => qualified(f.name));
+  const lines = [...introLine];
+  const named = new Map<string, { h: string; ref: Expr }>();
+  const namedVars = new Set<string>();
+  const splits: string[] = [];
+  const copies: string[] = [];
+  /** Every named result with its unfolded definition (`hr_k`) and what that definition reduced to. */
+  const defs: { r: string; name: string; def: string; reduced: Expr }[] = [];
+
+  const inlineBool = (expr: Expr): Expr => {
+    const e = mapExpr(expr, inlineBool);
+
+    if (e.kind !== 'call' || returnsOf(e.fn) !== 'bool') return e;
+    const f = byName.get(e.fn) as FunctionModel;
+    const values = new Map<string, Expr>(f.params.map((p, i) => [p.name, e.args[i] as Expr]));
+
+    return inlineBool(substituteVars(f.body as Expr, values));
+  };
+
+  /** `expr` (already with boolean calls inlined) with every integer call replaced by its name. */
+  const nameCalls = (expr: Expr, loc: string): Expr => {
+    const e = mapExpr(expr, (a) => nameCalls(a, loc));
+
+    if (e.kind !== 'call' || returnsOf(e.fn) !== 'int') return e;
+    const key = exprToLean(e);
+    let entry = named.get(key);
+
+    if (!entry) {
+      const k = named.size;
+      const name = `r$${k}`;
+      const r = varName(name);
+      // `hc_k` stays `call = r_k` to rewrite later uses of the call; `hr_k` is unfolded into the definition.
+      entry = { h: `hc_${k}`, ref: { kind: 'var', name } };
+      named.set(key, entry);
+      namedVars.add(name);
+      copies.push(entry.h);
+      const def = `hr_${k}`;
+      const f = byName.get(e.fn) as FunctionModel;
+      lines.push(
+        `  obtain ⟨${r}, ${entry.h}, ${def}⟩ : ∃ ${r}, ${key} = ${r} ∧ ${key} = ${r} := ⟨_, rfl, rfl⟩`,
+        `  try simp only [${entry.h}]${loc}`,
+        `  simp only [${qualified(f.name)}] at ${def}`,
+      );
+      const values = new Map<string, Expr>(f.params.map((p, i) => [p.name, e.args[i] as Expr]));
+      const reduced = place(substituteVars(f.body as Expr, values), ` at ${def}`);
+
+      defs.push({ r, name, def, reduced });
+
+      if (itesOnlyOver(reduced, namedVars)) splits.push(def);
+    } else lines.push(`  try simp only [${entry.h}]${loc}`);
+
+    return entry.ref;
+  };
+
+  const place = (expr: Expr, loc: string): Expr => {
+    if (boolDefs.length > 0 && calls(expr).some((fn) => returnsOf(fn) === 'bool'))
+      lines.push(`  try simp only [${boolDefs.join(', ')}]${loc}`);
+
+    return nameCalls(inlineBool(expr), loc);
+  };
+
+  place(ir.body, '');
+  // Left in place, `subst_vars` would put every call back.
+  lines.push(`  clear ${copies.join(' ')}`);
+
+  const finish = ['  all_goals (try simp only [veritas_ite_eq] at *)', '  all_goals omega'];
+
+  if (splits.length <= 1) {
+    // One code mapped from named results: its few cases give each branch a known code to prune against.
+    for (const h of splits) lines.push(`  all_goals (repeat' (split at ${h}))`);
+    lines.push(
+      '  all_goals (try simp only [decide_eq_true_eq] at *)',
+      '  all_goals (try subst_vars)',
+      ...bools.map((b) => `  all_goals (cases ${b} <;> try simp at *)`),
+      ...finish,
+    );
+  } else {
+    // Several: splitting each multiplies the branches. Instead, a named result is replaced by its value as soon
+    // as the split booleans reduce its definition to one of its literal cases, inner results first, so that the
+    // results built on it reduce in turn.
+    for (const d of defs) if (d.reduced.kind === 'var') lines.push(`  subst ${d.r}`);
+    const resolvable = defs
+      .map((d) => ({ ...d, leaves: literalLeaves(d.reduced) }))
+      .filter((d): d is typeof d & { leaves: bigint[] } => d.leaves !== null);
+    const done = new Set<string>();
+    const steps: string[] = [];
+
+    while (done.size < resolvable.length) {
+      const ready = resolvable.filter(
+        (d) =>
+          !done.has(d.name) &&
+          [...varsOf(d.reduced)].every(
+            (v) => !namedVars.has(v) || done.has(v) || !resolvable.some((o) => o.name === v),
+          ),
+      );
+      const next = ready.length > 0 ? ready : resolvable.filter((d) => !done.has(d.name));
+
+      for (const d of next) {
+        done.add(d.name);
+        const alts = d.leaves.flatMap((v) => [
+          `(obtain rfl : ${intLiteral(v)} = ${d.r} := ${d.def})`,
+          `(obtain rfl : ${d.r} = ${intLiteral(v)} := ${d.def})`,
+        ]);
+        steps.push(`(try (first | ${alts.join(' | ')}))`, '(try simp at *)');
+      }
+    }
+    for (const b of bools) {
+      lines.push(`  all_goals (cases ${b} <;> try simp at *)`);
+
+      if (steps.length > 0) lines.push(`  all_goals (${steps.join(' <;> ')})`);
+    }
+    lines.push(...finish);
+  }
+
+  return {
+    name: 'name-int-calls-cases',
+    script: lines,
+    lemmas: ITE_EQ_LEMMA,
+    options: [`set_option maxHeartbeats ${NAMED_CALLS_HEARTBEATS} in`],
+  };
 }
 
 interface Prepared {
@@ -367,6 +589,15 @@ export function leanProofStrategies(ir: PropertyIR): LeanStrategy[] {
     strategies.unshift({ name: 'abstract-calls-split', script: lines });
   }
 
+  // With many boolean parameters the strategies above start from 2^n goals; naming the integer calls and
+  // splitting one boolean at a time is then tried first.
+  const named = namedIntCallsStrategy(ir, introLine, bools);
+
+  if (named) {
+    if (bools.length > UPFRONT_CASES_MAX_BOOLS) strategies.unshift(named);
+    else strategies.push(named);
+  }
+
   let points = 1n;
 
   for (const p of ir.params) {
@@ -415,6 +646,8 @@ export function irToLean(ir: PropertyIR, options: { theoremName: string; strateg
     '',
     `namespace ${PROOF_NAMESPACE}`,
     '',
+    ...(strategy.lemmas ? [...strategy.lemmas, ''] : []),
+    ...(strategy.options ?? []),
     `open ${MODEL_NAMESPACE} in`,
     `theorem «${prepared.theoremName}» :`,
     `${prepared.statement} := by`,
