@@ -4668,6 +4668,8 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
   let inFactory = false;
   /** In a mock factory: constants holding what its parameters returned (`const actual = await importOriginal()`). */
   let factoryValues = new Set<string>();
+  /** In a function run now other than a mock factory: what it returns may be called. */
+  let immediate = false;
   /**
    * A call of the runner's API, by the identifier its callee chain starts with (`vi.mock`, `it.each(rows)`). The
    * factories of `vi.mock`, `vi.doMock`, `vi.hoisted` (and Jest's) run while the file is collected, so their code is
@@ -4727,6 +4729,8 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
     let called = true;
     // The member accessed on the root, which names the export when the root is a namespace (`vitest.it`).
     let first: string | undefined;
+    // Every member accessed along the callee chain.
+    const members: string[] = [];
 
     for (;;) {
       callee = skipParens(callee);
@@ -4744,6 +4748,7 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
         first = accessedMember(callee);
 
         if (first === undefined) return false;
+        members.push(first);
         callee = callee.expression;
         called = false;
       } else break;
@@ -4754,6 +4759,10 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
     const name = resolved === NAMESPACE ? first : resolved;
 
     if (name === undefined || !runnerOwn(name)) return false;
+
+    // A matcher other than the runner's own (`expect(0).toRegister()` after `expect.extend`) runs code from wherever
+    // it was registered.
+    if (runner.expect.has(name) && members.some((member) => !EXPECT_MEMBERS.has(member))) return false;
 
     // A call of `it`, `test` or `describe` that the inventory does not record as a registration (`it.extend(…)`, a
     // form it does not read) may register tests it does not see.
@@ -4992,7 +5001,9 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
     if (ts.isModuleDeclaration(node))
       return (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Ambient) !== 0;
 
-    if (ts.isReturnStatement(node)) return inFactory && (!node.expression || inert(node.expression));
+    // What a function run now returns may be called in turn (`factory()()`); a mock factory returns the module.
+    if (ts.isReturnStatement(node))
+      return inFactory && (!node.expression || (immediate ? passable : inert)(node.expression));
 
     if (ts.isClassDeclaration(node)) return inertClass(node);
 
@@ -5112,7 +5123,8 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
       )
     )
       return false;
-    const saved = { callable, inFactory, factoryValues };
+    const saved = { callable, inFactory, factoryValues, immediate };
+    immediate = mode === 'immediate';
     const factory = mode === 'factory';
 
     if (mode !== 'describe') {
@@ -5163,11 +5175,13 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
     try {
       return ts.isBlock(fn.body)
         ? fn.body.statements.every(closed)
-        : mode !== 'describe'
-          ? inert(fn.body)
-          : closedExpression(fn.body);
+        : mode === 'immediate'
+          ? passable(fn.body)
+          : mode === 'factory'
+            ? inert(fn.body)
+            : closedExpression(fn.body);
     } finally {
-      ({ callable, inFactory, factoryValues } = saved);
+      ({ callable, inFactory, factoryValues, immediate } = saved);
     }
   };
   /**
@@ -5291,6 +5305,94 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
   return source.statements.every(closed);
 }
+
+/**
+ * Members of `expect` and of what it returns that are the runner's own (Vitest's and Jest's built-in matchers,
+ * modifiers and asymmetric matchers); any other member is a custom matcher registered with `expect.extend`.
+ */
+const EXPECT_MEMBERS = new Set([
+  'not',
+  'resolves',
+  'rejects',
+  'soft',
+  'poll',
+  'extend',
+  'assertions',
+  'hasAssertions',
+  'any',
+  'anything',
+  'objectContaining',
+  'arrayContaining',
+  'stringContaining',
+  'stringMatching',
+  'closeTo',
+  'addSnapshotSerializer',
+  'addEqualityTesters',
+  'unreachable',
+  'getState',
+  'setState',
+  'toBe',
+  'toEqual',
+  'toStrictEqual',
+  'toBeTruthy',
+  'toBeFalsy',
+  'toBeNull',
+  'toBeUndefined',
+  'toBeDefined',
+  'toBeNaN',
+  'toContain',
+  'toContainEqual',
+  'toHaveLength',
+  'toHaveProperty',
+  'toMatch',
+  'toMatchObject',
+  'toThrow',
+  'toThrowError',
+  'toBeInstanceOf',
+  'toBeGreaterThan',
+  'toBeGreaterThanOrEqual',
+  'toBeLessThan',
+  'toBeLessThanOrEqual',
+  'toBeCloseTo',
+  'toBeTypeOf',
+  'toBeOneOf',
+  'toSatisfy',
+  'toMatchSnapshot',
+  'toMatchInlineSnapshot',
+  'toMatchFileSnapshot',
+  'toThrowErrorMatchingSnapshot',
+  'toThrowErrorMatchingInlineSnapshot',
+  'toHaveBeenCalled',
+  'toHaveBeenCalledTimes',
+  'toHaveBeenCalledWith',
+  'toHaveBeenLastCalledWith',
+  'toHaveBeenNthCalledWith',
+  'toHaveBeenCalledOnce',
+  'toHaveBeenCalledExactlyOnceWith',
+  'toHaveBeenCalledBefore',
+  'toHaveBeenCalledAfter',
+  'toHaveReturned',
+  'toHaveReturnedTimes',
+  'toHaveReturnedWith',
+  'toHaveLastReturnedWith',
+  'toHaveNthReturnedWith',
+  'toHaveResolved',
+  'toHaveResolvedTimes',
+  'toHaveResolvedWith',
+  'toHaveLastResolvedWith',
+  'toHaveNthResolvedWith',
+  'toBeCalled',
+  'toBeCalledTimes',
+  'toBeCalledWith',
+  'lastCalledWith',
+  'nthCalledWith',
+  'toReturn',
+  'toReturnTimes',
+  'toReturnWith',
+  'lastReturnedWith',
+  'nthReturnedWith',
+  'toBeCalledOnce',
+]);
 
 /** Members of the runner's mock object whose function arguments run while a test file is collected. */
 const MOCK_FACTORIES = new Set(['mock', 'doMock', 'hoisted', 'unstable_mockModule', 'setMock']);

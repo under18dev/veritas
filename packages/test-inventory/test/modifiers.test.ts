@@ -242,6 +242,11 @@ describe('full names static analysis cannot read', () => {
       expectAs: 'expect(sharedSuite as any).toBeDefined();',
       expectMockOf: 'expect(vi.fn(sharedSuite)).not.toThrow();',
       expectSpyOriginal: "expect(vi.spyOn(helpers, 'run')).not.toThrow();",
+      customMatcher:
+        "expect.extend({ toRegister() { sharedSuite(); return { pass: true, message: () => '' }; } });\nexpect(0).toRegister();",
+      customMatcherNegated: 'expect(0).not.toRegister();',
+      returnsFunction: 'expect(() => sharedSuite).not.toThrow();',
+      returnsFunctionFromBlock: 'expect(() => { return sharedSuite; }).not.toThrow();',
       expectSpyOnce: "expect(vi.spyOn(helpers, 'run').mockImplementationOnce(() => [1])).not.toThrow();",
       expectMockImplementation: 'expect(vi.fn().mockImplementation(sharedSuite)).not.toThrow();',
       expectSpyImplementation:
@@ -537,6 +542,11 @@ describe('full names static analysis cannot read', () => {
         "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun(sharedSuite!);\nit('p', () => {});\n",
       'test/passes-inline-choice.test.ts':
         "import { it } from 'vitest';\nimport { run } from './run-helper.js';\nconst flag = true;\nrun(flag ? () => 1 : () => 2);\nit('p', () => {});\n",
+      // What a function passed to a local call returns may be called in turn.
+      'test/passes-returning.test.ts':
+        "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun({ fn: () => sharedSuite });\nit('p', () => {});\n",
+      'test/passes-returning-inline.test.ts':
+        "import { it } from 'vitest';\nimport { run } from './run-helper.js';\nrun({ fn: () => () => 1 });\nit('p', () => {});\n",
       // createRequire makes a require the helper can load anything with.
       'test/created-require.ts':
         "import { createRequire } from 'node:module';\nconst load = createRequire(import.meta.url);\nexport function shared() { return load('external-test-package').sharedSuite(); }\n",
@@ -570,6 +580,8 @@ describe('full names static analysis cannot read', () => {
     for (const name of ['conditional', 'and', 'nullish', 'comma', 'as', 'nonnull'])
       expect(marked(`test/passes-${name}.test.ts`), name).toBe('open_collection');
     expect(marked('test/passes-inline-choice.test.ts')).toBeUndefined();
+    expect(marked('test/passes-returning.test.ts')).toBe('open_collection');
+    expect(marked('test/passes-returning-inline.test.ts')).toBeUndefined();
     // Calling a function that loads a package through createRequire may reach it.
     expect(marked('test/uses-created-require.test.ts')).toBe('open_collection');
     for (const name of ['name', 'runner', 'passed'])
