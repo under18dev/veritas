@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -190,13 +190,16 @@ describe('declared properties', () => {
 });
 
 describe('check-self-verification', () => {
-  type CheckRun = (input: {
-    declared: string[];
+  type CheckInput = {
+    declared: { id: string; version: number }[];
     expectCounterexample: string[];
-    properties: { id: string; status: string }[];
-    claims: Partial<Claim>[];
+    current: { configHash: string; sourceHash: string; gitCommit: string | null };
+    meta: { configHash: string; sourceHash: string; gitCommit: string | null };
+    properties: { id: string; status: string; version: number }[];
+    claims: Partial<Claim>[] | null;
     stages: { stage: string; status: string }[];
-  }) => { ok: boolean; lines: string[] };
+  };
+  type CheckRun = (input: CheckInput) => { ok: boolean; lines: string[] };
   const load = async () => ((await import(pathToFileURL(CHECK).href)) as { checkRun: CheckRun }).checkRun;
   const z3 = (status: string, semanticValidation = 'confirmed') => ({
     propertyId: 'D-a',
@@ -214,44 +217,46 @@ describe('check-self-verification', () => {
     assurance: 'kernel_checked',
     semanticValidation: 'not_attempted',
   };
-  const input = (claims: Partial<Claim>[], extra: Partial<Parameters<CheckRun>[0]> = {}) => ({
-    declared: ['a'],
+  const same = { configHash: 'c', sourceHash: 's', gitCommit: 'g' };
+  const input = (claims: Partial<Claim>[] | null, extra: Partial<CheckInput> = {}): CheckInput => ({
+    declared: [{ id: 'a', version: 7 }],
     expectCounterexample: [],
-    properties: [{ id: 'D-a', status: 'accepted' }],
+    current: same,
+    meta: same,
+    properties: [{ id: 'D-a', status: 'accepted', version: 7 }],
     claims,
     stages: [{ stage: 'prove', status: 'succeeded' }],
     ...extra,
   });
+  const proven = [z3('proven_within_model'), lean];
 
-  it('passes only a property proven by Z3 with replay and kernel-checked by Lean', async () => {
+  it('passes only a property proven by Z3 with replay and kernel-checked by Lean, in a run of the checkout', async () => {
     const checkRun = await load();
-    expect(checkRun(input([z3('proven_within_model'), lean])).ok).toBe(true);
-    const failing: [string, Parameters<CheckRun>[0]][] = [
+    expect(checkRun(input(proven)).ok).toBe(true);
+    // A modified tree (no commit to compare) still passes when the hashes match.
+    expect(checkRun(input(proven, { current: { ...same, gitCommit: null } })).ok).toBe(true);
+    const failing: [string, CheckInput][] = [
       ['no Lean claim', input([z3('proven_within_model')])],
       ['no claim', input([])],
+      ['no claims.json', input(null)],
       ['Z3 replay not confirmed', input([z3('proven_within_model', 'not_attempted'), lean])],
       ['Lean without kernel check', input([z3('proven_within_model'), { ...lean, assurance: 'none' }])],
       ...['unknown', 'timeout', 'unsupported', 'semantic_mismatch', 'error', 'counterexample_found'].map(
-        (status): [string, Parameters<CheckRun>[0]] => [status, input([z3(status), lean])],
+        (status): [string, CheckInput] => [status, input([z3(status), lean])],
       ),
       [
         'an unsupported claim besides the proofs',
-        input([z3('proven_within_model'), lean, { ...z3('unsupported'), engine: 'none' }]),
+        input([...proven, { ...z3('unsupported'), engine: 'none' }]),
       ],
-      [
-        'not accepted',
-        input([z3('proven_within_model'), lean], { properties: [{ id: 'D-a', status: 'proposed' }] }),
-      ],
-      ['missing from the run', input([z3('proven_within_model'), lean], { properties: [] })],
-      [
-        'the prove stage did not succeed',
-        input([z3('proven_within_model'), lean], { stages: [{ stage: 'prove', status: 'partial' }] }),
-      ],
-      ['no prove stage', input([z3('proven_within_model'), lean], { stages: [] })],
-      [
-        'an unknown negative control',
-        input([z3('proven_within_model'), lean], { expectCounterexample: ['b'] }),
-      ],
+      ['not accepted', input(proven, { properties: [{ id: 'D-a', status: 'proposed', version: 7 }] })],
+      ['missing from the run', input(proven, { properties: [] })],
+      ['an older version of the declaration', input(proven, { declared: [{ id: 'a', version: 8 }] })],
+      ['another configuration', input(proven, { meta: { ...same, configHash: 'x' } })],
+      ['other sources', input(proven, { meta: { ...same, sourceHash: 'x' } })],
+      ['another commit', input(proven, { meta: { ...same, gitCommit: 'x' } })],
+      ['the prove stage did not succeed', input(proven, { stages: [{ stage: 'prove', status: 'partial' }] })],
+      ['no prove stage', input(proven, { stages: [] })],
+      ['an unknown negative control', input(proven, { expectCounterexample: ['b'] })],
     ];
 
     for (const [name, data] of failing) expect(checkRun(data).ok, name).toBe(false);
@@ -263,12 +268,55 @@ describe('check-self-verification', () => {
     expect(control([z3('counterexample_found')])).toBe(true);
     expect(control([z3('counterexample_found', 'mismatch')])).toBe(false);
     expect(control([z3('semantic_mismatch', 'mismatch')])).toBe(false);
-    expect(control([z3('proven_within_model'), lean])).toBe(false);
+    expect(control(proven)).toBe(false);
     expect(control([z3('unknown')])).toBe(false);
     expect(control([z3('counterexample_found'), lean])).toBe(false);
   });
 
-  it('fails on usage errors and on a project without declarations', () => {
+  it('checks the newest run of the checkout, and fails when it is stale or did not finish', () => {
+    const dir = copyFixture('declared-properties');
+    const control = ['--expect-counterexample', 'stage.unguarded-succeeded-needs-tests'];
+    expect(runCli(['prove', '--engine', 'both', '--json'], dir).status).toBe(1);
+    expect(check(dir, ...control).status).toBe(0);
+
+    // A declaration edited after the run: its version and the configuration no longer match.
+    const configFile = path.join(dir, '.veritas/config.json');
+    const config = readFileSync(configFile, 'utf8');
+    editConfig(dir, (c) => {
+      c.properties[0] = { ...c.properties[0], description: 'edited after the run' };
+    });
+    const edited = check(dir, ...control);
+    expect(edited.status).toBe(1);
+    expect(edited.stdout).toContain(`FAIL ${GUARDED}: the run checked version`);
+    expect(edited.stdout).toContain('FAIL the run used another configuration');
+    writeFileSync(configFile, config);
+    expect(check(dir, ...control).status).toBe(0);
+
+    // A source edited after the run.
+    const source = path.join(dir, 'src/stage.ts');
+    const original = readFileSync(source, 'utf8');
+    writeFileSync(source, `${original}\n// edited\n`);
+    expect(check(dir, ...control).stdout).toContain('FAIL the run analyzed other source files');
+    writeFileSync(source, original);
+
+    // A newer run that recorded no claims is the one checked, and fails.
+    const runs = path.join(dir, '.veritas/runs');
+    const [older] = readdirSync(runs);
+    const newest = path.join(runs, 'run-29991231T000000000Z-000-ffffff');
+    mkdirSync(newest);
+    cpSync(path.join(runs, older as string, 'run.json'), path.join(newest, 'run.json'));
+    const unfinished = check(dir, ...control);
+    expect(unfinished.status).toBe(1);
+    expect(unfinished.stdout).toContain('FAIL the run recorded no claims');
+
+    // An artifact of the wrong shape is an input error, not a crash.
+    writeFileSync(path.join(newest, 'run.json'), JSON.stringify({ meta: {}, data: { stages: 'no' } }));
+    const malformed = check(dir, ...control);
+    expect(malformed.status).toBe(2);
+    expect(malformed.stderr).toMatch(/not a Veritas run artifact of the expected shape/);
+  }, 600_000);
+
+  it('fails on usage errors and on a project without declarations or runs', () => {
     expect(check(REPO_ROOT, '--bogus', 'x').status).toBe(2);
     expect(check(REPO_ROOT, '--run').status).toBe(2);
     const dir = copyFixture('declared-properties');
@@ -278,6 +326,6 @@ describe('check-self-verification', () => {
     const result = check(dir);
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(/declares no property/);
-    expect(check(copyFixture('declared-properties')).stderr).toMatch(/no run with claims/);
+    expect(check(copyFixture('declared-properties')).stderr).toMatch(/no run under/);
   });
 });
