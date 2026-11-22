@@ -76,7 +76,7 @@ export function unlinkedByInference(test: TestCase): boolean {
 }
 
 /** The evidence record of the decision kernel: what the test case says, with the counts read from the run. */
-export function outcomeEvidence(
+function outcomeEvidence(
   test: TestCase,
   run: Pick<
     OutcomeEvidence,
@@ -111,16 +111,6 @@ export function outcomeEvidence(
   };
 }
 
-/**
- * Assess each test from an evidence vector. Outcomes:
- * - tautological_or_disconnected: no assertion on a project call (constant assertions, no call, no assertion). A
- *   test static analysis could not link but that killed a mutant is not: the kill shows it observes project code;
- * - spec_conflict: a linked property is conflicted;
- * - weak_or_incomplete: a relevant mutant it covers survived, or a decisive boundary is not exercised;
- * - meaningful_with_evidence: asserts a project call, kills relevant mutants, no relevant survivors it covers,
- *   and exercises the boundary of every linked threshold property;
- * - inconclusive: anything that cannot be decided (e.g. no mutation data, no linked property).
- */
 interface InputIndex {
   edges: Map<string, AssessInput['edges']>;
   killed: Map<string, AssessInput['mutants']>;
@@ -145,6 +135,17 @@ function indexOf(input: AssessInput): InputIndex {
   return index;
 }
 
+/**
+ * Assess each test from an evidence vector. Outcomes:
+ * - tautological_or_disconnected: no assertion on a project call (constant assertions, no call, no assertion). A
+ *   test static analysis could not link but that killed a mutant is not: the kill shows it observes project code;
+ * - spec_conflict: a linked property is conflicted;
+ * - weak_or_incomplete: a relevant mutant it covers survived, or a decisive boundary is not exercised;
+ * - meaningful_with_evidence: asserts a project call, kills relevant mutants, no relevant survivors it covers,
+ *   and exercises the boundary of every linked threshold property;
+ * - inconclusive: anything that cannot be decided (e.g. no mutation data, no linked property).
+ * A skipped or todo test is never meaningful_with_evidence. The outcome itself is decided in `decision.ts`.
+ */
 export function assessTest(
   test: TestCase,
   input: AssessInput,
