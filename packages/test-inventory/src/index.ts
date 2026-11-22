@@ -253,7 +253,7 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
   const safety = moduleSafety(root, checker, resolveModule);
   /** Why the runner may report tests under a file that static analysis did not see (see `inexactNames`). */
   const inexactFile = (source: ts.SourceFile | undefined) => {
-    if (!source || !closedCollection(source, safety.localCallee))
+    if (!source || !closedCollection(source, safety.localCallee) || safety.imports(source).unknown)
       return { inexactNames: 'open_collection' as const };
     // Modules the runner loads for a mock (`vi.mock(path)`, `vi.importActual(path)`) run their code too.
     const mocked = mockedModules(source);
@@ -5626,8 +5626,11 @@ function moduleSafety(
 
         if (!erased && ts.isStringLiteralLike(node.moduleSpecifier)) add(node.moduleSpecifier.text);
       } else if (ts.isExportDeclaration(node)) {
-        if (node.moduleSpecifier && !node.isTypeOnly && ts.isStringLiteralLike(node.moduleSpecifier))
+        if (node.moduleSpecifier && !node.isTypeOnly && ts.isStringLiteralLike(node.moduleSpecifier)) {
+          // A barrel of the runner (`export * from 'vitest'`) hands its registration API out under other names.
+          if (runner.modules.has(node.moduleSpecifier.text)) found.unknown = true;
           add(node.moduleSpecifier.text);
+        }
       } else if (ts.isImportEqualsDeclaration(node)) {
         if (ts.isExternalModuleReference(node.moduleReference)) {
           const expression = node.moduleReference.expression;
@@ -5667,9 +5670,115 @@ function moduleSafety(
         }
       }
     }
+    if (escapesRunner(source)) found.unknown = true;
     importsOf.set(source, found);
 
     return found;
+  };
+  /**
+   * Whether a module uses the runner's registration API (`it`, `test`, `describe`, hooks) or a global object as a
+   * value other than by calling it the way the inventory reads (`const register = it`, `[it][0]`, `fn(it)`,
+   * `export { it }`, `const { it: t } = vitest`, `const g = globalThis`): what it then calls is not seen.
+   */
+  const escapesRunner = (source: ts.SourceFile): boolean => {
+    const registering = (name: string) =>
+      runner.tests.has(name) || runner.suites.has(name) || runner.hooks.has(name);
+    /** Whether `node` starts the callee of a registration or hook call the inventory reads. */
+    const readCallee = (node: ts.Expression): boolean => {
+      let current: ts.Node = node;
+
+      for (;;) {
+        const parent: ts.Node = current.parent;
+
+        if (ts.isParenthesizedExpression(parent) || ts.isNonNullExpression(parent)) current = parent;
+        else if (ts.isPropertyAccessExpression(parent) && parent.expression === current) current = parent;
+        else if (ts.isTaggedTemplateExpression(parent) && parent.tag === current) current = parent;
+        else if (ts.isCallExpression(parent) && parent.expression === current) {
+          if (
+            testRegistration(parent) !== undefined ||
+            describeRegistration(parent) !== undefined ||
+            runner.hooks.has(runnerExport(skipParens(parent.expression))?.name ?? '')
+          )
+            return true;
+          // A factory call (`it.each(rows)`) whose result is called in turn.
+          current = parent;
+        } else return false;
+      }
+    };
+    const inType = (node: ts.Node): boolean => {
+      for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
+        if (ts.isTypeNode(current) || ts.isTypeQueryNode(current)) return true;
+
+        if (ts.isStatement(current) || ts.isSourceFile(current)) return false;
+      }
+
+      return false;
+    };
+
+    for (const node of descendants(source)) {
+      if (!ts.isIdentifier(node) || inType(node)) continue;
+      const parent = node.parent;
+
+      // Declarations and names that are not references.
+      if (
+        ts.isImportSpecifier(parent) ||
+        ts.isImportClause(parent) ||
+        ts.isNamespaceImport(parent) ||
+        (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+        (ts.isPropertyAssignment(parent) && parent.name === node) ||
+        ((ts.isVariableDeclaration(parent) ||
+          ts.isParameter(parent) ||
+          ts.isFunctionDeclaration(parent) ||
+          ts.isFunctionExpression(parent) ||
+          ts.isClassDeclaration(parent) ||
+          ts.isMethodDeclaration(parent) ||
+          ts.isPropertyDeclaration(parent) ||
+          ts.isBindingElement(parent)) &&
+          parent.name === node) ||
+        (ts.isBindingElement(parent) && parent.propertyName === node) ||
+        (ts.isExportSpecifier(parent) && parent.parent.parent.moduleSpecifier !== undefined)
+      )
+        continue;
+
+      if (GLOBAL_OBJECTS.has(node.text)) {
+        // A global object only as the object of a member access the check above reads, or under `typeof`.
+        const usedDirectly =
+          ((ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+            parent.expression === node) ||
+          ts.isTypeOfExpression(parent);
+
+        if (!usedDirectly && !declaredLocally(node)) return true;
+        continue;
+      }
+      const resolved = runnerName(node);
+
+      if (resolved === NAMESPACE) {
+        // A namespace of the runner only as `vitest.member`, and a registration member only as a read callee.
+        if (!(ts.isPropertyAccessExpression(parent) && parent.expression === node)) return true;
+
+        if (registering(parent.name.text) && !readCallee(parent)) return true;
+        continue;
+      }
+
+      if (registering(resolved) && !declaredLocally(node) && !readCallee(node)) return true;
+    }
+
+    return false;
+  };
+  /** Whether a name is declared in its own file other than as an import (a variable named `test`, a parameter). */
+  const declaredLocally = (node: ts.Identifier): boolean => {
+    const symbol = checker.getSymbolAtLocation(node);
+
+    return (
+      symbol?.declarations?.some(
+        (declaration) =>
+          declaration.getSourceFile() === node.getSourceFile() &&
+          !ts.isImportSpecifier(declaration) &&
+          !ts.isImportClause(declaration) &&
+          !ts.isNamespaceImport(declaration) &&
+          !ts.isExportSpecifier(declaration),
+      ) ?? false
+    );
   };
   /** The modules `roots` load when they run, themselves included, transitively. */
   const closure = (roots: readonly ts.SourceFile[]): ts.SourceFile[] => {

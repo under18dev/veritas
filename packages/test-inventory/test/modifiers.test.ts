@@ -383,6 +383,58 @@ describe('full names static analysis cannot read', () => {
     expect(marked('test/imports-registering.test.ts')).toBe('imported_registrations');
   });
 
+  it('marks files that reach the registration API in a form the inventory does not read', () => {
+    const helpers: Record<string, string> = {
+      constInFunction:
+        "import { expect, it } from 'vitest';\nexport function shared() { const register = it; register('x', () => { expect(1).toBe(1); }); }",
+      constTop:
+        "import { it } from 'vitest';\nconst t = it;\nt('x', () => {});\nexport const shared = () => 1;",
+      destructuredNamespace:
+        "import * as v from 'vitest';\nconst { it: t } = v;\nt('x', () => {});\nexport const shared = () => 1;",
+      arrayElement: "import { it } from 'vitest';\n[it][0]('x', () => {});\nexport const shared = () => 1;",
+      namespaceMember:
+        "import * as v from 'vitest';\nexport function shared() { const f = v.test; f('x', () => {}); }",
+      jestGlobal: "export function shared() { const f = it; f('x', () => {}); }",
+      globalObject: "export function shared() { const g = globalThis as any; g.it('x', () => {}); }",
+      exported: "import { it } from 'vitest';\nexport { it };\nexport const shared = () => 1;",
+      passed:
+        "import { it } from 'vitest';\nconst keep = (f: unknown) => f;\nkeep(it);\nexport const shared = () => 1;",
+      barrel: "export * from 'vitest';\nexport const shared = () => 1;",
+    };
+    const files: Record<string, string> = {
+      'test/pure-build.ts': 'export const build = () => ({ a: 1 });\n',
+      'test/builds.test.ts':
+        "import { expect, it } from 'vitest';\nimport { build } from './pure-build.js';\nconst m = build();\nit('b', () => { expect(m.a).toBe(1); });\n",
+      'test/barrel-user.ts':
+        "import { test as t } from './helper-barrel.js';\nexport function shared() { t('x', () => {}); }\n",
+      'test/uses-barrel-user.test.ts':
+        "import { it } from 'vitest';\nimport { shared } from './barrel-user.js';\nshared();\nit('u', () => {});\n",
+      'test/own-escape.test.ts':
+        "import { expect, it } from 'vitest';\nfunction later() { const r = it; r('y', () => {}); }\nlater();\nit('o', () => { expect(1).toBe(1); });\n",
+    };
+    for (const [name, code] of Object.entries(helpers)) {
+      files[`test/helper-${name}.ts`] = code;
+      files[`test/uses-${name}.test.ts`] = [
+        "import { expect, it } from 'vitest';",
+        `import { shared } from './helper-${name}.js';`,
+        'shared();',
+        "it('own', () => { expect(1).toBe(1); });",
+        '',
+      ].join('\n');
+    }
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root: tempProject(files),
+      config: VeritasConfig.parse({}),
+    });
+    const marked = (file: string) => inventory.files.find((f) => f.path === file)?.inexactNames;
+
+    for (const name of Object.keys(helpers)) expect(marked(`test/uses-${name}.test.ts`), name).toBeDefined();
+    expect(marked('test/uses-barrel-user.test.ts')).toBeDefined();
+    expect(marked('test/own-escape.test.ts')).toBe('open_collection');
+    expect(marked('test/builds.test.ts')).toBeUndefined();
+  });
+
   it('records registrations through aliases and namespace imports, and leaves the file closed', () => {
     const root = tempProject({
       'src/value.ts': 'export const value = (input: number) => input;\n',
