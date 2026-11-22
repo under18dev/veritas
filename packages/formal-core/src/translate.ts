@@ -181,6 +181,41 @@ const and = (left: Expr, right: Expr): Expr => ({ kind: 'binary', op: 'and', lef
 const not = (arg: Expr): Expr => ({ kind: 'unary', op: 'not', arg });
 
 /** Find an exported function declaration or exported `const name = (...) => ...`. */
+/**
+ * Whether the module exports a function named `name` under that name: an exported function declaration or
+ * constant, or a local function listed in an `export { ... }` clause without renaming. Replay imports the export,
+ * so a function that is only declared cannot be checked against its model.
+ */
+export function exportsFunction(file: string, source: string, name: string): boolean {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const exported = (node: ts.Node) =>
+    ts.canHaveModifiers(node) &&
+    (ts.getModifiers(node) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+
+  for (const stmt of sf.statements) {
+    if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name && exported(stmt)) return true;
+
+    if (
+      ts.isVariableStatement(stmt) &&
+      exported(stmt) &&
+      stmt.declarationList.declarations.some((d) => ts.isIdentifier(d.name) && d.name.text === name)
+    )
+      return true;
+
+    if (
+      ts.isExportDeclaration(stmt) &&
+      !stmt.moduleSpecifier &&
+      !stmt.isTypeOnly &&
+      stmt.exportClause &&
+      ts.isNamedExports(stmt.exportClause) &&
+      stmt.exportClause.elements.some((e) => !e.isTypeOnly && e.name.text === name && !e.propertyName)
+    )
+      return true;
+  }
+
+  return false;
+}
+
 function findFunction(sf: ts.SourceFile, name: string): ts.FunctionLikeDeclaration | null {
   for (const stmt of sf.statements) {
     if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name) return stmt;

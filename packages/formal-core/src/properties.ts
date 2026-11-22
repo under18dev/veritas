@@ -73,6 +73,23 @@ export function thresholdProperty(options: {
   };
 }
 
+/**
+ * A declared `holds_for_all` property: forall inputs within the domain, impl(...) == true. The implementation
+ * must return a boolean.
+ */
+export function holdsForAllProperty(implementation: Translated, domain?: IntDomain): PropertyIR {
+  if (implementation.model.returns !== 'bool')
+    throw new Error(`${implementation.model.name} does not return a boolean`);
+
+  return {
+    irVersion: 1,
+    params: withDomain(implementation.params, domain, implementation.model),
+    preconditions: [],
+    functions: [...implementation.dependencies, implementation.model],
+    body: { kind: 'binary', op: '==', left: callOf(implementation), right: lit(true) },
+  };
+}
+
 /** Bounded equivalence of two models with the same signature (e.g. original and mutant): forall x: a(x) == b(x). */
 export function equivalenceProperty(a: Translated, b: Translated, domain?: IntDomain): PropertyIR {
   if (
