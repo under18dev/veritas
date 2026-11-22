@@ -244,6 +244,8 @@ export class TestNameIndex implements TestNameLookup {
   private readonly inexact = new Map<string, InexactReason>();
   /** Tests that may not have run: skipped, todo, conditional, or without `.only` in a file that has one. */
   private readonly mayNotRun = new Set<string>();
+  /** Tests known not to run: `skip` or `todo`, their own or an enclosing suite's. */
+  private readonly skipped = new Set<string>();
   /** Names (`<file>#<full name>`) more than one test of the run had, by mutator's numbered copies of them. */
   private readonly duplicated = new Set<string>();
   private readonly resolved = new Map<string, string | null | undefined>();
@@ -265,16 +267,19 @@ export class TestNameIndex implements TestNameLookup {
 
       if (inexact !== undefined && !this.inexact.has(test.file)) this.inexact.set(test.file, inexact);
 
-      if (
-        test.conditional ||
-        test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ||
-        (onlyFiles.has(test.file) && !test.modifiers?.includes('only'))
-      )
+      // `skip` and `todo` (its own, `xit`, or an enclosing `describe.skip`) are known not to run; `skipIf`,
+      // `runIf` and other conditions are not known either way.
+      const skipped = test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false;
+
+      if (skipped) this.skipped.add(test.id);
+
+      if (test.conditional || skipped || (onlyFiles.has(test.file) && !test.modifiers?.includes('only')))
         this.mayNotRun.add(test.id);
 
       if (test.conditional) this.repeatable.add(test.id);
 
-      if (!test.modifiers?.includes('each')) continue;
+      // A skipped table-driven test ran no row, so no reported name is its.
+      if (!test.modifiers?.includes('each') || skipped) continue;
       this.repeatable.add(test.id);
       const titles = [...test.suitePath, test.name];
       // Only the titles the runner formats have placeholders; a `%s` in a plain suite title is text.
@@ -385,6 +390,10 @@ export class TestNameIndex implements TestNameLookup {
     }
 
     if (exact === null) return null;
+
+    // A skipped test did not run: a name it has exactly that a running template fits is the template's.
+    if (exact !== undefined && this.skipped.has(exact) && [...candidates].some((id) => id !== exact))
+      exact = undefined;
     const because = this.inexact.get(file);
     let reason: WithheldReason | undefined;
 

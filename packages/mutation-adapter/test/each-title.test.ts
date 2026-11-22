@@ -224,13 +224,11 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect(twice.withheld.get(name)).toEqual({ kind: 'exact_and_template' });
 
     // The exact test may not have run.
-    for (const exact of [
-      { ...literal, modifiers: ['skip'] },
-      { ...literal, conditional: true as const },
-    ]) {
-      const index = new TestNameIndex([broad, exact], ' > ');
-      expect(mutatorTestId(name, ' > ', index)).not.toBe(literal.id);
-    }
+    const conditional = new TestNameIndex([broad, { ...literal, conditional: true as const }], ' > ');
+    expect([literal.id, broad.id]).not.toContain(mutatorTestId(name, ' > ', conditional));
+    // A skipped exact test did not run, so the name is the template's.
+    const skipped = new TestNameIndex([broad, { ...literal, modifiers: ['skip'] }], ' > ');
+    expect(mutatorTestId(name, ' > ', skipped)).toBe(broad.id);
     const only = new TestNameIndex([broad, literal, entry([], 'focused', ['only'])], ' > ');
     expect(mutatorTestId(name, ' > ', only)).not.toBe(literal.id);
 
@@ -297,6 +295,29 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     const alone = new TestNameIndex([literal, loop], ' > ');
     alone.observe([`${FILE}#fee for 5000`, `${FILE}#fee for 4999`]);
     expect(mutatorTestId(`${FILE}#fee for 5000`, ' > ', alone)).toBe(literal.id);
+  });
+
+  it('takes no template of a skipped or todo registration as a candidate', () => {
+    const plain = entry([], 'case 1', []);
+
+    for (const modifiers of [
+      ['each', 'skip'],
+      ['each', 'todo'],
+    ]) {
+      const index = new TestNameIndex([entry([], 'case %s', modifiers), plain], ' > ');
+      expect(mutatorTestId(`${FILE}#case 1`, ' > ', index), modifiers.join()).toBe(plain.id);
+      expect(index.withheld.size).toBe(0);
+    }
+    // In a describe.skip, the inherited skip counts too.
+    const inSkipped = { ...entry(['rows %s'], 'case 1', ['each', 'skip']), tableTitles: [0] };
+    const literal = entry(['rows a'], 'case 1', []);
+    expect(
+      mutatorTestId(`${FILE}#rows a > case 1`, ' > ', new TestNameIndex([inSkipped, literal], ' > ')),
+    ).toBe(literal.id);
+    // skipIf and runIf may have run: the template stays a candidate.
+    const conditional = { ...entry([], 'case %s'), conditional: true as const };
+    const index = new TestNameIndex([conditional, plain], ' > ');
+    expect([conditional.id, plain.id]).not.toContain(mutatorTestId(`${FILE}#case 1`, ' > ', index));
   });
 
   it('credits an empty row value to its template', () => {
