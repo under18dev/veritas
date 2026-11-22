@@ -4284,6 +4284,8 @@ function visitTests(
     table: number[],
     // Vitest options of the test or an enclosing suite that could not be read: they may hold `only`.
     optionsUnknown: boolean,
+    // A table of the test or an enclosing suite is empty as written (`it.each([])`): no test is registered.
+    emptyTable: boolean,
   ) => {
     if (ts.isCallExpression(node)) {
       const describe = describeRegistration(node);
@@ -4306,6 +4308,7 @@ function visitTests(
               childConditional,
               childTable,
               childOptionsUnknown,
+              emptyTable || emptyTableRegistration(node),
             ),
           );
 
@@ -4322,6 +4325,7 @@ function visitTests(
               conditional || conditionalRegistration(node),
               table,
               optionsUnknown || registrationOptions(node).unknown,
+              emptyTable || emptyTableRegistration(node),
             ),
           );
 
@@ -4343,6 +4347,7 @@ function visitTests(
             conditional || conditionalRegistration(node),
             info.modifiers.includes('each') ? [...table, currentSuite.length] : table,
             optionsUnknown || registrationOptions(node).unknown,
+            emptyTable || emptyTableRegistration(node),
           ),
         );
 
@@ -4364,10 +4369,10 @@ function visitTests(
           ts.SyntaxKind.QuestionQuestionToken,
         ].includes(node.operatorToken.kind));
     ts.forEachChild(node, (child) =>
-      walk(child, currentSuite, currentModifiers, inner, innerConditional, table, optionsUnknown),
+      walk(child, currentSuite, currentModifiers, inner, innerConditional, table, optionsUnknown, emptyTable),
     );
   };
-  walk(source, suitePath, inheritedModifiers, undefined, false, [], false);
+  walk(source, suitePath, inheritedModifiers, undefined, false, [], false, false);
 }
 
 /**
@@ -5691,6 +5696,21 @@ function surelyHasRows(node: ts.CallExpression): boolean {
   );
 }
 
+/** Whether a table-driven registration's table is empty as written (`it.each([])`, a tagged template with no row). */
+function emptyTableRegistration(node: ts.CallExpression): boolean {
+  const factory = registrationFactory(node);
+
+  if (factory === undefined || !propertyChain(factory).some((name) => runner.tableFactories.has(name)))
+    return false;
+  const maker = skipParens(node.expression);
+
+  if (ts.isTaggedTemplateExpression(maker))
+    return ts.isNoSubstitutionTemplateLiteral(maker.template) || maker.template.templateSpans.length === 0;
+  const table = ts.isCallExpression(maker) && maker.arguments[0] ? skipParens(maker.arguments[0]) : undefined;
+
+  return table !== undefined && ts.isArrayLiteralExpression(table) && table.elements.length === 0;
+}
+
 /** A number written as a literal (`1000`, `-1`), as a timeout is. */
 function numericLiteral(node: ts.Expression): boolean {
   return (
@@ -6225,6 +6245,7 @@ function analyzeTest(
   conditional = false,
   tableTitles: number[] = [],
   optionsUnknown = false,
+  emptyTable = false,
 ): TestCaseType {
   const { checker, root } = ctx;
   const source = registrationCall.getSourceFile();
@@ -6402,6 +6423,7 @@ function analyzeTest(
     ...(conditional ? { conditional: true as const } : {}),
     ...(tableTitles.length > 0 ? { tableTitles } : {}),
     ...(optionsUnknown ? { optionsUnknown: true as const } : {}),
+    ...(emptyTable ? { emptyTable: true as const } : {}),
   };
 }
 

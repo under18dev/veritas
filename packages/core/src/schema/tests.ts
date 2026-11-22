@@ -84,6 +84,8 @@ export const TestCase = z.object({
    * set modifiers, `only` included, which beats `skip`. Absent otherwise.
    */
   optionsUnknown: z.literal(true).optional(),
+  /** A table of the test or an enclosing suite is empty as written (`it.each([])`), so no test runs. Absent otherwise. */
+  emptyTable: z.literal(true).optional(),
 });
 export type TestCase = z.infer<typeof TestCase>;
 

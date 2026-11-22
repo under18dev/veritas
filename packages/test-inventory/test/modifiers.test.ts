@@ -924,14 +924,14 @@ describe('full names static analysis cannot read', () => {
       config: VeritasConfig.parse({}),
     }).tests;
 
-    expect(tests.map((t) => [t.name, t.conditional])).toEqual([
-      ['empty %s', true],
-      ['one %s', undefined],
-      ['named %s', true],
-      ['spread %s', true],
-      ['tagged $a', undefined],
-      ['no rows $a', true],
-      ['inside', true],
+    expect(tests.map((t) => [t.name, t.conditional, t.emptyTable])).toEqual([
+      ['empty %s', true, true],
+      ['one %s', undefined, undefined],
+      ['named %s', true, undefined],
+      ['spread %s', true, undefined],
+      ['tagged $a', undefined, undefined],
+      ['no rows $a', true, true],
+      ['inside', true, true],
     ]);
   });
 

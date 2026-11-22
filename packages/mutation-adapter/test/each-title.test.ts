@@ -486,6 +486,19 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect(mutatorTestId(`${FILE}#works`, ' > ', onlySkipped)).not.toBe(running.id);
   });
 
+  it('takes a registration with a table empty as written as registering no test', () => {
+    // `it.each([])('case %s'); it('case 1')`.
+    const empty = { ...entry([], 'case %s'), conditional: true as const, emptyTable: true as const };
+    const plain = entry([], 'case 1', []);
+    expect(mutatorTestId(`${FILE}#case 1`, ' > ', new TestNameIndex([empty, plain], ' > '))).toBe(plain.id);
+    // A focused one establishes no focus, and blocks none.
+    const emptyFocused = { ...empty, modifiers: ['each', 'only'] };
+    const works = entry([], 'works', []);
+    expect(mutatorTestId(`${FILE}#works`, ' > ', new TestNameIndex([emptyFocused, works], ' > '))).toBe(
+      works.id,
+    );
+  });
+
   it('keeps a skipped table out of the candidates even when its table may be empty', () => {
     // `it.skip.each(cases)('case %s')`: conditional because of the table, and skipped all the same.
     const rows = { ...entry([], 'case %s', ['each', 'skip']), conditional: true as const };

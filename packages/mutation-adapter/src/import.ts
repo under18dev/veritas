@@ -165,6 +165,8 @@ export interface NamedTest {
   tableTitles?: readonly number[];
   /** Options of the test or an enclosing suite could not be read, so they may focus it. */
   optionsUnknown?: true;
+  /** A table of the test or an enclosing suite is empty as written, so it registers no test. */
+  emptyTable?: true;
 }
 
 /** A test file as name resolution needs it: whether it may register tests static analysis did not see. */
@@ -264,10 +266,13 @@ export class TestNameIndex implements TestNameLookup {
   readonly withheld = new Map<string, WithheldReason>();
 
   constructor(
-    tests: readonly NamedTest[],
+    allTests: readonly NamedTest[],
     private readonly separator: string,
     files: readonly NamedTestFile[] = [],
   ) {
+    // A registration with a table empty as written registers no test: it is neither a candidate nor a test that
+    // may run.
+    const tests = allTests.filter((test) => !test.emptyTable);
     this.exact = testIdsByFullName(tests, separator);
     const onlyFiles = new Set(
       tests.filter((test) => test.modifiers?.includes('only')).map((test) => test.file),

@@ -200,6 +200,10 @@
     "optionsUnknown": {
       "type": "boolean",
       "const": true
+    },
+    "emptyTable": {
+      "type": "boolean",
+      "const": true
     }
   },
   "required": [
