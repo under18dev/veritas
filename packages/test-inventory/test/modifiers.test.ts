@@ -510,6 +510,14 @@ describe('full names static analysis cannot read', () => {
         "export function shared(k = 'constructor') { const o: any = shared; o[k](\"it('hidden', () => {})\")(); }",
       matcherMember:
         "import { expect } from 'vitest';\nexport function shared() { (expect.any(Function) as any).sample.constructor('x')(); }",
+      castKey:
+        "export function shared() { const k = 'constructor' as 'a'; const f: any = shared; f[k](\"it('hidden', () => {})\")(); }",
+      parameterKey:
+        "export function shared(k: 'a' = 'constructor' as any) { const f: any = shared; f[k](\"it('hidden', () => {})\")(); }",
+      letKey:
+        "let k: 'a' = 'a';\nk = 'constructor' as 'a';\nexport function shared() { const f: any = shared; f[k](\"it('hidden', () => {})\")(); }",
+      parsedKey:
+        "export function shared() { const k = JSON.parse('\"constructor\"') as 'a'; const f: any = shared; f[k](\"it('hidden', () => {})\")(); }",
       vmRun:
         "import { runInThisContext } from 'node:vm';\nexport function shared() { runInThisContext(\"it('hidden', () => {})\"); }",
       vmScript:

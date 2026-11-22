@@ -7028,14 +7028,7 @@ function moduleSafety(
           skipParens(node.parent.expression) !== node
         )
           return false;
-        const keyType = checker.getTypeAtLocation(node.argumentExpression);
-        const keys = keyType.isUnion() ? keyType.types : [keyType];
-
-        return !keys.every(
-          (key) =>
-            key.isStringLiteral() &&
-            !['constructor', '__proto__', 'prototype', 'call', 'apply', 'bind'].includes(key.value),
-        );
+        return !literalKeys(node.argumentExpression, new Set());
       }
 
       if (!ts.isIdentifier(node) || (node.text !== 'eval' && node.text !== 'Function')) return false;
@@ -7076,6 +7069,41 @@ function moduleSafety(
 
       return true;
     });
+  /**
+   * Whether a computed key's every possible value is written in the source as a string literal naming an ordinary
+   * method: the literal itself, a branch of `?:` between such keys, or a `const` initialised with one, with no type
+   * assertion on the way. A type alone (an annotation, `as`, a parameter, a `let`) can say anything.
+   */
+  const literalKeys = (node: ts.Expression, seen: Set<ts.Node>): boolean => {
+    const key = ts.isParenthesizedExpression(node) ? skipParens(node) : node;
+
+    if (ts.isStringLiteralLike(key))
+      return !['constructor', '__proto__', 'prototype', 'call', 'apply', 'bind'].includes(key.text);
+
+    if (ts.isConditionalExpression(key))
+      return literalKeys(key.whenTrue, seen) && literalKeys(key.whenFalse, seen);
+
+    if (!ts.isIdentifier(key)) return false;
+    let symbol = checker.getSymbolAtLocation(key);
+
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    const declarations = symbol?.declarations ?? [];
+    const declaration = declarations[0];
+
+    if (
+      declarations.length !== 1 ||
+      !declaration ||
+      !ts.isVariableDeclaration(declaration) ||
+      !ts.isIdentifier(declaration.name) ||
+      (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0 ||
+      !declaration.initializer ||
+      seen.has(declaration)
+    )
+      return false;
+    seen.add(declaration);
+
+    return literalKeys(declaration.initializer, seen);
+  };
   /** Whether a name is declared in its own file at all, imports included (an imported `module`). */
   const declaredAnyhow = (node: ts.Identifier): boolean =>
     checker
