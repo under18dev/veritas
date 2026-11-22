@@ -4803,11 +4803,52 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
       // An API that may call what it is given (`expect(f).toThrow()`, `assert.throws(f)`, `vi.waitFor(f)`) must not
       // be given anything that may be a function, through any branch (`cond ? f : g`, `a && f`), unless it only
       // stores values (`it.each(rows)`, `vi.spyOn`).
-      if (!defers && !(member !== undefined && (NON_CALLING.has(member) || FRESH_VALUES.has(member))))
-        return passable(argument);
+      if (member !== undefined && FRESH_VALUES.has(member)) return matcherArgument(argument);
+
+      if (!defers && !(member !== undefined && NON_CALLING.has(member))) return passable(argument);
 
       return inert(argument);
     });
+  };
+  /**
+   * What an asymmetric matcher (`expect.any(Number)`, `expect.objectContaining({ … })`) may take: a global
+   * constructor, literals, plain data and nested matchers. A function or method in it (an `asymmetricMatch`) runs
+   * while values are compared, so it is checked as run now; a getter or setter, or anything else, as an argument
+   * that may be called.
+   */
+  const matcherArgument = (node: ts.Expression): boolean => {
+    const value = skipParens(node);
+
+    if (ts.isIdentifier(value) && GLOBAL_CONSTRUCTORS.has(value.text) && runnerName(value) === value.text)
+      return true;
+
+    if (isFunction(value)) return closedFunction(value, 'immediate');
+
+    if (ts.isArrayLiteralExpression(value))
+      return value.elements.every((element) => ts.isOmittedExpression(element) || matcherArgument(element));
+
+    if (ts.isObjectLiteralExpression(value))
+      return value.properties.every((property) => {
+        if (property.name && ts.isComputedPropertyName(property.name) && !inert(property.name.expression))
+          return false;
+
+        if (ts.isPropertyAssignment(property)) return matcherArgument(property.initializer);
+
+        if (ts.isShorthandPropertyAssignment(property)) return matcherArgument(property.name);
+
+        if (ts.isMethodDeclaration(property)) return closedFunction(property, 'immediate');
+
+        return ts.isSpreadAssignment(property) && passable(property.expression);
+      });
+
+    if (ts.isCallExpression(value)) {
+      const member = accessedMember(skipParens(value.expression));
+
+      // A nested matcher (`expect.objectContaining({ a: expect.any(Number) })`).
+      if (member !== undefined && FRESH_VALUES.has(member)) return runnerCall(value);
+    }
+
+    return passable(value);
   };
   /** A call whose result is called in turn by a registration (`it.each(rows)(name, fn)`, `test.skipIf(c)(…)`). */
   const registrationFactoryCall = (node: ts.CallExpression | ts.TaggedTemplateExpression): boolean => {
@@ -5537,6 +5578,31 @@ const NON_CALLING = new Set([
   'restoreAllMocks',
   'unstubAllGlobals',
   'unstubAllEnvs',
+]);
+
+/** Global constructors an asymmetric matcher may take (`expect.any(Number)`). */
+const GLOBAL_CONSTRUCTORS = new Set([
+  'Number',
+  'String',
+  'Boolean',
+  'Object',
+  'Array',
+  'Function',
+  'Date',
+  'RegExp',
+  'Map',
+  'Set',
+  'WeakMap',
+  'WeakSet',
+  'Error',
+  'TypeError',
+  'RangeError',
+  'Symbol',
+  'BigInt',
+  'Promise',
+  'ArrayBuffer',
+  'Uint8Array',
+  'URL',
 ]);
 
 /** Members of the runner's API that return a new asymmetric matcher rather than anything they are given. */
