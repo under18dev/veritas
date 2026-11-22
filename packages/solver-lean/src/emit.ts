@@ -325,58 +325,96 @@ function itesOnlyOver(expr: Expr, allowed: ReadonlySet<string>): boolean {
   return found && ok;
 }
 
+/** The largest term (in IR nodes) the named-calls strategy inlines; beyond it the strategy is not offered. */
+const NAMED_CALLS_MAX_TERM = 20_000;
+
+function children(expr: Expr): Expr[] {
+  switch (expr.kind) {
+    case 'unary':
+      return [expr.arg];
+    case 'binary':
+      return [expr.left, expr.right];
+    case 'ite':
+      return [expr.cond, expr.whenTrue, expr.whenFalse];
+    case 'call':
+      return expr.args;
+    default:
+      return [];
+  }
+}
+
 /**
- * Names the result of every call to an integer-valued function (`r_k`, with `hr_k : call = r_k`), unfolds each
- * such function only in its own equation, and inlines the boolean-valued functions. A helper whose result is
- * used several times (a code mapped by another decision list) is then one variable instead of a copy of its
- * whole decision tree per use. The equations of functions that only branch on such named results are split; the
- * boolean parameters are then split one at a time, simplifying after each split so that decided branches close
- * early; what remains is a linear integer problem for `omega`.
+ * Size of `expr` once its boolean calls are inlined, computed without building it, so that a chain of helpers that
+ * each call the previous one several times is turned down before anything is expanded. Every node and every
+ * function is measured once, and sizes saturate just above `limit`, so the work is linear in the IR and the result
+ * is at most `limit + 1`.
  */
-/**
- * Size of `expr` once its boolean calls are inlined, computed without building it (memoized per function), so that
- * a chain of helpers that each call the previous one several times is turned down before anything is expanded.
- */
-function inlinedSize(ir: PropertyIR, expr: Expr): number {
+function inlinedSize(ir: PropertyIR, expr: Expr, limit: number = NAMED_CALLS_MAX_TERM): number {
   const byName = new Map(ir.functions.map((f) => [f.name, f]));
-  const memo = new Map<string, number>();
-  const occurrences = (body: Expr, name: string): number => {
-    if (body.kind === 'var') return body.name === name ? 1 : 0;
-    let n = 0;
-    mapExpr(body, (e) => {
-      n += occurrences(e, name);
+  const over = limit + 1;
+  const nodes = new WeakMap<Expr, number>();
+  const functions = new Map<string, number>();
+  const uses = new Map<string, Map<string, number>>();
+  const add = (a: number, b: number) => Math.min(over, a + b);
+  /** How often each parameter occurs in a body (saturating, counted once per function). */
+  const usesIn = (fn: string, body: Expr): Map<string, number> => {
+    let counts = uses.get(fn);
 
-      return e;
-    });
+    if (!counts) {
+      const found = new Map<string, number>();
+      const stack: Expr[] = [body];
 
-    return n;
+      while (stack.length > 0) {
+        const e = stack.pop() as Expr;
+
+        if (e.kind === 'var') found.set(e.name, add(found.get(e.name) ?? 0, 1));
+        else stack.push(...children(e));
+      }
+      counts = found;
+      uses.set(fn, counts);
+    }
+
+    return counts;
   };
   const size = (e: Expr): number => {
-    let children = 0;
-    mapExpr(e, (c) => {
-      children += size(c);
+    const known = nodes.get(e);
 
-      return c;
-    });
+    if (known !== undefined) return known;
     const f = e.kind === 'call' ? byName.get(e.fn) : undefined;
+    let total: number;
 
-    if (e.kind !== 'call' || f?.returns !== 'bool' || !f.body) return 1 + children;
-    const body = f.body;
-    let own = memo.get(f.name);
+    if (e.kind === 'call' && f?.returns === 'bool' && f.body) {
+      const body = f.body;
+      let own = functions.get(f.name);
 
-    if (own === undefined) {
-      own = size(body);
-      memo.set(f.name, own);
+      if (own === undefined) {
+        own = size(body);
+        functions.set(f.name, own);
+      }
+      const counts = usesIn(f.name, body);
+      total = own;
+
+      // Each use of a parameter in the body becomes a copy of the argument.
+      for (let i = 0; i < e.args.length && total < over; i++) {
+        const count = counts.get(f.params[i]?.name ?? '') ?? 0;
+
+        if (count > 0) total = add(total, Math.min(over, size(e.args[i] as Expr) * count));
+      }
+    } else {
+      total = 1;
+
+      for (const c of children(e)) {
+        if (total >= over) break;
+        total = add(total, size(c));
+      }
     }
-    // Each use of a parameter in the body becomes a copy of the argument.
-    return own + e.args.reduce((sum, a, i) => sum + size(a) * occurrences(body, f.params[i]?.name ?? ''), 0);
+    nodes.set(e, total);
+
+    return total;
   };
 
   return size(expr);
 }
-
-/** The largest term (in IR nodes) the named-calls strategy inlines; beyond it the strategy is not offered. */
-const NAMED_CALLS_MAX_TERM = 20_000;
 
 /**
  * Whether the named-calls strategy applies: some function returns an integer, every function has a body (opaque
@@ -391,6 +429,14 @@ function namedIntCallsApplies(ir: PropertyIR): boolean {
   );
 }
 
+/**
+ * Names the result of every call to an integer-valued function (`r_k`, with `hr_k : call = r_k`), unfolds each
+ * such function only in its own equation, and inlines the boolean-valued functions. A helper whose result is
+ * used several times (a code mapped by another decision list) is then one variable instead of a copy of its
+ * whole decision tree per use. The equations of functions that only branch on such named results are split; the
+ * boolean parameters are then split one at a time, simplifying after each split so that decided branches close
+ * early; what remains is a linear integer problem for `omega`.
+ */
 function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[]): string[] {
   const byName = new Map(ir.functions.map((f) => [f.name, f]));
   const returnsOf = (fn: string) => byName.get(fn)?.returns;
@@ -700,11 +746,6 @@ export function leanProofStrategies(ir: PropertyIR): LeanStrategy[] {
 }
 
 /**
- * Lean 4 source for `forall params in their domains: preconditions -> body`, with the IR functions as
- * `def`s over `Int`/`Bool`. The proof is the given strategy (default: the first one).
- * Throws `VeritasError` for IR that `checkIR` rejects, opaque functions, or an invalid theorem name.
- */
-/**
  * Checks that the IR translates to a Lean model (the same checks as `irToLean`) without generating any proof
  * script. Throws `VeritasError` otherwise.
  */
@@ -712,6 +753,11 @@ export function checkLeanModel(ir: PropertyIR, theoremName: string): void {
   prepare(ir, theoremName);
 }
 
+/**
+ * Lean 4 source for `forall params in their domains: preconditions -> body`, with the IR functions as
+ * `def`s over `Int`/`Bool`. The proof is the given strategy (default: the first one).
+ * Throws `VeritasError` for IR that `checkIR` rejects, opaque functions, or an invalid theorem name.
+ */
 export function irToLean(ir: PropertyIR, options: { theoremName: string; strategy?: LeanStrategy }): string {
   const prepared = prepare(ir, options.theoremName);
   const strategy = options.strategy ?? (leanProofStrategies(ir)[0] as LeanStrategy);

@@ -186,6 +186,50 @@ describe('name-int-calls-cases', () => {
     expect(names).not.toContain('name-int-calls-cases');
   });
 
+  it('measures deeply nested calls in linear time', () => {
+    // id(id(...id(b0))) with id(p) = p: every argument is measured once, however deep the nesting.
+    const flags = Array.from({ length: 9 }, (_, i) => ({ name: `b${i}`, sort: 'bool' as const }));
+    let nested: Expr = { kind: 'var', name: 'b0' };
+
+    for (let k = 0; k < 400; k++) nested = { kind: 'call', fn: 'id', args: [nested] };
+    const ir: PropertyIR = {
+      irVersion: 1,
+      params: [...flags, { name: 'x', sort: 'int', domain: { min: '-5', max: '5' } }],
+      preconditions: [],
+      functions: [
+        {
+          name: 'id',
+          symbol: 's#id',
+          params: [{ name: 'p', sort: 'bool' }],
+          returns: 'bool',
+          body: { kind: 'var', name: 'p' },
+        },
+        {
+          name: 'code',
+          symbol: 's#code',
+          params: [{ name: 'c', sort: 'bool' }],
+          returns: 'int',
+          body: {
+            kind: 'ite',
+            cond: { kind: 'var', name: 'c' },
+            whenTrue: { kind: 'int', value: '1' },
+            whenFalse: { kind: 'int', value: '0' },
+          },
+        },
+      ],
+      body: {
+        kind: 'binary',
+        op: '>=',
+        left: { kind: 'call', fn: 'code', args: [nested] },
+        right: { kind: 'int', value: '0' },
+      },
+    };
+    const started = Date.now();
+    const names = leanProofStrategies(ir).map((s) => s.name);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(names[0]).toBe('name-int-calls-cases');
+  });
+
   it('generates its script only when an attempt reads it', () => {
     const strategy = leanProofStrategies(holds('invariant_zeroNeedsAll'))[0];
     const descriptor = strategy ? Object.getOwnPropertyDescriptor(strategy, 'script') : undefined;
