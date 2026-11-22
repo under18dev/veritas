@@ -250,7 +250,13 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
 
     return resolved ? program.getSourceFile(resolved.resolvedFileName) : undefined;
   };
-  const safety = moduleSafety(root, checker, resolveModule);
+  // Without a tsconfig, or with imports kept as written, `import { type X } from './x'` still loads './x'.
+  const inlineTypeImportsErased =
+    compilerOptions !== DEFAULT_COMPILER_OPTIONS &&
+    !compilerOptions.verbatimModuleSyntax &&
+    !compilerOptions.preserveValueImports &&
+    compilerOptions.importsNotUsedAsValues !== ts.ImportsNotUsedAsValues.Preserve;
+  const safety = moduleSafety(root, checker, resolveModule, inlineTypeImportsErased);
   /** Why the runner may report tests under a file that static analysis did not see (see `inexactNames`). */
   const inexactFile = (source: ts.SourceFile | undefined) => {
     if (!source || !closedCollection(source, safety.local) || safety.imports(source).unknown)
@@ -4678,17 +4684,20 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
       ts.isSatisfiesExpression(node) ||
       ts.isNonNullExpression(node) ||
       ts.isTypeAssertionExpression(node) ||
-      ts.isTypeOfExpression(node) ||
-      ts.isSpreadElement(node) ||
-      ts.isSpreadAssignment(node)
+      ts.isTypeOfExpression(node)
     )
       return inert(node.expression);
 
+    // Spreading reads every property or runs the iterator of what is spread.
+    if (ts.isSpreadElement(node) || ts.isSpreadAssignment(node))
+      return readable(node.expression) && inert(node.expression);
+
     if (ts.isPrefixUnaryExpression(node)) return inert(node.operand);
 
-    if (ts.isPropertyAccessExpression(node)) return inert(node.expression);
+    if (ts.isPropertyAccessExpression(node)) return readable(node) && inert(node.expression);
 
-    if (ts.isElementAccessExpression(node)) return inert(node.expression) && inert(node.argumentExpression);
+    if (ts.isElementAccessExpression(node))
+      return readable(node) && inert(node.expression) && inert(node.argumentExpression);
 
     if (ts.isTemplateExpression(node)) return node.templateSpans.every((span) => inert(span.expression));
 
@@ -4702,7 +4711,10 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
         if (property.name && ts.isComputedPropertyName(property.name) && !inert(property.name.expression))
           return false;
 
-        // Methods and accessors are not run when the object is made.
+        // A getter or setter runs when the property is read or written, which collection code may do.
+        if (ts.isGetAccessorDeclaration(property) || ts.isSetAccessorDeclaration(property)) return false;
+
+        // Methods are not run when the object is made.
         return !ts.isPropertyAssignment(property) || inert(property.initializer);
       });
 
@@ -4722,12 +4734,38 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
     return false;
   };
+  /**
+   * Whether reading properties of an expression (`options.rows`, `...cases`) runs no code: what is read starts from a
+   * constant of plain data (in this file, or imported from a local module), the runner's API, or, in a mock factory,
+   * what the factory obtained. A getter, a proxy or an iterator elsewhere could run anything.
+   */
+  const readable = (node: ts.Expression): boolean => {
+    let root = skipParens(node);
+
+    while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root))
+      root = skipParens(root.expression);
+
+    if (inFactory) return true;
+
+    if (!ts.isIdentifier(root))
+      return ts.isArrayLiteralExpression(root) || ts.isObjectLiteralExpression(root);
+
+    if (dataConstants.has(root.text) || (local?.dataValue(root) ?? false)) return true;
+    const name = runnerName(root);
+
+    return name === NAMESPACE || runnerOwn(name);
+  };
   const inertClass = (node: ts.ClassLikeDeclaration): boolean =>
     !ts.getDecorators(node)?.length &&
     (node.heritageClauses ?? []).every((clause) => clause.types.every((type) => inert(type.expression))) &&
     node.members.every(
       (member) =>
         !ts.isClassStaticBlockDeclaration(member) &&
+        // A static getter or setter runs when collection code reads or writes it.
+        !(
+          (ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) &&
+          (ts.getCombinedModifierFlags(member) & ts.ModifierFlags.Static) !== 0
+        ) &&
         !(ts.canHaveDecorators(member) && ts.getDecorators(member)?.length) &&
         (!ts.isPropertyDeclaration(member) || !member.initializer || inert(member.initializer)) &&
         (!member.name || !ts.isComputedPropertyName(member.name) || inert(member.name.expression)),
@@ -5610,6 +5648,7 @@ function moduleSafety(
   root: string,
   checker: ts.TypeChecker,
   resolve: (name: string, from: string) => ts.SourceFile | undefined,
+  inlineTypeImportsErased = false,
 ) {
   const importsOf = new Map<ts.SourceFile, RuntimeImports>();
   const verdicts = new Map<ts.SourceFile, 'registers' | 'open' | 'safe'>();
@@ -5665,6 +5704,7 @@ function moduleSafety(
               clause.namedBindings !== undefined &&
               ts.isNamedImports(clause.namedBindings) &&
               clause.namedBindings.elements.length > 0 &&
+              inlineTypeImportsErased &&
               clause.namedBindings.elements.every((element) => element.isTypeOnly)));
 
         if (!erased && ts.isStringLiteralLike(node.moduleSpecifier)) add(node.moduleSpecifier.text);
@@ -5923,7 +5963,55 @@ function moduleSafety(
     return found;
   };
 
-  const calls: LocalCalls = { callee: localCallee, functionValue: (node) => functionValue(node) };
+  const plain = (node: ts.Expression): boolean => {
+    const expression = skipParens(node);
+
+    if (ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression))
+      return plain(expression.expression);
+
+    if (
+      ts.isStringLiteralLike(expression) ||
+      ts.isNumericLiteral(expression) ||
+      ts.isBigIntLiteral(expression) ||
+      expression.kind === ts.SyntaxKind.TrueKeyword ||
+      expression.kind === ts.SyntaxKind.FalseKeyword ||
+      expression.kind === ts.SyntaxKind.NullKeyword
+    )
+      return true;
+
+    if (ts.isPrefixUnaryExpression(expression)) return plain(expression.operand);
+
+    if (ts.isArrayLiteralExpression(expression)) return expression.elements.every(plain);
+
+    return (
+      ts.isObjectLiteralExpression(expression) &&
+      expression.properties.every(
+        (property) =>
+          ts.isPropertyAssignment(property) &&
+          !ts.isComputedPropertyName(property.name) &&
+          plain(property.initializer),
+      )
+    );
+  };
+  const dataValue = (target: ts.Identifier): boolean => {
+    let symbol = checker.getSymbolAtLocation(target);
+
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    const declarations = symbol?.declarations ?? [];
+
+    return (
+      declarations.length > 0 &&
+      declarations.every(
+        (declaration) =>
+          ts.isVariableDeclaration(declaration) &&
+          local(declaration.getSourceFile()) &&
+          (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 &&
+          declaration.initializer !== undefined &&
+          plain(declaration.initializer),
+      )
+    );
+  };
+  const calls: LocalCalls = { callee: localCallee, functionValue: (node) => functionValue(node), dataValue };
 
   return { imports, closure, verdict, local: calls };
 }
@@ -5934,6 +6022,8 @@ interface LocalCalls {
   callee(call: ts.CallExpression): boolean;
   /** Whether a name passed as an argument is such a function. */
   functionValue(node: ts.Identifier): boolean;
+  /** Whether a name stands for a constant of plain data declared in a local module, whose properties run no code. */
+  dataValue(node: ts.Identifier): boolean;
 }
 
 /** The local files a source names in its imports, re-exports and literal dynamic imports, in source order. */

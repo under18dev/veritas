@@ -482,6 +482,55 @@ describe('full names static analysis cannot read', () => {
     expect(marked('test/passes-inline.test.ts')).toBeUndefined();
   });
 
+  it('opens files that read properties which may run code at collection time', () => {
+    const root = tempProject({
+      'test/data.ts': "export const options = { rows: ['own'] } as const;\n",
+      'test/getter-data.ts': "export const options = { get rows() { return ['own']; } };\n",
+      'test/getter.test.ts':
+        "import { it } from 'vitest';\nconst options = { get rows() { return ['own']; } };\nit.each(options.rows)('%s', () => {});\n",
+      'test/static-getter.test.ts':
+        "import { it } from 'vitest';\nclass Rows { static get all() { return ['own']; } }\nit.each(Rows.all)('%s', () => {});\n",
+      'test/imported-getter.test.ts':
+        "import { it } from 'vitest';\nimport { options } from './getter-data.js';\nit.each(options.rows)('%s', () => {});\n",
+      'test/spread-import.test.ts':
+        "import { it } from 'vitest';\nimport { options } from './getter-data.js';\nit.each([...options.rows])('%s', () => {});\n",
+      'test/plain-data.test.ts':
+        "import { it } from 'vitest';\nimport { options } from './data.js';\nconst local = { rows: [1, 2] } as const;\nit.each(options.rows)('%s', () => {});\nit.each([...local.rows])('n %s', () => {});\n",
+    });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
+    const marked = (file: string) => inventory.files.find((f) => f.path === file)?.inexactNames;
+
+    for (const file of ['getter', 'static-getter', 'imported-getter', 'spread-import'])
+      expect(marked(`test/${file}.test.ts`), file).toBe('open_collection');
+    expect(marked('test/plain-data.test.ts')).toBeUndefined();
+  });
+
+  it('follows inline type-only imports unless the project erases them', () => {
+    const files = {
+      'test/shared-suite.ts':
+        "import { it } from 'vitest';\nexport type Shared = number;\nexport function shared() { it('hidden', () => {}); }\n",
+      'test/uses-type.test.ts':
+        "import { it } from 'vitest';\nimport { type Shared } from './shared-suite.js';\nconst n: Shared = 1;\nit('t', () => { n; });\n",
+    };
+    const marked = (extra: Record<string, string>) =>
+      inventoryTests({
+        recognition: vitest.recognition,
+        root: tempProject({ ...files, ...extra }),
+        config: VeritasConfig.parse({}),
+      }).files.find((f) => f.path === 'test/uses-type.test.ts')?.inexactNames;
+
+    // No tsconfig: whether the import is kept is not known.
+    expect(marked({})).toBe('imported_registrations');
+    expect(marked({ 'tsconfig.json': '{ "compilerOptions": { "verbatimModuleSyntax": true } }' })).toBe(
+      'imported_registrations',
+    );
+    expect(marked({ 'tsconfig.json': '{ "compilerOptions": { "strict": true } }' })).toBeUndefined();
+  });
+
   it('records registrations through aliases and namespace imports, and leaves the file closed', () => {
     const root = tempProject({
       'src/value.ts': 'export const value = (input: number) => input;\n',
