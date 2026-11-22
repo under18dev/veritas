@@ -5225,15 +5225,24 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
     // A mock made here (`vi.fn(impl)`, `vi.spyOn(o, 'm').mockImplementation(impl)`) runs its implementation when
     // what it is given to calls it.
     if (ts.isCallExpression(expression)) {
+      // A spy that replaces nothing (`vi.spyOn(o, 'm')`) calls the original method when called.
+      let replaced = false;
+
       for (let call: ts.Expression = expression; ; ) {
         call = skipParens(call);
 
         if (ts.isCallExpression(call)) {
-          if (
-            DEFERRING.has(accessedMember(skipParens(call.expression)) ?? '') &&
-            !call.arguments.every(passable)
-          )
-            return false;
+          const member = accessedMember(skipParens(call.expression)) ?? '';
+
+          if (DEFERRING.has(member) && !call.arguments.every(passable)) return false;
+
+          if (member !== 'fn' && member !== 'extend' && DEFERRING.has(member)) replaced = true;
+
+          if (member === 'spyOn' && !replaced) {
+            const spied = call.arguments[0];
+
+            if (!spied || !plainRoot(spied)) return false;
+          }
           call = call.expression;
         } else if (ts.isPropertyAccessExpression(call) || ts.isElementAccessExpression(call))
           call = call.expression;

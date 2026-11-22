@@ -241,6 +241,7 @@ describe('full names static analysis cannot read', () => {
       waitForComma: 'vi.waitFor((0, sharedSuite));',
       expectAs: 'expect(sharedSuite as any).toBeDefined();',
       expectMockOf: 'expect(vi.fn(sharedSuite)).not.toThrow();',
+      expectSpyOriginal: "expect(vi.spyOn(helpers, 'run')).not.toThrow();",
       expectMockImplementation: 'expect(vi.fn().mockImplementation(sharedSuite)).not.toThrow();',
       expectSpyImplementation:
         "expect(vi.spyOn(console, 'log').mockImplementation(() => sharedSuite())).not.toThrow();",
@@ -296,6 +297,9 @@ describe('full names static analysis cannot read', () => {
       expectValue: "const n = 1; const row = { a: [1, 'x'] }; expect(n).toBe(1); expect(row).toEqual(row);",
       expectChoice: 'const flag = true; expect(flag ? 1 : 2).toBe(1); expect(() => flag).not.toThrow();',
       expectMockOfInline: 'expect(vi.fn(() => 1)).not.toThrow();',
+      expectSpyOnData: "const plain = { m: 1 }; expect(vi.spyOn(plain, 'm')).toBeDefined();",
+      expectSpyReplaced:
+        "const n = 1; expect(vi.spyOn(console, 'log').mockImplementation(() => n)).toBeDefined();",
       spyOn: "vi.spyOn(console, 'log'); it('s', () => {});",
       expectExtend:
         "expect.extend({ toBeTwo(received: number) { return { pass: received === 2, message: () => 'two' }; } });",
