@@ -236,7 +236,7 @@ describe('writeMutationVitestConfig', () => {
       root: string;
       test: {
         include?: string[];
-        projects?: { root?: string; test: { name?: string; include: string[] } }[];
+        projects?: { root?: string; test: { name?: string; include: string[]; globalSetup?: unknown } }[];
       };
     }>;
 
