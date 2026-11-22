@@ -362,6 +362,13 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     // A focused test registered on a condition may not run, and then the others run: the template stays.
     const conditional = new TestNameIndex([{ ...focused, conditional: true as const }, rows], ' > ');
     expect([focused.id, rows.id]).not.toContain(mutatorTestId(`${FILE}#case 1`, ' > ', conditional));
+    // A test whose options cannot be read (conditional) may be focused: no test of its file counts as unfocused.
+    const unknownOptions = { ...entry([], 'handles empty', []), conditional: true as const };
+    const focusedHandles = entry([], 'handles %s', ['each', 'only']);
+    const withUnknown = new TestNameIndex([unknownOptions, focusedHandles], ' > ');
+    expect([unknownOptions.id, focusedHandles.id]).not.toContain(
+      mutatorTestId(`${FILE}#handles empty`, ' > ', withUnknown),
+    );
     // A focused template next to an unfocused test is credited too.
     const focusedRows = entry([], 'case %s', ['each', 'only']);
     const plain = entry([], 'case 2', []);

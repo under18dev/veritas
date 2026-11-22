@@ -263,13 +263,17 @@ export class TestNameIndex implements TestNameLookup {
     const onlyFiles = new Set(
       tests.filter((test) => test.modifiers?.includes('only')).map((test) => test.file),
     );
-    // Files with a focused test that surely runs: the runner runs only the focused tests of such a file.
+    // Files with a focused test that surely runs: the runner runs only the focused tests of such a file. Not a file
+    // with a test registered on a condition, which includes options static analysis cannot read: that test may be
+    // focused too.
+    const conditionalFiles = new Set(tests.filter((test) => test.conditional).map((test) => test.file));
     const focusedFiles = new Set(
       tests
         .filter(
           (test) =>
             test.modifiers?.includes('only') &&
             !test.conditional &&
+            !conditionalFiles.has(test.file) &&
             !test.modifiers.some((modifier) => modifier === 'skip' || modifier === 'todo'),
         )
         .map((test) => test.file),
