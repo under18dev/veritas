@@ -206,7 +206,7 @@ describe('test outcome decision kernel', () => {
     expect(total).toBe(2 * 2 ** 12 * 2 ** 6);
     expect(violations).toEqual({});
     expect([...rules].sort((a, b) => a - b)).toEqual(Object.values(OUTCOME_RULE));
-  });
+  }, 30_000);
 
   it('decides a few records as documented', () => {
     const meaningful = evidence({

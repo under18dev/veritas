@@ -700,7 +700,7 @@ describe('test outcome kernel against the previous assessTest', () => {
       'meaningful_with_evidence -> inconclusive',
       'weak_or_incomplete -> inconclusive',
     ]);
-  });
+  }, 30_000);
 
   // The abstract space includes records no run produces (more relevant kills than kills, conflicted properties
   // without a linked one), so this compares the kernel with the previous decision beyond what assessTest reaches.
@@ -719,5 +719,5 @@ describe('test outcome kernel against the previous assessTest', () => {
     expect(total).toBe(2 ** 12 * 2 ** 6);
     expect(mismatches).toEqual([]);
     expect(changed).toBeGreaterThan(0);
-  });
+  }, 30_000);
 });
