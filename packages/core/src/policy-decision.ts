@@ -9,8 +9,11 @@ import type { StageStatus, VerificationStatus } from './schema/status.js';
  * within a bounded model:
  * - no runtime imports (type-only imports are fine) and calls only to functions in this file;
  * - parameters and results are numbers, booleans or flat records of numbers and booleans;
- * - only `const`, `if`, the conditional operator, `&&`, `||`, `!`, comparisons and `+`; no `let`, `switch`,
- *   loops, array methods, `??` or `as`.
+ * - inside the kernel functions, only `const`, `if`, the conditional operator, `&&`, `||`, `!` and comparisons;
+ *   no `let`, `switch`, loops, array methods, `??` or `as` (the lookup tables outside the functions may use
+ *   `as const`);
+ * - every count is compared with 0 on its own, never summed first, so that the rules mean the same over a model
+ *   whose integer domain includes negative numbers (a negative count is treated like 0).
  *
  * Enumerations are encoded as small integers where the translator has to read them (rule and verdict codes).
  * Not yet translatable today:
@@ -110,11 +113,11 @@ export function policyRule(c: PolicyCounts): number {
 
   if (c.toolErrors > 0) return 2;
 
-  const inconclusive = c.inconclusiveStages + c.inconclusiveClaims + c.thresholdUndecided;
+  const inconclusive = c.inconclusiveStages > 0 || c.inconclusiveClaims > 0 || c.thresholdUndecided > 0;
 
-  if (inconclusive > 0 && c.failOnInconclusive) return 3;
+  if (inconclusive && c.failOnInconclusive) return 3;
 
-  if (c.confirmedViolations > 0 || c.openFindings > 0 || inconclusive > 0) return 4;
+  if (c.confirmedViolations > 0 || c.openFindings > 0 || inconclusive) return 4;
 
   return 5;
 }
@@ -162,22 +165,22 @@ export function invariant_passMeansNothingOpen(c: PolicyCounts): boolean {
 
   return (
     verdict !== 0 ||
-    (c.confirmedViolations === 0 &&
-      c.toolErrors === 0 &&
-      c.inconclusiveStages === 0 &&
-      c.inconclusiveClaims === 0 &&
-      c.thresholdFailures === 0 &&
-      c.thresholdUndecided === 0 &&
-      c.openFindings === 0)
+    (c.confirmedViolations <= 0 &&
+      c.toolErrors <= 0 &&
+      c.inconclusiveStages <= 0 &&
+      c.inconclusiveClaims <= 0 &&
+      c.thresholdFailures <= 0 &&
+      c.thresholdUndecided <= 0 &&
+      c.openFindings <= 0)
   );
 }
 
 /** An inconclusive stage, claim or threshold is never a clean pass, whatever `inconclusiveBehavior` says. */
 export function invariant_inconclusiveIsNeverPass(c: PolicyCounts): boolean {
   const verdict = verdictOfRule(policyRule(c));
-  const inconclusive = c.inconclusiveStages + c.inconclusiveClaims + c.thresholdUndecided;
+  const inconclusive = c.inconclusiveStages > 0 || c.inconclusiveClaims > 0 || c.thresholdUndecided > 0;
 
-  return inconclusive === 0 || verdict !== 0;
+  return !inconclusive || verdict !== 0;
 }
 
 /** Exit code 0 only for `pass` or `pass_with_warnings`. */
@@ -206,7 +209,7 @@ export function invariant_failuresExitOne(c: PolicyCounts): boolean {
   const exit = exitCodeOfVerdict(verdictOfRule(policyRule(c)));
 
   return (
-    (c.thresholdFailures === 0 && !(c.confirmedViolations > 0 && c.failOnConfirmedViolation)) || exit === 1
+    (c.thresholdFailures <= 0 && !(c.confirmedViolations > 0 && c.failOnConfirmedViolation)) || exit === 1
   );
 }
 
@@ -214,7 +217,7 @@ export function invariant_failuresExitOne(c: PolicyCounts): boolean {
 export function invariant_toolErrorNeverSucceeds(c: PolicyCounts): boolean {
   const exit = exitCodeOfVerdict(verdictOfRule(policyRule(c)));
 
-  return c.toolErrors === 0 || exit !== 0;
+  return c.toolErrors <= 0 || exit !== 0;
 }
 
 /**
@@ -223,9 +226,9 @@ export function invariant_toolErrorNeverSucceeds(c: PolicyCounts): boolean {
  */
 export function invariant_inconclusiveFailExitsFour(c: PolicyCounts): boolean {
   const exit = exitCodeOfVerdict(verdictOfRule(policyRule(c)));
-  const inconclusive = c.inconclusiveStages + c.inconclusiveClaims + c.thresholdUndecided;
+  const inconclusive = c.inconclusiveStages > 0 || c.inconclusiveClaims > 0 || c.thresholdUndecided > 0;
   const precedes =
     c.thresholdFailures > 0 || (c.confirmedViolations > 0 && c.failOnConfirmedViolation) || c.toolErrors > 0;
 
-  return !c.failOnInconclusive || inconclusive === 0 || precedes || exit === 4;
+  return !c.failOnInconclusive || !inconclusive || precedes || exit === 4;
 }

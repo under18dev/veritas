@@ -381,10 +381,11 @@ describe('policy decision kernel', () => {
     expect(() => verdictName(POLICY_VERDICTS.length)).toThrow(/unknown policy verdict/);
   });
 
-  // An exhaustive test over a reduced domain (every count in {0, 1, 2}), not a proof: the kernel only compares
-  // counts with 0, which this test does not check.
+  // An exhaustive test over a reduced domain (every count in {-1, 0, 1, 2}), not a proof: the kernel only
+  // compares counts with 0, which this test does not check. Counts are never negative in a run; -1 is there
+  // because a model whose integer domain includes negative numbers must reach the same conclusions.
   it('holds every invariant over a reduced domain', () => {
-    const counts = [0, 1, 2];
+    const counts = [-1, 0, 1, 2];
     const flags = [false, true];
     const records = product<[number, boolean, number, number, number, number, number, number, boolean]>(
       counts,
@@ -428,7 +429,7 @@ describe('policy decision kernel', () => {
       invariant_toolErrorNeverSucceeds,
       invariant_inconclusiveFailExitsFour,
     };
-    expect(records).toHaveLength(3 ** 7 * 4);
+    expect(records).toHaveLength(4 ** 7 * 4);
 
     for (const [name, holds] of Object.entries(invariants))
       expect(
