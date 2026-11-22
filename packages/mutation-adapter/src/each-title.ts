@@ -71,6 +71,8 @@ export function compileTitleTemplate(template: string): TitleTemplate {
   let placeholders = 0;
   // `%#` and `%$` met so far: Jest replaces only the first of each.
   const indexes = new Set<string>();
+  // Whether the title interpolates `$` keys (see `keyCharacter`).
+  const interpolates = [...template].some((char, k) => char === '$' && keyCharacter(template[k + 1]));
   let styled = false;
   let repeatedIndex = false;
   let appended = false;
@@ -90,7 +92,10 @@ export function compileTitleTemplate(template: string): TitleTemplate {
         if (next === '#' || next === '$') {
           const first = !indexes.has(next);
           indexes.add(next);
-          tokens.push(...(first ? [DIGIT, DIGITS] : [ONE, ANY]));
+          // Jest formats a title with `$` keys and no other placeholder from an object row, which leaves `%$` in
+          // place (`it.each([{ name: 'a' }])('case $name %$')` reports `case a %$`).
+          const literalToo = !first || (next === '$' && interpolates);
+          tokens.push(...(literalToo ? [ONE, ANY] : [DIGIT, DIGITS]));
 
           if (!first) repeatedIndex = true;
 

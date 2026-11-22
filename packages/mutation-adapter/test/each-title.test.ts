@@ -99,6 +99,22 @@ describe('title templates of table-driven tests', () => {
     ).toBe(styled.id);
   });
 
+  it('lets %$ stay as its own text in a title with $ keys, which Jest formats from an object row', () => {
+    // jest-each: `it.each([{ name: 'a' }])('case $name %$')` reports `case a %$`.
+    expect(matches('case $name %$', 'case a %$')).toBe(true);
+    expect(matches('case $name %$', 'case a 1')).toBe(true);
+    // Without $ keys, %$ is the row number.
+    expect(matches('case %s %$', 'case a %$')).toBe(false);
+
+    const file = 'test/a.test.ts';
+    const own = { id: 'T-own', file, suitePath: [], name: 'case $name %$', modifiers: ['each'] };
+    const broad = { id: 'T-broad', file, suitePath: [], name: '%s', modifiers: ['each'] };
+    expect(mutatorTestId(`${file}#case a %$`, ' ', new TestNameIndex([own], ' '), false)).toBe(own.id);
+    expect(mutatorTestId(`${file}#case a %$`, ' ', new TestNameIndex([own, broad], ' '), false)).not.toBe(
+      broad.id,
+    );
+  });
+
   it('reads a second %# or %$ as digits or its own text, since Jest replaces only the first', () => {
     expect(matches('row %# of %#', 'row 0 of %#')).toBe(true);
     expect(matches('row %# of %#', 'row 0 of 0')).toBe(true);
