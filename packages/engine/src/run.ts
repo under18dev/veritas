@@ -759,6 +759,8 @@ async function runInContext(
         cache.set('mutation', cacheKey, result);
 
       if (cached) result.rawReportPath = null;
+      // The earlier stop is worth a word only when it shaped a run that got to mutants, not one that failed before.
+      const reserveApplied = reserve && startedMutants(result);
       // The mutants mutator itself left unrun, before --since relabels others as pending.
       const budgetBefore = result.timeBudgetExhausted?.notRun;
       const unrun = result.mutants.filter((m) => m.status === 'pending').map((m) => m.id);
@@ -807,7 +809,7 @@ async function runInContext(
         usage: { mutants: result.mutants.length },
         messages: [
           ...(cached ? [`mutation results reused from cache ${cacheKey}`] : []),
-          ...(reserve
+          ...(reserveApplied
             ? [
                 `the main run started no new mutant after ${Math.round(MAIN_RUN_BUDGET_SHARE * 100)}% of mutation.timeoutMs (instead of 75%), to leave time for the check of tests static analysis could not link`,
               ]
@@ -1649,6 +1651,20 @@ export function cacheableMutationResult(
  * not parse, and a run that stopped starting mutants because its time budget ran out, `--since` or not: those
  * mutants were selected and not run. A `partial` stage means the run cannot report `pass`.
  */
+/** Whether a mutation run got as far as running mutants: it succeeded and at least one mutant ran to an outcome. */
+export function startedMutants(result: { status: string; mutants: readonly Mutant[] }): boolean {
+  return (
+    result.status === 'succeeded' &&
+    result.mutants.some(
+      (m) =>
+        m.status === 'killed' ||
+        m.status === 'survived' ||
+        m.status === 'timeout' ||
+        m.status === 'runtime_error',
+    )
+  );
+}
+
 export function mutationStageStatus(
   result: {
     status: StageResult['status'] | 'unsupported';

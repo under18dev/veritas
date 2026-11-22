@@ -5,9 +5,24 @@ import {
   literalInput,
   mutationStageStatus,
   outstandingBudget,
+  startedMutants,
 } from '../src/index.js';
 
 const mutant = (status: Mutant['status']) => ({ status }) as Mutant;
+
+describe('startedMutants', () => {
+  it('is true only for a run that got to running mutants', () => {
+    expect(startedMutants({ status: 'succeeded', mutants: [mutant('pending'), mutant('killed')] })).toBe(
+      true,
+    );
+    expect(startedMutants({ status: 'succeeded', mutants: [mutant('survived')] })).toBe(true);
+    // A baseline failure, or a run in which every mutant stayed unrun or uncovered, did not.
+    expect(startedMutants({ status: 'failed', mutants: [] })).toBe(false);
+    expect(startedMutants({ status: 'succeeded', mutants: [mutant('no_coverage'), mutant('pending')] })).toBe(
+      false,
+    );
+  });
+});
 
 describe('mutationStageStatus', () => {
   it('succeeds only when every mutant has a decided result', () => {
