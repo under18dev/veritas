@@ -1,0 +1,115 @@
+{
+  "schemaVersion": "1.0.0",
+  "approvals": [
+    {
+      "id": "A-eec05e01af20",
+      "propertyId": "D-policy.pass-means-nothing-open",
+      "propertyVersion": 1926101356,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented run-policy rules for verdicts and exit codes",
+      "decidedAt": "2026-11-22T08:11:36.279Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-e889cd363f27",
+      "propertyId": "D-policy.inconclusive-is-never-pass",
+      "propertyVersion": 1557312210,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented run-policy rules for verdicts and exit codes",
+      "decidedAt": "2026-11-22T08:11:36.570Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-43f0a8816dec",
+      "propertyId": "D-policy.success-exit-only-when-passing",
+      "propertyVersion": 3692077735,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented run-policy rules for verdicts and exit codes",
+      "decidedAt": "2026-11-22T08:11:36.853Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-de608119441d",
+      "propertyId": "D-policy.exit-code-follows-verdict",
+      "propertyVersion": 3088919646,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented run-policy rules for verdicts and exit codes",
+      "decidedAt": "2026-11-22T08:11:37.161Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-cb8b7b3e572c",
+      "propertyId": "D-policy.failures-exit-one",
+      "propertyVersion": 1664906632,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented run-policy rules for verdicts and exit codes",
+      "decidedAt": "2026-11-22T08:11:37.467Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-fe63c73c2143",
+      "propertyId": "D-policy.tool-error-never-succeeds",
+      "propertyVersion": 281321974,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented run-policy rules for verdicts and exit codes",
+      "decidedAt": "2026-11-22T08:11:37.768Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-95f389136b98",
+      "propertyId": "D-policy.inconclusive-fail-exits-four",
+      "propertyVersion": 1050069360,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented run-policy rules for verdicts and exit codes",
+      "decidedAt": "2026-11-22T08:11:38.068Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-67ede21c3546",
+      "propertyId": "D-policy.exit-one-means-policy-failure",
+      "propertyVersion": 3758673526,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented run-policy rules for verdicts and exit codes",
+      "decidedAt": "2026-11-22T08:11:38.364Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-3347560bbfff",
+      "propertyId": "D-policy.exit-three-means-tool-error",
+      "propertyVersion": 1740518730,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented run-policy rules for verdicts and exit codes",
+      "decidedAt": "2026-11-22T08:11:38.650Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-c01b5fd092eb",
+      "propertyId": "D-policy.exit-four-means-inconclusive-fail",
+      "propertyVersion": 977342983,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented run-policy rules for verdicts and exit codes",
+      "decidedAt": "2026-11-22T08:11:38.938Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-22a10bdbb1d6",
+      "propertyId": "D-policy.open-findings-never-fail",
+      "propertyVersion": 1969944321,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented run-policy rules for verdicts and exit codes",
+      "decidedAt": "2026-11-22T08:11:39.222Z",
+      "sourceIds": []
+    }
+  ]
+}
