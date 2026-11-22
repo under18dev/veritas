@@ -651,6 +651,33 @@ describe('full names static analysis cannot read', () => {
     expect(marked({}, 'test/uses-import-type.test.ts')).toBeUndefined();
   });
 
+  it('records Vitest options it could not read, on the test and inherited from a suite', () => {
+    const root = tempProject({
+      'test/unknown-options.test.ts': `
+        import { describe, it } from 'vitest';
+        const opts = { only: true };
+        it.skip('named', opts, () => {});
+        it.skip('spread', { ...opts }, () => {});
+        it('spread then skip', { ...opts, skip: true }, () => {});
+        describe.skip('D', opts, () => { it('inside', () => {}); });
+        it('literal', { skip: true }, () => {});
+      `,
+    });
+    const tests = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests;
+
+    expect(tests.map((t) => [t.name, t.modifiers, t.optionsUnknown])).toEqual([
+      ['named', ['skip'], true],
+      ['spread', ['skip'], true],
+      ['spread then skip', ['skip'], true],
+      ['inside', ['skip'], true],
+      ['literal', ['skip'], undefined],
+    ]);
+  });
+
   it('reads Vitest test options that set a modifier, and takes other options as conditional', () => {
     const root = tempProject({
       'src/value.ts': 'export const value = (input: number) => input;\n',

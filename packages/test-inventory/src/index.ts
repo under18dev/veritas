@@ -4276,6 +4276,8 @@ function visitTests(
     inexact: TestCaseType['inexactName'],
     conditional: boolean,
     table: number[],
+    // Vitest options of the test or an enclosing suite that could not be read: they may hold `only`.
+    optionsUnknown: boolean,
   ) => {
     if (ts.isCallExpression(node)) {
       const describe = describeRegistration(node);
@@ -4288,8 +4290,17 @@ function visitTests(
           const childModifiers = [...new Set([...currentModifiers, ...describe.modifiers])];
           const childConditional = conditional || conditionalRegistration(node);
           const childTable = describe.modifiers.includes('each') ? [...table, currentSuite.length] : table;
+          const childOptionsUnknown = optionsUnknown || registrationOptions(node).unknown;
           ts.forEachChild(callback, (child) =>
-            walk(child, [...currentSuite, name], childModifiers, inexact, childConditional, childTable),
+            walk(
+              child,
+              [...currentSuite, name],
+              childModifiers,
+              inexact,
+              childConditional,
+              childTable,
+              childOptionsUnknown,
+            ),
           );
 
           return;
@@ -4304,6 +4315,7 @@ function visitTests(
               inexact ?? 'dynamic_suite',
               conditional || conditionalRegistration(node),
               table,
+              optionsUnknown || registrationOptions(node).unknown,
             ),
           );
 
@@ -4324,6 +4336,7 @@ function visitTests(
             inexact,
             conditional || conditionalRegistration(node),
             info.modifiers.includes('each') ? [...table, currentSuite.length] : table,
+            optionsUnknown || registrationOptions(node).unknown,
           ),
         );
 
@@ -4345,10 +4358,10 @@ function visitTests(
           ts.SyntaxKind.QuestionQuestionToken,
         ].includes(node.operatorToken.kind));
     ts.forEachChild(node, (child) =>
-      walk(child, currentSuite, currentModifiers, inner, innerConditional, table),
+      walk(child, currentSuite, currentModifiers, inner, innerConditional, table, optionsUnknown),
     );
   };
-  walk(source, suitePath, inheritedModifiers, undefined, false, []);
+  walk(source, suitePath, inheritedModifiers, undefined, false, [], false);
 }
 
 /**
@@ -5627,6 +5640,7 @@ function analyzeTest(
   inexact?: TestCaseType['inexactName'],
   conditional = false,
   tableTitles: number[] = [],
+  optionsUnknown = false,
 ): TestCaseType {
   const { checker, root } = ctx;
   const source = registrationCall.getSourceFile();
@@ -5803,6 +5817,7 @@ function analyzeTest(
         : { inexactName: inexact }),
     ...(conditional ? { conditional: true as const } : {}),
     ...(tableTitles.length > 0 ? { tableTitles } : {}),
+    ...(optionsUnknown ? { optionsUnknown: true as const } : {}),
   };
 }
 

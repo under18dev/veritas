@@ -79,6 +79,11 @@ export const TestCase = z.object({
    * titles are reported as written. Absent for a test with no such title.
    */
   tableTitles: z.array(z.number().int().nonnegative()).optional(),
+  /**
+   * Vitest options of the test or an enclosing suite could not be read (`it('x', opts, fn)`, `{ ...opts }`): they may
+   * set modifiers, `only` included, which beats `skip`. Absent otherwise.
+   */
+  optionsUnknown: z.literal(true).optional(),
 });
 export type TestCase = z.infer<typeof TestCase>;
 

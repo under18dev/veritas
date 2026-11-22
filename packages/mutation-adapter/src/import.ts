@@ -163,6 +163,8 @@ export interface NamedTest {
    * written. When a table-driven test has none recorded (an older inventory), every title is read as a template.
    */
   tableTitles?: readonly number[];
+  /** Options of the test or an enclosing suite could not be read, so they may focus it. */
+  optionsUnknown?: true;
 }
 
 /** A test file as name resolution needs it: whether it may register tests static analysis did not see. */
@@ -301,7 +303,8 @@ export class TestNameIndex implements TestNameLookup {
       // test that surely runs, unless it may run anyway.
       const skipped =
         ((test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false) &&
-          !focused) ||
+          !focused &&
+          !test.optionsUnknown) ||
         (!uncertain(test) && focusedFiles.has(test.file) && !focused);
 
       if (skipped) this.skipped.add(test.id);
