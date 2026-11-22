@@ -263,6 +263,7 @@ describe('name-int-calls-cases', () => {
     const started = Date.now();
     const strategy = leanProofStrategies(ir).find((s) => s.name === 'name-int-calls-cases');
     expect(strategy?.script).toEqual([]);
+    expect(strategy?.skipReason).toBe('generated script exceeded the 2000-named-result budget');
     expect(Date.now() - started).toBeLessThan(2000);
   });
 

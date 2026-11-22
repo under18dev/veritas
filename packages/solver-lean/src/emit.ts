@@ -245,6 +245,8 @@ export interface LeanStrategy {
   lemmas?: string[];
   /** `set_option ... in` lines placed right before the theorem (only options the project check allows). */
   options?: string[];
+  /** Why the script is empty (generation hit a budget), so the strategy is skipped without running Lean. */
+  readonly skipReason?: string | undefined;
 }
 
 /** Rewrites an equation on an `if` into the two cases, so that `omega` can read what is left of a decision list. */
@@ -448,6 +450,17 @@ function namedIntCallsApplies(ir: PropertyIR): boolean {
   );
 }
 
+/** Generation of the named-calls script stopped at a budget: the strategy is abandoned without an attempt. */
+class ScriptTooLarge extends Error {
+  constructor(budget: string) {
+    super(`generated script exceeded the ${budget} budget`);
+  }
+}
+
+/** At most this many named call results, and this many bytes of script, before the strategy is abandoned. */
+const NAMED_CALLS_MAX_RESULTS = 2_000;
+const NAMED_CALLS_MAX_SCRIPT_BYTES = 1_000_000;
+
 /**
  * Names the result of every call to an integer-valued function (`r_k`, with `hr_k : call = r_k`), unfolds each
  * such function only in its own equation, and inlines the boolean-valued functions. A helper whose result is
@@ -456,13 +469,6 @@ function namedIntCallsApplies(ir: PropertyIR): boolean {
  * boolean parameters are then split one at a time, simplifying after each split so that decided branches close
  * early; what remains is a linear integer problem for `omega`.
  */
-/** Generation of the named-calls script stopped at a budget: the strategy is abandoned without an attempt. */
-class ScriptTooLarge extends Error {}
-
-/** At most this many named call results, and this many bytes of script, before the strategy is abandoned. */
-const NAMED_CALLS_MAX_RESULTS = 2_000;
-const NAMED_CALLS_MAX_SCRIPT_BYTES = 1_000_000;
-
 function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[]): string[] {
   const byName = new Map(ir.functions.map((f) => [f.name, f]));
   const returnsOf = (fn: string) => byName.get(fn)?.returns;
@@ -473,7 +479,8 @@ function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[
   const push = (...more: string[]) => {
     for (const l of more) bytes += l.length + 1;
 
-    if (bytes > NAMED_CALLS_MAX_SCRIPT_BYTES) throw new ScriptTooLarge();
+    if (bytes > NAMED_CALLS_MAX_SCRIPT_BYTES)
+      throw new ScriptTooLarge(`${NAMED_CALLS_MAX_SCRIPT_BYTES}-byte size`);
     lines.push(...more);
   };
   const named = new Map<string, { h: string; ref: Expr }>();
@@ -484,7 +491,7 @@ function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[
   const defs: { r: string; name: string; def: string; reduced: Expr }[] = [];
 
   const inlineBool = (expr: Expr): Expr => {
-    if (++work > NAMED_CALLS_MAX_TERM * 10) throw new ScriptTooLarge();
+    if (++work > NAMED_CALLS_MAX_TERM * 10) throw new ScriptTooLarge('helper inlining work');
     const e = mapExpr(expr, inlineBool);
 
     if (e.kind !== 'call' || returnsOf(e.fn) !== 'bool') return e;
@@ -503,7 +510,8 @@ function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[
     let entry = named.get(key);
 
     if (!entry) {
-      if (named.size >= NAMED_CALLS_MAX_RESULTS) throw new ScriptTooLarge();
+      if (named.size >= NAMED_CALLS_MAX_RESULTS)
+        throw new ScriptTooLarge(`${NAMED_CALLS_MAX_RESULTS}-named-result`);
       const k = named.size;
       const name = `r$${k}`;
       const r = varName(name);
@@ -600,21 +608,31 @@ function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[
 function namedIntCallsStrategy(ir: PropertyIR, introLine: string[], bools: string[]): LeanStrategy | null {
   if (!namedIntCallsApplies(ir)) return null;
   let script: string[] | undefined;
+  let skipReason: string | undefined;
+  const generate = (): string[] => {
+    if (script === undefined) {
+      try {
+        script = namedIntCallsScript(ir, introLine, bools);
+      } catch (error) {
+        if (!(error instanceof ScriptTooLarge)) throw error;
+        script = [];
+        skipReason = error.message;
+      }
+    }
+
+    return script;
+  };
 
   return {
     name: 'name-int-calls-cases',
     // Empty when generation hits a budget; `proveWithLean` then skips the strategy without running Lean.
     get script() {
-      if (script === undefined) {
-        try {
-          script = namedIntCallsScript(ir, introLine, bools);
-        } catch (error) {
-          if (!(error instanceof ScriptTooLarge)) throw error;
-          script = [];
-        }
-      }
+      return generate();
+    },
+    get skipReason() {
+      generate();
 
-      return script;
+      return skipReason;
     },
     lemmas: ITE_EQ_LEMMA,
     options: [`set_option maxHeartbeats ${NAMED_CALLS_HEARTBEATS} in`],
