@@ -110,6 +110,166 @@
       "reason": "reviewed: matches the documented run-policy rules for verdicts and exit codes",
       "decidedAt": "2026-11-22T08:11:39.222Z",
       "sourceIds": []
+    },
+    {
+      "id": "A-55f5cb804c36",
+      "propertyId": "D-assessment.meaningful-needs-evidence",
+      "propertyVersion": 3211497211,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:10.555Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-e1e2e5ef6900",
+      "propertyId": "D-assessment.reachable-by-name-never-meaningful",
+      "propertyVersion": 1899242911,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:10.860Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-568ab71b90a3",
+      "propertyId": "D-assessment.reachable-by-name-without-asserted-call-is-inconclusive",
+      "propertyVersion": 981315216,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:11.172Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-3b4366125332",
+      "propertyId": "D-assessment.killed-is-not-tautological",
+      "propertyVersion": 94845195,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:11.517Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-523667007602",
+      "propertyId": "D-assessment.asserts-nothing-is-tautological",
+      "propertyVersion": 2195457190,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:11.826Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-bd9c0fd21d0f",
+      "propertyId": "D-assessment.expected-failure-is-inconclusive",
+      "propertyVersion": 1442701529,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:12.128Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-960315f8f57a",
+      "propertyId": "D-assessment.type-level-only-is-inconclusive",
+      "propertyVersion": 4232003250,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:12.435Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-ba7e5b957cf4",
+      "propertyId": "D-assessment.skipped-never-meaningful",
+      "propertyVersion": 3784669859,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:12.741Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-fbb8ba1934e1",
+      "propertyId": "D-assessment.killed-without-link-is-inconclusive",
+      "propertyVersion": 107897297,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:13.048Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-e71f34bbe3b6",
+      "propertyId": "D-assessment.no-mutation-never-meaningful",
+      "propertyVersion": 1149660735,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:13.351Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-383bb06c6889",
+      "propertyId": "D-assessment.outcome-in-range",
+      "propertyVersion": 2911331108,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:13.656Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-b9844927fdff",
+      "propertyId": "D-assessment.spec-conflict-needs-conflict",
+      "propertyVersion": 3494855778,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:13.964Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-ae6169e7121a",
+      "propertyId": "D-assessment.weak-needs-gap",
+      "propertyVersion": 748971569,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:14.266Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-148bf992ccc0",
+      "propertyId": "D-assessment.tautological-needs-static-finding",
+      "propertyVersion": 5446768,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:14.567Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-3e5ed5441114",
+      "propertyId": "D-assessment.unknown-link-without-asserted-call-is-inconclusive",
+      "propertyVersion": 1400917293,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:14.869Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-880c840c26fe",
+      "propertyId": "D-assessment.skipped-ignores-mutation-results",
+      "propertyVersion": 1202368529,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "reviewed: matches the documented test-outcome rules",
+      "decidedAt": "2026-11-22T13:14:15.175Z",
+      "sourceIds": []
     }
   ]
 }
