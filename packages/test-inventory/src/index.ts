@@ -139,14 +139,19 @@ export function inventoryTests(options: {
   files?: string[];
 }): TestInventory {
   const previous = runner;
+  const previousChecker = runnerChecker;
   runner = runnerApi(options.recognition);
 
   try {
     return inventory(options);
   } finally {
     runner = previous;
+    runnerChecker = previousChecker;
   }
 }
+
+/** The type checker of the inventory running, for `runnerName` to follow names imported from local modules. */
+let runnerChecker: ts.TypeChecker | undefined;
 
 function inventory(options: { root: string; config: VeritasConfig; files?: string[] }): TestInventory {
   const root = path.resolve(options.root);
@@ -166,6 +171,7 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
   const compilerOptions = readCompilerOptions(root, options.config);
   const program = ts.createProgram([...projectFiles, ...uniqueFiles], compilerOptions);
   const checker = program.getTypeChecker();
+  runnerChecker = checker;
   const sourceFiles = new Map<string, ts.SourceFile>();
 
   for (const sourceFile of program.getSourceFiles())
@@ -5740,8 +5746,12 @@ function runnerName(identifier: ts.Identifier): string {
   if (!aliases) {
     aliases = new Map();
 
-    // A name the file binds itself, or imports from elsewhere, is not the runner's even when it has a runner name
-    // (`import { beforeEach } from './support.js'`, `function it() {}`); ambient declarations bind nothing.
+    // A name the file binds itself, or imports from elsewhere, is the runner's only when it stands for the runner's
+    // API (`export const test = base.extend(…)`, `export { it } from 'vitest'`), followed lazily in `bindings`; a
+    // function of its own (`export function beforeEach() {}`) is not. Ambient declarations bind nothing.
+    const bindings = new Map<string, ts.Identifier>();
+    runnerBindings.set(source, bindings);
+
     for (const statement of source.statements) {
       if (
         ts.isImportDeclaration(statement) &&
@@ -5753,13 +5763,13 @@ function runnerName(identifier: ts.Identifier): string {
       ) {
         const clause = statement.importClause;
 
-        if (clause.name) aliases.set(clause.name.text, NOT_RUNNER);
+        if (clause.name) bindings.set(clause.name.text, clause.name);
 
         if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings))
           aliases.set(clause.namedBindings.name.text, NOT_RUNNER);
         else if (clause.namedBindings)
           for (const element of clause.namedBindings.elements)
-            if (!element.isTypeOnly) aliases.set(element.name.text, NOT_RUNNER);
+            if (!element.isTypeOnly) bindings.set(element.name.text, element.name);
       } else if (
         (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
         statement.name &&
@@ -5771,7 +5781,7 @@ function runnerName(identifier: ts.Identifier): string {
         !statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword)
       ) {
         const bind = (name: ts.BindingName): void => {
-          if (ts.isIdentifier(name)) aliases?.set(name.text, NOT_RUNNER);
+          if (ts.isIdentifier(name)) bindings.set(name.text, name);
           else for (const element of name.elements) if (!ts.isOmittedExpression(element)) bind(element.name);
         };
 
@@ -5797,7 +5807,139 @@ function runnerName(identifier: ts.Identifier): string {
     runnerAliases.set(source, aliases);
   }
 
-  return aliases.get(identifier.text) ?? identifier.text;
+  const known = aliases.get(identifier.text);
+
+  if (known !== undefined) return known;
+  const binding = runnerBindings.get(source)?.get(identifier.text);
+
+  if (binding === undefined) return identifier.text;
+  const resolved = resolveBinding(binding);
+  aliases.set(identifier.text, resolved);
+
+  return resolved;
+}
+
+const runnerBindings = new WeakMap<ts.SourceFile, Map<string, ts.Identifier>>();
+/** Bindings being followed, so that names bound to each other in a cycle end. */
+const resolvingBindings = new Set<ts.Identifier>();
+/** Declaration files of the runner's packages. */
+const RUNNER_PACKAGE = /[\\/]node_modules[\\/](?:vitest|@vitest[\\/]|@jest[\\/]|@types[\\/]jest|jest)/;
+
+/**
+ * The runner export a name bound in a file stands for, or `NOT_RUNNER`: an import from a local module is followed
+ * to what it is there, a constant to its value (`base.extend(…)` and other `.extend` chains of a registration
+ * function, or another name), and a re-export of the runner's module to the export it names.
+ */
+function resolveBinding(name: ts.Identifier): string {
+  if (resolvingBindings.has(name)) return NOT_RUNNER;
+  resolvingBindings.add(name);
+
+  try {
+    const parent = name.parent;
+
+    if (ts.isVariableDeclaration(parent)) return resolveDeclaration(parent);
+
+    if (!ts.isImportSpecifier(parent) && !ts.isImportClause(parent)) return NOT_RUNNER;
+    const exported = ts.isImportSpecifier(parent) ? (parent.propertyName ?? parent.name).text : 'default';
+    const symbol = runnerChecker?.getSymbolAtLocation(name);
+    let target: ts.Symbol | undefined;
+
+    try {
+      target =
+        symbol && symbol.flags & ts.SymbolFlags.Alias ? runnerChecker?.getAliasedSymbol(symbol) : symbol;
+    } catch {
+      target = undefined;
+    }
+    const declaration = target?.declarations?.[0];
+
+    if (declaration) {
+      const file = declaration.getSourceFile();
+
+      if (file.isDeclarationFile || file.fileName.split(/[\\/]/).includes('node_modules'))
+        return RUNNER_PACKAGE.test(file.fileName) ? (target?.name ?? NOT_RUNNER) : NOT_RUNNER;
+
+      return resolveDeclaration(declaration);
+    }
+    // The checker could not follow it (the runner's types are not installed): a local module that re-exports the
+    // runner's module hands out the runner's name.
+    let importDeclaration: ts.Node = parent;
+
+    while (!ts.isImportDeclaration(importDeclaration) && importDeclaration.parent)
+      importDeclaration = importDeclaration.parent;
+    const moduleSymbol = ts.isImportDeclaration(importDeclaration)
+      ? runnerChecker?.getSymbolAtLocation(importDeclaration.moduleSpecifier)
+      : undefined;
+    const moduleFile = moduleSymbol?.valueDeclaration;
+
+    if (!moduleFile || !ts.isSourceFile(moduleFile)) return NOT_RUNNER;
+
+    for (const statement of moduleFile.statements)
+      if (
+        ts.isExportDeclaration(statement) &&
+        !statement.isTypeOnly &&
+        statement.moduleSpecifier &&
+        ts.isStringLiteral(statement.moduleSpecifier) &&
+        runner.modules.has(statement.moduleSpecifier.text)
+      ) {
+        const clause = statement.exportClause;
+
+        if (!clause) return exported;
+
+        if (ts.isNamedExports(clause))
+          for (const element of clause.elements)
+            if (element.name.text === exported) return (element.propertyName ?? element.name).text;
+      }
+
+    return NOT_RUNNER;
+  } finally {
+    resolvingBindings.delete(name);
+  }
+}
+
+/** What a declaration a name resolves to stands for (see `resolveBinding`). */
+function resolveDeclaration(declaration: ts.Declaration): string {
+  if (ts.isExportSpecifier(declaration)) {
+    const exportDeclaration = declaration.parent.parent;
+    const local = declaration.propertyName ?? declaration.name;
+
+    if (exportDeclaration.moduleSpecifier && ts.isStringLiteral(exportDeclaration.moduleSpecifier))
+      return runner.modules.has(exportDeclaration.moduleSpecifier.text) && ts.isIdentifier(local)
+        ? local.text
+        : NOT_RUNNER;
+
+    return ts.isIdentifier(local) ? runnerName(local) : NOT_RUNNER;
+  }
+
+  if (ts.isImportSpecifier(declaration))
+    return ts.isStringLiteral(declaration.parent.parent.parent.moduleSpecifier) &&
+      runner.modules.has(declaration.parent.parent.parent.moduleSpecifier.text)
+      ? (declaration.propertyName ?? declaration.name).text
+      : resolveBinding(declaration.name);
+
+  if (
+    !ts.isVariableDeclaration(declaration) ||
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0 ||
+    !declaration.initializer
+  )
+    return NOT_RUNNER;
+  let value = skipParens(declaration.initializer);
+
+  // `base.extend({ … })`, `base.extend(…).extend(…)`: a registration function with fixtures.
+  while (
+    ts.isCallExpression(value) &&
+    ts.isPropertyAccessExpression(skipParens(value.expression)) &&
+    (skipParens(value.expression) as ts.PropertyAccessExpression).name.text === 'extend'
+  )
+    value = skipParens((skipParens(value.expression) as ts.PropertyAccessExpression).expression);
+
+  if (!ts.isIdentifier(value)) return NOT_RUNNER;
+  const resolved = runnerName(value);
+
+  // A plain alias (`const it = vit`) stands for whatever its value is; an `.extend` chain only for a test or suite
+  // registration function.
+  if (value === skipParens(declaration.initializer)) return resolved;
+
+  return runner.tests.has(resolved) || runner.suites.has(resolved) ? resolved : NOT_RUNNER;
 }
 
 /** What `runnerName` returns for a name the file binds to something other than the runner's API. */
@@ -5836,7 +5978,8 @@ function registration(node: ts.CallExpression, names: Set<string>): TestCaseType
   if (resolved === undefined) return undefined;
   const { name, chain } = resolved;
 
-  if (!names.has(name)) return undefined;
+  // `test.extend({ … })` makes a registration function with fixtures; it registers nothing itself.
+  if (!names.has(name) || chain.includes('extend')) return undefined;
   const found = chain.filter((member): member is TestCaseType['modifiers'][number] =>
     runner.modifiers.has(member),
   );

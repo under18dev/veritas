@@ -766,6 +766,39 @@ describe('full names static analysis cannot read', () => {
     ]);
   });
 
+  it('records tests registered through a local module that hands out the runner API', () => {
+    const root = tempProject({
+      'test/fixtures.ts':
+        "import { test as base } from 'vitest';\nexport const test = base.extend({ n: async ({}, use) => use(1) });\nexport { expect } from 'vitest';\n",
+      'test/a.test.ts':
+        "import { test, expect } from './fixtures.js';\nimport { describe } from 'vitest';\ndescribe('S', () => { test('uses fixture', () => { expect(1).toBe(1); }); });\ntest('top', () => {});\n",
+      'test/wrap.ts': "import { it as vit } from 'vitest';\nexport const it = vit;\n",
+      'test/b.test.ts': "import { it } from './wrap.js';\nit('wrapped', () => {});\n",
+      'test/support.ts':
+        "import { pkgRun } from 'external-test-package';\nexport function beforeEach(fn: () => void) { pkgRun(); fn(); }\n",
+      'test/c.test.ts':
+        "import { it } from 'vitest';\nimport { beforeEach } from './support.js';\nbeforeEach(() => {});\nit('c', () => {});\n",
+    });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
+    const marked = (file: string) => inventory.files.find((f) => f.path === file)?.inexactNames;
+
+    expect(inventory.tests.map((t) => [t.file, [...t.suitePath, t.name].join(' > ')])).toEqual([
+      ['test/a.test.ts', 'S > uses fixture'],
+      ['test/a.test.ts', 'top'],
+      ['test/b.test.ts', 'wrapped'],
+      ['test/c.test.ts', 'c'],
+    ]);
+    // The modules hand out the runner's API as a value, which is not followed: the files are not closed.
+    expect(marked('test/a.test.ts')).toBe('imported_open_module');
+    expect(marked('test/b.test.ts')).toBe('imported_open_module');
+    // A support function with a hook's name is an ordinary function, which reaches a package.
+    expect(marked('test/c.test.ts')).toBe('open_collection');
+  });
+
   it('records registrations through aliases and namespace imports, and leaves the file closed', () => {
     const root = tempProject({
       'src/value.ts': 'export const value = (input: number) => input;\n',
