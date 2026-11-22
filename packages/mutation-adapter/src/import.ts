@@ -273,6 +273,8 @@ export class TestNameIndex implements TestNameLookup {
           (test) =>
             test.modifiers?.includes('only') &&
             !test.conditional &&
+            // Registered at collection level: a `.only` inside a function runs only if the function is called.
+            test.inexactName === undefined &&
             !conditionalFiles.has(test.file) &&
             !test.modifiers.some((modifier) => modifier === 'skip' || modifier === 'todo'),
         )
@@ -322,7 +324,10 @@ export class TestNameIndex implements TestNameLookup {
    * a name with mutator's duplicate suffix shows that its unnumbered name belongs to more than one test of the run.
    */
   observe(names: Iterable<string>): void {
-    for (const name of names) {
+    for (const reported of names) {
+      // The file part as `mutatorTestId` reads it (`test\\a.test.ts` is `test/a.test.ts`).
+      const { file, full } = mutatorTestName(reported, false);
+      const name = `${file}#${full}`;
       this.observed.add(name);
       const base = withoutDuplicateSuffix(name);
 

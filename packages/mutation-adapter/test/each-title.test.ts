@@ -377,6 +377,26 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     );
   });
 
+  it('takes a .only registered inside a function as no guarantee of focus', () => {
+    const inFunction = { ...entry([], 'never', ['only']), inexactName: 'registered_in_function' as const };
+    const works = entry([], 'works', []);
+
+    expect(mutatorTestId(`${FILE}#works`, ' > ', new TestNameIndex([inFunction, works], ' > '))).toBe(
+      works.id,
+    );
+  });
+
+  it('reads backslashes in the file part of reported names as mutatorTestId does', () => {
+    const rows = entry([], 'case %s');
+    const literal = entry([], 'case 1', []);
+    const index = new TestNameIndex([rows, literal], ' > ');
+    const windows = FILE.replaceAll('/', '\\');
+    index.observe([`${windows}#case 1`, `${windows}#case 1#2`]);
+
+    expect([rows.id, literal.id]).not.toContain(mutatorTestId(`${windows}#case 1#2`, ' > ', index));
+    expect(index.withheld.get(`${FILE}#case 1#2`)).toEqual({ kind: 'exact_and_template' });
+  });
+
   it('credits an empty row value to its template', () => {
     const empty = entry([], 'rejects <%s>');
     const index = new TestNameIndex([empty], ' > ');
