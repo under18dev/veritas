@@ -160,6 +160,56 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect(mutatorTestId(`${FILE}#case 2`, ' > ', index)).toBe(template.id);
   });
 
+  it('credits an exact name next to a broad template whose placeholders would have to span titles (Vitest)', () => {
+    const broad = entry([], '$name');
+    const bare = entry([], '%s');
+    const literal = entry(['threshold'], 'is free at 5000', []);
+    const index = new TestNameIndex([broad, bare, literal], ' > ');
+    index.observe([`${FILE}#small order`, `${FILE}#threshold > is free at 5000`]);
+
+    expect(mutatorTestId(`${FILE}#[main] threshold > is free at 5000`, ' > ', index)).toBe(literal.id);
+    expect(index.withheld.size).toBe(0);
+  });
+
+  it('credits no test with an exact name a broad template may share', () => {
+    const broad = entry([], '$name');
+    const literal = entry(['threshold'], 'is free at 5000', []);
+    const name = `${FILE}#threshold > is free at 5000`;
+
+    // mutator reported the name twice.
+    const twice = new TestNameIndex([broad, literal], ' > ');
+    twice.observe([name, `${name}#2`]);
+    expect(mutatorTestId(name, ' > ', twice)).not.toBe(literal.id);
+    expect(twice.withheld.get(name)).toEqual({ kind: 'exact_and_template' });
+
+    // The exact test may not have run.
+    for (const exact of [
+      { ...literal, modifiers: ['skip'] },
+      { ...literal, conditional: true as const },
+    ]) {
+      const index = new TestNameIndex([broad, exact], ' > ');
+      expect(mutatorTestId(name, ' > ', index)).not.toBe(literal.id);
+    }
+    const only = new TestNameIndex([broad, literal, entry([], 'focused', ['only'])], ' > ');
+    expect(mutatorTestId(name, ' > ', only)).not.toBe(literal.id);
+
+    // Jest joins titles with a space, so a placeholder may stand for any of them.
+    const jest = new TestNameIndex([broad, literal], ' ');
+    expect(mutatorTestId(`${FILE}#threshold is free at 5000`, ' ', jest, false)).not.toBe(literal.id);
+    expect(jest.withheld.get(`${FILE}#threshold is free at 5000`)).toEqual({ kind: 'exact_and_template' });
+  });
+
+  it('matches no template in a file that calls a function which may register tests', () => {
+    const each = entry([], '$name');
+    const index = new TestNameIndex([each], ' > ', [{ path: FILE, inexactNames: 'registered_by_call' }]);
+
+    expect(mutatorTestId(`${FILE}#is free at 5000`, ' > ', index)).not.toBe(each.id);
+    expect(index.withheld.get(`${FILE}#is free at 5000`)).toEqual({
+      kind: 'inexact_file',
+      because: 'registered_by_call',
+    });
+  });
+
   it("credits an exact name when no other test's template fits it", () => {
     const literal = entry(['suite'], 'handles null', []);
     const template = entry(['other'], 'handles %s');

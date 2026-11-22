@@ -149,7 +149,18 @@ export interface NamedTest {
   modifiers?: readonly string[];
   granularity?: 'test' | 'suite';
   inexactName?: 'dynamic_title' | 'dynamic_suite' | 'registered_in_function';
+  /** The test is registered on a condition, so it may not have run. */
+  conditional?: true;
 }
+
+/** A test file as name resolution needs it: whether it may register tests static analysis did not see. */
+export interface NamedTestFile {
+  path: string;
+  inexactNames?: 'registered_by_call';
+}
+
+/** Why static analysis could not read the full name of every test a file runs. */
+export type InexactReason = NonNullable<NamedTest['inexactName'] | NamedTestFile['inexactNames']>;
 
 /**
  * The lookup `mutatorTestId` resolves names with: each test's id by `<file>#<full name>`, the full name joined with
@@ -174,7 +185,7 @@ export function testIdsByFullName(
 export type WithheldReason =
   | { kind: 'templates' }
   | { kind: 'exact_and_template' }
-  | { kind: 'inexact_file'; because: NonNullable<NamedTest['inexactName']> };
+  | { kind: 'inexact_file'; because: InexactReason };
 
 /** mutator's suffix for the second and later tests of a run with one full name (`case 1#2`). */
 const DUPLICATE = /^(.*)#([2-9]|[1-9]\d+)$/s;
@@ -187,49 +198,84 @@ function withoutDuplicateSuffix(key: string): string | undefined {
   return match ? `${key.slice(0, hash)}#${match[1]}` : undefined;
 }
 
+/** One title of a full name: a template, or the literal title when it has no placeholder. */
+type Segment = TitleTemplate | string;
+
 /**
  * Test ids by full name (as `testIdsByFullName`), plus the templates of table-driven tests: a test with the `each`
  * modifier (its own `.each`/`.for`, or an enclosing `describe.each`) whose full name has placeholders matches the
  * names the runner formats from it, in the same file.
  *
  * A kill is never credited to a test other than the one the runner named, so a name is credited to no test (null)
- * and kept in `withheld` with the reason when it may belong to more than one: when it fits the templates of two
- * tests; when one test has it exactly and it also fits the template of another (`case 1` and `case %s`); and when it
- * fits a template in a file where static analysis could not read the full name of some test (a title or a suite
- * title that is not a literal, or a test registered inside a function), since the runner may have named that test.
+ * and kept in `withheld` with the reason when it may belong to more than one:
+ * - it fits the templates of two tests;
+ * - one test has it exactly and another test may have run under it too (`exact_and_template`): the name fits that
+ *   test's template and mutator reported it more than once, the exact test may not have run (skipped, a todo,
+ *   registered on a condition, or next to a `.only` in its file), or the template fits it title by title. Vitest
+ *   joins titles with ` > `, so a template's placeholders are kept within one title for this; with any other
+ *   separator (Jest's space) titles cannot be told apart, and any fit counts;
+ * - it fits a template, or mutator reported it more than once, in a file where static analysis could not read the
+ *   full name of every test (a title or suite title that is not a literal, a test registered inside a function, or a
+ *   call that may register tests, see `NamedTestFile`), since the runner may have named such a test.
  *
  * mutator numbers the second and later tests that share a full name (`case 1#2`; see `observe`). Such a name is
- * resolved through the name it shares as well, and in a file where static analysis could not read every full name
- * it is credited to no test even when one test has it exactly, since the other test of that name may be one whose
- * name was not read.
+ * resolved through the name it shares as well.
  */
 export class TestNameIndex implements TestNameLookup {
   private readonly exact: Map<string, string | null>;
-  private readonly templates = new Map<string, { id: string; template: TitleTemplate }[]>();
-  /** Files with a test whose full name is not known exactly, and why (the first such test). */
-  private readonly inexact = new Map<string, NonNullable<NamedTest['inexactName']>>();
+  private readonly templates = new Map<
+    string,
+    { id: string; template: TitleTemplate; segments: Segment[] }[]
+  >();
+  /** Files whose tests static analysis could not all name exactly, and why (the first reason found). */
+  private readonly inexact = new Map<string, InexactReason>();
+  /** Tests that may not have run: skipped, todo, conditional, or without `.only` in a file that has one. */
+  private readonly mayNotRun = new Set<string>();
   /** Names (`<file>#<full name>`) more than one test of the run had, by mutator's numbered copies of them. */
   private readonly duplicated = new Set<string>();
   private readonly resolved = new Map<string, string | null | undefined>();
   /** Names (`<file>#<full name>`, as the runner reports them) credited to no test, and why. */
   readonly withheld = new Map<string, WithheldReason>();
 
-  constructor(tests: readonly NamedTest[], separator: string) {
+  constructor(
+    tests: readonly NamedTest[],
+    private readonly separator: string,
+    files: readonly NamedTestFile[] = [],
+  ) {
     this.exact = testIdsByFullName(tests, separator);
+    const onlyFiles = new Set(
+      tests.filter((test) => test.modifiers?.includes('only')).map((test) => test.file),
+    );
 
     for (const test of tests) {
       const inexact = test.inexactName ?? (test.granularity === 'suite' ? 'dynamic_title' : undefined);
 
       if (inexact !== undefined && !this.inexact.has(test.file)) this.inexact.set(test.file, inexact);
 
+      if (
+        test.conditional ||
+        test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ||
+        (onlyFiles.has(test.file) && !test.modifiers?.includes('only'))
+      )
+        this.mayNotRun.add(test.id);
+
       if (!test.modifiers?.includes('each')) continue;
-      const template = compileTitleTemplate([...test.suitePath, test.name].join(separator));
+      const titles = [...test.suitePath, test.name];
+      const template = compileTitleTemplate(titles.join(separator));
 
       if (template === undefined) continue;
       const list = this.templates.get(test.file) ?? [];
-      list.push({ id: test.id, template });
+      list.push({
+        id: test.id,
+        template,
+        segments: titles.map((title) => compileTitleTemplate(title) ?? title),
+      });
       this.templates.set(test.file, list);
     }
+
+    for (const file of files)
+      if (file.inexactNames !== undefined && !this.inexact.has(file.path))
+        this.inexact.set(file.path, file.inexactNames);
   }
 
   /**
@@ -262,18 +308,35 @@ export class TestNameIndex implements TestNameLookup {
     return keys.map((key) => this.exact.get(key)).find((id) => id !== undefined);
   }
 
-  private fitting(keys: readonly string[], into: Set<string>): void {
+  /** The tests whose templates fit a name; with `byTitle`, only those that fit it title by title. */
+  private fitting(keys: readonly string[], into: Set<string>, byTitle = false): void {
     for (const key of keys) {
       const hash = key.indexOf('#');
       const full = key.slice(hash + 1);
+      const titles = byTitle ? full.split(this.separator) : [];
 
-      for (const { id, template } of this.templates.get(hash < 0 ? '' : key.slice(0, hash)) ?? [])
-        if (matchesTitleTemplate(template, full)) into.add(id);
+      for (const { id, template, segments } of this.templates.get(hash < 0 ? '' : key.slice(0, hash)) ?? []) {
+        if (!byTitle) {
+          if (matchesTitleTemplate(template, full)) into.add(id);
+          continue;
+        }
+
+        if (
+          titles.length === segments.length &&
+          segments.every((segment, k) =>
+            typeof segment === 'string'
+              ? segment === titles[k]
+              : matchesTitleTemplate(segment, titles[k] ?? ''),
+          )
+        )
+          into.add(id);
+      }
     }
   }
 
   private decide(keys: readonly string[]): string | null | undefined {
     const name = keys[0] ?? '';
+    let lookup = keys;
     let exact = this.exactOf(keys);
     const candidates = new Set<string>();
     this.fitting(keys, candidates);
@@ -288,31 +351,39 @@ export class TestNameIndex implements TestNameLookup {
         exact = this.exactOf(bases);
         this.fitting(bases, viaBase);
         duplicate = exact !== undefined || viaBase.size > 0;
+        lookup = bases;
 
         for (const id of viaBase) candidates.add(id);
       }
     }
 
     if (exact === null) return null;
-
-    if (exact !== undefined) candidates.add(exact);
-
-    if (candidates.size === 0) return undefined;
     const hash = name.indexOf('#');
     const because = this.inexact.get(hash < 0 ? '' : name.slice(0, hash));
     let reason: WithheldReason | undefined;
 
-    if (candidates.size > 1)
-      reason =
-        exact !== undefined
-          ? { kind: 'exact_and_template' }
-          : because !== undefined
-            ? { kind: 'inexact_file', because }
-            : { kind: 'templates' };
-    else if (because !== undefined && (exact === undefined || duplicate))
-      reason = { kind: 'inexact_file', because };
+    if (exact !== undefined) {
+      candidates.delete(exact);
+      let shared = candidates.size > 0 && (duplicate || this.mayNotRun.has(exact));
 
-    if (reason === undefined) return [...candidates][0];
+      if (candidates.size > 0 && !shared) {
+        if (this.separator !== ' > ') shared = true;
+        else {
+          const byTitle = new Set<string>();
+          this.fitting(lookup, byTitle, true);
+          byTitle.delete(exact);
+          shared = byTitle.size > 0;
+        }
+      }
+
+      if (shared) reason = { kind: 'exact_and_template' };
+      else if (because !== undefined && duplicate) reason = { kind: 'inexact_file', because };
+      else return exact;
+    } else if (candidates.size === 0) return undefined;
+    else if (because !== undefined) reason = { kind: 'inexact_file', because };
+    else if (candidates.size > 1) reason = { kind: 'templates' };
+    else return [...candidates][0];
+
     this.withheld.set(name, reason);
 
     return null;

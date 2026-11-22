@@ -456,6 +456,7 @@ async function runInContext(
         killMatrix: true,
         mutantsPerLine: CONFIRMATION_MUTANTS_PER_LINE,
         tests: inventory.tests,
+        testFileInfo: inventory.files,
       }));
 
     if (!cached && cache && cacheKey && cacheableMutationResult(run)) cache.set('mutation', cacheKey, run);
@@ -751,7 +752,7 @@ async function runInContext(
           ...(options.scope ? { scope: options.scope } : {}),
           ...(options.killMatrix ? { killMatrix: true } : {}),
           ...(testFiles ? { testFiles } : {}),
-          ...(inventory ? { tests: inventory.tests } : {}),
+          ...(inventory ? { tests: inventory.tests, testFileInfo: inventory.files } : {}),
         }));
 
       // Only a complete mutation run is reused; a failed or unsupported one, or one that left files out, is run again.

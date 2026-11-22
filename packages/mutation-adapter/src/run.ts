@@ -24,7 +24,13 @@ import {
   transformErrorLine,
   withoutDebug,
 } from './diagnose.js';
-import { importMutationReport, type NamedTest, TestNameIndex, type WithheldReason } from './import.js';
+import {
+  importMutationReport,
+  type NamedTest,
+  type NamedTestFile,
+  TestNameIndex,
+  type WithheldReason,
+} from './import.js';
 import { countMutants, emptyCounts, type MutationRunResult, type MutationRunStatus } from './schema.js';
 
 export interface RunMutationOptions {
@@ -73,12 +79,15 @@ export interface RunMutationOptions {
    * full-name separator.
    */
   tests?: readonly NamedTest[];
+  /** The inventoried test files, for those that may register tests static analysis did not see. */
+  testFileInfo?: readonly NamedTestFile[];
 }
 
 const INEXACT_BECAUSE: Record<Extract<WithheldReason, { kind: 'inexact_file' }>['because'], string> = {
   dynamic_title: 'a test title that is not a literal',
   dynamic_suite: 'a describe title that is not a literal',
   registered_in_function: 'a test registered inside a function',
+  registered_by_call: 'a call that may register tests, such as a shared suite',
 };
 
 /** One warning for each reason names in mutator's report were credited to no test (see `TestNameIndex`). */
@@ -576,7 +585,9 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   }
   let mutants: Mutant[];
   const testIds =
-    options.tests === undefined ? undefined : new TestNameIndex(options.tests, runner.fullNameSeparator);
+    options.tests === undefined
+      ? undefined
+      : new TestNameIndex(options.tests, runner.fullNameSeparator, options.testFileInfo);
 
   try {
     const json: unknown = JSON.parse(readFileSync(rawReportPath, 'utf8'));
