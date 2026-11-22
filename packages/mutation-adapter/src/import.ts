@@ -9,6 +9,7 @@ import {
   VeritasError,
 } from '@under18dev/veritas-core';
 import { z } from 'zod';
+import { compileTitleTemplate, matchesTitleTemplate, type TitleTemplate } from './each-title.js';
 
 export type ReportSource = 'mutator' | 'stryker' | 'mutation-testing-elements';
 
@@ -89,28 +90,63 @@ export function mutatorTestName(name: string, projectPrefix = true): { file: str
 }
 
 /**
- * The test id test-inventory assigns to the test behind a mutator test name: looked up in `testIds` (keyed by
- * `<file>#<full name>`) when given, the name as written first and, with `projectPrefix`, then without a leading
- * `[project] ` label (so a title that starts with brackets is not cut); otherwise from the name split with
- * `separator`. A name `testIds` maps to null belongs to more than one inventoried test; it gets an id of its own that
- * matches none of them, so no kill is credited to a test that may not have run.
+ * Test ids by `<file>#<full name>`: a `Map` from `testIdsByFullName`, or anything with the same `get`. A name mapped
+ * to null belongs to more than one inventoried test. `match`, when present, resolves a name no test has exactly, such
+ * as the title a runner formats for one row of a table-driven test (see `TestNameIndex`).
+ */
+export interface TestNameLookup {
+  get(key: string): string | null | undefined;
+  match?(key: string): string | null | undefined;
+}
+
+/**
+ * The test id test-inventory assigns to the test behind a mutator test name. With `testIds` (keyed by
+ * `<file>#<full name>`), the name is looked up exactly, as written first and, with `projectPrefix`, then without a
+ * leading `[project] ` label (so a title that starts with brackets is not cut); only when neither is known is it
+ * matched against the templates of table-driven tests (`testIds.match`). Otherwise the id comes from the name split
+ * with `separator`. A name that belongs to, or matches the templates of, more than one inventoried test gets an id of
+ * its own that matches none of them, so no kill is credited to a test that may not have run.
  */
 export function mutatorTestId(
   name: string,
   separator = ' > ',
-  testIds?: ReadonlyMap<string, string | null>,
+  testIds?: TestNameLookup,
   projectPrefix = true,
 ): string {
   if (testIds !== undefined) {
-    for (const strip of projectPrefix ? [false, true] : [false]) {
-      const { file, full } = mutatorTestName(name, strip);
+    const variants = (projectPrefix ? [false, true] : [false]).map((strip) => mutatorTestName(name, strip));
+
+    for (const { file, full } of variants) {
       const known = testIds.get(`${file}#${full}`);
 
       if (known !== undefined) return known ?? stableId('T', { file, ambiguous: full });
     }
+    const matched = new Set<string | null>();
+
+    for (const { file, full } of variants) {
+      const found = testIds.match?.(`${file}#${full}`);
+
+      if (found !== undefined) matched.add(found);
+    }
+
+    if (matched.size > 0) {
+      const [only] = matched;
+      const { file, full } = mutatorTestName(name, false);
+
+      return matched.size === 1 && typeof only === 'string' ? only : stableId('T', { file, ambiguous: full });
+    }
   }
 
   return stableId('T', mutatorTestRef(name, separator, projectPrefix));
+}
+
+/** An inventoried test as name resolution needs it; `modifiers` tells table-driven tests (`each`) apart. */
+export interface NamedTest {
+  id: string;
+  file: string;
+  suitePath: readonly string[];
+  name: string;
+  modifiers?: readonly string[];
 }
 
 /**
@@ -118,7 +154,7 @@ export function mutatorTestId(
  * `separator`, and null for a full name that more than one test has.
  */
 export function testIdsByFullName(
-  tests: readonly { id: string; file: string; suitePath: readonly string[]; name: string }[],
+  tests: readonly NamedTest[],
   separator: string,
 ): Map<string, string | null> {
   const ids = new Map<string, string | null>();
@@ -132,6 +168,57 @@ export function testIdsByFullName(
   return ids;
 }
 
+/**
+ * Test ids by full name (as `testIdsByFullName`), plus the templates of table-driven tests: a test with the `each`
+ * modifier (its own `.each`/`.for`, or an enclosing `describe.each`) whose full name has placeholders matches the
+ * names the runner formats from it, in the same file. `mutatorTestId` tries exact names first. A name that matches
+ * the templates of more than one test resolves to null and is kept in `ambiguous`, so the caller can say why no test
+ * was credited.
+ */
+export class TestNameIndex implements TestNameLookup {
+  private readonly exact: Map<string, string | null>;
+  private readonly templates = new Map<string, { id: string; template: TitleTemplate }[]>();
+  private readonly matched = new Map<string, string | null | undefined>();
+  /** Names (`<file>#<full name>`) that matched the templates of more than one test. */
+  readonly ambiguous = new Set<string>();
+
+  constructor(tests: readonly NamedTest[], separator: string) {
+    this.exact = testIdsByFullName(tests, separator);
+
+    for (const test of tests) {
+      if (!test.modifiers?.includes('each')) continue;
+      const template = compileTitleTemplate([...test.suitePath, test.name].join(separator));
+
+      if (template === undefined) continue;
+      const list = this.templates.get(test.file) ?? [];
+      list.push({ id: test.id, template });
+      this.templates.set(test.file, list);
+    }
+  }
+
+  get(key: string): string | null | undefined {
+    return this.exact.get(key);
+  }
+
+  match(key: string): string | null | undefined {
+    if (this.matched.has(key)) return this.matched.get(key);
+    const hash = key.indexOf('#');
+    const full = key.slice(hash + 1);
+    const ids = new Set(
+      (this.templates.get(hash < 0 ? '' : key.slice(0, hash)) ?? [])
+        .filter(({ template }) => matchesTitleTemplate(template, full))
+        .map(({ id }) => id),
+    );
+    const [only] = ids;
+    const id = only === undefined ? undefined : ids.size === 1 ? only : null;
+
+    if (id === null) this.ambiguous.add(key);
+    this.matched.set(key, id);
+
+    return id;
+  }
+}
+
 export interface ImportOptions {
   root: string;
   source: ReportSource;
@@ -143,9 +230,10 @@ export interface ImportOptions {
   projectPrefix?: boolean;
   /**
    * Test ids of the inventoried tests by `<file>#<full name>`, to resolve mutator test names exactly; null for a full
-   * name more than one test has (see `testIdsByFullName`).
+   * name more than one test has (see `testIdsByFullName`); a `TestNameIndex` also matches the names of table-driven
+   * tests to their templates.
    */
-  testIds?: ReadonlyMap<string, string | null>;
+  testIds?: TestNameLookup;
 }
 
 /**

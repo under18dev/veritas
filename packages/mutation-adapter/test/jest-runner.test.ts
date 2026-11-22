@@ -13,7 +13,7 @@ function write(root: string, files: Record<string, string>): void {
 }
 
 /** A stand-in mutator with --runner and --jest-config that records its arguments and kills one mutant. */
-function recordingCli(dir: string): string {
+function recordingCli(dir: string, killedBy = ['test/a.test.ts#pricing gives a discount']): string {
   write(dir, {
     'package.json': '{"type":"commonjs"}',
     'stub-cli.js': [
@@ -24,7 +24,7 @@ function recordingCli(dir: string): string {
       `fs.writeFileSync(${JSON.stringify(path.join(dir, 'argv.json'))}, JSON.stringify(process.argv.slice(2)));`,
       'const mutant = { id: "m1", mutatorName: "EqualityOperator", replacement: ">=", status: "Killed",',
       '  location: { start: { line: 1, column: 1 }, end: { line: 1, column: 2 } },',
-      '  killedBy: ["test/a.test.ts#pricing gives a discount"], coveredBy: [] };',
+      `  killedBy: ${JSON.stringify(killedBy)}, coveredBy: [] };`,
       "fs.writeFileSync(out + '/mutation.json', JSON.stringify({ schemaVersion: '2', thresholds: { high: 80, low: 60 },",
       "  files: { 'src/a.ts': { language: 'typescript', source: 'x', mutants: [mutant] } } }));",
       "console.log('{}');",
@@ -101,5 +101,51 @@ describe('mutation with the Jest provider', () => {
 
     expect(result.status).toBe('unsupported');
     expect(result.detail).toContain('--runner');
+  });
+
+  it('credits kills by rows of .each tests to their templates, and none when two templates fit', async () => {
+    const root = tempDir('jest-each');
+    const bin = recordingCli(tempDir('jest-each-cli'), [
+      'test/a.test.ts#pricing at 10% gives 5',
+      'test/a.test.ts#rounding of 1.5 is 2',
+    ]);
+    write(root, {
+      'package.json': '{"type":"module"}',
+      'jest.config.mjs': 'export default {};',
+      'src/a.ts': 'x',
+    });
+    const result = await runMutation({
+      root,
+      config: config({ timeoutMs: 60_000 }),
+      testRunner: jest,
+      reportDir: path.join(root, '.veritas', 'runs', 'r', 'mutation'),
+      mutatorBin: bin,
+      testFiles: ['test/a.test.ts'],
+      tests: [
+        {
+          id: 'T-rate',
+          file: 'test/a.test.ts',
+          suitePath: ['pricing'],
+          name: 'at %s gives %d',
+          modifiers: ['each'],
+        },
+        {
+          id: 'T-of',
+          file: 'test/a.test.ts',
+          suitePath: ['rounding'],
+          name: 'of $value is $expected',
+          modifiers: ['each'],
+        },
+        { id: 'T-is', file: 'test/a.test.ts', suitePath: ['rounding'], name: 'of %s', modifiers: ['each'] },
+      ],
+    });
+
+    expect(result.status).toBe('succeeded');
+    expect(result.mutants[0]?.killedBy).toContain('T-rate');
+    expect(result.mutants[0]?.killedBy).not.toContain('T-of');
+    expect(result.mutants[0]?.killedBy).not.toContain('T-is');
+    expect(result.warnings).toContain(
+      "1 test name(s) in mutator's report match the titles of more than one table-driven test (.each); their kills and coverage are credited to none of them: test/a.test.ts#rounding of 1.5 is 2",
+    );
   });
 });
