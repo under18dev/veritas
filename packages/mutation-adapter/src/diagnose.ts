@@ -263,3 +263,16 @@ export function timeBudgetExhausted(stderr: string): { seconds: number; notRun: 
 
   return match ? { seconds: Number(match[1]), notRun: Number(match[2]) } : null;
 }
+
+/** `dry run: 3/12 test files, 40 source files`: of the 12 test files the runner config selects, 3 ran now. */
+const DRY_RUN_FILES = /^dry run: \d+\/(\d+) test files/m;
+
+/**
+ * How many test files the test runner config selected, from mutator's progress line, or null when it printed none.
+ * The report cannot tell: it lists only the tests that covered or killed a mutant.
+ */
+export function selectedTestFileCount(stderr: string): number | null {
+  const match = DRY_RUN_FILES.exec(withoutDebug(stderr));
+
+  return match ? Number(match[1]) : null;
+}
