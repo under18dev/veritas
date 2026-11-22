@@ -144,7 +144,9 @@ function indexOf(input: AssessInput): InputIndex {
  * - meaningful_with_evidence: asserts a project call, kills relevant mutants, no relevant survivors it covers,
  *   and exercises the boundary of every linked threshold property;
  * - inconclusive: anything that cannot be decided (e.g. no mutation data, no linked property).
- * A skipped or todo test is never meaningful_with_evidence. The outcome itself is decided in `decision.ts`.
+ * A skipped or todo test does not run, so the mutation results credited to it are not used: it can only be
+ * tautological_or_disconnected, spec_conflict or weak_or_incomplete (an unexercised boundary) from static analysis,
+ * and is inconclusive otherwise. The outcome itself is decided in `decision.ts`.
  */
 export function assessTest(
   test: TestCase,
@@ -298,7 +300,7 @@ export function assessTest(
       // Only a test that ran mutants can be said to have missed them; others were outside the mutation scope.
       // Without a full run, it is known to have run only the mutants no test killed: mutator stops at the first
       // failing test.
-      if (input.mutationAvailable && covered.length > 0 && killed.length === 0) {
+      if (!evidence.skippedOrTodo && input.mutationAvailable && covered.length > 0 && killed.length === 0) {
         const known = input.ranMutantIds?.get(test.id);
         const decided = covered.filter((m) => m.status === 'killed' || m.status === 'survived');
         const ran = decided.filter((m) => input.killMatrix || m.status === 'survived' || known?.has(m.id));
@@ -352,17 +354,20 @@ export function assessTest(
           .join(', ')}`,
       );
       break;
-    case OUTCOME_RULE.weak:
-      if (relevantSurvived.length > 0) {
+    case OUTCOME_RULE.weak: {
+      // Survivors credited to a skipped or todo test are not its evidence: only the boundaries decide it.
+      const survivors = evidence.skippedOrTodo ? [] : relevantSurvived;
+
+      if (survivors.length > 0) {
         rationale.push(
-          `${relevantSurvived.length} specification-relevant mutant(s) it runs survived: ${relevantSurvived.map((m) => `${m.location.file}:${m.location.range?.start} ${m.original} -> ${m.replacement}`).join('; ')}`,
+          `${survivors.length} specification-relevant mutant(s) it runs survived: ${survivors.map((m) => `${m.location.file}:${m.location.range?.start} ${m.original} -> ${m.replacement}`).join('; ')}`,
         );
       }
 
       for (const b of boundaryCoverage.filter((b) => b.exercised === 'no'))
         rationale.push(`boundary not exercised: ${b.boundary}`);
 
-      for (const c of testClaims.filter((c) => relevantSurvived.some((m) => m.id === c.mutantId))) {
+      for (const c of testClaims.filter((c) => survivors.some((m) => m.id === c.mutantId))) {
         if (c.status === 'counterexample_found')
           rationale.push(
             `its input ${JSON.stringify(c.counterexample)} distinguishes mutant ${c.mutantId} from the original, but no assertion caught it (${c.id})`,
@@ -373,6 +378,7 @@ export function assessTest(
           );
       }
       break;
+    }
     case OUTCOME_RULE.noMutationResults:
       rationale.push('asserts a project result, but detection power was not measured (no mutation results)');
       break;
@@ -394,10 +400,9 @@ export function assessTest(
       );
       break;
     case OUTCOME_RULE.skippedOrTodo:
-      // A skipped or todo test does not run: kills credited to it can only come from results attributed to the
-      // wrong test, so they are no evidence of what it checks.
+      // A skipped or todo test does not run: it is judged only on what static analysis sees.
       rationale.push(
-        `skipped or marked todo, so it does not run: the ${relevantKilled.length} specification-relevant mutant kill(s) credited to it are not evidence of what it checks`,
+        'skipped or marked todo, so it does not run: it is not judged on mutation results, and static analysis finds nothing that decides it',
       );
       break;
     default:
@@ -408,6 +413,13 @@ export function assessTest(
       if (boundaryCoverage.length)
         rationale.push(`exercises decisive inputs: ${boundaryCoverage.map((b) => b.boundary).join('; ')}`);
   }
+
+  // Kills and survivors credited to a test that does not run can only come from results attributed to the wrong
+  // test; they stay in the evidence vector but decide nothing.
+  if (evidence.skippedOrTodo && (killed.length > 0 || covered.length > 0))
+    rationale.push(
+      `skipped or marked todo, so it does not run: the mutation results credited to it (${killed.length} killed, ${survived.length} survived) are not evidence of what it checks and are not used`,
+    );
 
   if (killEvidence)
     rationale.unshift(

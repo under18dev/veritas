@@ -44,18 +44,21 @@ export const OUTCOME_RULE = {
   killedWithoutLink: 4,
   /** A linked property is conflicted. */
   specConflict: 5,
-  /** A relevant mutant it runs survived, or a decisive boundary is not exercised. */
+  /** A relevant mutant it runs survived (not for a skipped or todo test), or a decisive boundary is not exercised. */
   weak: 6,
+  /**
+   * Skipped or marked todo: it does not run, so mutation results credited to it are not its evidence. Only the
+   * static rules above decide such a test; it is not judged on mutation results.
+   */
+  skippedOrTodo: 7,
   /** The run has no mutation results. */
-  noMutationResults: 7,
+  noMutationResults: 8,
   /** No property is linked to the functions it calls. */
-  noLinkedProperty: 8,
+  noLinkedProperty: 9,
   /** Kills relevant mutants, but code static analysis cannot follow may be what detected them. */
-  killsThroughUnknownLink: 9,
+  killsThroughUnknownLink: 10,
   /** Linked to properties but killed no specification-relevant mutant. */
-  noRelevantKill: 10,
-  /** Skipped or marked todo: it does not run, so mutation results credited to it are not its evidence. */
-  skippedOrTodo: 11,
+  noRelevantKill: 11,
   /** Asserts a project call, kills relevant mutants, no relevant survivors, every boundary exercised. */
   meaningful: 12,
 } as const;
@@ -118,14 +121,19 @@ export function inferredUnlinked(e: OutcomeEvidence): boolean {
   return e.targetNotCalled || (!e.assertedCall && !linkUnknown(e));
 }
 
-/** The test was unlinked by inference but killed a mutant: it does observe project behaviour. */
+/**
+ * The test was unlinked by inference but killed a mutant: it does observe project behaviour. Not for a skipped
+ * or todo test, which does not run: a kill credited to it is no evidence.
+ */
 export function killedWithoutLink(e: OutcomeEvidence): boolean {
-  return inferredUnlinked(e) && e.killed > 0;
+  return inferredUnlinked(e) && !e.skippedOrTodo && e.killed > 0;
 }
 
 /**
  * The rule that decides the outcome (an `OUTCOME_RULE` code). A test that asserts nothing or only constants
- * stays disconnected even when it killed a mutant: such a test can only fail when the code it runs throws.
+ * stays disconnected even when it killed a mutant: such a test can only fail when the code it runs throws. A
+ * skipped or todo test is decided as if no mutation result were credited to it: only the static rules (no
+ * assertion or no link, a conflicted property, an unexercised boundary) apply, and otherwise it is inconclusive.
  */
 export function outcomeRule(e: OutcomeEvidence): number {
   if (e.expectedFailure) return 0;
@@ -143,17 +151,17 @@ export function outcomeRule(e: OutcomeEvidence): number {
 
   if (e.conflictedProperties > 0) return 5;
 
-  if (e.relevantSurvived > 0 || e.unexercisedBoundaries > 0) return 6;
+  if ((!e.skippedOrTodo && e.relevantSurvived > 0) || e.unexercisedBoundaries > 0) return 6;
 
-  if (!e.mutationAvailable) return 7;
+  if (e.skippedOrTodo) return 7;
 
-  if (e.linkedProperties <= 0) return 8;
+  if (!e.mutationAvailable) return 8;
 
-  if (linkUnknown(e) && e.relevantKilled > 0) return 9;
+  if (e.linkedProperties <= 0) return 9;
 
-  if (e.relevantKilled <= 0) return 10;
+  if (linkUnknown(e) && e.relevantKilled > 0) return 10;
 
-  if (e.skippedOrTodo) return 11;
+  if (e.relevantKilled <= 0) return 11;
 
   return 12;
 }
@@ -227,9 +235,12 @@ export function invariant_reachableByNameWithoutAssertedCallIsInconclusive(e: Ou
   );
 }
 
-/** A test that killed a mutant and is not known to assert nothing is never tautological or disconnected. */
+/**
+ * A test that killed a mutant and is not known to assert nothing is never tautological or disconnected, unless it
+ * is skipped or todo: a kill credited to a test that does not run overturns nothing.
+ */
 export function invariant_killedIsNotTautological(e: OutcomeEvidence): boolean {
-  return e.killed <= 0 || e.assertsNothing || outcomeCode(e) !== 2;
+  return e.killed <= 0 || e.assertsNothing || e.skippedOrTodo || outcomeCode(e) !== 2;
 }
 
 /** A test that asserts nothing or only constants is tautological, unless it is expected to fail or type-level. */
@@ -267,4 +278,70 @@ export function invariant_outcomeInRange(e: OutcomeEvidence): boolean {
   const outcome = outcomeCode(e);
 
   return outcome >= 0 && outcome <= 4;
+}
+
+/** `spec_conflict` only for a test that asserts a project call and is linked to a conflicted property. */
+export function invariant_specConflictNeedsConflict(e: OutcomeEvidence): boolean {
+  return outcomeCode(e) !== 3 || (e.conflictedProperties > 0 && e.assertedCall);
+}
+
+/**
+ * `weak_or_incomplete` only for a test that asserts a project call, has no conflicted property, and has a relevant
+ * survivor (not credited to a skipped or todo test) or an unexercised boundary.
+ */
+export function invariant_weakNeedsGap(e: OutcomeEvidence): boolean {
+  return (
+    outcomeCode(e) !== 1 ||
+    (((!e.skippedOrTodo && e.relevantSurvived > 0) || e.unexercisedBoundaries > 0) &&
+      e.assertedCall &&
+      e.conflictedProperties <= 0)
+  );
+}
+
+/** `tautological_or_disconnected` only from static analysis: it asserts nothing, or no link was found. */
+export function invariant_tautologicalNeedsStaticFinding(e: OutcomeEvidence): boolean {
+  return (
+    outcomeCode(e) !== 2 ||
+    (!e.expectedFailure && !e.typeLevelOnly && (e.assertsNothing || inferredUnlinked(e)))
+  );
+}
+
+/**
+ * A test without an asserted call whose link is unknown (an unresolved import, a child process, a progress-only
+ * check, a caller-supplied suite, name reach) is inconclusive, unless static analysis is certain it asserts nothing
+ * or calls no target.
+ */
+export function invariant_unknownLinkWithoutAssertedCallIsInconclusive(e: OutcomeEvidence): boolean {
+  return !linkUnknown(e) || e.assertedCall || e.assertsNothing || e.targetNotCalled || outcomeCode(e) === 4;
+}
+
+/**
+ * A skipped or todo test is decided without its mutation results: the outcome is the same with no kill, no
+ * survivor and no mutation results at all.
+ */
+export function invariant_skippedIgnoresMutationResults(e: OutcomeEvidence): boolean {
+  return (
+    !e.skippedOrTodo ||
+    outcomeCode(e) ===
+      outcomeCode({
+        expectedFailure: e.expectedFailure,
+        skippedOrTodo: e.skippedOrTodo,
+        typeLevelOnly: e.typeLevelOnly,
+        assertsNothing: e.assertsNothing,
+        targetNotCalled: e.targetNotCalled,
+        assertedCall: e.assertedCall,
+        unresolvedImport: e.unresolvedImport,
+        opaqueCall: e.opaqueCall,
+        progressOnly: e.progressOnly,
+        callerSupplied: e.callerSupplied,
+        reachableByName: e.reachableByName,
+        mutationAvailable: false,
+        killed: 0,
+        relevantKilled: 0,
+        relevantSurvived: 0,
+        linkedProperties: e.linkedProperties,
+        conflictedProperties: e.conflictedProperties,
+        unexercisedBoundaries: e.unexercisedBoundaries,
+      })
+  );
 }
