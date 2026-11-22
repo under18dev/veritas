@@ -37,7 +37,7 @@ succeeded   prove
 
 - 引数と戻り値が `number`（範囲を限った整数として扱います）か `boolean`
 - プロパティがすべて `number` か `boolean` のレコードの引数と、`formal.maxArrayLength` 個までの `number[]` や `boolean[]` の引数
-- `if`/`else`、三項演算子、`return`、`const`、`+ - *`、比較、`=== !==`、`&& || !`、同じファイルにある対応範囲内の関数の呼び出し
+- `if`/`else`、三項演算子、`return`、`const`、`+ - *`、比較、`=== !==`、`&& || !`、同じファイルにある対応範囲内の関数の呼び出し（レコードの引数、呼び出し先とフィールドがまったく同じオブジェクトリテラル、配列の引数を渡せます）
 
 割り算、`%`、`**`、浮動小数点数、`NaN`、`Infinity`、`==`、`??`、暗黙の型変換、ループ、`let`/`var`、非同期処理、副作用、入出力は `unsupported` になります。表の全体は[対応環境](/ja/concepts/support-matrix)にあります。
 
@@ -128,7 +128,7 @@ Veritas は関数の Lean モデルと Property の定理を生成し、`lake bu
 
 `kernel_checked` になるのは、ビルドが成功し、定理が `propext`、`Classical.choice`、`Quot.sound` 以外の公理に依存していないときだけです。`sorry`、`admit`、`native_decide`、その他の公理を使った証明は受け入れません。
 
-- Lean が扱うのは整数と真偽値の引数だけで、レコードや配列を含む Property は `unsupported` です。
+- Lean が扱うのは整数、真偽値、レコードの引数で、配列を含む Property は `unsupported` です。
 - Lean のモデルは Property の形式モデルから生成します。TypeScript のコードと対応しているかは証明されておらず、どの Lean の結果にも semantic gaps として記載されます。
 - Lean のビルドには制限時間がありますが、メモリの上限はありません。
 

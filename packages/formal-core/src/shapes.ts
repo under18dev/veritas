@@ -3,11 +3,18 @@ import { shapeArguments } from './interpret.js';
 
 /**
  * A flat model input (`{ order__total: '1000', order__vip: true }`) in the shape of the JavaScript arguments of
- * the first function model whose parameters it covers (`{ order: { total: '1000', vip: true } }`). Inputs no
- * model with records or arrays covers are returned unchanged.
+ * the first top-level function model whose parameters it covers (`{ order: { total: '1000', vip: true } }`).
+ * A model another model calls is skipped: it only sees the values its caller passes, so its parameters do not
+ * describe the input even when their names occur in it. Inputs no top-level model with records or arrays covers
+ * are returned unchanged.
  */
 export function shapeInput(ir: PropertyIR, input: Record<string, string | boolean>): Record<string, unknown> {
-  const model = ir.functions.find((f) => f.jsParams && f.params.every((p) => p.name in input));
+  const called = new Set<string>();
+
+  for (const f of ir.functions) if (f.body) callsOf(f.body, called);
+  const model = ir.functions.find(
+    (f) => f.jsParams && !called.has(f.name) && f.params.every((p) => p.name in input),
+  );
 
   if (!model?.jsParams) return input;
   const values = new Map(Object.entries(input));
@@ -28,7 +35,36 @@ export function shapeInput(ir: PropertyIR, input: Record<string, string | boolea
   return out;
 }
 
-function substitute(expr: Expr, subst: Map<string, Expr>): Expr {
+function callsOf(expr: Expr, out: Set<string>): void {
+  switch (expr.kind) {
+    case 'call':
+      out.add(expr.fn);
+
+      for (const a of expr.args) callsOf(a, out);
+
+      return;
+    case 'unary':
+      callsOf(expr.arg, out);
+
+      return;
+    case 'binary':
+      callsOf(expr.left, out);
+      callsOf(expr.right, out);
+
+      return;
+    case 'ite':
+      callsOf(expr.cond, out);
+      callsOf(expr.whenTrue, out);
+      callsOf(expr.whenFalse, out);
+
+      return;
+    default:
+      return;
+  }
+}
+
+/** Replace variables by expressions. */
+export function substitute(expr: Expr, subst: Map<string, Expr>): Expr {
   switch (expr.kind) {
     case 'var':
       return subst.get(expr.name) ?? expr;

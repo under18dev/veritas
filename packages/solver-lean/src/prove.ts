@@ -63,7 +63,7 @@ const CLAIM_STATUS: Record<LeanCheckStatus, VerificationStatus> = {
   error: 'error',
 };
 
-/** Whether the IR is in the subset Lean proofs cover (integers and booleans, no records or arrays). */
+/** Whether the IR is in the subset Lean proofs cover (integers, booleans and records of them; no arrays). */
 export function leanTranslatable(ir: PropertyIR): boolean {
   try {
     leanProofStrategies(ir);

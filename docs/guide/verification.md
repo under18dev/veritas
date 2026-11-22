@@ -37,7 +37,7 @@ Formal checks cover pure functions with:
 
 - `number` (treated as a bounded integer) and `boolean` parameters and results;
 - record parameters whose properties are all `number` or `boolean`, and `number[]` or `boolean[]` parameters up to `formal.maxArrayLength` elements;
-- `if`/`else`, ternaries, `return`, `const`, `+ - *`, comparisons, `=== !==`, `&& || !`, and calls to other supported functions in the same file.
+- `if`/`else`, ternaries, `return`, `const`, `+ - *`, comparisons, `=== !==`, `&& || !`, and calls to other supported functions in the same file, which may pass on a record parameter, an object literal with exactly the callee's fields, or an array parameter.
 
 Division, `%`, `**`, floats, `NaN`, `Infinity`, `==`, `??`, implicit coercion, loops, `let`/`var`, async code, side effects and I/O are `unsupported`. The [support matrix](/concepts/support-matrix) has the full table.
 
@@ -128,7 +128,7 @@ Veritas generates a Lean model of the function and a theorem for the property, a
 
 A claim is `kernel_checked` only when the build succeeds and the theorem depends on no axioms other than `propext`, `Classical.choice` and `Quot.sound`. A proof using `sorry`, `admit`, `native_decide` or any other axiom is rejected.
 
-- Lean covers integer and boolean parameters; properties over records or arrays are `unsupported`.
+- Lean covers integer, boolean and record parameters; properties over arrays are `unsupported`.
 - The Lean model is generated from the property's formal model. Its correspondence to your TypeScript code is not proven; every Lean claim lists this under its semantic gaps.
 - Lean builds have a timeout and no memory limit.
 

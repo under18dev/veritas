@@ -41,6 +41,19 @@ const bin = (op: Extract<Expr, { kind: 'binary' }>['op'], left: Expr, right: Exp
   right,
 });
 
+/** pay(order) passes its record parameter, and an object literal, to a function in the same file. */
+const RECORD_SOURCE = `interface Order {
+  total: number;
+  vip: boolean;
+}
+function qualifies(o: Order): boolean {
+  return o.total >= 5 || o.vip;
+}
+export function pay(order: Order): number {
+  return qualifies(order) && qualifies({ total: order.total, vip: false }) ? 100 : 0;
+}
+`;
+
 /** Translate discountAmount from a copy of a fixture file and state the README rule as a property. */
 function discountIR(relativeFile: string): PropertyIR {
   const dir = tmp();
@@ -82,12 +95,10 @@ function project(source: string): string {
 }
 
 describe('irToLean', () => {
-  it('refuses records and arrays instead of emitting a theorem that does not describe them', () => {
-    const source =
-      'export function pay(order: { total: number }): number {\n  return order.total >= 1000 ? 100 : 0;\n}\n';
+  it('emits record parameters and record arguments as their Int/Bool fields, but refuses arrays', () => {
     const t = translateFunction({
       file: 'src/o.ts',
-      source,
+      source: RECORD_SOURCE,
       exportName: 'pay',
       domain: { min: '-10', max: '10' },
     });
@@ -100,8 +111,29 @@ describe('irToLean', () => {
       value: '5',
       whenTrue: '100',
     });
-    expect(() => irToLean(ir, { theoremName: 'pay_rule' })).toThrow(/record or array/);
-    expect(leanTranslatable(ir)).toBe(false);
+    const src = irToLean(ir, { theoremName: 'pay_rule' });
+    expect(src).toContain('def «f_pay__qualifies» («v_o__total» : Int) («v_o__vip» : Bool) : Bool :=');
+    expect(src).toContain('(«f_pay__qualifies» «v_order__total» «v_order__vip»)');
+    expect(src).toContain('∀ («v_order__total» : Int) («v_order__vip» : Bool),');
+    expect(leanTranslatable(ir)).toBe(true);
+
+    const xs = translateFunction({
+      file: 'src/o.ts',
+      source: 'export function first(xs: number[]): number {\n  return xs.length > 0 ? xs[0] : 0;\n}\n',
+      exportName: 'first',
+      domain: { min: '-10', max: '10' },
+    });
+
+    if (xs.status !== 'translated') throw new Error(JSON.stringify(xs));
+    const arrayIr = thresholdProperty({
+      implementation: xs,
+      param: 'xs__0',
+      operator: '>=',
+      value: '5',
+      whenTrue: '100',
+    });
+    expect(() => irToLean(arrayIr, { theoremName: 'first_rule' })).toThrow(/takes an array/);
+    expect(leanTranslatable(arrayIr)).toBe(false);
     expect(leanTranslatable(discountIR('candidates/pricing-fixed.ts'))).toBe(true);
   });
 
@@ -631,6 +663,33 @@ describe('proveWithLean (real Lean)', () => {
       expect(claim.status).toBe('unknown');
       expect(claim.assurance).toBe('none');
       expect(claim.assumptions.join('\n')).toMatch(/neither proven nor refuted/);
+    },
+    LEAN_TIMEOUT * 3,
+  );
+
+  it(
+    'kernel checks a property over a record passed on to another function',
+    async () => {
+      requireLean();
+      const t = translateFunction({
+        file: 'src/o.ts',
+        source: RECORD_SOURCE,
+        exportName: 'pay',
+        domain: { min: '-10', max: '10' },
+      });
+
+      if (t.status !== 'translated') throw new Error(JSON.stringify(t));
+      const ir = thresholdProperty({
+        implementation: t,
+        param: 'order__total',
+        operator: '>=',
+        value: '5',
+        whenTrue: '100',
+      });
+      const { claim, check } = await proveWithLean({ propertyId: 'P-pay', ir, timeoutMs: LEAN_TIMEOUT });
+      expect(check.status).toBe('kernel_checked');
+      expect(claim.status).toBe('proven_within_model');
+      expect(claim.assurance).toBe('kernel_checked');
     },
     LEAN_TIMEOUT * 3,
   );
