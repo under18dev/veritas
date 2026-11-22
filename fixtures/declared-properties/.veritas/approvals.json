@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "1.0.0",
+  "approvals": [
+    {
+      "id": "A-f736f4a25b12",
+      "propertyId": "D-stage.guarded-succeeded-needs-tests",
+      "propertyVersion": 3103021279,
+      "decision": "accept",
+      "actor": "fixture",
+      "reason": "fixture: the guarded stage rule, expected to hold",
+      "decidedAt": "2026-11-22T05:15:56.445Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-b2d3ac0cafb5",
+      "propertyId": "D-stage.unguarded-succeeded-needs-tests",
+      "propertyVersion": 2952988804,
+      "decision": "accept",
+      "actor": "fixture",
+      "reason": "fixture: negative control, expected to come back with a counterexample",
+      "decidedAt": "2026-11-22T05:15:58.254Z",
+      "sourceIds": []
+    }
+  ]
+}
