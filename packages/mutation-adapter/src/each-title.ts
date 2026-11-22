@@ -7,11 +7,12 @@
  * Placeholders, as Vitest and Jest format them: printf-style `%s %d %i %f %j %o %O %p %c` and the row numbers `%#`
  * and `%$` (`%%` is a literal `%`), and the object and template-table interpolation `$name`, `$name.path`, `$0` and
  * `$#`. What each can print:
- * - `%s` and `$name` print a string as it is, so they may print nothing (`''`); `%c` always prints nothing;
- * - `%#` and `%$` print the row index (from 0 and from 1): digits only;
+ * - `%s` and `$name` print a string as it is, so they may print nothing (`''`);
+ * - `%#` and `%$` print the row index (from 0 and from 1): digits only, the first of each; Jest replaces only the
+ *   first, so a later one may stay as its own text;
  * - every other conversion prints at least one character (`NaN`, `''` in quotes, `undefined`).
- * A placeholder other than `%#`, `%$` and `%c` may also stand for its own text, which the runners leave in place when
- * there is no value for it.
+ * A placeholder may also stay as its own text: Jest leaves the placeholders after the row's last value in place
+ * (`it.each([[1]])('case %s %c')` reports `case 1 %c`), so `%c` prints nothing or `%c`, and is read as any text.
  */
 
 /** One step of a compiled title: a literal character, or text a placeholder prints. */
@@ -73,6 +74,8 @@ export function literalTitle(text: string): TitleTemplate {
 export function compileTitleTemplate(template: string): TitleTemplate {
   const tokens: Token[] = [];
   let placeholders = 0;
+  // `%#` and `%$` met so far: Jest replaces only the first of each.
+  const indexes = new Set<string>();
 
   for (let i = 0; i < template.length; ) {
     const char = template[i] as string;
@@ -86,9 +89,12 @@ export function compileTitleTemplate(template: string): TitleTemplate {
       }
 
       if (next === 's' || next === 'c' || next === '#' || next === '$' || PRINTF.has(next)) {
-        if (next === '#' || next === '$') tokens.push(DIGIT, DIGITS);
-        else if (next === 's') tokens.push(ANY);
-        else if (next !== 'c') tokens.push(ONE, ANY);
+        if (next === '#' || next === '$') {
+          const first = !indexes.has(next);
+          indexes.add(next);
+          tokens.push(...(first ? [DIGIT, DIGITS] : [ONE, ANY]));
+        } else if (next === 's' || next === 'c') tokens.push(ANY);
+        else tokens.push(ONE, ANY);
         placeholders++;
         i += 2;
         continue;

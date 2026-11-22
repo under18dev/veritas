@@ -46,8 +46,31 @@ describe('title templates of table-driven tests', () => {
     expect(compileTitleTemplate('50% off, 10%').placeholders).toBe(0);
   });
 
-  it('lets %c print nothing', () => {
+  it('lets %c print nothing, or stay as its own text after the row runs out of values (Jest)', () => {
     expect(matches('%cstyled %s', 'styled a')).toBe(true);
+    // `it.each([[1]])('case %s %c')` is reported `case 1 %c` by Jest.
+    expect(matches('case %s %c', 'case 1 %c')).toBe(true);
+    expect(matches('case %s %c', 'case 1 ')).toBe(true);
+    // Other placeholders past the row's values stay as their own text too.
+    expect(matches('case %s %d %p', 'case 1 %d %p')).toBe(true);
+  });
+
+  it('reads a second %# or %$ as digits or its own text, since Jest replaces only the first', () => {
+    expect(matches('row %# of %#', 'row 0 of %#')).toBe(true);
+    expect(matches('row %# of %#', 'row 0 of 0')).toBe(true);
+    expect(matches('row %$ again %$', 'row 1 again %$')).toBe(true);
+    expect(matches('row %# of %#', 'row x of %#')).toBe(false);
+  });
+
+  it("credits a name with Jest's leftover %c to its own template, not to a broad one", () => {
+    const file = 'test/a.test.ts';
+    const own = { id: 'T-own', file, suitePath: [], name: 'case %s %c', modifiers: ['each'] };
+    const broad = { id: 'T-broad', file, suitePath: [], name: '%s', modifiers: ['each'] };
+    const index = new TestNameIndex([own, broad], ' ');
+
+    // Both fit; before, `%c` was read as nothing and only the broad template fitted.
+    expect(mutatorTestId(`${file}#case 1 %c`, ' ', index, false)).not.toBe(broad.id);
+    expect(mutatorTestId(`${file}#case 1 %c`, ' ', new TestNameIndex([own], ' '), false)).toBe(own.id);
   });
 
   it('matches $variable, $a.b, $0 and $# interpolation', () => {
