@@ -311,4 +311,53 @@ describe('record and array arguments to functions in the same file', () => {
     expect(claim.status).toBe('unsupported');
     expect(claim.semanticGaps.join('\n')).toMatch(/read at or beyond the array's length .* \{"xs":\[\]\}/);
   }, 60_000);
+
+  it("gives array lengths [0, maxArrayLength] only for the root function's own arrays", async () => {
+    const source = `function size(xs: number[]): number {
+  return xs.length;
+}
+export function lengthNamed(xs__length: number, ys: number[]): boolean {
+  return size(ys) >= 0 && xs__length >= 0;
+}
+`;
+    const t = translated(translate('lengthNamed', source));
+    expect(t.params.find((p) => p.name === 'xs__length')).toEqual({
+      name: 'xs__length',
+      sort: 'int',
+      domain: DOMAIN,
+    });
+    expect(t.params.find((p) => p.name === 'ys__length')).toEqual({
+      name: 'ys__length',
+      sort: 'int',
+      domain: { min: '0', max: '3' },
+    });
+    const root = project(source);
+    const { claim } = await prove(root, holds(t), 'lengthNamed');
+    expect(claim.status).toBe('counterexample_found');
+    expect(claim.semanticValidation).toBe('confirmed');
+    expect(Number((claim.counterexample as { xs__length: string }).xs__length)).toBeLessThan(0);
+  }, 60_000);
+
+  it('rejects a parameter whose name collides with a flattened field, length or slot', () => {
+    const cases: [string, RegExp][] = [
+      ['export function f(r: { a: number }, r__a: number): number { return r__a; }', /r__a collides/],
+      ['export function f(r__a: number, r: { a: number }): number { return r__a; }', /r__a collides/],
+      [
+        'export function f(xs: number[], xs__length: number): number { return xs__length; }',
+        /xs__length collides/,
+      ],
+      ['export function f(xs: number[], xs__0: number): number { return xs__0; }', /xs__0 collides/],
+      [
+        'export function f(a: { b__c: number }, a__b: { c: number }): number { return a.b__c; }',
+        /a__b__c collides/,
+      ],
+    ];
+
+    for (const [source, reason] of cases) {
+      const result = translateFunction({ file: 'src/x.ts', source, exportName: 'f', domain: DOMAIN });
+      expect(result.status, source).toBe('unsupported');
+
+      if (result.status === 'unsupported') expect(result.reasons[0]?.reason, source).toMatch(reason);
+    }
+  });
 });

@@ -707,8 +707,6 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
 
   if (!Number.isInteger(maxArrayLength) || maxArrayLength < 1 || maxArrayLength > 8)
     throw new RangeError('maxArrayLength must be an integer from 1 to 8');
-  /** Array length parameters: their domain is [0, maxArrayLength], not the integer domain. */
-  const lengths = new Set<string>();
   const line = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
 
   const translateNamed = (name: string, modelName: string): FunctionModel => {
@@ -785,7 +783,6 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
           params.push({ name: e, sort: shape.sort });
           paramSorts.set(e, shape.sort);
         }
-        lengths.add(length);
         aggregates.set(pname, { kind: 'array', name: pname, length, elements, sort: shape.sort });
         jsParams.push({ kind: 'array', name: pname, length, elements });
       }
@@ -843,6 +840,9 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
     }
     throw error;
   }
+  // Array lengths range over [0, maxArrayLength], not the integer domain. Only the root model's own arrays count:
+  // a callee's flattened length name says nothing about a same-named parameter of the root.
+  const lengths = new Set((model.jsParams ?? []).flatMap((p) => (p.kind === 'array' ? [p.length] : [])));
   const params: Param[] = model.params.map((p) =>
     p.sort === 'bool'
       ? { name: p.name, sort: 'bool' }
