@@ -54,14 +54,18 @@ export const OUTCOME_RULE = {
   killsThroughUnknownLink: 9,
   /** Linked to properties but killed no specification-relevant mutant. */
   noRelevantKill: 10,
+  /** Skipped or marked todo: it does not run, so mutation results credited to it are not its evidence. */
+  skippedOrTodo: 11,
   /** Asserts a project call, kills relevant mutants, no relevant survivors, every boundary exercised. */
-  meaningful: 11,
+  meaningful: 12,
 } as const;
 
 /** Abstract evidence a test outcome is decided on. Counts are numbers of items of that kind for this test. */
 export interface OutcomeEvidence {
   /** The test has the `expected_failure` modifier. */
   expectedFailure: boolean;
+  /** The test has the `skip` or the `todo` modifier. */
+  skippedOrTodo: boolean;
   /** Suspicion `type_level_only`. */
   typeLevelOnly: boolean;
   /** Suspicion `no_assertion` or `tautological_assertion`: static analysis is certain it checks no result. */
@@ -149,12 +153,14 @@ export function outcomeRule(e: OutcomeEvidence): number {
 
   if (e.relevantKilled <= 0) return 10;
 
-  return 11;
+  if (e.skippedOrTodo) return 11;
+
+  return 12;
 }
 
 /** Outcome code (an index into `TEST_OUTCOMES`) of a rule code. */
 export function outcomeOfRule(rule: number): number {
-  if (rule === 11) return 0;
+  if (rule === 12) return 0;
 
   if (rule === 6) return 1;
 
@@ -186,7 +192,7 @@ export function outcomeName(outcome: number): TestOutcome {
 /**
  * `meaningful_with_evidence` only with the full evidence: an asserted project call, a relevant kill, mutation
  * results, a linked property, no unexercised boundary, no relevant survivor, no conflict, a known link, and a
- * test that is not expected to fail or type-level only.
+ * test that runs normally (not expected to fail, not type-level only, not skipped or todo).
  */
 export function invariant_meaningfulNeedsEvidence(e: OutcomeEvidence): boolean {
   return (
@@ -201,7 +207,8 @@ export function invariant_meaningfulNeedsEvidence(e: OutcomeEvidence): boolean {
       !e.expectedFailure &&
       !e.typeLevelOnly &&
       !e.assertsNothing &&
-      !linkUnknown(e))
+      !linkUnknown(e) &&
+      !e.skippedOrTodo)
   );
 }
 
@@ -238,6 +245,11 @@ export function invariant_expectedFailureIsInconclusive(e: OutcomeEvidence): boo
 /** A test that checks only types is always inconclusive. */
 export function invariant_typeLevelOnlyIsInconclusive(e: OutcomeEvidence): boolean {
   return !e.typeLevelOnly || outcomeCode(e) === 4;
+}
+
+/** A skipped or todo test is never meaningful, whatever mutation results are credited to it. */
+export function invariant_skippedNeverMeaningful(e: OutcomeEvidence): boolean {
+  return !e.skippedOrTodo || outcomeCode(e) !== 0;
 }
 
 /** A test unlinked by inference that killed a mutant is inconclusive: neither meaningful, weak nor tautological. */

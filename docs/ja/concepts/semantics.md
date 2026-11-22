@@ -88,3 +88,5 @@ Vitest では、設定の各プロジェクトが実行するのは、選んだ�
 評価はベクトル（仕様との関係、assertion の関係、mutation の検出、境界の網羅、形式的な根拠、出典の信頼度、不明な点）で表し、`meaningful_with_evidence`、`weak_or_incomplete`、`tautological_or_disconnected`、`spec_conflict`、`inconclusive` のいずれかに要約します。1 つの品質スコアはありません。
 
 テストが `meaningful_with_evidence` になるのは、プロジェクトの関数を呼んで結果を assert する呼び出しが、仕様に関係する mutant を kill し、かつ決め手になる境界の入力をすべて assert しているときだけです。mutation の結果はテストごとに記録します。テストの中のどれかの呼び出しが、TypeScript で解決できなかった相対 import を経由している場合や、テストが子プロセスや動的 import でコードを実行している場合は、そのコードが mutant を検出した可能性があります。そのため判定は `inconclusive` とし、理由を不明な点に載せます。
+
+skip や todo のテスト（`it.skip`、`it.todo`）は `meaningful_with_evidence` になりません。実行されないので、そのテストに付いた kill は、結果を別のテストに帰属させた誤りからしか生じないからです。ほかの条件では meaningful になる根拠がそろっていても判定は `inconclusive` とし、理由を rationale に書きます。それ以外の判定は、ほかのテストと同じ規則で決めます。

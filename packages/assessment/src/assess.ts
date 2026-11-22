@@ -93,6 +93,7 @@ export function outcomeEvidence(
 
   return {
     expectedFailure: test.modifiers.includes('expected_failure'),
+    skippedOrTodo: test.modifiers.includes('skip') || test.modifiers.includes('todo'),
     typeLevelOnly: s.includes('type_level_only'),
     // Static analysis is certain about these: the test asserts nothing, or only constants. A mutant such a test
     // kills can only fail it by making the code it runs throw, so a kill does not make it check a result.
@@ -389,6 +390,13 @@ export function assessTest(
         ranMutants
           ? 'linked to properties but killed no specification-relevant mutant or boundary coverage is partial'
           : 'linked to properties, but it ran no mutant of this run (outside the mutation scope, or coverage not reported)',
+      );
+      break;
+    case OUTCOME_RULE.skippedOrTodo:
+      // A skipped or todo test does not run: kills credited to it can only come from results attributed to the
+      // wrong test, so they are no evidence of what it checks.
+      rationale.push(
+        `skipped or marked todo, so it does not run: the ${relevantKilled.length} specification-relevant mutant kill(s) credited to it are not evidence of what it checks`,
       );
       break;
     default:

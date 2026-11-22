@@ -19,6 +19,7 @@ import {
   invariant_outcomeInRange,
   invariant_reachableByNameNeverMeaningful,
   invariant_reachableByNameWithoutAssertedCallIsInconclusive,
+  invariant_skippedNeverMeaningful,
   invariant_typeLevelOnlyIsInconclusive,
   OUTCOME_RULE,
   type OutcomeEvidence,
@@ -376,6 +377,7 @@ function legacyArgumentValues(arg: string): string[] {
 
 const FLAGS = [
   'expectedFailure',
+  'skippedOrTodo',
   'typeLevelOnly',
   'assertsNothing',
   'targetNotCalled',
@@ -460,11 +462,14 @@ function legacyOutcomeOfRecord(e: OutcomeEvidence): TestAssessment['outcome'] {
 // ---------------------------------------------------------------------------------------------------------------
 // Concrete inputs that realise the abstract space through assessTest
 
+const SKIP_MESSAGE =
+  /^skipped or marked todo, so it does not run: the 1 specification-relevant mutant kill\(s\)/;
+
 type PropertyShape = 'none' | 'no_predicate' | 'exercised' | 'unexercised';
 
 interface Scenario {
   flags: Record<(typeof FLAGS)[number], boolean>;
-  /** Which suspicion stands for `assertsNothing`. */
+  /** Which suspicion stands for `assertsNothing`, and which modifier for `skippedOrTodo`. */
   variant: boolean;
   kill: 'none' | 'unrelated' | 'relevant';
   property: PropertyShape;
@@ -479,6 +484,7 @@ function scenarioInput(s: Scenario): { test: TestCase; input: AssessInput } {
 
   if (f.expectedFailure) modifiers.push('expected_failure');
 
+  if (f.skippedOrTodo) modifiers.push(s.variant ? 'todo' : 'skip');
   const suspicions: TestCase['suspicions'] = [];
   const add = (on: boolean, suspicion: TestCase['suspicions'][number]) => {
     if (on) suspicions.push(suspicion);
@@ -612,9 +618,11 @@ function* scenarios(): Generator<Scenario> {
 // ---------------------------------------------------------------------------------------------------------------
 
 describe('test outcome decision kernel', () => {
-  it('matches the previous assessTest on every scenario', () => {
+  it('matches the previous assessTest on every scenario, except that a skipped or todo test is never meaningful', () => {
     let cases = 0;
     const mismatches: unknown[] = [];
+    const changed: Scenario[] = [];
+    let skippedMeaningful = 0;
     const outcomes = new Set<string>();
 
     for (const s of scenarios()) {
@@ -623,27 +631,60 @@ describe('test outcome decision kernel', () => {
       const expected = legacyAssessTest(test, input);
       const actual = assessTest(test, input);
       outcomes.add(expected.outcome);
+      const skippedAndMeaningful = s.flags.skippedOrTodo && expected.outcome === 'meaningful_with_evidence';
 
-      if (JSON.stringify(actual) !== JSON.stringify(expected) && mismatches.length < 5)
+      if (skippedAndMeaningful) {
+        skippedMeaningful++;
+        // The one deliberate change: the outcome becomes inconclusive with its own rationale; the rest is equal.
+        const ok =
+          actual.outcome === 'inconclusive' &&
+          actual.rationale.length === 1 &&
+          SKIP_MESSAGE.test(actual.rationale[0] ?? '') &&
+          JSON.stringify({ ...actual, outcome: expected.outcome, rationale: expected.rationale }) ===
+            JSON.stringify(expected);
+
+        if (ok) changed.push(s);
+        else if (mismatches.length < 5) mismatches.push({ s, expected, actual });
+      } else if (JSON.stringify(actual) !== JSON.stringify(expected) && mismatches.length < 5) {
         mismatches.push({ s, expected, actual });
+      }
     }
 
     expect(mismatches).toEqual([]);
     expect(cases).toBe(2 ** FLAGS.length * 2 * 3 * (1 + 3 * 2) * 2 * 2);
+    // Every outcome is reached, and the change applies to exactly the skipped or todo tests that were meaningful.
     expect([...outcomes].sort()).toEqual([...TEST_OUTCOMES].sort());
+    expect(changed).toHaveLength(skippedMeaningful);
+    expect(skippedMeaningful).toBeGreaterThan(0);
+    expect(changed.every((s) => s.flags.skippedOrTodo && s.flags.assertedCall && s.kill === 'relevant')).toBe(
+      true,
+    );
   }, 120_000);
 
   // The abstract space includes records no run produces (more relevant kills than kills, conflicted properties
   // without a linked one), so this compares the kernel with the previous decision beyond what assessTest reaches.
-  it('matches the previous decision over the abstract record', () => {
-    const mismatches: OutcomeEvidence[] = [];
+  it('matches the previous decision over the abstract record, except for skipped or todo tests', () => {
+    let differences = 0;
+    const unexpected: OutcomeEvidence[] = [];
     const total = forEachRecord([0, 1, 2], (e) => {
-      if (outcomeName(outcomeCode(e)) !== legacyOutcomeOfRecord(e) && mismatches.length < 5)
-        mismatches.push({ ...e });
+      const expected = legacyOutcomeOfRecord(e);
+      const actual = outcomeName(outcomeCode(e));
+
+      if (actual === expected) return;
+      differences++;
+
+      if (!(e.skippedOrTodo && expected === 'meaningful_with_evidence' && actual === 'inconclusive'))
+        if (unexpected.length < 5) unexpected.push({ ...e });
+    });
+    let skippedMeaningful = 0;
+    forEachRecord([0, 1, 2], (e) => {
+      if (e.skippedOrTodo && legacyOutcomeOfRecord(e) === 'meaningful_with_evidence') skippedMeaningful++;
     });
 
-    expect(total).toBe(2 ** 11 * 3 ** 6);
-    expect(mismatches).toEqual([]);
+    expect(total).toBe(2 ** 12 * 3 ** 6);
+    expect(unexpected).toEqual([]);
+    expect(differences).toBe(skippedMeaningful);
+    expect(differences).toBeGreaterThan(0);
   }, 120_000);
 
   it('maps rules to outcomes', () => {
@@ -661,10 +702,32 @@ describe('test outcome decision kernel', () => {
       ['noLinkedProperty', 'inconclusive'],
       ['killsThroughUnknownLink', 'inconclusive'],
       ['noRelevantKill', 'inconclusive'],
+      ['skippedOrTodo', 'inconclusive'],
       ['meaningful', 'meaningful_with_evidence'],
     ]);
     expect(() => outcomeName(TEST_OUTCOMES.length)).toThrow(/unknown test outcome/);
     expect(() => outcomeName(-1)).toThrow(/unknown test outcome/);
+  });
+
+  it('says why a skipped test with credited kills is not meaningful', () => {
+    const { test, input } = scenarioInput({
+      flags: Object.fromEntries(
+        FLAGS.map((k) => [k, k === 'skippedOrTodo' || k === 'assertedCall' || k === 'mutationAvailable']),
+      ) as Scenario['flags'],
+      variant: false,
+      kill: 'relevant',
+      property: 'exercised',
+      conflicted: false,
+      survivor: false,
+      covered: false,
+    });
+    const a = assessTest(test, input);
+    expect(a.outcome).toBe('inconclusive');
+    expect(a.rationale).toEqual([
+      'skipped or marked todo, so it does not run: the 1 specification-relevant mutant kill(s) credited to it are not evidence of what it checks',
+    ]);
+    // The same test without the modifier is meaningful.
+    expect(assessTest({ ...test, modifiers: [] }, input).outcome).toBe('meaningful_with_evidence');
   });
 
   // An exhaustive test over a reduced domain (every flag, every count in {-1, 0, 1}), not a proof: the kernel only
@@ -679,6 +742,7 @@ describe('test outcome decision kernel', () => {
       invariant_assertsNothingIsTautological,
       invariant_expectedFailureIsInconclusive,
       invariant_typeLevelOnlyIsInconclusive,
+      invariant_skippedNeverMeaningful,
       invariant_killedWithoutLinkIsInconclusive,
       invariant_noMutationNeverMeaningful,
       invariant_outcomeInRange,
@@ -699,8 +763,28 @@ describe('test outcome decision kernel', () => {
         }
     });
 
-    expect(total).toBe(2 ** 11 * 3 ** 6);
+    expect(total).toBe(2 ** 12 * 3 ** 6);
     expect(violations).toEqual({});
     expect([...rules].sort((a, b) => a - b)).toEqual(Object.values(OUTCOME_RULE));
   }, 120_000);
+
+  it('changes the previous decision only for a skipped or todo test with the evidence of a meaningful one', () => {
+    const meaningfulButSkipped = {
+      ...Object.fromEntries([...FLAGS, ...COUNTS].map((k) => [k, false])),
+      skippedOrTodo: true,
+      assertedCall: true,
+      mutationAvailable: true,
+      killed: 1,
+      relevantKilled: 1,
+      linkedProperties: 1,
+      relevantSurvived: 0,
+      conflictedProperties: 0,
+      unexercisedBoundaries: 0,
+    } as OutcomeEvidence;
+    expect(outcomeName(outcomeCode(meaningfulButSkipped))).toBe('inconclusive');
+    expect(legacyOutcomeOfRecord(meaningfulButSkipped)).toBe('meaningful_with_evidence');
+    expect(outcomeName(outcomeCode({ ...meaningfulButSkipped, skippedOrTodo: false }))).toBe(
+      'meaningful_with_evidence',
+    );
+  });
 });
