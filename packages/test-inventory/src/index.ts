@@ -6206,7 +6206,30 @@ function moduleSafety(
   const declaredAnyhow = (node: ts.Identifier): boolean =>
     checker
       .getSymbolAtLocation(node)
-      ?.declarations?.some((declaration) => declaration.getSourceFile() === node.getSourceFile()) ?? false;
+      ?.declarations?.some(
+        (declaration) => declaration.getSourceFile() === node.getSourceFile() && !ambient(declaration),
+      ) ?? false;
+  /**
+   * Whether a declaration only describes a value that exists elsewhere (`declare const it: any`, `declare global`,
+   * a `.d.ts` file): it shadows nothing, the value is the global one.
+   */
+  const ambient = (declaration: ts.Node): boolean => {
+    if (declaration.getSourceFile().isDeclarationFile) return true;
+
+    for (let current: ts.Node | undefined = declaration; current; current = current.parent)
+      if (
+        (ts.isVariableDeclaration(current) ||
+          ts.isVariableStatement(current) ||
+          ts.isFunctionDeclaration(current) ||
+          ts.isClassDeclaration(current) ||
+          ts.isModuleDeclaration(current) ||
+          ts.isEnumDeclaration(current)) &&
+        (ts.getCombinedModifierFlags(current as ts.Declaration) & ts.ModifierFlags.Ambient) !== 0
+      )
+        return true;
+
+    return false;
+  };
   /** Whether a name is declared in its own file other than as an import (a variable named `test`, a parameter). */
   const declaredLocally = (node: ts.Identifier): boolean => {
     const symbol = checker.getSymbolAtLocation(node);
@@ -6215,6 +6238,7 @@ function moduleSafety(
       symbol?.declarations?.some(
         (declaration) =>
           declaration.getSourceFile() === node.getSourceFile() &&
+          !ambient(declaration) &&
           !ts.isImportSpecifier(declaration) &&
           !ts.isImportClause(declaration) &&
           !ts.isNamespaceImport(declaration) &&

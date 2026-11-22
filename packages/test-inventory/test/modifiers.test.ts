@@ -423,6 +423,16 @@ describe('full names static analysis cannot read', () => {
       mainModuleRequire:
         "export function shared() { (process as any).mainModule.require('vitest').it('x', () => {}); }",
       mainModuleValue: 'export function shared() { const m: any = process.mainModule; m.load(); }',
+      // Ambient declarations describe the globals; they shadow nothing.
+      ambientIt: "declare const it: any;\nexport function shared() { const f = it; f('hidden', () => {}); }",
+      ambientGlobalThis:
+        "declare const globalThis: any;\nexport function shared() { const g = globalThis; g.it('x', () => {}); }",
+      ambientModuleLoad:
+        "declare const module: any;\nexport function shared() { module.constructor._load('vitest').it('x', () => {}); }",
+      ambientModuleCreateRequire:
+        "declare const module: any;\ndeclare const __filename: string;\nexport function shared() { module.constructor.createRequire(__filename)('vitest').it('x', () => {}); }",
+      declareGlobal:
+        "declare global { const it: any }\nexport function shared() { const f = it; f('x', () => {}); }",
     };
     const files: Record<string, string> = {
       'test/pure-build.ts':
