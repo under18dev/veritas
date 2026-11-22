@@ -325,6 +325,8 @@ describe('full names static analysis cannot read', () => {
         "const g = vi.fn().mockImplementation(() => double(1)); it('g', () => { g(); });",
       expectValue: "const n = 1; const row = { a: [1, 'x'] }; expect(n).toBe(1); expect(row).toEqual(row);",
       expectChoice: 'const flag = true; expect(flag ? 1 : 2).toBe(1); expect(() => flag).not.toThrow();',
+      typeofEval:
+        "type E = typeof eval; const kind = typeof eval; it('t', () => { expect(kind).toBe('function'); });",
       functionTypeChecks:
         "it('f', () => { const f = vi.fn(); f(() => 1); expect(f).toHaveBeenCalledWith(expect.any(Function)); expect(f).toBeInstanceOf(Function); });",
       nestedMatchers:
@@ -496,6 +498,18 @@ describe('full names static analysis cannot read', () => {
         'export function shared() { const F = (() => {}).constructor as any; new F("it(\'hidden\', () => {})")(); }',
       functionPrototype:
         'export function shared() { const F = (Function as any).prototype.constructor; F("it(\'hidden\', () => {})")(); }',
+      arrayConstructor:
+        'export function shared() { ([] as any).constructor.constructor("it(\'hidden\', () => {})")(); }',
+      objectConstructor:
+        'export function shared() { ({} as any).constructor.constructor("it(\'hidden\', () => {})")(); }',
+      prototypeConstructor:
+        'export function shared() { Object.getPrototypeOf(async function () {}).constructor("it(\'hidden\', () => {})")(); }',
+      bracketConstructor:
+        "export function shared() { const o: any = shared; o['constructor'](\"it('hidden', () => {})\")(); }",
+      computedCall:
+        "export function shared(k = 'constructor') { const o: any = shared; o[k](\"it('hidden', () => {})\")(); }",
+      matcherMember:
+        "import { expect } from 'vitest';\nexport function shared() { (expect.any(Function) as any).sample.constructor('x')(); }",
       vmRun:
         "import { runInThisContext } from 'node:vm';\nexport function shared() { runInThisContext(\"it('hidden', () => {})\"); }",
       vmScript:
@@ -592,6 +606,16 @@ describe('full names static analysis cannot read', () => {
         "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun(sharedSuite!);\nit('p', () => {});\n",
       'test/passes-inline-choice.test.ts':
         "import { it } from 'vitest';\nimport { run } from './run-helper.js';\nconst flag = true;\nrun(flag ? () => 1 : () => 2);\nit('p', () => {});\n",
+      // A helper that compares constructors and prototypes, and calls a method named by a literal-typed key.
+      'test/plain-reflection.ts': [
+        'export function shared(cause: unknown, item: object) {',
+        '  const o = { a: () => 1, b: () => 2 };',
+        "  const key: 'a' | 'b' = 'a';",
+        '  return (cause instanceof Error && cause.constructor === Error) || Object.getPrototypeOf(item) === null || o[key]();',
+        '}',
+      ].join('\n'),
+      'test/uses-plain-reflection.test.ts':
+        "import { it } from 'vitest';\nimport { shared } from './plain-reflection.js';\nshared(1, {});\nit('r', () => {});\n",
       // A setup helper registering matchers that call a package.
       'test/matchers-helper.ts':
         "import { expect } from 'vitest';\nimport { pkgRun } from 'external-test-package';\nexpect.extend({ toBe() { pkgRun(); return { pass: true, message: () => '' }; } });\nexport const ready = true;\n",
@@ -637,6 +661,7 @@ describe('full names static analysis cannot read', () => {
     expect(marked('test/passes-inline-choice.test.ts')).toBeUndefined();
     expect(marked('test/passes-returning.test.ts')).toBe('open_collection');
     expect(marked('test/uses-matchers-helper.test.ts')).toBe('imported_open_module');
+    expect(marked('test/uses-plain-reflection.test.ts')).toBeUndefined();
     expect(marked('test/passes-returning-inline.test.ts')).toBeUndefined();
     // Calling a function that loads a package through createRequire may reach it.
     expect(marked('test/uses-created-require.test.ts')).toBe('open_collection');

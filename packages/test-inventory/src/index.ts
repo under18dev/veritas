@@ -6970,18 +6970,79 @@ function moduleSafety(
    */
   const evaluatesCode = (source: ts.SourceFile): boolean =>
     descendants(source).some((node) => {
-      if (ts.isPropertyAccessExpression(node) && node.name.text === 'constructor') {
+      if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+        const member = memberName(node);
+
+        // Any constructor reached by a member (`[].constructor.constructor`), any prototype
+        // (`Object.getPrototypeOf(fn).constructor`, `x.__proto__`), and members of an asymmetric matcher.
+        if (member === 'constructor' || member === '__proto__') {
+          // Compared (`cause.constructor === Error`), it runs nothing; used in any other way, it may be called.
+          const parent = node.parent;
+          const compared =
+            ts.isBinaryExpression(parent) &&
+            [
+              ts.SyntaxKind.EqualsEqualsEqualsToken,
+              ts.SyntaxKind.ExclamationEqualsEqualsToken,
+              ts.SyntaxKind.EqualsEqualsToken,
+              ts.SyntaxKind.ExclamationEqualsToken,
+              ts.SyntaxKind.InstanceOfKeyword,
+            ].includes(parent.operatorToken.kind);
+
+          return !compared;
+        }
+
+        if (member === 'setPrototypeOf') return true;
+
+        // A prototype obtained and then used through a member (`Object.getPrototypeOf(fn).constructor(…)`) or
+        // called; compared or passed on to `getPrototypeOf` again, it runs nothing.
+        if (member === 'getPrototypeOf') {
+          const call = node.parent;
+
+          if (!ts.isCallExpression(call) || call.expression !== node) return true;
+          const use = call.parent;
+
+          return (
+            ((ts.isPropertyAccessExpression(use) || ts.isElementAccessExpression(use)) &&
+              use.expression === call) ||
+            (ts.isCallExpression(use) && use.expression === call)
+          );
+        }
         const object = skipParens(node.expression);
 
-        return (
-          isFunction(object) ||
-          ts.isClassExpression(object) ||
-          (ts.isPropertyAccessExpression(object) && object.name.text === 'prototype')
+        if (ts.isCallExpression(object)) {
+          const callee = skipParens(object.expression);
+
+          if (
+            (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
+            FRESH_VALUES.has(memberName(callee) ?? '')
+          )
+            return true;
+        }
+
+        // A call through a key computed at run time (`obj[key](…)`) may call anything, unless the key's type names
+        // methods as literals (`raw[key]()` with `key: 'text' | 'json'`), which is a call of a named method.
+        if (
+          member !== undefined ||
+          !ts.isElementAccessExpression(node) ||
+          !ts.isCallExpression(node.parent) ||
+          skipParens(node.parent.expression) !== node
+        )
+          return false;
+        const keyType = checker.getTypeAtLocation(node.argumentExpression);
+        const keys = keyType.isUnion() ? keyType.types : [keyType];
+
+        return !keys.every(
+          (key) =>
+            key.isStringLiteral() &&
+            !['constructor', '__proto__', 'prototype', 'call', 'apply', 'bind'].includes(key.value),
         );
       }
 
       if (!ts.isIdentifier(node) || (node.text !== 'eval' && node.text !== 'Function')) return false;
       const parent = node.parent;
+
+      // `typeof eval`, in a type or as a value, reads nothing.
+      if (ts.isTypeQueryNode(parent) || ts.isTypeOfExpression(parent)) return false;
 
       // Names that are not references.
       if (
