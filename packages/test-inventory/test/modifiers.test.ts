@@ -221,6 +221,13 @@ describe('full names static analysis cannot read', () => {
       expectFunction: 'expect(() => sharedSuite()).toThrow();',
       assertFunction: 'assert.throws(() => sharedSuite());',
       waitFor: 'vi.waitFor(() => sharedSuite());',
+      expectFunctionReference: 'const f = () => sharedSuite(); expect(f).toThrow();',
+      expectFunctionDeclaration: 'function f2() { sharedSuite(); } expect(f2).toThrow();',
+      expectMock: 'const m = vi.fn(() => sharedSuite()); expect(m).toThrow();',
+      assertMember: 'assert.throws(helpers.run);',
+      waitForReference: 'const g = () => sharedSuite(); vi.waitFor(g);',
+      pollImport: 'expect.poll(sharedSuite);',
+      expectImport: 'expect(sharedSuite).toBeDefined();',
       mockedPathNotLiteral: "const where = './x.js'; vi.mock(where);",
       testArgument: "it('x', sharedSuite());",
       titleArgument: 'describe(String(sharedSuite()), () => {});',
@@ -265,7 +272,8 @@ describe('full names static analysis cannot read', () => {
       mockNotCalled: "const f = vi.fn(() => double(1)); it('f', () => { f(); });",
       implementationNotCalled:
         "const g = vi.fn().mockImplementation(() => double(1)); it('g', () => { g(); });",
-      expectValue: 'expect(value).toBeDefined();',
+      expectValue: "const n = 1; const row = { a: [1, 'x'] }; expect(n).toBe(1); expect(row).toEqual(row);",
+      spyOn: "vi.spyOn(console, 'log'); it('s', () => {});",
       expectExtend:
         "expect.extend({ toBeTwo(received: number) { return { pass: received === 2, message: () => 'two' }; } });",
       automockPlain: "vi.mock('./pure-helper.js'); it('a', () => {});",

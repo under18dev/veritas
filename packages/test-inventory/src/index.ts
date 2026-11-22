@@ -4426,6 +4426,68 @@ function closedCollection(source: ts.SourceFile): boolean {
     runner.assertObjects.has(name) ||
     runner.mockObjects.has(name);
   /**
+   * Names that are data wherever the file uses them: every declaration of the name is a `const` whose value is a
+   * literal, or an array or object of literals (no function, no call).
+   */
+  const dataConstants = (() => {
+    const data = (node: ts.Expression): boolean => {
+      const expression = skipParens(node);
+
+      if (
+        ts.isStringLiteralLike(expression) ||
+        ts.isNumericLiteral(expression) ||
+        ts.isBigIntLiteral(expression) ||
+        expression.kind === ts.SyntaxKind.TrueKeyword ||
+        expression.kind === ts.SyntaxKind.FalseKeyword ||
+        expression.kind === ts.SyntaxKind.NullKeyword
+      )
+        return true;
+
+      if (ts.isPrefixUnaryExpression(expression)) return data(expression.operand);
+
+      if (ts.isArrayLiteralExpression(expression)) return expression.elements.every(data);
+
+      return (
+        ts.isObjectLiteralExpression(expression) &&
+        expression.properties.every(
+          (property) =>
+            ts.isPropertyAssignment(property) &&
+            !ts.isComputedPropertyName(property.name) &&
+            data(property.initializer),
+        )
+      );
+    };
+    const verdict = new Map<string, boolean>();
+    const mark = (name: string, isData: boolean) => verdict.set(name, (verdict.get(name) ?? true) && isData);
+
+    for (const node of descendants(source)) {
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name))
+        mark(
+          node.name.text,
+          (ts.getCombinedNodeFlags(node) & ts.NodeFlags.Const) !== 0 &&
+            node.initializer !== undefined &&
+            data(node.initializer),
+        );
+      else if (ts.isParameter(node) || ts.isBindingElement(node) || ts.isVariableDeclaration(node)) {
+        // A destructured or parameter name may hold anything.
+        for (const element of [node.name, ...descendants(node.name)])
+          if (ts.isIdentifier(element)) mark(element.text, false);
+      } else if (
+        (ts.isFunctionDeclaration(node) ||
+          ts.isClassDeclaration(node) ||
+          ts.isFunctionExpression(node) ||
+          ts.isClassExpression(node) ||
+          ts.isImportSpecifier(node) ||
+          ts.isImportClause(node) ||
+          ts.isNamespaceImport(node)) &&
+        node.name
+      )
+        mark(node.name.text, false);
+    }
+
+    return new Set([...verdict].filter(([, isData]) => isData).map(([name]) => name));
+  })();
+  /**
    * Inside a mock factory: the factory's own parameters, which it may call (`importOriginal()`), and whether `await`
    * and `return` are allowed.
    */
@@ -4464,6 +4526,19 @@ function closedCollection(source: ts.SourceFile): boolean {
           ts.isNumericLiteral(argument) ||
           (ts.isObjectLiteralExpression(argument) && inert(argument))
         );
+
+      // An API that may call what it is given (`expect(f).toThrow()`, `assert.throws(f)`, `vi.waitFor(f)`) must not
+      // be given anything that may be a function, unless it only stores values (`it.each(rows)`, `vi.spyOn`).
+      const argumentNode = skipParens(argument);
+
+      if (
+        !defers &&
+        !(member !== undefined && NON_CALLING.has(member)) &&
+        ((ts.isIdentifier(argumentNode) && !dataConstants.has(argumentNode.text)) ||
+          ts.isPropertyAccessExpression(argumentNode) ||
+          ts.isElementAccessExpression(argumentNode))
+      )
+        return false;
 
       return inert(argument);
     });
@@ -4768,6 +4843,31 @@ function closedCollection(source: ts.SourceFile): boolean {
 
 /** Members of the runner's mock object whose function arguments run while a test file is collected. */
 const MOCK_FACTORIES = new Set(['mock', 'doMock', 'hoisted', 'unstable_mockModule', 'setMock']);
+
+/**
+ * Members of the runner's API that store or inspect their arguments without calling them: table and condition
+ * factories of registrations, spies and stubs, timers and module registry controls.
+ */
+const NON_CALLING = new Set([
+  'each',
+  'for',
+  'skipIf',
+  'runIf',
+  'spyOn',
+  'stubGlobal',
+  'stubEnv',
+  'mocked',
+  'setSystemTime',
+  'useFakeTimers',
+  'useRealTimers',
+  'setConfig',
+  'resetModules',
+  'clearAllMocks',
+  'resetAllMocks',
+  'restoreAllMocks',
+  'unstubAllGlobals',
+  'unstubAllEnvs',
+]);
 
 /** Members of the runner's API that keep a function argument to run later (a mock implementation, a fixture). */
 const DEFERRING = new Set([
