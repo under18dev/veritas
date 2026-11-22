@@ -4411,14 +4411,103 @@ function requiresCreated(source: ts.SourceFile, load: (name: string) => void, un
   }
 
   for (const node of descendants(source)) {
-    if (!ts.isIdentifier(node) || !loaders.has(node.text)) continue;
+    if (!ts.isIdentifier(node)) continue;
     const parent = node.parent;
 
-    if (ts.isVariableDeclaration(parent) && parent.name === node) continue;
+    if (loaders.has(node.text)) {
+      if (ts.isVariableDeclaration(parent) && parent.name === node) continue;
 
-    if (ts.isCallExpression(parent) && parent.expression === node) loaded(parent);
-    else unknown();
+      if (ts.isCallExpression(parent) && parent.expression === node) loaded(parent);
+      else unknown();
+      continue;
+    }
+
+    // `createRequire` itself, or the module object that has it, used other than to call it (`const cr = createRequire`).
+    if (named.has(node.text)) {
+      if (ts.isImportSpecifier(parent)) continue;
+
+      if (!(ts.isCallExpression(parent) && parent.expression === node)) unknown();
+    } else if (namespaces.has(node.text)) {
+      if (ts.isImportClause(parent) || ts.isNamespaceImport(parent)) continue;
+      const member =
+        (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+        parent.expression === node
+          ? memberName(parent)
+          : undefined;
+
+      if (member === undefined) unknown();
+      else if (
+        member === 'createRequire' &&
+        !(ts.isCallExpression(parent.parent) && parent.parent.expression === parent)
+      )
+        unknown();
+    }
   }
+}
+
+/**
+ * Whether a module obtains `require` in a way it is not followed: `require` used other than to call it with a
+ * module name (or `require.resolve(...)`, which loads nothing) — an alias, `.call`, passing it on; a `.require` member
+ * of anything (`module.require`, `process.mainModule.require`); the CommonJS `module` other than `module.exports`;
+ * `process.mainModule`.
+ */
+function requireEscapes(source: ts.SourceFile, declaredLocally: (node: ts.Identifier) => boolean): boolean {
+  for (const node of descendants(source)) {
+    if (
+      (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+      memberName(node) === 'require'
+    )
+      return true;
+
+    if (!ts.isIdentifier(node)) continue;
+    const parent = node.parent;
+
+    // Names that are not references.
+    if (
+      (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+      (ts.isPropertyAssignment(parent) && parent.name === node) ||
+      ts.isImportSpecifier(parent) ||
+      ts.isImportClause(parent) ||
+      ts.isNamespaceImport(parent) ||
+      ((ts.isVariableDeclaration(parent) ||
+        ts.isParameter(parent) ||
+        ts.isFunctionDeclaration(parent) ||
+        ts.isBindingElement(parent) ||
+        ts.isMethodDeclaration(parent) ||
+        ts.isPropertyDeclaration(parent)) &&
+        parent.name === node)
+    )
+      continue;
+
+    if (node.text === 'require') {
+      const called = ts.isCallExpression(parent) && parent.expression === node;
+      const resolving =
+        ts.isPropertyAccessExpression(parent) &&
+        parent.expression === node &&
+        parent.name.text === 'resolve' &&
+        ts.isCallExpression(parent.parent) &&
+        parent.parent.expression === parent;
+
+      if (!called && !resolving) return true;
+    } else if (node.text === 'module' && !declaredLocally(node)) {
+      if (
+        !(
+          ts.isPropertyAccessExpression(parent) &&
+          parent.expression === node &&
+          parent.name.text === 'exports'
+        )
+      )
+        return true;
+    } else if (
+      node.text === 'process' &&
+      (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+      parent.expression === node &&
+      memberName(parent) === 'mainModule'
+    )
+      return true;
+  }
+
+  return false;
 }
 
 /** Members of the runner's mock object that load the module named by their first argument. */
@@ -6015,7 +6104,7 @@ function moduleSafety(
         }
       }
     }
-    if (escapesRunner(source)) found.unknown = true;
+    if (escapesRunner(source) || requireEscapes(source, declaredAnyhow)) found.unknown = true;
     requiresCreated(source, loadedAtRunTime, () => {
       found.unknown = true;
     });
@@ -6113,6 +6202,11 @@ function moduleSafety(
 
     return false;
   };
+  /** Whether a name is declared in its own file at all, imports included (an imported `module`). */
+  const declaredAnyhow = (node: ts.Identifier): boolean =>
+    checker
+      .getSymbolAtLocation(node)
+      ?.declarations?.some((declaration) => declaration.getSourceFile() === node.getSourceFile()) ?? false;
   /** Whether a name is declared in its own file other than as an import (a variable named `test`, a parameter). */
   const declaredLocally = (node: ts.Identifier): boolean => {
     const symbol = checker.getSymbolAtLocation(node);

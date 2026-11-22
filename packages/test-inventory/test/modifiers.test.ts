@@ -415,11 +415,20 @@ describe('full names static analysis cannot read', () => {
       importActual:
         "import { vi } from 'vitest';\nexport async function shared() { const m: any = await vi.importActual('vitest'); m.it('x', () => {}); }",
       importEquals: "import v = require('vitest');\nexport function shared() { v.it('x', () => {}); }",
+      createRequireAlias:
+        "import { createRequire } from 'node:module';\nconst cr = createRequire;\nexport function shared() { cr(import.meta.url)('vitest').it('x', () => {}); }",
+      requireAlias: "export function shared() { const r = require; r('vitest').it('x', () => {}); }",
+      requireCall: "export function shared() { require.call(null, 'vitest').it('x', () => {}); }",
+      moduleRequire: "export function shared() { module.require('vitest').it('x', () => {}); }",
+      mainModuleRequire:
+        "export function shared() { (process as any).mainModule.require('vitest').it('x', () => {}); }",
+      mainModuleValue: 'export function shared() { const m: any = process.mainModule; m.load(); }',
     };
     const files: Record<string, string> = {
-      'test/pure-build.ts': 'export const build = () => ({ a: 1 });\n',
+      'test/pure-build.ts':
+        "export const build = () => ({ a: 1 });\nexport const where = () => require.resolve('./pure-build.js');\n",
       'test/builds.test.ts':
-        "import { expect, it } from 'vitest';\nimport { build } from './pure-build.js';\nconst m = build();\nit('b', () => { expect(m.a).toBe(1); });\n",
+        "import { expect, it } from 'vitest';\nimport { build, where } from './pure-build.js';\nconst m = build();\nwhere();\nit('b', () => { expect(m.a).toBe(1); });\n",
       'test/barrel-user.ts':
         "import { test as t } from './helper-barrel.js';\nexport function shared() { t('x', () => {}); }\n",
       'test/uses-barrel-user.test.ts':
