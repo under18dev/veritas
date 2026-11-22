@@ -180,17 +180,22 @@ type Aggregate =
 const and = (left: Expr, right: Expr): Expr => ({ kind: 'binary', op: 'and', left, right });
 const not = (arg: Expr): Expr => ({ kind: 'unary', op: 'not', arg });
 
-/** Find an exported function declaration or exported `const name = (...) => ...`. */
 /**
  * Whether the module exports a function named `name` under that name: an exported function declaration or
- * constant, or a local function listed in an `export { ... }` clause without renaming. Replay imports the export,
+ * constant, or a local function listed in an `export { ... }` clause without renaming. `export default function
+ * name` exports only `default`, so it does not count unless a clause also exports `name`. Replay imports the export,
  * so a function that is only declared cannot be checked against its model.
  */
 export function exportsFunction(file: string, source: string, name: string): boolean {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const exported = (node: ts.Node) =>
-    ts.canHaveModifiers(node) &&
-    (ts.getModifiers(node) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+  const exported = (node: ts.Node) => {
+    const modifiers = ts.canHaveModifiers(node) ? (ts.getModifiers(node) ?? []) : [];
+
+    return (
+      modifiers.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) &&
+      !modifiers.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword)
+    );
+  };
 
   for (const stmt of sf.statements) {
     if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name && exported(stmt)) return true;
@@ -216,6 +221,7 @@ export function exportsFunction(file: string, source: string, name: string): boo
   return false;
 }
 
+/** Find a function declaration or `const name = (...) => ...` of the file, exported or not. */
 function findFunction(sf: ts.SourceFile, name: string): ts.FunctionLikeDeclaration | null {
   for (const stmt of sf.statements) {
     if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name) return stmt;

@@ -36,6 +36,9 @@ function hidden(e: Evidence): boolean {
 }
 const listed = (x: number): boolean => x === x;
 export { listed };
+export default function invariant_default(x: number): boolean {
+  return x >= x;
+}
 `;
 
 function project(): string {
@@ -163,6 +166,7 @@ describe('formalizeDeclared', () => {
     ['src/missing.ts#invariant', /target file src\/missing\.ts does not exist/],
     ['src/kernel.ts#nothing', /exports no function named nothing/],
     ['src/kernel.ts#hidden', /exports no function named hidden/],
+    ['src/kernel.ts#invariant_default', /exports no function named invariant_default/],
     [
       'src/kernel.ts#score',
       /returns a number; a holds_for_all property needs a function that returns a boolean/,

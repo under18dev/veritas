@@ -120,4 +120,10 @@ export type { T } from './t.js';
     expect(exportsFunction('m.ts', source, 'e')).toBe(false);
     expect(exportsFunction('m.ts', source, 'missing')).toBe(false);
   });
+
+  it('does not take a default export for an export of its name', () => {
+    const only = 'export default function invariant(x: number): boolean { return x >= x; }\n';
+    expect(exportsFunction('m.ts', only, 'invariant')).toBe(false);
+    expect(exportsFunction('m.ts', `${only}export { invariant };\n`, 'invariant')).toBe(true);
+  });
 });
