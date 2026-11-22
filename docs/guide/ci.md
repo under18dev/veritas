@@ -174,15 +174,16 @@ The job caches no Veritas results: each workflow run starts without `.veritas/ca
 
 1. Declare the properties in `.veritas/config.json`, review them and record the decisions with `veritas spec accept D-<id> --reason "<why>"`. You can do this before the first run. Commit `.veritas/config.json` and `.veritas/approvals.json`.
 2. Set `policy.confirmedViolation` and `policy.inconclusiveBehavior` to `fail`, so a counterexample exits `1` and any undecided result (`unknown`, `timeout`, `unsupported`) exits `4`.
-3. Run prove and fail on its exit code. Install Lean only if you use `--engine both` or `lean`.
+3. Run prove and fail on its exit code. Install Lean only if you use `--engine both` or `lean`. When Lean is not available, `--engine both` records only Z3 claims and still exits `0`, so check that Lean is installed before prove (`lean --version`).
 4. A property that is not accepted is not checked and does not change the exit code. To require that every declaration is accepted, check the list as well.
 
 ```yaml
 - name: Install Lean (elan)
   run: |
-    curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
-    sh elan-init.sh -y --default-toolchain stable --no-modify-path
+    curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o "$RUNNER_TEMP/elan-init.sh"
+    sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain stable --no-modify-path
     echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+- run: lean --version
 - run: npx veritas --json prove --engine both
 - name: Every declared property is accepted
   run: >-

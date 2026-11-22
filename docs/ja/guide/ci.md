@@ -174,15 +174,16 @@ jobs:
 
 1. `.veritas/config.json` に Property を宣言してレビューし、`veritas spec accept D-<id> --reason "<理由>"` で決定を記録します。最初の実行の前でもできます。`.veritas/config.json` と `.veritas/approvals.json` をコミットします。
 2. `policy.confirmedViolation` と `policy.inconclusiveBehavior` を `fail` にします。反例が出れば終了コード `1`、判定できない結果（`unknown`、`timeout`、`unsupported`）が残れば `4` になります。
-3. prove を実行し、終了コードでジョブを失敗させます。Lean が必要なのは `--engine both` か `lean` を使うときだけです。
+3. prove を実行し、終了コードでジョブを失敗させます。Lean が必要なのは `--engine both` か `lean` を使うときだけです。Lean が使えないとき、`--engine both` は Z3 の結果だけを記録して終了コード `0` で終わるので、prove の前に Lean が入っていることを確かめます（`lean --version`）。
 4. accept されていない Property は検査されず、終了コードも変えません。すべての宣言が accept されていることを求めるなら、一覧も確かめます。
 
 ```yaml
 - name: Install Lean (elan)
   run: |
-    curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
-    sh elan-init.sh -y --default-toolchain stable --no-modify-path
+    curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o "$RUNNER_TEMP/elan-init.sh"
+    sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain stable --no-modify-path
     echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+- run: lean --version
 - run: npx veritas --json prove --engine both
 - name: Every declared property is accepted
   run: >-
