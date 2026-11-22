@@ -296,10 +296,13 @@ export class TestNameIndex implements TestNameLookup {
 
       // `skip` and `todo` (its own, `xit`, or an enclosing `describe.skip`) are known not to run; `skipIf`,
       // `runIf` and other conditions are not known either way.
+      const focused = test.modifiers?.includes('only') ?? false;
+      // Skipped or a todo, and not focused, never runs, whatever its table or condition; unfocused next to a focused
+      // test that surely runs, unless it may run anyway.
       const skipped =
-        !uncertain(test) &&
-        ((test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false) ||
-          (focusedFiles.has(test.file) && !test.modifiers?.includes('only')));
+        ((test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false) &&
+          !focused) ||
+        (!uncertain(test) && focusedFiles.has(test.file) && !focused);
 
       if (skipped) this.skipped.add(test.id);
 

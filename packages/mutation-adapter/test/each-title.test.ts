@@ -377,6 +377,14 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     );
   });
 
+  it('keeps a skipped table out of the candidates even when its table may be empty', () => {
+    // `it.skip.each(cases)('case %s')`: conditional because of the table, and skipped all the same.
+    const rows = { ...entry([], 'case %s', ['each', 'skip']), conditional: true as const };
+    const plain = entry([], 'case 1', []);
+
+    expect(mutatorTestId(`${FILE}#case 1`, ' > ', new TestNameIndex([rows, plain], ' > '))).toBe(plain.id);
+  });
+
   it('takes a test that is both focused and skipped as one that may run', () => {
     // Vitest gives `only` precedence: `it('case 1', { skip: true, only: true })` runs, and focuses the file.
     const rows = entry([], 'case %s');
