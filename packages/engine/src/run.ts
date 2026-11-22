@@ -1643,14 +1643,6 @@ export function cacheableMutationResult(
   return result.status === 'succeeded' && !result.excludedFiles?.length && !result.timeBudgetExhausted;
 }
 
-/**
- * Stage status for a mutation run. Mutants whose backend status was not recognized (`unknown`) leave the stage
- * `partial`, and so do mutants that were not run (`pending`) unless the run was incremental (`--since`), where
- * mutants outside the change are left out on purpose. A complete run without a single mutant is `partial` too:
- * it is no evidence about the tests. So is a run that left source files out because their instrumented copy did
- * not parse, and a run that stopped starting mutants because its time budget ran out, `--since` or not: those
- * mutants were selected and not run. A `partial` stage means the run cannot report `pass`.
- */
 /** Whether a mutation run got as far as running mutants: it succeeded and at least one mutant ran to an outcome. */
 export function startedMutants(result: { status: string; mutants: readonly Mutant[] }): boolean {
   return (
@@ -1665,6 +1657,14 @@ export function startedMutants(result: { status: string; mutants: readonly Mutan
   );
 }
 
+/**
+ * Stage status for a mutation run. Mutants whose backend status was not recognized (`unknown`) leave the stage
+ * `partial`, and so do mutants that were not run (`pending`) unless the run was incremental (`--since`), where
+ * mutants outside the change are left out on purpose. A complete run without a single mutant is `partial` too:
+ * it is no evidence about the tests. So is a run that left source files out because their instrumented copy did
+ * not parse, and a run that stopped starting mutants because its time budget ran out, `--since` or not: those
+ * mutants were selected and not run. A `partial` stage means the run cannot report `pass`.
+ */
 export function mutationStageStatus(
   result: {
     status: StageResult['status'] | 'unsupported';
