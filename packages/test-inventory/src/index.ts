@@ -4397,6 +4397,10 @@ function closedCollection(source: ts.SourceFile): boolean {
     )
       return false;
 
+    // The call's own arguments are evaluated now, whatever the call does with them (`beforeEach(setup())`);
+    // inline functions are not run by being passed.
+    if (ts.isCallExpression(node) ? !node.arguments.every(inert) : !inert(node.template)) return false;
+
     for (;;) {
       callee = skipParens(callee);
 
@@ -4577,7 +4581,9 @@ function closedCollection(source: ts.SourceFile): boolean {
 
     if (ts.isVariableStatement(node))
       return node.declarationList.declarations.every(
-        (declaration) => !declaration.initializer || inert(declaration.initializer),
+        // Defaults in a destructuring pattern (`const { a = setup() } = {}`) run too.
+        (declaration) =>
+          (!declaration.initializer || inert(declaration.initializer)) && inertBinding(declaration.name),
       );
 
     return (
