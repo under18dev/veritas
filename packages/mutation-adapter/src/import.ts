@@ -314,19 +314,20 @@ export class TestNameIndex implements TestNameLookup {
 
     for (const test of tests) {
       const inexact = test.inexactName ?? (test.granularity === 'suite' ? 'dynamic_title' : undefined);
-
-      if (inexact !== undefined && !this.inexact.has(test.file)) this.inexact.set(test.file, inexact);
-
       // `skip` and `todo` (its own, `xit`, or an enclosing `describe.skip`) are known not to run; `skipIf`,
       // `runIf` and other conditions are not known either way.
       const focused = test.modifiers?.includes('only') ?? false;
+      const definitelySkipped =
+        (test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false) &&
+        !focused &&
+        !test.optionsUnknown;
+
+      // A registration known not to run (`it.skip(title, …)`) names no test that ran, whatever its title.
+      if (inexact !== undefined && !definitelySkipped && !this.inexact.has(test.file))
+        this.inexact.set(test.file, inexact);
       // Skipped or a todo, and not focused, never runs, whatever its table or condition; unfocused next to a focused
       // test that surely runs, unless it may run anyway.
-      const skipped =
-        ((test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false) &&
-          !focused &&
-          !test.optionsUnknown) ||
-        (focusedFiles.has(test.file) && !focused && !test.optionsUnknown);
+      const skipped = definitelySkipped || (focusedFiles.has(test.file) && !focused && !test.optionsUnknown);
 
       skippedById.set(test.id, (skippedById.get(test.id) ?? true) && skipped);
 

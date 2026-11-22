@@ -443,6 +443,26 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect(mutatorTestId(`${FILE}#fee for 5000`, ' > ', alone)).toBe(literal.id);
   });
 
+  it('reads every full name of a file whose only unread title is of a registration known not to run', () => {
+    // `const title = 'ignored'; it.skip(title, …); it.each([1, 2])('case %s', …)`.
+    const table = entry([], 'case %s', ['each']);
+    const skipped = { ...entry([], '<dynamic test>', ['skip']), inexactName: 'dynamic_title' as const };
+    const index = new TestNameIndex([table, skipped], ' > ');
+    expect(mutatorTestId(`${FILE}#case 1`, ' > ', index)).toBe(table.id);
+    expect(index.withheld.get(`${FILE}#case 1`)).toBeUndefined();
+
+    // Not when it may run after all: focused too, or with options not read.
+    for (const variant of [
+      { ...skipped, modifiers: ['skip', 'only'] },
+      { ...skipped, optionsUnknown: true },
+      { ...skipped, modifiers: [] },
+    ]) {
+      const open = new TestNameIndex([table, variant], ' > ');
+      expect(mutatorTestId(`${FILE}#case 1`, ' > ', open)).not.toBe(table.id);
+      expect(open.withheld.get(`${FILE}#case 1`)).toEqual({ kind: 'inexact_file', because: 'dynamic_title' });
+    }
+  });
+
   it('takes no template of a skipped or todo registration as a candidate', () => {
     const plain = entry([], 'case 1', []);
 
