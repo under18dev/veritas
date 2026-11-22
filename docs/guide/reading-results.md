@@ -142,6 +142,8 @@ Placeholders are read only in the titles the runner formats: the title of the `.
 
 mutator numbers the second and later tests of a run that share a full name (`case 1#2`). Such a name is resolved through the name it shares, by the same rules, when mutator also reported that name and two runs could have had it (two tests fit it, or a test that fits it is table-driven, in a loop, or in a file whose names were not all read); otherwise the `#2` is read as part of the title. Some names stay unmatched although they come from a template, for example a Jest key with a character that cannot be part of an identifier other than `$` and `.` (`$a-b`). Their kills are not credited to any test, rather than to a wrong one.
 
+What static analysis cannot see is not detected: code that runs implicitly while a file is collected (a getter, an iterator, a type coercion or `Symbol.dispose` of an external package), tests registered by `setupFiles`, and packages that register tests when imported. Names of such tests can still be matched to a template of the file that runs them.
+
 A file inside the analysis scope that imports Vitest's runtime (`expect`, `assert`, `vi`, or `import * as vitest from 'vitest'`) is treated as test code wherever it lives, because it only runs inside a test run. A mock utility such as `src/test-utils.ts` is therefore not counted as project code. The flip side is that a real function kept in such a file is not counted either, so a test that calls only that function is reported as not checking project behaviour. Move the function out of that file if it is project code.
 
 ## Evidence vector
