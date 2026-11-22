@@ -102,7 +102,9 @@ function withheldWarnings(index: TestNameIndex): string[] {
         ? 'match the titles of more than one table-driven test (.each)'
         : reason.kind === 'exact_and_template'
           ? 'are the title of one test and also match the title of a table-driven test (.each)'
-          : `fit the title of a test in a file where static analysis could not read the full name of every test (${INEXACT_BECAUSE[reason.because]}), so they may belong to a test whose name was not read`;
+          : reason.kind === 'skipped_exact'
+            ? 'are the title only of a test that is skipped or a todo, which cannot have run'
+            : `fit the title of a test in a file where static analysis could not read the full name of every test (${INEXACT_BECAUSE[reason.because]}), so they may belong to a test whose name was not read`;
     const list = groups.get(what) ?? [];
     list.push(redact(summarize(name, 1, 200)));
     groups.set(what, list);

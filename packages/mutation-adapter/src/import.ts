@@ -197,6 +197,8 @@ export function testIdsByFullName(
 export type WithheldReason =
   | { kind: 'templates' }
   | { kind: 'exact_and_template' }
+  /** The only test with the name is skipped or a todo, so it cannot have run under it. */
+  | { kind: 'skipped_exact' }
   | { kind: 'inexact_file'; because: InexactReason };
 
 /** mutator's suffix for the second and later tests of a run with one full name (`case 1#2`). */
@@ -391,9 +393,16 @@ export class TestNameIndex implements TestNameLookup {
 
     if (exact === null) return null;
 
-    // A skipped test did not run: a name it has exactly that a running template fits is the template's.
-    if (exact !== undefined && this.skipped.has(exact) && [...candidates].some((id) => id !== exact))
+    // A skipped test did not run: a name it has exactly that a running template fits is the template's, and one no
+    // running template fits came from a test static analysis did not see.
+    if (exact !== undefined && this.skipped.has(exact)) {
+      if (![...candidates].some((id) => id !== exact)) {
+        this.withheld.set(name, { kind: 'skipped_exact' });
+
+        return null;
+      }
       exact = undefined;
+    }
     const because = this.inexact.get(file);
     let reason: WithheldReason | undefined;
 

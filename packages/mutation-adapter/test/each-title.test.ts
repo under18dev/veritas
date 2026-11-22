@@ -128,6 +128,32 @@ describe('title templates of table-driven tests', () => {
     // About half a second on a laptop; the bound only catches a return to checking every template.
     expect(performance.now() - started).toBeLessThan(20_000);
   }, 60_000);
+
+  it('resolves names against many templates that share their prefix and suffix, by an inner literal', () => {
+    const file = 'test/big.test.ts';
+    const tests = Array.from({ length: 2000 }, (_, i) => ({
+      id: `T-${i}`,
+      file,
+      suitePath: ['suite %s'],
+      name: `case ${i} %s with %s and %s`,
+      modifiers: ['each'],
+      tableTitles: [0, 1],
+    }));
+    const index = new TestNameIndex(tests, ' > ');
+    const started = performance.now();
+    let credited = 0;
+
+    for (let j = 0; j < 20000; j++) {
+      const i = j % 2000;
+
+      if (mutatorTestId(`${file}#suite x${j} > case ${i} a with b and c`, ' > ', index) === `T-${i}`)
+        credited++;
+    }
+
+    expect(credited).toBe(20000);
+    // A few seconds even under load; checking every template took minutes.
+    expect(performance.now() - started).toBeLessThan(60_000);
+  }, 120_000);
 });
 
 describe('resolving mutator names of table-driven tests to inventoried tests', () => {
@@ -314,6 +340,12 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect(
       mutatorTestId(`${FILE}#rows a > case 1`, ' > ', new TestNameIndex([inSkipped, literal], ' > ')),
     ).toBe(literal.id);
+    // A name only a skipped test has, with no running template to fit, came from a test not seen.
+    for (const modifiers of [['skip'], ['todo']]) {
+      const lone = new TestNameIndex([entry([], 'case 1', modifiers)], ' > ');
+      expect(mutatorTestId(`${FILE}#case 1`, ' > ', lone)).not.toBe(entry([], 'case 1').id);
+      expect(lone.withheld.get(`${FILE}#case 1`)).toEqual({ kind: 'skipped_exact' });
+    }
     // skipIf and runIf may have run: the template stays a candidate.
     const conditional = { ...entry([], 'case %s'), conditional: true as const };
     const index = new TestNameIndex([conditional, plain], ' > ');

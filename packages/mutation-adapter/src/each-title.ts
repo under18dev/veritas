@@ -137,10 +137,29 @@ interface Shape {
   suffix: string;
   /** Tokens between them, which the automaton runs. */
   middle: readonly Token[];
+  /** The runs of literal characters inside the middle, in order: a name must contain each after the one before. */
+  literals: readonly string[];
   min: number;
 }
 
 const shapes = new WeakMap<TitleTemplate, Shape>();
+
+function literalRuns(tokens: readonly Token[]): string[] {
+  const runs: string[] = [];
+  let run = '';
+
+  for (const token of tokens) {
+    if (token.kind === 'char') run += token.char;
+    else if (run) {
+      runs.push(run);
+      run = '';
+    }
+  }
+
+  if (run) runs.push(run);
+
+  return runs;
+}
 
 function shapeOf(template: TitleTemplate): Shape {
   let shape = shapes.get(template);
@@ -162,6 +181,7 @@ function shapeOf(template: TitleTemplate): Shape {
     prefix: text(0, start),
     suffix: text(end, tokens.length),
     middle: tokens.slice(start, end),
+    literals: literalRuns(tokens.slice(start, end)),
     min: tokens.filter((token) => token.kind === 'char' || token.kind === 'one' || token.kind === 'digit')
       .length,
   };
@@ -180,13 +200,22 @@ let following = new Uint8Array(64);
  * all of its states at once, so the time is the name's length times the template's, with no backtracking.
  */
 export function matchesTitleTemplate(template: TitleTemplate, name: string): boolean {
-  const { prefix, suffix, middle, min } = shapeOf(template);
+  const { prefix, suffix, middle, min, literals } = shapeOf(template);
 
   if (name.length < min || !name.startsWith(prefix) || !name.endsWith(suffix)) return false;
   const from = prefix.length;
   const to = name.length - suffix.length;
 
   if (to < from) return false;
+  // A quick necessary test before the automaton: the literal runs in order (each placeholder may print nothing).
+  let at = from;
+
+  for (const literal of literals) {
+    const found = name.indexOf(literal, at);
+
+    if (found < 0 || found + literal.length > to) return false;
+    at = found + literal.length;
+  }
   const size = middle.length;
 
   if (current.length < size + 1) {
@@ -297,10 +326,10 @@ function* along<V>(root: Trie<V>, text: string, fromEnd: boolean): Generator<Tri
  * characters of each, then fully by `matchesTitleTemplate`).
  */
 export class TemplateSet<T> {
-  private readonly root = trie<Trie<{ template: TitleTemplate; value: T }>>();
+  private readonly root = trie<Trie<Bucket<T>>>();
 
   add(template: TitleTemplate, value: T): void {
-    const { prefix, suffix } = shapeOf(template);
+    const { prefix, suffix, literals } = shapeOf(template);
     const byPrefix = nodeFor(this.root, prefix, false);
     let suffixes = byPrefix.values[0];
 
@@ -308,7 +337,26 @@ export class TemplateSet<T> {
       suffixes = trie();
       byPrefix.values.push(suffixes);
     }
-    nodeFor(suffixes, suffix, true).values.push({ template, value });
+    const node = nodeFor(suffixes, suffix, true);
+    let bucket = node.values[0];
+
+    if (!bucket) {
+      bucket = { plain: [], byKey: new Map() };
+      node.values.push(bucket);
+    }
+    const entry = { template, value };
+    const first = literals[0];
+
+    if (first === undefined) {
+      bucket.plain.push(entry);
+      return;
+    }
+    // Indexed by the start of the first literal inside the template, which the name must contain somewhere.
+    const size = Math.min(first.length, KEY_LENGTH);
+    const keys = bucket.byKey.get(size) ?? new Map<string, Entry<T>[]>();
+    const key = first.slice(0, size);
+    keys.set(key, [...(keys.get(key) ?? []), entry]);
+    bucket.byKey.set(size, keys);
   }
 
   /** The values of the templates `name` fits. */
@@ -318,9 +366,31 @@ export class TemplateSet<T> {
     for (const byPrefix of along(this.root, name, false))
       for (const suffixes of byPrefix.values)
         for (const bySuffix of along(suffixes, name, true))
-          for (const { template, value } of bySuffix.values)
-            if (matchesTitleTemplate(template, name)) found.push(value);
+          for (const bucket of bySuffix.values) {
+            const entries = new Set(bucket.plain);
+
+            for (const [size, keys] of bucket.byKey)
+              for (let at = 0; at + size <= name.length; at++)
+                for (const entry of keys.get(name.slice(at, at + size)) ?? []) entries.add(entry);
+
+            for (const { template, value } of entries)
+              if (matchesTitleTemplate(template, name)) found.push(value);
+          }
 
     return found;
   }
+}
+
+/** How many characters of a template's first inner literal `TemplateSet` indexes by. */
+const KEY_LENGTH = 64;
+
+interface Entry<T> {
+  template: TitleTemplate;
+  value: T;
+}
+
+/** Templates with one literal prefix and suffix: those with an inner literal by its start, the others as they are. */
+interface Bucket<T> {
+  plain: Entry<T>[];
+  byKey: Map<number, Map<string, Entry<T>[]>>;
 }
