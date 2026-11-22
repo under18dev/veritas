@@ -3,13 +3,15 @@
  * own config into one that runs only the selected test files. It imports nothing but Node built-ins at load time;
  * the matcher, globber and config loader come from the project's own Vitest and Vite, by the URLs it is given.
  */
-import { existsSync, globSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 /** What the generated config passes in. Paths are absolute. */
 export interface MutationRuntimeOptions {
   /** Directory of the project config: the project root. */
   configDir: string;
+  /** The project config file itself, or null when the project has none. */
+  configFile: string | null;
   /** Absolute test files to run, or null to keep the config's own selection. */
   files: string[] | null;
   /** Directories Vite must also allow files from. */
@@ -37,6 +39,11 @@ type TestOptions = Record<string, unknown> & {
 type Matcher = (relative: string) => boolean;
 type Env = { mode?: string } | undefined;
 
+interface Tinyglobby {
+  glob: (patterns: string[], options: object) => Promise<string[]>;
+  isDynamicPattern: (pattern: string) => boolean;
+}
+
 /** Vitest's defaults (4 and later) for a config that sets no `include` or `exclude`. */
 const DEFAULT_INCLUDE = ['**/*.{test,spec}.?(c|m)[jt]s?(x)'];
 const DEFAULT_EXCLUDE = ['**/node_modules/**', '**/.git/**'];
@@ -53,6 +60,12 @@ function cannotNarrow(what: string, why: string): Error {
   );
 }
 
+function noneSelected(count: number, where: string): Error {
+  return new Error(
+    `Veritas selected ${count} test file(s) for mutation, and the project's Vitest config runs none of them: ${where} match none of them. Mutation testing was not run, since every mutant would be reported as not covered.`,
+  );
+}
+
 const posix = (file: string) => file.split(path.sep).join('/');
 
 const toArray = (value: unknown): string[] | undefined =>
@@ -62,21 +75,22 @@ const toArray = (value: unknown): string[] | undefined =>
 const inherit = (inherited: string[] | undefined, own: string[] | undefined): string[] | undefined =>
   inherited === undefined && own === undefined ? undefined : [...(inherited ?? []), ...(own ?? [])];
 
-async function loadMatcher(picomatchUrl: string | null): Promise<(globs: string[]) => Matcher> {
-  if (picomatchUrl) {
+/** Picomatch and tinyglobby are dependencies of Vitest 4 and later: without them, nothing can be matched as Vitest does. */
+async function loadModule<T>(url: string | null, name: string): Promise<T> {
+  if (url) {
     try {
-      const mod = (await import(picomatchUrl)) as { default?: unknown };
-      const picomatch = (mod.default ?? mod) as (globs: string[], options: object) => Matcher;
+      const mod = (await import(url)) as { default?: unknown };
 
-      // Vitest finds test files with tinyglobby, which matches with picomatch and `dot: true`.
-      return (globs) => (globs.length === 0 ? () => false : picomatch(globs, { dot: true }));
+      return (name === 'picomatch' ? (mod.default ?? mod) : mod) as T;
     } catch {
-      // Fall back to Node's matcher below.
+      // Reported below.
     }
   }
 
-  // No extglob support: a file only such a pattern selects is not run, and the run reports that no test ran.
-  return (globs) => (relative) => globs.some((glob) => path.posix.matchesGlob(relative, glob));
+  throw cannotNarrow(
+    'config',
+    `the ${name} of the project's Vitest, which Vitest matches test files with, could not be loaded`,
+  );
 }
 
 /** A glob relative to `dir`, the way tinyglobby takes it: without a leading `./`, and absolute ones made relative. */
@@ -86,51 +100,35 @@ function relativeGlob(glob: string, dir: string): string {
   return glob.startsWith('./') ? glob.slice(2) : glob;
 }
 
-interface Tinyglobby {
-  glob: (patterns: string[], options: object) => Promise<string[]>;
-  isDynamicPattern: (pattern: string) => boolean;
+/** Splits patterns as tinyglobby does: those starting with `!` exclude what the others include. */
+function splitNegated(patterns: string[]): { positive: string[]; negative: string[] } {
+  return {
+    positive: patterns.filter((p) => !p.startsWith('!')),
+    negative: patterns.filter((p) => p.startsWith('!')).map((p) => p.slice(1)),
+  };
 }
 
 /** Resolved paths a string `projects` entry stands for: config files, and directories ending with `/`. */
-async function projectPaths(entry: string, root: string, tinyglobbyUrl: string | null): Promise<string[]> {
-  const pattern = entry.replace('<rootDir>', root);
-  let glob: Tinyglobby | null = null;
+async function projectPaths(entry: string, root: string, tinyglobby: Tinyglobby): Promise<string[]> {
+  // Vitest substitutes its own root, which Vite keeps in POSIX form.
+  const pattern = entry.replace('<rootDir>', posix(root));
 
-  if (tinyglobbyUrl) {
-    try {
-      glob = (await import(tinyglobbyUrl)) as Tinyglobby;
-    } catch {
-      // Fall back to Node's glob below.
-    }
-  }
-  const dynamic = glob ? glob.isDynamicPattern(pattern) : /[*?[\]{}()!]/.test(pattern);
-
-  if (!dynamic) {
+  if (!tinyglobby.isDynamicPattern(pattern)) {
     const file = path.resolve(root, pattern);
 
     if (!existsSync(file)) return [file];
 
     return [statSync(file).isDirectory() ? `${file.replace(/[/\\]$/, '')}/` : file];
   }
-  const ignore = ['**/node_modules/**', '**/*.timestamp-*', '**/.DS_Store'];
 
-  if (glob)
-    return glob.glob([pattern], {
-      absolute: true,
-      dot: true,
-      onlyFiles: false,
-      cwd: root,
-      expandDirectories: false,
-      ignore,
-    });
-
-  return globSync(pattern, { cwd: root, withFileTypes: true, exclude: (d) => d.name === 'node_modules' }).map(
-    (d) => {
-      const full = path.join(d.parentPath, d.name);
-
-      return d.isDirectory() ? `${full}/` : full;
-    },
-  );
+  return tinyglobby.glob([pattern], {
+    absolute: true,
+    dot: true,
+    onlyFiles: false,
+    cwd: root,
+    expandDirectories: false,
+    ignore: ['**/node_modules/**', '**/*.timestamp-*', '**/.DS_Store'],
+  });
 }
 
 /** The name Vitest gives a file or directory project that does not name itself. */
@@ -147,6 +145,21 @@ function fileProjectName(projectPath: string): string {
   return path.basename(dir);
 }
 
+const samePath = (a: string, b: string) => {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return path.resolve(a) === path.resolve(b);
+  }
+};
+
+/** The root of a config, as Vitest resolves it: `test.root`, else `root`, against `dir`. */
+const rootOf = (config: Config, dir: string) => {
+  const custom = config.test?.root ?? config.root;
+
+  return custom ? path.resolve(dir, custom) : dir;
+};
+
 /** Turn the project config into the config of one mutation run. */
 export async function mutationConfig(
   baseModule: { default?: unknown },
@@ -157,28 +170,35 @@ export async function mutationConfig(
 
   if (typeof base === 'function') base = await (base as (env: Env) => unknown)(env);
   const config = ((await base) ?? {}) as Config;
-  const vitestRoot = config.root ? path.resolve(options.configDir, config.root) : options.configDir;
+  const vitestRoot = rootOf(config, options.configDir);
   const allowed = (resolved: Config) => allowing(resolved, vitestRoot, options);
-  const test: TestOptions = config.test ?? {};
+  const { root: _ownTestRoot, ...test }: TestOptions = config.test ?? {};
 
-  if (options.files === null) return allowed({ ...config, root: vitestRoot });
+  if (options.files === null) return allowed({ ...config, root: vitestRoot, test });
   const files = options.files;
-  const glob = await loadMatcher(options.picomatchUrl);
+  const picomatch = await loadModule<(globs: string[], options: object) => Matcher>(
+    options.picomatchUrl,
+    'picomatch',
+  );
+  // Vitest finds test files with tinyglobby, which matches with picomatch and `dot: true`.
+  const glob = (globs: string[]): Matcher =>
+    globs.length === 0 ? () => false : picomatch(globs, { dot: true });
   const mode = env?.mode ?? 'test';
   /** The selected files a project with these options runs, as include globs relative to its test directory. */
   const select = (t: TestOptions, root: string, inherited: TestOptions = {}): string[] => {
     const dir = path.resolve(root, t.dir ?? inherited.dir ?? '.');
-    const include = inherit(toArray(inherited.include), toArray(t.include)) ?? DEFAULT_INCLUDE;
+    const include = splitNegated(inherit(toArray(inherited.include), toArray(t.include)) ?? DEFAULT_INCLUDE);
+    const source = splitNegated(inherit(toArray(inherited.includeSource), toArray(t.includeSource)) ?? []);
     const exclude = inherit(toArray(inherited.exclude), toArray(t.exclude)) ?? DEFAULT_EXCLUDE;
-    const source = inherit(toArray(inherited.includeSource), toArray(t.includeSource)) ?? [];
     const matches = (globs: string[]) => glob(globs.map((g) => relativeGlob(g, dir)));
-    const included = matches(include);
-    const excluded = matches(exclude);
-    const inSource = matches(source);
+    const included = matches(include.positive);
+    const inSource = matches(source.positive);
+    const excluded = matches([...exclude, ...include.negative]);
+    const excludedFromSource = matches([...exclude, ...source.negative]);
 
     return files
       .map((f) => posix(path.relative(dir, f)))
-      .filter((f) => (included(f) || inSource(f)) && !excluded(f));
+      .filter((f) => (included(f) && !excluded(f)) || (inSource(f) && !excludedFromSource(f)));
   };
 
   if (!Array.isArray(test.projects)) {
@@ -203,10 +223,15 @@ export async function mutationConfig(
     return loaded?.config ?? {};
   };
   const projects: unknown[] = [];
+  /** Config files and directories already turned into a project: Vitest resolves each once. */
+  const seen = new Set<string>();
+  let tinyglobby: Tinyglobby | null = null;
 
   for (const definition of test.projects) {
     if (typeof definition === 'string') {
-      for (const found of await projectPaths(definition, vitestRoot, options.tinyglobbyUrl)) {
+      tinyglobby ??= await loadModule<Tinyglobby>(options.tinyglobbyUrl, 'tinyglobby');
+
+      for (const found of await projectPaths(definition, vitestRoot, tinyglobby)) {
         if (!existsSync(found)) {
           // Vitest itself refuses this entry; keep it so that Vitest says why.
           projects.push(definition);
@@ -223,23 +248,44 @@ export async function mutationConfig(
           projects.push(definition);
           break;
         }
-        const projectRoot = isDir ? found.slice(0, -1) : path.dirname(found);
+        const key = file ?? found;
+
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        if (file && options.configFile && samePath(file, options.configFile)) {
+          // Vitest runs the declaring config itself as one of its projects, with its own test options.
+          const include = select(test, vitestRoot);
+
+          if (include.length > 0) {
+            const { projects: _projects, ...own } = test;
+            projects.push({
+              ...config,
+              root: vitestRoot,
+              extends: false,
+              test: { ...own, name: own.name ?? fileProjectName(file), include, includeSource: [] },
+            });
+          }
+          continue;
+        }
+        const dir = isDir ? found.slice(0, -1) : path.dirname(found);
         const own = file ? await loadFile(file) : {};
-        const ownTest: TestOptions = own.test ?? {};
+        const { root: _testRoot, ...ownTest }: TestOptions = own.test ?? {};
 
         if (Array.isArray(ownTest.projects))
           throw cannotNarrow(`project ${file}`, 'it declares projects of its own');
+        // Its own root and test.root count from its directory, as Vitest resolves them.
+        const projectRoot = rootOf(own, dir);
         const include = select(ownTest, projectRoot);
 
         if (include.length === 0) continue;
-        const { root: _testRoot, ...rest } = ownTest;
         // A file project owns all of its values, so the inline copy inherits nothing.
         projects.push({
           ...own,
           root: projectRoot,
           extends: false,
           test: {
-            ...rest,
+            ...ownTest,
             name: ownTest.name ?? fileProjectName(file ?? found),
             include,
             includeSource: [],
@@ -264,8 +310,7 @@ export async function mutationConfig(
       continue;
     }
     const entryTest: TestOptions = entry.test ?? {};
-    const customRoot = entryTest.root ?? entry.root;
-    const projectRoot = customRoot ? path.resolve(vitestRoot, customRoot) : vitestRoot;
+    const projectRoot = rootOf(entry, vitestRoot);
     let inherited: TestOptions = {};
 
     if (typeof entry.extends === 'string') {
@@ -293,12 +338,6 @@ export async function mutationConfig(
   const { include: _include, includeSource: _source, ...rootTest } = test;
 
   return allowed({ ...config, root: vitestRoot, test: { ...rootTest, projects } });
-}
-
-function noneSelected(count: number, where: string): Error {
-  return new Error(
-    `Veritas selected ${count} test file(s) for mutation, and the project's Vitest config runs none of them: ${where} match none of them. Mutation testing was not run, since every mutant would be reported as not covered.`,
-  );
 }
 
 /** Setting `server.fs.allow` replaces Vite's default, the workspace root, so that is listed first. */

@@ -64,6 +64,7 @@ export function writeMutationVitestConfig(options: {
   const toolchain = options.toolchain ?? vitestToolchain(root);
   const runtime: MutationRuntimeOptions = {
     configDir: root,
+    configFile: base,
     files: options.testFiles?.map((test) => path.join(root, test)) ?? null,
     allowDirs: options.fsAllow?.dirs ?? [],
     viteUrl: options.fsAllow?.viteUrl ?? toolchain.viteUrl,

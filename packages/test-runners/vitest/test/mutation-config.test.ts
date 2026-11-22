@@ -57,6 +57,9 @@ describe('writeMutationVitestConfig', () => {
       expect(listed[i] === file || listed[i]?.endsWith(`/${file}`), `${listed[i]} is ${file}`).toBe(true);
   };
 
+  // The Vitest installed with Veritas stands in for the project's.
+  const toolchain = vitestToolchain(path.resolve(import.meta.dirname, '../../../..'));
+
   it('keeps only the selected tests in the project config and drops projects left without one', () => {
     const root = tempDir('narrow');
     write(root, {
@@ -75,12 +78,15 @@ describe('writeMutationVitestConfig', () => {
     });
     const dir = path.join(root, '.veritas/runs/r/mutation');
     mkdirSync(dir, { recursive: true });
-    const configPath = writeMutationVitestConfig({ root, dir, testFiles: ['packages/a/test/a.test.mjs'] });
+    const configPath = writeMutationVitestConfig({
+      root,
+      dir,
+      testFiles: ['packages/a/test/a.test.mjs'],
+      toolchain,
+    });
     expectListed(root, configPath, ['packages/a/test/a.test.mjs']);
   }, 90_000);
 
-  // The Vitest installed with Veritas stands in for the project's.
-  const toolchain = vitestToolchain(path.resolve(import.meta.dirname, '../../../..'));
   const mutationDir = (root: string) => {
     const dir = path.join(root, '.veritas/runs/r/mutation');
     mkdirSync(dir, { recursive: true });
@@ -224,6 +230,171 @@ describe('writeMutationVitestConfig', () => {
     );
   });
 
+  /** The config the generated one resolves to, without running Vitest. */
+  const resolve = async (configPath: string, env = {}) =>
+    (await import(`${pathToFileURL(configPath).href}?${Math.random()}`)).default(env) as Promise<{
+      root: string;
+      test: {
+        include?: string[];
+        projects?: { root?: string; test: { name?: string; include: string[] } }[];
+      };
+    }>;
+
+  it("resolves a file project's own root and test.root from its directory, as Vitest does", () => {
+    for (const [name, project] of [
+      ['test-root', "{ test: { name: 'a', globals: true, root: 'src', setupFiles: ['./setup.mjs'] } }"],
+      ['top-root', "{ root: 'src', test: { name: 'a', globals: true, setupFiles: ['./setup.mjs'] } }"],
+    ] as const) {
+      const root = tempDir(`file-root-${name}`);
+      write(root, {
+        'vitest.config.mjs': "export default { test: { projects: ['packages/*'] } };",
+        'packages/a/vitest.config.mjs': `export default ${project};`,
+        'packages/a/src/setup.mjs': 'globalThis.ready = true;',
+        'packages/a/src/x.test.mjs':
+          "it('x', () => { if (!globalThis.ready) throw new Error('no setup'); });",
+        'packages/a/src/other.test.mjs': "it('other', () => {});",
+      });
+      const configPath = writeMutationVitestConfig({
+        root,
+        dir: mutationDir(root),
+        testFiles: ['packages/a/src/x.test.mjs'],
+        toolchain,
+      });
+      expectListed(root, configPath, ['packages/a/src/x.test.mjs']);
+    }
+  }, 90_000);
+
+  it('takes the root of the project config from test.root too', async () => {
+    const root = tempDir('test-root');
+    write(root, {
+      'vitest.config.mjs': "export default { test: { root: 'src', include: ['**/*.test.mjs'] } };",
+      'src/s.test.mjs': "import { it } from 'vitest'; it('s', () => {});",
+      'src/t.test.mjs': "import { it } from 'vitest'; it('t', () => {});",
+    });
+    const configPath = writeMutationVitestConfig({
+      root,
+      dir: mutationDir(root),
+      testFiles: ['src/s.test.mjs'],
+      toolchain,
+    });
+    expectListed(root, configPath, ['src/s.test.mjs']);
+    const resolved = await resolve(configPath);
+    expect(resolved.root).toBe(path.join(root, 'src'));
+    expect(resolved.test.include).toEqual(['s.test.mjs']);
+  }, 90_000);
+
+  it('turns a project listed twice into one, and narrows the declaring config when it lists itself', async () => {
+    const root = tempDir('dedupe');
+    write(root, {
+      'vitest.config.mjs': `export default {
+        test: { name: 'root', globals: true, include: ['test/**/*.test.mjs'], projects: ['.', 'packages/*', 'packages/a'] },
+      };`,
+      'packages/a/vitest.config.mjs': "export default { test: { name: 'a', globals: true } };",
+      'packages/a/a.test.mjs': "it('a', () => {});",
+      'test/r.test.mjs': "it('r', () => {});",
+      'test/s.test.mjs': "it('s', () => { throw new Error('not selected'); });",
+    });
+    const configPath = writeMutationVitestConfig({
+      root,
+      dir: mutationDir(root),
+      testFiles: ['packages/a/a.test.mjs', 'test/r.test.mjs'],
+      toolchain,
+    });
+    expectListed(root, configPath, ['packages/a/a.test.mjs', 'test/r.test.mjs']);
+    const names = (await resolve(configPath)).test.projects?.map((p) => p.test.name);
+    expect(names).toEqual(['root', 'a']);
+  }, 90_000);
+
+  it('treats negated include patterns as excludes, as tinyglobby does', async () => {
+    const root = tempDir('negated');
+    write(root, {
+      'vitest.config.mjs':
+        "export default { test: { projects: [{ test: { include: ['test/**/*.test.mjs', '!**/slow.test.mjs'] } }] } };",
+      'test/fast.test.mjs': '',
+      'test/slow.test.mjs': '',
+    });
+    const configPath = writeMutationVitestConfig({
+      root,
+      dir: mutationDir(root),
+      testFiles: ['test/fast.test.mjs', 'test/slow.test.mjs'],
+      toolchain,
+    });
+    expect((await resolve(configPath)).test.projects?.[0]?.test.include).toEqual(['test/fast.test.mjs']);
+  });
+
+  it('applies what an inline project inherits from the declaring config by the Vitest major', async () => {
+    const root = tempDir('inherit');
+    write(root, {
+      'vitest.config.mjs':
+        "export default { test: { exclude: ['src/skip/**'], projects: [{ test: { include: ['src/**/*.test.mjs'] } }] } };",
+      'src/skip/a.test.mjs': '',
+    });
+    const write5 = writeMutationVitestConfig({
+      root,
+      dir: mutationDir(root),
+      testFiles: ['src/skip/a.test.mjs'],
+      toolchain: { ...toolchain, vitestMajor: 5 },
+    });
+    // Vitest 5 extends the declaring config by default, so its exclude applies.
+    await expect(resolve(write5)).rejects.toThrow(/runs none of them/);
+    const write4 = writeMutationVitestConfig({
+      root,
+      dir: mutationDir(root),
+      testFiles: ['src/skip/a.test.mjs'],
+      toolchain: { ...toolchain, vitestMajor: 4 },
+    });
+    expect((await resolve(write4)).test.projects?.[0]?.test.include).toEqual(['src/skip/a.test.mjs']);
+  });
+
+  it('cannot narrow a project that extends a config with its own include', async () => {
+    const root = tempDir('extends-include');
+    write(root, {
+      'vitest.config.mjs':
+        "export default { test: { projects: [{ extends: './shared.config.mjs', test: { name: 'x' } }] } };",
+      'shared.config.mjs': "export default { test: { include: ['test/**/*.test.mjs'] } };",
+      'test/a.test.mjs': '',
+    });
+    const configPath = writeMutationVitestConfig({
+      root,
+      dir: mutationDir(root),
+      testFiles: ['test/a.test.mjs'],
+      toolchain,
+    });
+    await expect(resolve(configPath)).rejects.toThrow(/cannot limit the Vitest project "x".*sets include/);
+  });
+
+  it("fails closed without the project's picomatch or tinyglobby", async () => {
+    const root = tempDir('no-matcher');
+    write(root, {
+      'vitest.config.mjs': "export default { test: { projects: ['packages/*'] } };",
+      'packages/a/vitest.config.mjs': 'export default {};',
+      'packages/a/a.test.mjs': '',
+    });
+    const options = { root, dir: mutationDir(root), testFiles: ['packages/a/a.test.mjs'] };
+    await expect(
+      resolve(writeMutationVitestConfig({ ...options, toolchain: { ...toolchain, picomatchUrl: null } })),
+    ).rejects.toThrow(/the picomatch of the project's Vitest, .* could not be loaded/);
+    await expect(
+      resolve(writeMutationVitestConfig({ ...options, toolchain: { ...toolchain, tinyglobbyUrl: null } })),
+    ).rejects.toThrow(/the tinyglobby of the project's Vitest, .* could not be loaded/);
+  });
+
+  it('substitutes <rootDir> in project entries', async () => {
+    const root = tempDir('rootdir');
+    write(root, {
+      'vitest.config.mjs': "export default { test: { projects: ['<rootDir>/packages/*'] } };",
+      'packages/a/vitest.config.mjs': "export default { test: { name: 'a' } };",
+      'packages/a/a.test.mjs': '',
+    });
+    const configPath = writeMutationVitestConfig({
+      root,
+      dir: mutationDir(root),
+      testFiles: ['packages/a/a.test.mjs'],
+      toolchain,
+    });
+    expect((await resolve(configPath)).test.projects?.map((p) => p.test.include)).toEqual([['a.test.mjs']]);
+  });
+
   it('works without a project config', () => {
     const root = tempDir('bare');
     write(root, {
@@ -232,7 +403,7 @@ describe('writeMutationVitestConfig', () => {
     });
     const dir = path.join(root, '.veritas/runs/r/mutation');
     mkdirSync(dir, { recursive: true });
-    const configPath = writeMutationVitestConfig({ root, dir, testFiles: ['test/b.test.mjs'] });
+    const configPath = writeMutationVitestConfig({ root, dir, testFiles: ['test/b.test.mjs'], toolchain });
     expect(readFileSync(configPath, 'utf8')).toContain('const baseModule = {};');
     expectListed(root, configPath, ['test/b.test.mjs']);
   }, 90_000);
