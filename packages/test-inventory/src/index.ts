@@ -5246,7 +5246,31 @@ function conditionalRegistration(node: ts.CallExpression): boolean {
 
   return (
     (factory !== undefined && propertyChain(factory).some((name) => name === 'skipIf' || name === 'runIf')) ||
-    registrationOptions(node).unknown
+    registrationOptions(node).unknown ||
+    !surelyHasRows(node)
+  );
+}
+
+/**
+ * Whether a registration registers at least one test: always, unless it is table-driven (`it.each(table)`,
+ * `describe.for(table)`) with a table that is not a literal array with an item that is not spread, or a tagged
+ * template table with a row.
+ */
+function surelyHasRows(node: ts.CallExpression): boolean {
+  const factory = registrationFactory(node);
+
+  if (factory === undefined || !propertyChain(factory).some((name) => runner.tableFactories.has(name)))
+    return true;
+  const maker = skipParens(node.expression);
+
+  if (ts.isTaggedTemplateExpression(maker))
+    return ts.isTemplateExpression(maker.template) && maker.template.templateSpans.length > 0;
+  const table = ts.isCallExpression(maker) ? maker.arguments[0] : undefined;
+
+  return (
+    table !== undefined &&
+    ts.isArrayLiteralExpression(skipParens(table)) &&
+    (skipParens(table) as ts.ArrayLiteralExpression).elements.some((element) => !ts.isSpreadElement(element))
   );
 }
 

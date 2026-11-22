@@ -377,6 +377,16 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     );
   });
 
+  it('takes a focused table that may be empty as no guarantee of focus', () => {
+    // `it.only.each([])('row %s')` registers nothing: the inventory records it as conditional.
+    const emptyRows = { ...entry([], 'row %s', ['each', 'only']), conditional: true as const };
+    const works = entry([], 'works', []);
+
+    expect(mutatorTestId(`${FILE}#works`, ' > ', new TestNameIndex([emptyRows, works], ' > '))).toBe(
+      works.id,
+    );
+  });
+
   it('takes a .only registered inside a function as no guarantee of focus', () => {
     const inFunction = { ...entry([], 'never', ['only']), inexactName: 'registered_in_function' as const };
     const works = entry([], 'works', []);

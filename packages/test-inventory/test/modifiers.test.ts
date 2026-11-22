@@ -733,6 +733,38 @@ describe('full names static analysis cannot read', () => {
     ]);
   });
 
+  it('takes a table-driven registration whose table may be empty as conditional', () => {
+    const root = tempProject({
+      'test/tables.test.ts': [
+        "import { describe, it } from 'vitest';",
+        'const cases = [1];',
+        "it.only.each([])('empty %s', () => {});",
+        "it.each([1])('one %s', () => {});",
+        "it.each(cases)('named %s', () => {});",
+        "it.each([...cases])('spread %s', () => {});",
+        `it.each\`\n  a\n  \${1}\n\`('tagged $a', () => {});`,
+        "it.each`\n  a\n`('no rows $a', () => {});",
+        "describe.only.each([])('suite %s', () => { it('inside', () => {}); });",
+        '',
+      ].join('\n'),
+    });
+    const tests = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests;
+
+    expect(tests.map((t) => [t.name, t.conditional])).toEqual([
+      ['empty %s', true],
+      ['one %s', undefined],
+      ['named %s', true],
+      ['spread %s', true],
+      ['tagged $a', undefined],
+      ['no rows $a', true],
+      ['inside', true],
+    ]);
+  });
+
   it('records tests registered on a condition', () => {
     const root = tempProject({
       'src/value.ts': 'export const value = (input: number) => input;\n',
