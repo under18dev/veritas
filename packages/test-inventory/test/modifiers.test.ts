@@ -252,6 +252,10 @@ describe('full names static analysis cannot read', () => {
       matcherByReference: 'expect.extend({ toBe: sharedSuite });\nexpect(0).toBe(0);',
       matcherFromPackage:
         "import { pkgRun } from 'external-test-package';\nexpect.extend({ toBe: pkgRun });\nexpect(0).toBe(0);",
+      shadowedHook:
+        "describe('suite', () => { const beforeEach = sharedSuite; beforeEach(); it.each(['own'])('%s', () => {}); });",
+      shadowedHookFunction:
+        "import { pkgRun } from 'external-test-package';\ndescribe('suite', () => { function afterAll() { pkgRun(); } afterAll(); it('x', () => {}); });",
       supportHook: "import { beforeEach as setup } from './support-hooks.js';\nsetup(() => {});",
       supportHookSameName: "import { afterAll } from './support-hooks.js';\nafterAll(() => {});",
       returnsFunction: 'expect(() => sharedSuite).not.toThrow();',
@@ -461,6 +465,14 @@ describe('full names static analysis cannot read', () => {
       importEquals: "import v = require('vitest');\nexport function shared() { v.it('x', () => {}); }",
       createRequireAlias:
         "import { createRequire } from 'node:module';\nconst cr = createRequire;\nexport function shared() { cr(import.meta.url)('vitest').it('x', () => {}); }",
+      cjsCreateRequireDestructured:
+        "const { createRequire } = require('node:module');\nexport function shared() { createRequire(__filename)('external-shared-suite').sharedSuite(); }",
+      cjsCreateRequireMember:
+        "export function shared() { require('module').createRequire(__filename)('external-shared-suite').sharedSuite(); }",
+      cjsCreateRequireNamespace:
+        "const m = require('node:module');\nexport function shared() { m.createRequire(__filename)('external-shared-suite').sharedSuite(); }",
+      cjsModulePassed:
+        "const m = require('node:module');\nexport const keep = [m];\nexport function shared() { return 1; }",
       vmRun:
         "import { runInThisContext } from 'node:vm';\nexport function shared() { runInThisContext(\"it('hidden', () => {})\"); }",
       vmScript:

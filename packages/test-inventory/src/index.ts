@@ -4399,16 +4399,65 @@ function requiresCreated(source: ts.SourceFile, load: (name: string) => void, un
         if ((element.propertyName ?? element.name).text === 'createRequire') named.add(element.name.text);
   }
 
-  if (named.size === 0 && namespaces.size === 0) return;
+  // The same module obtained with CommonJS: `const { createRequire } = require('node:module')`,
+  // `const m = require('module')`, `require('module').createRequire(…)`.
+  const requiresModule = (node: ts.Node): boolean => {
+    const call = ts.isExpression(node) ? skipParens(node) : node;
+
+    return (
+      ts.isCallExpression(call) &&
+      ts.isIdentifier(skipParens(call.expression)) &&
+      (skipParens(call.expression) as ts.Identifier).text === 'require' &&
+      call.arguments[0] !== undefined &&
+      ts.isStringLiteralLike(call.arguments[0]) &&
+      (call.arguments[0].text === 'module' || call.arguments[0].text === 'node:module')
+    );
+  };
+  const moduleObjects = descendants(source).filter(requiresModule) as ts.CallExpression[];
+
+  for (const call of moduleObjects) {
+    const parent = call.parent;
+
+    if (ts.isVariableDeclaration(parent) && parent.initializer === call) {
+      if (ts.isIdentifier(parent.name)) namespaces.add(parent.name.text);
+      else if (ts.isObjectBindingPattern(parent.name))
+        for (const element of parent.name.elements) {
+          const key = element.propertyName ?? element.name;
+
+          if (!ts.isIdentifier(key) && !ts.isStringLiteral(key)) unknown();
+          else if (key.text === 'createRequire') {
+            if (ts.isIdentifier(element.name)) named.add(element.name.text);
+            else unknown();
+          } else if (element.dotDotDotToken) unknown();
+        }
+      else unknown();
+    } else if (
+      !(
+        (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+        parent.expression === call
+      )
+    )
+      unknown();
+    else if (
+      memberName(parent) === 'createRequire' &&
+      !(ts.isCallExpression(parent.parent) && parent.parent.expression === parent)
+    )
+      unknown();
+  }
+
+  if (named.size === 0 && namespaces.size === 0 && moduleObjects.length === 0) return;
   const makesRequire = (call: ts.CallExpression): boolean => {
     const callee = skipParens(call.expression);
 
-    return ts.isIdentifier(callee)
-      ? named.has(callee.text)
-      : (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
-          ts.isIdentifier(skipParens(callee.expression)) &&
-          namespaces.has((skipParens(callee.expression) as ts.Identifier).text) &&
-          memberName(callee) === 'createRequire';
+    if (ts.isIdentifier(callee)) return named.has(callee.text);
+
+    if (!(ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee))) return false;
+    const object = skipParens(callee.expression);
+
+    return (
+      memberName(callee) === 'createRequire' &&
+      ((ts.isIdentifier(object) && namespaces.has(object.text)) || requiresModule(object))
+    );
   };
   const loaders = new Set<string>();
   const loaded = (call: ts.CallExpression) => {
@@ -4443,11 +4492,16 @@ function requiresCreated(source: ts.SourceFile, load: (name: string) => void, un
 
     // `createRequire` itself, or the module object that has it, used other than to call it (`const cr = createRequire`).
     if (named.has(node.text)) {
-      if (ts.isImportSpecifier(parent)) continue;
+      if (ts.isImportSpecifier(parent) || (ts.isBindingElement(parent) && parent.name === node)) continue;
 
       if (!(ts.isCallExpression(parent) && parent.expression === node)) unknown();
     } else if (namespaces.has(node.text)) {
-      if (ts.isImportClause(parent) || ts.isNamespaceImport(parent)) continue;
+      if (
+        ts.isImportClause(parent) ||
+        ts.isNamespaceImport(parent) ||
+        (ts.isVariableDeclaration(parent) && parent.name === node)
+      )
+        continue;
       const member =
         (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
         parent.expression === node
@@ -5348,7 +5402,14 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
     return closedFunction(callback, 'describe');
   };
 
-  return source.statements.every(closed);
+  const previousStrict = strictRunnerNames;
+  strictRunnerNames = true;
+
+  try {
+    return source.statements.every(closed);
+  } finally {
+    strictRunnerNames = previousStrict;
+  }
 }
 
 /**
@@ -5741,6 +5802,31 @@ const runnerAliases = new WeakMap<ts.SourceFile, Map<string, string>>();
  */
 function runnerName(identifier: ts.Identifier): string {
   const source = identifier.getSourceFile();
+  // When judging what collection code may run (`strictRunnerNames`), a name the file declares itself at any depth
+  // (`const beforeEach = sharedSuite` in a describe callback, a parameter named `it`) stands for that declaration,
+  // not for the runner's API of the same name. Recognising registrations keeps reading such a name as the runner's
+  // (a shared suite's `(it) => it('x', …)`), so their tests are still inventoried.
+  const symbol = strictRunnerNames ? runnerChecker?.getSymbolAtLocation(identifier) : undefined;
+  const own = symbol?.declarations?.find(
+    (declaration) =>
+      declaration.getSourceFile() === source &&
+      !ts.isImportSpecifier(declaration) &&
+      !ts.isImportClause(declaration) &&
+      !ts.isNamespaceImport(declaration) &&
+      !ts.isExportSpecifier(declaration) &&
+      !ambientDeclaration(declaration),
+  );
+
+  if (own !== undefined && !ts.isSourceFile(own.parent?.parent?.parent ?? own)) {
+    if (!ts.isVariableDeclaration(own) || resolvingDeclarations.has(own)) return NOT_RUNNER;
+    resolvingDeclarations.add(own);
+
+    try {
+      return resolveDeclaration(own);
+    } finally {
+      resolvingDeclarations.delete(own);
+    }
+  }
   let aliases = runnerAliases.get(source);
 
   if (!aliases) {
@@ -5820,6 +5906,28 @@ function runnerName(identifier: ts.Identifier): string {
 }
 
 const runnerBindings = new WeakMap<ts.SourceFile, Map<string, ts.Identifier>>();
+/** Whether `runnerName` reads names declared in the file as their declarations, for judging collection code. */
+let strictRunnerNames = false;
+/** Declarations being followed by `runnerName`, so that names declared in terms of each other end. */
+const resolvingDeclarations = new Set<ts.Declaration>();
+
+/** Whether a declaration only describes a value that exists elsewhere (`declare`, `declare global`, `.d.ts`). */
+function ambientDeclaration(declaration: ts.Node): boolean {
+  if (declaration.getSourceFile().isDeclarationFile) return true;
+
+  for (let current: ts.Node | undefined = declaration; current; current = current.parent)
+    if (
+      (ts.isVariableStatement(current) ||
+        ts.isFunctionDeclaration(current) ||
+        ts.isClassDeclaration(current) ||
+        ts.isModuleDeclaration(current) ||
+        ts.isEnumDeclaration(current)) &&
+      current.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword)
+    )
+      return true;
+
+  return false;
+}
 /** Bindings being followed, so that names bound to each other in a cycle end. */
 const resolvingBindings = new Set<ts.Identifier>();
 /** Declaration files of the runner's packages. */
@@ -6606,7 +6714,14 @@ function moduleSafety(
         }
       }
     }
-    if (escapesRunner(source) || requireEscapes(source, declaredAnyhow)) found.unknown = true;
+    const previousStrict = strictRunnerNames;
+    strictRunnerNames = true;
+
+    try {
+      if (escapesRunner(source) || requireEscapes(source, declaredAnyhow)) found.unknown = true;
+    } finally {
+      strictRunnerNames = previousStrict;
+    }
     requiresCreated(source, loadedAtRunTime, () => {
       found.unknown = true;
     });
