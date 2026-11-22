@@ -198,6 +198,10 @@ describe('record and array arguments to functions in the same file', () => {
         /g takes 1 argument\(s\) but is called with 2/,
       ],
       ['export function f(r: { a: number; b: boolean }): number { return g(...[r]); }', /spread arguments/],
+      [
+        'export function f(x: number): boolean { return h({ __proto__: x, k: x }); }\nfunction h(r: { __proto__: number; k: number }): boolean { return r.__proto__ === r.k; }',
+        /property __proto__ is the prototype/,
+      ],
     ];
 
     for (const [source, reason] of cases) {

@@ -102,6 +102,11 @@ function recordFields(
     if (!/^[A-Za-z_$][\w$]*$/.test(m.name.text))
       throw new Unsupported(m, 'record', `${what}: property name ${m.name.text} is not a plain identifier`);
 
+    // In an object literal, `__proto__: v` sets the prototype instead of making a property, so the model and
+    // JavaScript would read different values.
+    if (m.name.text === '__proto__')
+      throw new Unsupported(m, 'record', `${what}: property __proto__ is the prototype in an object literal`);
+
     return { key: m.name.text, sort: sortOfType(m.type, `property ${m.name.text} of ${what}`, m) };
   });
 
