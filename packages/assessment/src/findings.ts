@@ -38,8 +38,14 @@ export function deriveFindings(input: FindingInput): Finding[] {
     input.claims.filter((c) => c.propertyId === propertyId && c.kind === 'conformance');
 
   for (const p of input.properties) {
-    // A rejected or superseded reading is no longer a specification, so it cannot be violated.
-    if (p.origin !== 'normative' || p.status === 'rejected' || p.status === 'superseded') continue;
+    // A rejected or superseded reading is no longer a specification, so it cannot be violated. Properties inferred
+    // from code or observed at runtime are not specifications either; declared ones (origin human) are.
+    if (
+      (p.origin !== 'normative' && p.origin !== 'human') ||
+      p.status === 'rejected' ||
+      p.status === 'superseded'
+    )
+      continue;
     const claims = claimsFor(p.id);
     const cex = claims.find(
       (c) => c.status === 'counterexample_found' && c.semanticValidation === 'confirmed',
@@ -49,7 +55,7 @@ export function deriveFindings(input: FindingInput): Finding[] {
     const accepted = p.status === 'accepted';
     const certainty: Finding['certainty'] = cex && accepted ? 'confirmed' : 'suspected';
     const explanation = [
-      `documented: ${p.formalExpression} (${p.citations.join(', ') || 'no citation'})`,
+      `${p.origin === 'human' ? 'declared' : 'documented'}: ${p.formalExpression} (${p.citations.join(', ') || 'no citation'})`,
       p.implementationAgreement === 'disagree'
         ? 'implementation compares the same parameter against a different boundary'
         : 'implementation comparison not matched statically',

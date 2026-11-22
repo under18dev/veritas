@@ -21,7 +21,8 @@ function project(): string {
   return root;
 }
 
-describe('report input', () => {
+// Each test runs a whole quick-profile run (about 2.5 s alone), which can pass 5 s on a loaded machine.
+describe('report input', { timeout: 30_000 }, () => {
   it('carries the metadata of the run and writes it into the JSON report', async () => {
     const root = project();
     const { runId, dir } = await runVeritas({

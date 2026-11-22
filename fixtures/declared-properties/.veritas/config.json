@@ -1,0 +1,32 @@
+{
+  "$schema": "../../../schemas/config.json",
+  "schemaVersion": "1.0.0",
+  "sources": {
+    "local": false
+  },
+  "analysis": {
+    "include": ["src/**/*.ts"],
+    "inferSpecsFromCode": false
+  },
+  "formal": {
+    "backend": "both"
+  },
+  "policy": {
+    "confirmedViolation": "fail",
+    "inconclusiveBehavior": "fail"
+  },
+  "properties": [
+    {
+      "id": "stage.guarded-succeeded-needs-tests",
+      "kind": "holds_for_all",
+      "target": "src/stage.ts#invariant_guardedSucceededNeedsTests",
+      "description": "With the guard, the stage succeeds only after at least one test ran."
+    },
+    {
+      "id": "stage.unguarded-succeeded-needs-tests",
+      "kind": "holds_for_all",
+      "target": "src/stage.ts#invariant_unguardedSucceededNeedsTests",
+      "description": "Negative control: without the guard, the stage can succeed with no test, so this must come back with a counterexample."
+    }
+  ]
+}

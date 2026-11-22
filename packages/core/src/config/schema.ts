@@ -10,6 +10,69 @@ export type TestFramework = z.infer<typeof TestFramework>;
 
 const Domain = z.string().regex(/^[a-z0-9.-]+$/i, 'expected a bare domain name such as docs.example.com');
 
+/** Declaration ids: letters, digits, `.`, `_` and `-`, so the property id derived from them is a safe file name. */
+const DECLARED_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+
+/**
+ * A property a person declares in the configuration instead of one discovered in documents. `holds_for_all`
+ * states that the target, a pure function returning a boolean, returns true for every input in the domain.
+ * A declared property is proposed like any other until `veritas spec accept` records an approval.
+ */
+export const DeclaredProperty = z
+  .object({
+    id: z
+      .string()
+      .regex(DECLARED_ID, 'expected letters, digits, ".", "_" or "-", starting with a letter or digit')
+      .describe(
+        'Stable name of the declaration. The property id is `D-<id>`, so approvals follow the declaration, not its position in the file.',
+      ),
+    kind: z
+      .enum(['holds_for_all'])
+      .describe(
+        'What the property states. `holds_for_all`: the target returns true for every input in the domain.',
+      ),
+    target: z
+      .string()
+      .regex(
+        /^[^#\0]+#[A-Za-z_$][\w$]*$/,
+        'expected <file>#<exported function>, such as src/rules.ts#invariant_total',
+      )
+      .describe(
+        'Function the property is about, as `<file relative to the project root>#<exported name>`. It must return a boolean and stay in the supported formal subset.',
+      ),
+    description: z
+      .string()
+      .min(1)
+      .max(500)
+      .describe('What the property means, in words, for reviewers and reports.'),
+    domain: z
+      .object({
+        integer: z
+          .object({
+            min: IntLiteral.describe('Smallest integer input checked.'),
+            max: IntLiteral.describe('Largest integer input checked.'),
+          })
+          .strict()
+          .refine((d) => BigInt(d.min) <= BigInt(d.max), 'domain min must not exceed max')
+          .optional()
+          .describe(
+            'Range integer inputs are checked over, as decimal strings; unset uses formal.integerDomain.',
+          ),
+        maxArrayLength: z
+          .number()
+          .int()
+          .min(1)
+          .max(8)
+          .optional()
+          .describe('Longest array modelled; unset uses formal.maxArrayLength.'),
+      })
+      .strict()
+      .optional()
+      .describe('Bounds of the inputs checked; parts left unset use the formal settings.'),
+  })
+  .strict();
+export type DeclaredProperty = z.infer<typeof DeclaredProperty>;
+
 export const VeritasConfig = z
   .object({
     $schema: z
@@ -389,6 +452,21 @@ export const VeritasConfig = z
       .strict()
       .prefault({})
       .describe('Resource limits for the processes Veritas starts.'),
+    properties: z
+      .array(DeclaredProperty)
+      .default([])
+      .superRefine((declared, ctx) => {
+        const seen = new Set<string>();
+
+        declared.forEach((p, index) => {
+          if (seen.has(p.id))
+            ctx.addIssue({ code: 'custom', path: [index, 'id'], message: `duplicate property id ${p.id}` });
+          seen.add(p.id);
+        });
+      })
+      .describe(
+        'Properties declared by hand. Each one is proposed until accepted with `veritas spec accept`, like a discovered one.',
+      ),
   })
   .strict();
 

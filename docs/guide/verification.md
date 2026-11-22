@@ -141,6 +141,92 @@ To get both kinds of evidence, use `--engine both` or set `formal.backend` to `b
 
 Without `--engine`, `prove` uses `formal.backend`. With `formal.backend: lean`, which older versions of `veritas init` could write, `prove` now uses Lean; pass `--engine z3` for Z3 alone. Versions of Veritas before `both` was added reject a configuration that uses it.
 
+Veritas tries a few fixed tactic scripts in turn and keeps the first proof the kernel accepts; the claim names it. When the function a property calls calls other functions, for example a decision function that maps a rule to a verdict and the verdict to an exit code, it first tries `abstract-calls-split`: it names the result of each inner call once and splits that call into its cases, instead of copying it into every place its result is used.
+
+## Declare a property
+
+Rules found in documents are one source of properties. You can also write a rule yourself, as an exported function that returns `true` when the rule holds, and declare it in `.veritas/config.json`:
+
+```ts
+// src/stage.ts
+export interface StageEvidence {
+  failed: boolean;
+  undecided: number;
+  testsRan: number;
+}
+
+export function status(e: StageEvidence): number {
+  if (e.failed) return 2;
+  if (e.undecided > 0 || e.testsRan <= 0) return 1;
+  return 0;
+}
+
+export function invariant_succeededNeedsTests(e: StageEvidence): boolean {
+  return status(e) !== 0 || e.testsRan >= 1;
+}
+```
+
+```json
+{
+  "properties": [
+    {
+      "id": "stage.succeeded-needs-tests",
+      "kind": "holds_for_all",
+      "target": "src/stage.ts#invariant_succeededNeedsTests",
+      "description": "The stage succeeds only after at least one test ran.",
+      "domain": { "integer": { "min": "0", "max": "1000" } }
+    }
+  ]
+}
+```
+
+A `holds_for_all` property states that the target returns `true` for every input in the domain. The [configuration reference](/reference/configuration#declared-properties) lists every field.
+
+| Field         | Meaning                                                                                                                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`          | A stable name. The property ID is `D-<id>`, so it does not change when you reorder or edit the declarations                                                                                |
+| `target`      | `<file>#<export>`: an exported function of a file in the project, which returns `boolean` and stays in the [supported code](#supported-code). It does not have to match `analysis.include` |
+| `description` | What the rule means, shown in reviews, findings and reports                                                                                                                                |
+| `domain`      | Optional `integer` bounds (`min`, `max`) and `maxArrayLength`. Parts you leave out come from `formal.integerDomain` and `formal.maxArrayLength`                                            |
+
+A declared property goes through the same review as one found in a document. It starts as `proposed`, with origin `human`, and is checked only once you accept it (or with `--include-proposed`, whose results stay `suspected`). The prove stage names every declared property it left out because it is not accepted:
+
+```text
+succeeded   prove
+            D-stage.succeeded-needs-tests: declared property not verified, it is proposed (accept it with `veritas spec accept D-stage.succeeded-needs-tests --reason "<why>"`, or pass --include-proposed)
+```
+
+```bash
+veritas spec accept D-stage.succeeded-needs-tests --reason "the stage rule we rely on"
+veritas prove --engine both
+```
+
+```text
+succeeded   prove
+            D-stage.succeeded-needs-tests: proven_within_model
+            D-stage.succeeded-needs-tests (lean): proven_within_model [kernel_checked]
+```
+
+The version of a declared property is derived from its description, target, kind and domain, including the formal settings it takes its bounds from. Change any of them and the approval no longer applies: the property is `proposed` again until you accept it again. This holds in a fresh checkout and on CI too, since the version does not depend on earlier runs. The prove stage names the decision that no longer applies:
+
+```text
+D-stage.succeeded-needs-tests: the accept recorded by you (A-7d000af7e5fa) was for version 3103021279 of the declaration; it is now version 2952988804 and needs a new decision
+```
+
+A declared property that is not accepted, whether it never was or its approval went stale, is not verified, and like any other unaccepted property it does not change the exit code by itself. Where every declaration must be verified, check the run as the Veritas repository does (below).
+
+The results mean what they mean for any other property:
+
+- Z3 checks every input in the domain, and a counterexample is replayed against your function in JavaScript. A replay that disagrees gives `semantic_mismatch`, never a counterexample.
+- A replayed counterexample to an accepted declared property is a `confirmed` `spec_implementation_mismatch` finding, which fails the run with `policy.confirmedViolation: fail`.
+- With `--engine both`, Lean adds a kernel-checked proof where Z3 proved the property.
+- A declaration Veritas cannot check gives an `unsupported` claim with the reason, never silence: the target file does not exist or is outside the project, the file exports no function of that name, the function returns a number, or it uses code outside the supported subset. Like any `unsupported` result it is inconclusive, so it exits `4` with `policy.inconclusiveBehavior: fail`.
+- A declaration that is invalid in itself (a duplicate ID, a target without `#<export>`, `min` above `max`) fails with `CONFIG_INVALID` and exit code 2.
+
+To check only declared properties, turn off reading documents and inferring rules from code: set `sources.local` to `false` and `analysis.inferSpecsFromCode` to `false`.
+
+The Veritas repository checks itself this way. Its `.veritas/config.json` declares the invariants of the run policy in `packages/core/src/policy-decision.ts`, such as "the verdict is `pass` only when nothing is open" and "exit code 1 only for a policy failure". A maintainer reviews each declaration and records the decision with `veritas spec accept`, which writes `.veritas/approvals.json`; that file is committed next to the configuration. `node scripts/check-self-verification.mjs` (after `pnpm build` and `veritas prove --engine both`) fails unless every declared property is accepted, proven by Z3 with a confirmed replay, and kernel-checked by Lean, in the newest run, and that run is of the current checkout: the same configuration and sources (the analyzed files and every declared target file), the same commit when the tree is clean, and the current version of every declaration. A run that did not record its claims fails too. `fixtures/declared-properties` keeps a negative control, a deliberately false invariant that must come back with a counterexample (`--expect-counterexample`). The proof covers the decision rules only: how Veritas counts the evidence it passes to them is checked by tests, not proven.
+
 ## What `proven_within_model` means
 
 It means that no input violates the property within the stated model, domain and assumptions. Every claim lists them, for example:

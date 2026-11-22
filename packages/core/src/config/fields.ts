@@ -113,7 +113,8 @@ function collect(node: Node, path: string[], inherited: unknown, required: boole
 
 /**
  * Every setting of `.veritas/config.json`, grouped by its top-level key, with the descriptions, defaults and
- * constraints of the configuration schema. Editors show these instead of keeping their own copy.
+ * constraints of the configuration schema. Editors show these instead of keeping their own copy. The declared
+ * `properties` list is not a setting and is left out.
  */
 export function configSections(): ConfigSection[] {
   const schema = toJSONSchema(VeritasConfig, { io: 'input', unrepresentable: 'any' }) as Node;
@@ -121,6 +122,10 @@ export function configSections(): ConfigSection[] {
   const sections: ConfigSection[] = [];
 
   for (const [name, node] of Object.entries(schema.properties ?? {})) {
+    // A list of records (the declared `properties`) is not a setting an editor can change field by field; it is
+    // edited in the file, and editors keep it as written.
+    if (node.type === 'array' && node.items?.type === 'object') continue;
+
     if (node.type === 'object' && node.properties) {
       const fields: ConfigField[] = [];
 

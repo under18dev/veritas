@@ -135,8 +135,105 @@ export function irUsesDivision(ir: PropertyIR): boolean {
   );
 }
 
+/** `expr` with the variables named in `values` replaced by the given expressions. */
+function substituteVars(expr: Expr, values: ReadonlyMap<string, Expr>): Expr {
+  switch (expr.kind) {
+    case 'var':
+      return values.get(expr.name) ?? expr;
+    case 'unary':
+      return { ...expr, arg: substituteVars(expr.arg, values) };
+    case 'binary':
+      return { ...expr, left: substituteVars(expr.left, values), right: substituteVars(expr.right, values) };
+    case 'ite':
+      return {
+        ...expr,
+        cond: substituteVars(expr.cond, values),
+        whenTrue: substituteVars(expr.whenTrue, values),
+        whenFalse: substituteVars(expr.whenFalse, values),
+      };
+    case 'call':
+      return { ...expr, args: expr.args.map((a) => substituteVars(a, values)) };
+    default:
+      return expr;
+  }
+}
+
+type Call = Extract<Expr, { kind: 'call' }>;
+
+/** Distinct calls in `expr` whose arguments contain no call, keyed by their Lean text. */
+function innermostCalls(expr: Expr, out: Map<string, Call> = new Map()): Map<string, Call> {
+  if (expr.kind === 'call') {
+    if (expr.args.some((a) => calls(a).length > 0)) for (const a of expr.args) innermostCalls(a, out);
+    else out.set(exprToLean(expr), expr);
+  } else if (expr.kind === 'unary') innermostCalls(expr.arg, out);
+  else if (expr.kind === 'binary') {
+    innermostCalls(expr.left, out);
+    innermostCalls(expr.right, out);
+  } else if (expr.kind === 'ite') {
+    innermostCalls(expr.cond, out);
+    innermostCalls(expr.whenTrue, out);
+    innermostCalls(expr.whenFalse, out);
+  }
+
+  return out;
+}
+
+/**
+ * The functions the property body calls, and the innermost calls their bodies make once those are unfolded (with
+ * the arguments of the body's calls in place of their parameters). Null when there is no such inner call, or when
+ * the calls cannot be abstracted as written: a call among the body's call arguments, or an inner call to a function
+ * the body also calls, would be unfolded too.
+ */
+function abstractableCalls(ir: PropertyIR): { unfolded: string[]; inner: Call[] } | null {
+  const byName = new Map(ir.functions.map((f) => [f.name, f]));
+  const direct = [...new Set(calls(ir.body))];
+  const inner = new Map<string, Call>();
+  let nested = false;
+
+  const visit = (expr: Expr) => {
+    if (expr.kind === 'call') {
+      const f = byName.get(expr.fn);
+
+      if (expr.args.some((a) => calls(a).length > 0)) nested = true;
+      else if (f?.body) {
+        const values = new Map<string, Expr>(f.params.map((p, i) => [p.name, expr.args[i] as Expr]));
+        innermostCalls(substituteVars(f.body, values), inner);
+      }
+    } else if (expr.kind === 'unary') visit(expr.arg);
+    else if (expr.kind === 'binary') {
+      visit(expr.left);
+      visit(expr.right);
+    } else if (expr.kind === 'ite') {
+      visit(expr.cond);
+      visit(expr.whenTrue);
+      visit(expr.whenFalse);
+    }
+  };
+  visit(ir.body);
+  const innerCalls = [...inner.values()];
+
+  if (nested || innerCalls.length === 0 || innerCalls.some((c) => direct.includes(c.fn))) return null;
+
+  return { unfolded: direct, inner: innerCalls };
+}
+
+/** The functions `name` calls, directly or through others, with itself. */
+function reachable(ir: PropertyIR, name: string): string[] {
+  const byName = new Map(ir.functions.map((f) => [f.name, f]));
+  const out = new Set<string>();
+  const visit = (fn: string) => {
+    if (out.has(fn)) return;
+    out.add(fn);
+
+    for (const callee of calls(byName.get(fn)?.body ?? { kind: 'bool', value: true })) visit(callee);
+  };
+  visit(name);
+
+  return [...out];
+}
+
 export interface LeanStrategy {
-  name: 'unfold-split-omega' | 'simp-split-omega' | 'decide-enumerate';
+  name: 'abstract-calls-split' | 'unfold-split-omega' | 'simp-split-omega' | 'decide-enumerate';
   /** Tactic script lines placed after `:= by`, already indented. */
   script: string[];
 }
@@ -238,6 +335,37 @@ export function leanProofStrategies(ir: PropertyIR): LeanStrategy[] {
       ],
     },
   ];
+
+  // Unfolding everything copies a helper's whole decision tree into every place its result is used, and
+  // splitting those copies one by one can exhaust Lean's budget long before the cases meet. Instead, unfold only
+  // what the body calls, name each innermost call's result (`r_k`), split that call's definition into its cases
+  // and substitute the value of each case. Tried first whenever the functions the body calls call others.
+  const abstractable = abstractableCalls(ir);
+
+  if (abstractable) {
+    const all = (names: string[]) => names.map((n) => `${MODEL_NAMESPACE}.${fnName(n)}`).join(', ');
+    const lines = [...introLine, `  simp only [${all(abstractable.unfolded)}]`];
+    const hyps: string[] = [];
+
+    abstractable.inner.forEach((call, k) => {
+      const r = `r_${k}`;
+      const h = `hr_${k}`;
+      hyps.push(h);
+      lines.push(
+        `  obtain ⟨${r}, ${h}⟩ : ∃ ${r}, ${exprToLean(call)} = ${r} := ⟨_, rfl⟩`,
+        `  simp only [${h}]`,
+        `  try simp only [${all(reachable(ir, call.fn))}] at ${h}`,
+      );
+    });
+    lines.push(
+      ...casesLine,
+      `  all_goals (repeat' (first ${hyps.map((h) => `| (split at ${h})`).join(' ')}))`,
+      ...hyps.map((h) => `  all_goals (try subst ${h})`),
+      `  all_goals (try simp_all [${all(ir.functions.map((f) => f.name))}])`,
+      '  all_goals omega',
+    );
+    strategies.unshift({ name: 'abstract-calls-split', script: lines });
+  }
 
   let points = 1n;
 

@@ -19,6 +19,7 @@ import {
   gitCommit,
   gitOutput,
   hashValue,
+  type IntDomain,
   type JsParam,
   type LogSink,
   logEvent,
@@ -71,8 +72,12 @@ import {
 import {
   applyApprovals,
   buildRegistry,
+  declaredDomain,
+  declaredProperties,
+  formalizeDeclared,
   formalizeProperty,
   loadApprovals,
+  normalizeTarget,
 } from '@under18dev/veritas-property-engine';
 import { type PbtResult, runPropertyTest } from '@under18dev/veritas-property-testing';
 import { detectLean, leanTranslatable, proveWithLean } from '@under18dev/veritas-solver-lean';
@@ -176,6 +181,51 @@ export function leanSkipReason(z3Status: VerificationStatus, translatable: boole
   return null;
 }
 
+/**
+ * The source hash recorded on every artifact of a run: the analyzed files and, when the configuration declares
+ * properties, the content of each declared target file, which may lie outside `analysis.include`. The target file
+ * alone is enough: the translator follows calls only to functions of the same file. Without declarations the hash
+ * is that of the analyzed files, as before. `scripts/check-self-verification.mjs` computes it the same way.
+ */
+export function runSourceHash(
+  root: string,
+  config: Pick<VeritasConfig, 'properties'>,
+  files: readonly unknown[],
+): string {
+  if (config.properties.length === 0) return hashValue(files);
+  const targets = [...new Set(config.properties.map((p) => normalizeTarget(p.target).replace(/#[^#]*$/, '')))]
+    .sort()
+    .map((file) => {
+      let content: string | null = null;
+
+      try {
+        content = sha256(readFileSync(resolveInsideRoot(root, file)));
+      } catch {
+        // A missing or escaping target is reported as unsupported by the prove stage; here it is just absent.
+      }
+
+      return { file, content };
+    });
+
+  return hashValue({ files, declaredTargets: targets });
+}
+
+/**
+ * The integer domain and array bound a property is modelled with: the declaration's own for a declared property,
+ * otherwise the formal settings. Models compared with the property's (mutants) must use the same ones.
+ */
+export function formalBounds(
+  property: Property,
+  config: Pick<VeritasConfig, 'formal'>,
+): { integer: IntDomain; maxArrayLength: number } {
+  return (
+    declaredDomain(property) ?? {
+      integer: config.formal.integerDomain,
+      maxArrayLength: config.formal.maxArrayLength,
+    }
+  );
+}
+
 export const PROFILE_STAGES: Record<Profile, StageName[]> = {
   quick: ['index', 'discover', 'spec', 'map', 'assess', 'report'],
   standard: ['index', 'discover', 'spec', 'map', 'mutate', 'assess', 'report'],
@@ -196,6 +246,8 @@ interface SpecOutput {
   conflicts: import('@under18dev/veritas-property-engine').ConflictGroup[];
   /** Properties with a predicate that could not be formalized, with the reason. */
   notFormalized: Map<string, string>;
+  /** Decisions recorded for an earlier version of a property; they no longer apply. */
+  staleApprovals: import('@under18dev/veritas-core').Approval[];
 }
 
 function previousProperties(root: string): Property[] {
@@ -303,7 +355,7 @@ async function runInContext(
     functions: fullIndex.functions.filter((f) => inScope(f.file)),
     files: fullIndex.files.filter((f) => inScope(f.path)),
   };
-  const sourceHash = hashValue(code0.files);
+  const sourceHash = runSourceHash(root, config, code0.files);
   const store = new RunStore(root, runId, {
     configHash,
     sourceHash,
@@ -611,7 +663,12 @@ async function runInContext(
         candidates: index.candidates,
         previous: previousProperties(root),
       });
-      const applied = applyApprovals(registry.properties, loadApprovals(root));
+      // Declared properties join the discovered ones and go through the same approvals: none is accepted here.
+      const declared = declaredProperties(config.properties, {
+        integerDomain: domain,
+        maxArrayLength: config.formal.maxArrayLength,
+      });
+      const applied = applyApprovals([...registry.properties, ...declared], loadApprovals(root));
       const formalized: SpecOutput['formalized'] = new Map();
       const notFormalized: SpecOutput['notFormalized'] = new Map();
       const formalization: {
@@ -620,20 +677,30 @@ async function runInContext(
         detail: string;
       }[] = [];
 
-      for (const p of applied.properties) {
-        if (!p.predicate || p.targetSymbols.length !== 1) continue;
-        const fn = index.code.functions.find((f) => f.symbol === p.targetSymbols[0]);
+      const declaredIds = new Set(declared.map((p) => p.id));
 
-        if (!fn) continue;
-        const quote = discovery.statements.find((s) => p.statementIds.includes(s.id))?.quote;
-        const result = formalizeProperty({
-          root,
-          property: p,
-          fn,
-          domain,
-          maxArrayLength: config.formal.maxArrayLength,
-          ...(quote ? { quote } : {}),
-        });
+      for (const p of applied.properties) {
+        let result: ReturnType<typeof formalizeProperty>;
+
+        if (declaredIds.has(p.id)) {
+          // A declared target is read from its file even outside analysis.include; one that is missing or cannot
+          // be translated is recorded as not formalizable, so the prove stage reports it as unsupported.
+          result = formalizeDeclared({ root, property: p });
+        } else {
+          if (!p.predicate || p.targetSymbols.length !== 1) continue;
+          const fn = index.code.functions.find((f) => f.symbol === p.targetSymbols[0]);
+
+          if (!fn) continue;
+          const quote = discovery.statements.find((s) => p.statementIds.includes(s.id))?.quote;
+          result = formalizeProperty({
+            root,
+            property: p,
+            fn,
+            domain,
+            maxArrayLength: config.formal.maxArrayLength,
+            ...(quote ? { quote } : {}),
+          });
+        }
 
         if (result.status === 'formalized') {
           formalized.set(p.id, result);
@@ -665,6 +732,7 @@ async function runInContext(
           formalized,
           notFormalized,
           conflicts: registry.conflicts,
+          staleApprovals: applied.staleApprovals,
         } satisfies SpecOutput,
         artifacts: [artifact],
         messages: [`properties: ${JSON.stringify(counts)}; ${registry.conflicts.length} conflict(s)`],
@@ -1014,6 +1082,30 @@ async function runInContext(
         messages.push(
           `${skipped.length} formalized propert(y/ies) not verified: not accepted (use --include-proposed)`,
         );
+
+      // A declared property is named when it is left out, whether or not it could be formalized: a declaration is
+      // never passed over without a word.
+      // An approval of an earlier version of the declaration is named too: editing a declaration, or a formal
+      // setting it takes its bounds from, is what makes it stale.
+      for (const p of spec.properties) {
+        if (p.origin !== 'human') continue;
+
+        if (options.propertyIds && !options.propertyIds.includes(p.id)) continue;
+        const stale = spec.staleApprovals.filter((a) => a.propertyId === p.id).at(-1);
+
+        if (stale)
+          messages.push(
+            `${p.id}: the ${stale.decision} recorded by ${stale.actor} (${stale.id}) was for version ${stale.propertyVersion} of the declaration; it is now version ${p.version} and needs a new decision`,
+          );
+
+        if (wantedStatus(p)) continue;
+        messages.push(
+          `${p.id}: declared property not verified, it is ${p.status}` +
+            (p.status === 'proposed' || p.status === 'reviewed'
+              ? ` (accept it with \`veritas spec accept ${p.id} --reason "<why>"\`, or pass --include-proposed)`
+              : ''),
+        );
+      }
       // Survived mutants in translatable functions: bounded equivalence or a distinguishing input.
       const functions =
         (ctx.outputs.get('index') as { code: CodeIndex } | undefined)?.code.functions ?? code0.functions;
@@ -1191,6 +1283,9 @@ async function runInContext(
         const f = spec.formalized.get(p.id);
 
         if (!f) continue;
+        // A declared property may set its own bounds; the mutant is modelled with the same ones, so that it has
+        // the signature of the original in the property's model.
+        const bounds = formalBounds(p, config);
 
         for (const m of mutants.filter((m) => m.status !== 'pending' && m.status !== 'ignored')) {
           const found = mutantSource(m);
@@ -1200,8 +1295,8 @@ async function runInContext(
             file: found.fn.file,
             source: found.mutated,
             exportName: found.fn.name,
-            domain,
-            maxArrayLength: config.formal.maxArrayLength,
+            domain: bounds.integer,
+            maxArrayLength: bounds.maxArrayLength,
             modelName: `${f.exportName}__mutant`,
           });
           let ir: PropertyIR;

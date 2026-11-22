@@ -3,7 +3,13 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
-.veritas/
+# Veritas run data. The configuration and approvals of the self-verification and of the declared-properties
+# fixture are committed; runs and caches never are.
+**/.veritas/*
+!/.veritas/config.json
+!/.veritas/approvals.json
+!/fixtures/declared-properties/.veritas/config.json
+!/fixtures/declared-properties/.veritas/approvals.json
 .mutator/
 .claude/
 veritas-runs/

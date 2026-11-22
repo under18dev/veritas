@@ -752,7 +752,11 @@ export function buildRegistry(options: BuildOptions): Registry {
   return { properties, conflicts, mapping };
 }
 
-/** Hash of the fields an approval is about; review state and confidence are excluded. */
+/**
+ * Hash of the fields an approval is about; review state and confidence are excluded. For a declared property the
+ * kind and the bounds it is checked over (`inputDomain`) count too; they are left out of the others, whose hashes
+ * stay what they were.
+ */
 export function contentHash(p: Property): string {
   return hashValue({
     description: p.description,
@@ -760,5 +764,6 @@ export function contentHash(p: Property): string {
     targetSymbols: p.targetSymbols,
     sourceIds: p.sourceIds,
     template: p.template,
+    ...(p.origin === 'human' ? { inputDomain: p.inputDomain } : {}),
   });
 }

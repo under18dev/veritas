@@ -1,0 +1,87 @@
+{
+  "$schema": "../schemas/config.json",
+  "schemaVersion": "1.0.0",
+  "sources": {
+    "local": false
+  },
+  "analysis": {
+    "include": ["packages/core/src/policy-decision.ts"],
+    "testInclude": ["packages/core/test/policy-decision.test.ts"],
+    "inferSpecsFromCode": false
+  },
+  "formal": {
+    "backend": "both"
+  },
+  "policy": {
+    "confirmedViolation": "fail",
+    "inconclusiveBehavior": "fail"
+  },
+  "properties": [
+    {
+      "id": "policy.pass-means-nothing-open",
+      "kind": "holds_for_all",
+      "target": "packages/core/src/policy-decision.ts#invariant_passMeansNothingOpen",
+      "description": "The verdict is pass only when there is nothing at all to report: no confirmed violation, tool error, inconclusive stage, claim or threshold, failed threshold or open finding."
+    },
+    {
+      "id": "policy.inconclusive-is-never-pass",
+      "kind": "holds_for_all",
+      "target": "packages/core/src/policy-decision.ts#invariant_inconclusiveIsNeverPass",
+      "description": "An inconclusive stage, claim or threshold is never a clean pass, whatever inconclusiveBehavior says."
+    },
+    {
+      "id": "policy.success-exit-only-when-passing",
+      "kind": "holds_for_all",
+      "target": "packages/core/src/policy-decision.ts#invariant_successExitOnlyWhenPassing",
+      "description": "Exit code 0 only for the verdicts pass and pass_with_warnings."
+    },
+    {
+      "id": "policy.exit-code-follows-verdict",
+      "kind": "holds_for_all",
+      "target": "packages/core/src/policy-decision.ts#invariant_exitCodeFollowsVerdict",
+      "description": "The exit code follows the verdict: policy failure 1, tool error 3, inconclusive 4, success 0, and never 2."
+    },
+    {
+      "id": "policy.failures-exit-one",
+      "kind": "holds_for_all",
+      "target": "packages/core/src/policy-decision.ts#invariant_failuresExitOne",
+      "description": "A failed threshold, or a confirmed violation with confirmedViolation: fail, always exits 1."
+    },
+    {
+      "id": "policy.tool-error-never-succeeds",
+      "kind": "holds_for_all",
+      "target": "packages/core/src/policy-decision.ts#invariant_toolErrorNeverSucceeds",
+      "description": "A stage that failed or errored never exits 0."
+    },
+    {
+      "id": "policy.inconclusive-fail-exits-four",
+      "kind": "holds_for_all",
+      "target": "packages/core/src/policy-decision.ts#invariant_inconclusiveFailExitsFour",
+      "description": "With inconclusiveBehavior: fail, an inconclusive item exits 4 unless a policy failure or a tool error takes precedence."
+    },
+    {
+      "id": "policy.exit-one-means-policy-failure",
+      "kind": "holds_for_all",
+      "target": "packages/core/src/policy-decision.ts#invariant_exitOneMeansPolicyFailure",
+      "description": "Exit code 1 only for a failed threshold or a confirmed violation with confirmedViolation: fail."
+    },
+    {
+      "id": "policy.exit-three-means-tool-error",
+      "kind": "holds_for_all",
+      "target": "packages/core/src/policy-decision.ts#invariant_exitThreeMeansToolError",
+      "description": "Exit code 3 only for a stage that failed or errored."
+    },
+    {
+      "id": "policy.exit-four-means-inconclusive-fail",
+      "kind": "holds_for_all",
+      "target": "packages/core/src/policy-decision.ts#invariant_exitFourMeansInconclusiveFail",
+      "description": "Exit code 4 only with inconclusiveBehavior: fail and something inconclusive."
+    },
+    {
+      "id": "policy.open-findings-never-fail",
+      "kind": "holds_for_all",
+      "target": "packages/core/src/policy-decision.ts#invariant_openFindingsNeverFail",
+      "description": "Open findings never make the exit code non-zero without a failed threshold, a failing confirmed violation, a tool error or a failing inconclusive item."
+    }
+  ]
+}

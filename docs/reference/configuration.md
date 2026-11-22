@@ -80,6 +80,35 @@ Commit `.veritas/config.json` and `.veritas/approvals.json`; the [GitHub Action]
 
 Inconclusive results are claims that are `unknown`, `timeout`, `unsupported`, `semantic_mismatch` or `error`, and stages that are `partial`, `skipped`, `unsupported`, `timeout` or `cancelled`.
 
+## Declared properties
+
+`properties` lists rules you state yourself, each as an exported function that returns `true` when the rule holds. It is a list, not a setting, so the [TUI](/guide/tui) settings screen leaves it out; edit it in the file.
+
+```json
+{
+  "properties": [
+    {
+      "id": "stage.succeeded-needs-tests",
+      "kind": "holds_for_all",
+      "target": "src/stage.ts#invariant_succeededNeedsTests",
+      "description": "The stage succeeds only after at least one test ran.",
+      "domain": { "integer": { "min": "0", "max": "1000" }, "maxArrayLength": 2 }
+    }
+  ]
+}
+```
+
+| Field                   | Required | Meaning                                                                                                                     |
+| ----------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `id`                    | yes      | Letters, digits, `.`, `_` and `-`, unique in the list. The property ID is `D-<id>`                                          |
+| `kind`                  | yes      | `holds_for_all`: the target returns `true` for every input in the domain                                                    |
+| `target`                | yes      | `<file relative to the project root>#<exported function>`. The function must return `boolean` and stay in the formal subset |
+| `description`           | yes      | What the rule means, up to 500 characters                                                                                   |
+| `domain.integer`        | no       | `min` and `max` of every integer input, as decimal strings. Default: `formal.integerDomain`                                 |
+| `domain.maxArrayLength` | no       | Longest array modelled, 1 to 8. Default: `formal.maxArrayLength`                                                            |
+
+Each declared property is `proposed` until you accept it with `veritas spec accept`, and an approval stops applying when the declaration or the formal settings it uses change. A target Veritas cannot check gives an `unsupported` claim with the reason. See [Declare a property](/guide/verification#declare-a-property).
+
 ## Settings with a single allowed value
 
 These settings state a rule and accept only one value. Any other value is an invalid configuration.
