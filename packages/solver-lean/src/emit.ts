@@ -448,6 +448,13 @@ function namedIntCallsApplies(ir: PropertyIR): boolean {
   );
 }
 
+/** Generation of the named-calls script stopped at a budget: the strategy is abandoned without an attempt. */
+class ScriptTooLarge extends Error {}
+
+/** At most this many named call results, and this many bytes of script, before the strategy is abandoned. */
+const NAMED_CALLS_MAX_RESULTS = 2_000;
+const NAMED_CALLS_MAX_SCRIPT_BYTES = 1_000_000;
+
 /**
  * Names the result of every call to an integer-valued function (`r_k`, with `hr_k : call = r_k`), unfolds each
  * such function only in its own equation, and inlines the boolean-valued functions. A helper whose result is
@@ -456,13 +463,6 @@ function namedIntCallsApplies(ir: PropertyIR): boolean {
  * boolean parameters are then split one at a time, simplifying after each split so that decided branches close
  * early; what remains is a linear integer problem for `omega`.
  */
-/** Generation of the named-calls script stopped at a budget: the strategy is abandoned without an attempt. */
-class ScriptTooLarge extends Error {}
-
-/** At most this many named call results, and this many bytes of script, before the strategy is abandoned. */
-const NAMED_CALLS_MAX_RESULTS = 2_000;
-const NAMED_CALLS_MAX_SCRIPT_BYTES = 1_000_000;
-
 function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[]): string[] {
   const byName = new Map(ir.functions.map((f) => [f.name, f]));
   const returnsOf = (fn: string) => byName.get(fn)?.returns;
