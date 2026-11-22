@@ -382,6 +382,72 @@ describe('writeMutationVitestConfig', () => {
     ).rejects.toThrow(/the tinyglobby of the project's Vitest, .* could not be loaded/);
   });
 
+  it('keeps an absolute root of a file project as it is', () => {
+    for (const key of ['test.root', 'root'] as const) {
+      const root = tempDir(`absolute-root-${key}`);
+      const options = `name: 'c', globals: true, include: ['src/**/*.test.js']`;
+      write(root, {
+        'vitest.config.mjs': "export default { test: { projects: ['configs/vitest.config.mjs'] } };",
+        'configs/vitest.config.mjs':
+          key === 'root'
+            ? `export default { root: ${JSON.stringify(root)}, test: { ${options} } };`
+            : `export default { test: { root: ${JSON.stringify(root)}, ${options} } };`,
+        'src/a.test.js': "it('a', () => {});",
+        'src/b.test.js': "it('b', () => { throw new Error('not selected'); });",
+      });
+      const configPath = writeMutationVitestConfig({
+        root,
+        dir: mutationDir(root),
+        testFiles: ['src/a.test.js'],
+        toolchain,
+      });
+      expectListed(root, configPath, ['src/a.test.js']);
+    }
+  }, 90_000);
+
+  it('leaves out the projects a negated pattern excludes, as Vitest does', async () => {
+    const root = tempDir('negated-projects');
+    write(root, {
+      'vitest.config.mjs': "export default { test: { projects: ['packages/*', '!packages/excluded'] } };",
+      'packages/a/vitest.config.mjs': "export default { test: { name: 'a', globals: true } };",
+      'packages/a/a.test.mjs': "it('a', () => {});",
+      'packages/excluded/vitest.config.mjs': "export default { test: { name: 'excluded', globals: true } };",
+      'packages/excluded/x.test.mjs': "it('x', () => { throw new Error('excluded'); });",
+    });
+    const configPath = writeMutationVitestConfig({
+      root,
+      dir: mutationDir(root),
+      testFiles: ['packages/a/a.test.mjs', 'packages/excluded/x.test.mjs'],
+      toolchain,
+    });
+    expectListed(root, configPath, ['packages/a/a.test.mjs']);
+    expect((await resolve(configPath)).test.projects?.map((p) => p.test.name)).toEqual(['a']);
+  }, 90_000);
+
+  it('keeps in-source candidates in includeSource, where Vitest checks them for import.meta.vitest', async () => {
+    const root = tempDir('include-source');
+    write(root, {
+      'vitest.config.mjs':
+        "export default { test: { globals: true, include: ['test/**/*.test.mjs'], includeSource: ['src/**/*.mjs'] } };",
+      'src/helper.mjs': 'export const helper = 1;',
+      'src/in-source.mjs':
+        "export const one = 1;\nif (import.meta.vitest) { const { it } = import.meta.vitest; it('in source', () => {}); }\n",
+      'test/a.test.mjs': "it('a', () => {});",
+    });
+    const configPath = writeMutationVitestConfig({
+      root,
+      dir: mutationDir(root),
+      testFiles: ['src/helper.mjs', 'src/in-source.mjs', 'test/a.test.mjs'],
+      toolchain,
+    });
+    expectListed(root, configPath, ['src/in-source.mjs', 'test/a.test.mjs']);
+    const resolved = (await resolve(configPath)) as {
+      test: { include?: string[]; includeSource?: string[] };
+    };
+    expect(resolved.test.include).toEqual(['test/a.test.mjs']);
+    expect(resolved.test.includeSource).toEqual(['src/helper.mjs', 'src/in-source.mjs']);
+  }, 90_000);
+
   it('substitutes <rootDir> in project entries', async () => {
     const root = tempDir('rootdir');
     write(root, {
