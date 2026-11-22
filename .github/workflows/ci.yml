@@ -61,15 +61,15 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
-          sh elan-init.sh -y --default-toolchain stable --no-modify-path
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o "$RUNNER_TEMP/elan-init.sh"
+          sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain stable --no-modify-path
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - name: Install Lean (elan, Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri https://raw.githubusercontent.com/leanprover/elan/master/elan-init.ps1 -OutFile elan-init.ps1
-          ./elan-init.ps1 -NoPrompt 1 -DefaultToolchain stable
+          Invoke-WebRequest -Uri https://raw.githubusercontent.com/leanprover/elan/master/elan-init.ps1 -OutFile "$env:RUNNER_TEMP/elan-init.ps1"
+          & "$env:RUNNER_TEMP/elan-init.ps1" -NoPrompt 1 -DefaultToolchain stable
           echo "$env:USERPROFILE\.elan\bin" >> $env:GITHUB_PATH
       - name: Download the Lean toolchain
         run: lean --version && lake --version
@@ -133,8 +133,8 @@ jobs:
       - name: Install Lean (elan)
         shell: bash
         run: |
-          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
-          sh elan-init.sh -y --default-toolchain stable --no-modify-path
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o "$RUNNER_TEMP/elan-init.sh"
+          sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain stable --no-modify-path
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - name: Download the Lean toolchain
         run: lean --version && lake --version
