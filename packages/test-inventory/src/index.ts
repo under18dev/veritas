@@ -6860,7 +6860,8 @@ function moduleSafety(
     strictRunnerNames = true;
 
     try {
-      if (escapesRunner(source) || requireEscapes(source, declaredAnyhow)) found.unknown = true;
+      if (escapesRunner(source) || requireEscapes(source, declaredAnyhow) || evaluatesCode(source))
+        found.unknown = true;
     } finally {
       strictRunnerNames = previousStrict;
     }
@@ -6961,6 +6962,59 @@ function moduleSafety(
 
     return false;
   };
+  /**
+   * Whether a module can run source text: `eval` or `Function` used in any way (`const execute = eval`,
+   * `(0, eval)(…)`, `Reflect.apply(eval, …)`) other than passed to a type check (`expect.any(Function)`,
+   * `toBeInstanceOf(Function)`), or the constructor of a function reached by a member (`(() => {}).constructor`,
+   * `Function.prototype.constructor`). A name the file declares itself is its own.
+   */
+  const evaluatesCode = (source: ts.SourceFile): boolean =>
+    descendants(source).some((node) => {
+      if (ts.isPropertyAccessExpression(node) && node.name.text === 'constructor') {
+        const object = skipParens(node.expression);
+
+        return (
+          isFunction(object) ||
+          ts.isClassExpression(object) ||
+          (ts.isPropertyAccessExpression(object) && object.name.text === 'prototype')
+        );
+      }
+
+      if (!ts.isIdentifier(node) || (node.text !== 'eval' && node.text !== 'Function')) return false;
+      const parent = node.parent;
+
+      // Names that are not references.
+      if (
+        (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+        (ts.isPropertyAssignment(parent) && parent.name === node) ||
+        ((ts.isVariableDeclaration(parent) ||
+          ts.isParameter(parent) ||
+          ts.isFunctionDeclaration(parent) ||
+          ts.isBindingElement(parent) ||
+          ts.isMethodDeclaration(parent) ||
+          ts.isPropertyDeclaration(parent)) &&
+          parent.name === node) ||
+        ts.isTypeReferenceNode(parent) ||
+        ts.isExpressionWithTypeArguments(parent) ||
+        declaredLocally(node)
+      )
+        return false;
+
+      // A type check takes the constructor without calling it.
+      if (
+        node.text === 'Function' &&
+        ts.isCallExpression(parent) &&
+        parent.arguments.includes(node) &&
+        ['any', 'toBeInstanceOf'].includes(
+          ts.isPropertyAccessExpression(skipParens(parent.expression))
+            ? (skipParens(parent.expression) as ts.PropertyAccessExpression).name.text
+            : '',
+        )
+      )
+        return false;
+
+      return true;
+    });
   /** Whether a name is declared in its own file at all, imports included (an imported `module`). */
   const declaredAnyhow = (node: ts.Identifier): boolean =>
     checker

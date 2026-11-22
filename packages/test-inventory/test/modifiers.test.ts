@@ -325,6 +325,8 @@ describe('full names static analysis cannot read', () => {
         "const g = vi.fn().mockImplementation(() => double(1)); it('g', () => { g(); });",
       expectValue: "const n = 1; const row = { a: [1, 'x'] }; expect(n).toBe(1); expect(row).toEqual(row);",
       expectChoice: 'const flag = true; expect(flag ? 1 : 2).toBe(1); expect(() => flag).not.toThrow();',
+      functionTypeChecks:
+        "it('f', () => { const f = vi.fn(); f(() => 1); expect(f).toHaveBeenCalledWith(expect.any(Function)); expect(f).toBeInstanceOf(Function); });",
       nestedMatchers:
         "const v = { a: 1 }; expect(v).toEqual(expect.objectContaining({ a: expect.any(Number), b: expect.stringContaining('x'), c: [1, /r/] }));",
       expectMockOfInline: 'expect(vi.fn(() => 1)).not.toThrow();',
@@ -487,6 +489,13 @@ describe('full names static analysis cannot read', () => {
         "const m = require('node:module');\nexport function shared() { m.createRequire(__filename)('external-shared-suite').sharedSuite(); }",
       cjsModulePassed:
         "const m = require('node:module');\nexport const keep = [m];\nexport function shared() { return 1; }",
+      evalAlias: 'export function shared() { const execute = eval; execute("it(\'hidden\', () => {})"); }',
+      evalIndirect: 'export function shared() { (0, eval)("it(\'hidden\', () => {})"); }',
+      evalReflect: 'export function shared() { Reflect.apply(eval, null, ["it(\'hidden\', () => {})"]); }',
+      functionConstructor:
+        'export function shared() { const F = (() => {}).constructor as any; new F("it(\'hidden\', () => {})")(); }',
+      functionPrototype:
+        'export function shared() { const F = (Function as any).prototype.constructor; F("it(\'hidden\', () => {})")(); }',
       vmRun:
         "import { runInThisContext } from 'node:vm';\nexport function shared() { runInThisContext(\"it('hidden', () => {})\"); }",
       vmScript:
