@@ -5612,13 +5612,16 @@ const OPTION_MODIFIERS = new Map<string, TestCaseType['modifiers'][number]>([
  */
 function registrationOptions(node: ts.CallExpression): {
   modifiers: TestCaseType['modifiers'];
+  /** Modifiers set to `false`, which override the same modifier chained on the registration (`it.only(…, { only: false })`). */
+  cleared: TestCaseType['modifiers'];
   unknown: boolean;
 } {
   const modifiers: TestCaseType['modifiers'] = [];
+  const cleared: TestCaseType['modifiers'] = [];
   let unknown = false;
 
   // Only a runner that reads an options object (Vitest); Jest's extra argument is a timeout.
-  if (!runner.testOptions) return { modifiers, unknown };
+  if (!runner.testOptions) return { modifiers, cleared, unknown };
   // Each modifier's value as the object ends up with it: later keys override earlier ones.
   const set = new Map<TestCaseType['modifiers'][number], boolean>();
 
@@ -5674,19 +5677,26 @@ function registrationOptions(node: ts.CallExpression): {
     }
   }
 
-  for (const [modifier, on] of set) if (on) modifiers.push(modifier);
+  for (const [modifier, on] of set) (on ? modifiers : cleared).push(modifier);
 
-  return { modifiers, unknown };
+  return { modifiers, cleared, unknown };
 }
 
 /** A registration with the modifiers its options object sets added. */
 function withOptions(node: ts.CallExpression, found: Registration | undefined): Registration | undefined {
   if (!found) return undefined;
-  const { modifiers } = registrationOptions(node);
+  const { modifiers, cleared } = registrationOptions(node);
 
-  return modifiers.length === 0
-    ? found
-    : { ...found, modifiers: [...new Set([...found.modifiers, ...modifiers])] };
+  if (modifiers.length === 0 && cleared.length === 0) return found;
+
+  // Vitest spreads the options over the chained modifiers of this registration (an enclosing suite's are merged
+  // later and still apply).
+  return {
+    ...found,
+    modifiers: [
+      ...new Set([...found.modifiers.filter((modifier) => !cleared.includes(modifier)), ...modifiers]),
+    ],
+  };
 }
 
 /** Vitest takes `(name, fn, timeout | options)` as well as `(name, options, fn)`: the callback is the last function. */

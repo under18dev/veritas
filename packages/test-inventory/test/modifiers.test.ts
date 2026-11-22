@@ -756,6 +756,10 @@ describe('full names static analysis cannot read', () => {
         it('unskipped', { skip: true, ...{ skip: false } }, () => {});
         it('overridden', { skip: true, timeout: 5, skip: false }, () => {});
         it('skipped again', { ...base, skip: true }, () => {});
+        it.only('unfocused', { only: false }, () => {});
+        it.skip('unskipped chain', { skip: false }, () => {});
+        it.fails('not failing', { fails: false }, () => {});
+        describe.skip('skipped suite', () => { it('still skipped', { skip: false }, () => {}); });
         describe('suite', { concurrent: true }, () => { it('inside', () => {}); });
       `,
     });
@@ -774,6 +778,10 @@ describe('full names static analysis cannot read', () => {
       ['unskipped', [], true],
       ['overridden', [], undefined],
       ['skipped again', ['skip'], true],
+      ['unfocused', [], undefined],
+      ['unskipped chain', [], undefined],
+      ['not failing', [], undefined],
+      ['still skipped', ['skip'], undefined],
       ['inside', ['concurrent'], undefined],
     ]);
   });
