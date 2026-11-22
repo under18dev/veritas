@@ -518,6 +518,34 @@ describe('full names static analysis cannot read', () => {
         "let k: 'a' = 'a';\nk = 'constructor' as 'a';\nexport function shared() { const f: any = shared; f[k](\"it('hidden', () => {})\")(); }",
       parsedKey:
         "export function shared() { const k = JSON.parse('\"constructor\"') as 'a'; const f: any = shared; f[k](\"it('hidden', () => {})\")(); }",
+      computedAsCall:
+        "export function shared(k = 'constructor') { const f: any = shared; (f[k] as any)(\"it('hidden', () => {})\")(); }",
+      computedParenCall:
+        "export function shared(k = 'constructor') { const f: any = shared; (f[k])(\"it('hidden', () => {})\")(); }",
+      computedNonNullCall:
+        "export function shared(k = 'constructor') { const f: any = shared; f[k]!(\"it('hidden', () => {})\")(); }",
+      computedCommaCall:
+        "export function shared(k = 'constructor') { const f: any = shared; (0, f[k])(\"it('hidden', () => {})\")(); }",
+      computedAlias:
+        "export function shared(k = 'constructor') { const f: any = shared; const g = f[k]; g(\"it('hidden', () => {})\")(); }",
+      computedPassed:
+        "export function shared(k = 'constructor') { const f: any = shared; [\"it('hidden', () => {})\"].map(f[k]).forEach((h: any) => h()); }",
+      computedMemberCall:
+        "export function shared(k = 'constructor') { const f: any = shared; f[k].call(null, \"it('hidden', () => {})\")(); }",
+      computedNew:
+        "export function shared(k = 'constructor') { const f: any = shared; new (f[k])(\"it('hidden', () => {})\")(); }",
+      computedTagged:
+        "export function shared(k = 'constructor') { const f: any = shared; f[k]`it('hidden', () => {})`(); }",
+      computedReturned:
+        "export function shared(k = 'constructor') { const f: any = shared; const get = () => f[k]; get()(\"it('hidden', () => {})\")(); }",
+      computedAliasRead:
+        "export function shared(k = 'constructor') { const f: any = shared; const g = f[k]; const h = g.bind(null); h(\"it('hidden', () => {})\")(); }",
+      objectKeys:
+        "export function shared() { const f: any = shared; for (const k of Object.keys({ constructor: 1 }) as 'a'[]) f[k](\"it('hidden', () => {})\")(); }",
+      castKeyWrapped:
+        "export function shared() { const k = 'constructor' as 'a'; const f: any = shared; (f[k] as any)(\"it('hidden', () => {})\")(); }",
+      computedDestructured:
+        "export function shared(k = 'constructor') { const { [k]: g }: any = shared; g(\"it('hidden', () => {})\")(); }",
       vmRun:
         "import { runInThisContext } from 'node:vm';\nexport function shared() { runInThisContext(\"it('hidden', () => {})\"); }",
       vmScript:
@@ -622,6 +650,20 @@ describe('full names static analysis cannot read', () => {
         '  return (cause instanceof Error && cause.constructor === Error) || Object.getPrototypeOf(item) === null || o[key]();',
         '}',
       ].join('\n'),
+      // A helper reading members through computed keys only to compare, count, convert or interpolate them.
+      'test/plain-indexing.ts': [
+        'export function shared(xs: string[], m: Record<string, string>, k: string) {',
+        '  let n = 0n;',
+        '  for (let i = 0; i < xs.length; i++) {',
+        '    const x = xs[i];',
+        "    if (x !== '' && xs[i + 1] !== x) n += BigInt(xs[i]) + BigInt(x.length);",
+        '    xs[i] = x.padStart(4);',
+        '  }',
+        "  return m[k] === 'a' || typeof m[k] === 'string' || `$" + '{m[k]}`.length > n || m[k].length > 0;',
+        '}',
+      ].join('\n'),
+      'test/uses-plain-indexing.test.ts':
+        "import { it } from 'vitest';\nimport { shared } from './plain-indexing.js';\nshared([], {}, 'a');\nit('r', () => {});\n",
       'test/uses-plain-reflection.test.ts':
         "import { it } from 'vitest';\nimport { shared } from './plain-reflection.js';\nshared(1, {});\nit('r', () => {});\n",
       // A setup helper registering matchers that call a package.
@@ -670,6 +712,7 @@ describe('full names static analysis cannot read', () => {
     expect(marked('test/passes-returning.test.ts')).toBe('open_collection');
     expect(marked('test/uses-matchers-helper.test.ts')).toBe('imported_open_module');
     expect(marked('test/uses-plain-reflection.test.ts')).toBeUndefined();
+    expect(marked('test/uses-plain-indexing.test.ts')).toBeUndefined();
     expect(marked('test/passes-returning-inline.test.ts')).toBeUndefined();
     // Calling a function that loads a package through createRequire may reach it.
     expect(marked('test/uses-created-require.test.ts')).toBe('open_collection');

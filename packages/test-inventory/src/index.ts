@@ -5602,6 +5602,21 @@ const NON_CALLING = new Set([
   'unstubAllEnvs',
 ]);
 
+/** Global functions that convert their argument to a primitive without calling it. */
+const COERCIONS = new Set([
+  'BigInt',
+  'Number',
+  'String',
+  'Boolean',
+  'parseInt',
+  'parseFloat',
+  'isNaN',
+  'isFinite',
+]);
+
+/** Members that run a function value, or reach code that runs source text. */
+const UNSAFE_METHODS = new Set(['call', 'apply', 'bind', 'constructor', '__proto__', 'eval', 'Function']);
+
 /** Global constructors an asymmetric matcher may take (`expect.any(Number)`). */
 const GLOBAL_CONSTRUCTORS = new Set([
   'Number',
@@ -7019,17 +7034,26 @@ function moduleSafety(
             return true;
         }
 
-        // A call through a key computed at run time (`obj[key](…)`) may call anything, unless the key's type names
-        // methods as literals (`raw[key]()` with `key: 'text' | 'json'`), which is a call of a named method.
-        if (
-          member !== undefined ||
-          !ts.isElementAccessExpression(node) ||
-          !ts.isCallExpression(node.parent) ||
-          skipParens(node.parent.expression) !== node
-        )
-          return false;
-        return !literalKeys(node.argumentExpression, new Set());
+        // A member read through a key computed at run time (`obj[key]`) may be anything, `constructor` included:
+        // unless every key it may have is written as a literal (see `literalKeys`), its value may only go where it
+        // cannot be called (see `harmlessUse`).
+        if (member !== undefined || !ts.isElementAccessExpression(node)) return false;
+
+        return (
+          !literalKeys(node.argumentExpression, new Set()) &&
+          !numericKey(node.argumentExpression, new Set()) &&
+          !harmlessUse(node)
+        );
       }
+
+      // A computed key in a destructuring pattern (`const { [k]: g } = f`) reads the same way.
+      if (
+        ts.isBindingElement(node) &&
+        node.propertyName &&
+        ts.isComputedPropertyName(node.propertyName) &&
+        !literalKeys(node.propertyName.expression, new Set())
+      )
+        return true;
 
       if (!ts.isIdentifier(node) || (node.text !== 'eval' && node.text !== 'Function')) return false;
       const parent = node.parent;
@@ -7104,6 +7128,212 @@ function moduleSafety(
 
     return literalKeys(declaration.initializer, seen);
   };
+  /**
+   * Whether a key is a number by how it is computed, whatever types say: a numeric literal, arithmetic that always
+   * yields a number (`-`, `*`, `/`, `%`, `**`, bitwise operators, unary `-`, `+`, `~`, `++`, `--`), a `const`
+   * initialised with such a key, or a loop counter (`for (let i = 0; …; i++)`) only ever changed that way. A number
+   * names an index, never a method such as `constructor`.
+   */
+  const numericKey = (node: ts.Expression, seen: Set<ts.Node>): boolean => {
+    const key = skipParens(node);
+
+    if (ts.isNumericLiteral(key)) return true;
+
+    if (ts.isPrefixUnaryExpression(key))
+      return (
+        [ts.SyntaxKind.MinusToken, ts.SyntaxKind.PlusToken, ts.SyntaxKind.TildeToken].includes(
+          key.operator,
+        ) ||
+        ((key.operator === ts.SyntaxKind.PlusPlusToken || key.operator === ts.SyntaxKind.MinusMinusToken) &&
+          numericKey(key.operand, seen))
+      );
+
+    if (ts.isPostfixUnaryExpression(key)) return numericKey(key.operand, seen);
+
+    if (ts.isBinaryExpression(key) && key.operatorToken.kind === ts.SyntaxKind.PlusToken)
+      return numericKey(key.left, seen) && numericKey(key.right, seen);
+
+    if (ts.isConditionalExpression(key))
+      return numericKey(key.whenTrue, seen) && numericKey(key.whenFalse, seen);
+
+    if (ts.isBinaryExpression(key))
+      return [
+        ts.SyntaxKind.MinusToken,
+        ts.SyntaxKind.AsteriskToken,
+        ts.SyntaxKind.SlashToken,
+        ts.SyntaxKind.PercentToken,
+        ts.SyntaxKind.AsteriskAsteriskToken,
+        ts.SyntaxKind.AmpersandToken,
+        ts.SyntaxKind.BarToken,
+        ts.SyntaxKind.CaretToken,
+        ts.SyntaxKind.LessThanLessThanToken,
+        ts.SyntaxKind.GreaterThanGreaterThanToken,
+        ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken,
+      ].includes(key.operatorToken.kind);
+
+    if (!ts.isIdentifier(key)) return false;
+    const symbol = checker.getSymbolAtLocation(key);
+    const declarations = symbol?.declarations ?? [];
+    const declaration = declarations[0];
+
+    if (
+      declarations.length !== 1 ||
+      !declaration ||
+      !ts.isVariableDeclaration(declaration) ||
+      !ts.isIdentifier(declaration.name) ||
+      !declaration.initializer ||
+      seen.has(declaration)
+    )
+      return false;
+    seen.add(declaration);
+
+    if (!numericKey(declaration.initializer, seen)) return false;
+
+    if ((ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0) return true;
+    // A `let`: every change of it keeps it a number (`i++`, `i += 1`), and it is changed nowhere else.
+    const scope = declaration.getSourceFile();
+
+    return descendants(scope).every((use) => {
+      if (!ts.isIdentifier(use) || use === declaration.name || checker.getSymbolAtLocation(use) !== symbol)
+        return true;
+      const parent = use.parent;
+
+      if (
+        (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
+        (parent.operator === ts.SyntaxKind.PlusPlusToken || parent.operator === ts.SyntaxKind.MinusMinusToken)
+      )
+        return true;
+
+      if (ts.isBinaryExpression(parent) && parent.left === use) {
+        const operator = parent.operatorToken.kind;
+
+        if (operator === ts.SyntaxKind.EqualsToken) return numericKey(parent.right, seen);
+
+        return (
+          operator >= ts.SyntaxKind.FirstCompoundAssignment &&
+          operator <= ts.SyntaxKind.LastCompoundAssignment &&
+          (operator !== ts.SyntaxKind.PlusEqualsToken || numericKey(parent.right, seen))
+        );
+      }
+
+      // Read only.
+      return !(ts.isBinaryExpression(parent) && parent.left === use);
+    });
+  };
+  /**
+   * Whether a value read through a computed key is only used where it cannot be called: compared, tested,
+   * counted, interpolated, assigned to (`cache[key] = value`), or read further (`obj[key].length`) with the result
+   * used so. Anywhere else (called, passed, returned, held in a name, wrapped in `as` or `!` and then any of those) it
+   * may be called.
+   */
+  const harmlessUse = (node: ts.Expression, seen: Set<ts.Node> = new Set()): boolean => {
+    let current: ts.Node = node;
+
+    while (
+      ts.isParenthesizedExpression(current.parent) ||
+      ts.isAsExpression(current.parent) ||
+      ts.isSatisfiesExpression(current.parent) ||
+      ts.isNonNullExpression(current.parent) ||
+      ts.isTypeAssertionExpression(current.parent)
+    )
+      current = current.parent;
+    const parent = current.parent;
+
+    if (ts.isBinaryExpression(parent)) {
+      const operator = parent.operatorToken.kind;
+
+      // The target of an assignment is written, not read.
+      if (operator === ts.SyntaxKind.EqualsToken) return parent.left === current;
+
+      return [
+        ts.SyntaxKind.EqualsEqualsEqualsToken,
+        ts.SyntaxKind.ExclamationEqualsEqualsToken,
+        ts.SyntaxKind.EqualsEqualsToken,
+        ts.SyntaxKind.ExclamationEqualsToken,
+        ts.SyntaxKind.LessThanToken,
+        ts.SyntaxKind.LessThanEqualsToken,
+        ts.SyntaxKind.GreaterThanToken,
+        ts.SyntaxKind.GreaterThanEqualsToken,
+        ts.SyntaxKind.InstanceOfKeyword,
+        ts.SyntaxKind.InKeyword,
+        ts.SyntaxKind.MinusToken,
+        ts.SyntaxKind.AsteriskToken,
+        ts.SyntaxKind.SlashToken,
+        ts.SyntaxKind.PercentToken,
+        ts.SyntaxKind.AsteriskAsteriskToken,
+        ts.SyntaxKind.PlusToken,
+      ].includes(operator);
+    }
+
+    if (
+      ts.isPrefixUnaryExpression(parent) ||
+      ts.isPostfixUnaryExpression(parent) ||
+      ts.isTypeOfExpression(parent) ||
+      ts.isVoidExpression(parent) ||
+      ts.isDeleteExpression(parent) ||
+      ts.isTemplateSpan(parent)
+    )
+      return true;
+
+    if (
+      (ts.isIfStatement(parent) || ts.isWhileStatement(parent) || ts.isDoStatement(parent)) &&
+      parent.expression === current
+    )
+      return true;
+
+    if (ts.isConditionalExpression(parent) && parent.condition === current) return true;
+
+    if (ts.isExpressionStatement(parent)) return true;
+
+    // Converted to a primitive (`BigInt(sections[i])`): the value is not called.
+    if (
+      ts.isCallExpression(parent) &&
+      parent.arguments.includes(current as ts.Expression) &&
+      ts.isIdentifier(skipParens(parent.expression)) &&
+      COERCIONS.has((skipParens(parent.expression) as ts.Identifier).text) &&
+      !declaredLocally(skipParens(parent.expression) as ts.Identifier)
+    )
+      return true;
+
+    if (ts.isPropertyAccessExpression(parent) && parent.expression === current) {
+      const name = parent.name.text;
+
+      // A method of the value called by its name (`node.padStart(4, '0')`): only `call`, `apply`, `bind` run the
+      // value itself, and `constructor`, `eval` or a registration name reach code that runs source or registers.
+      if (ts.isCallExpression(parent.parent) && parent.parent.expression === parent)
+        return !UNSAFE_METHODS.has(name) && !registeringName(name);
+
+      // A further read: its result is judged the same way.
+      return !UNSAFE_METHODS.has(name) && harmlessUse(parent, seen);
+    }
+
+    if (ts.isElementAccessExpression(parent) && parent.expression === current)
+      return harmlessUse(parent, seen);
+
+    // Held in a constant: every use of the constant is judged the same way.
+    if (
+      ts.isVariableDeclaration(parent) &&
+      parent.initializer === current &&
+      ts.isIdentifier(parent.name) &&
+      (ts.getCombinedNodeFlags(parent) & ts.NodeFlags.Const) !== 0 &&
+      !seen.has(parent)
+    ) {
+      seen.add(parent);
+      const symbol = checker.getSymbolAtLocation(parent.name);
+
+      return descendants(parent.getSourceFile()).every(
+        (use) =>
+          !ts.isIdentifier(use) ||
+          use === parent.name ||
+          checker.getSymbolAtLocation(use) !== symbol ||
+          harmlessUse(use, seen),
+      );
+    }
+
+    return false;
+  };
+  const registeringName = (name: string) =>
+    runner.tests.has(name) || runner.suites.has(name) || runner.hooks.has(name);
   /** Whether a name is declared in its own file at all, imports included (an imported `module`). */
   const declaredAnyhow = (node: ts.Identifier): boolean =>
     checker
