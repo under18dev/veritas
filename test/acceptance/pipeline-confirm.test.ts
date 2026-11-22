@@ -126,4 +126,67 @@ describe('table-driven tests end to end', () => {
     ]);
     for (const test of tests) expect(killers.has(test.id), test.name).toBe(true);
   });
+
+  it('credits no table-driven test with kills another test of its file may have made', () => {
+    const dir = setup('discount-boundary');
+    const write = (file: string, lines: string[]) =>
+      writeFileSync(
+        path.join(dir, file),
+        [
+          "import { describe, expect, it } from 'vitest';",
+          "import { shippingFee } from '../src/pricing.js';",
+          '',
+        ]
+          .concat(lines, '')
+          .join('\n'),
+      );
+    // A vacuous it.each next to loop-generated tests whose titles are not literals: the loop's names fit the template.
+    write('test/loop-each.test.ts', [
+      "it.each([[4999]])('fee for %s', (total) => { shippingFee(total); expect(true).toBe(true); });",
+      `for (const [t, f] of [[5000, 0], [4999, 500]]) it(\`fee for \${t}\`, () => { expect(shippingFee(t)).toBe(f); });`,
+    ]);
+    // A vacuous describe.each next to a describe whose title is not a literal.
+    write('test/dynamic-describe.test.ts', [
+      "describe.each([['any']])('%s', () => { it('works', () => { shippingFee(1); expect(true).toBe(true); }); });",
+      `for (const y of [1]) describe(\`dyn \${y}\`, () => {`,
+      "  it('works', () => { expect(shippingFee(5000)).toBe(0); expect(shippingFee(4999)).toBe(500); });",
+      '});',
+    ]);
+    // A row title that is also the title of a plain test.
+    write('test/exact-and-row.test.ts', [
+      "it.each([[1]])('case %s', () => { shippingFee(1); expect(true).toBe(true); });",
+      "it('case 1', () => { expect(shippingFee(5000)).toBe(0); expect(shippingFee(4999)).toBe(500); });",
+    ]);
+    const run = json<RunJson>(runCli(['mutate', '--kill-matrix', '--json'], dir));
+    const stage = run.stages.find((s) => s.stage === 'mutate');
+    expect(stage?.status).toBe('succeeded');
+    const tests = readRunArtifact<{ tests: { id: string; file: string; name: string }[] }>(
+      dir,
+      run.runId,
+      'test-map.json',
+    ).tests;
+    const killers = new Set(
+      readRunArtifact<{ mutants: { killedBy: string[] }[] }>(dir, run.runId, 'mutation.json').mutants.flatMap(
+        (m) => m.killedBy,
+      ),
+    );
+    const id = (file: string, name: string) =>
+      tests.find((t) => t.file === file && t.name === name)?.id as string;
+
+    expect(killers.has(id('test/loop-each.test.ts', 'fee for %s'))).toBe(false);
+    expect(killers.has(id('test/dynamic-describe.test.ts', 'works'))).toBe(false);
+    expect(killers.has(id('test/exact-and-row.test.ts', 'case %s'))).toBe(false);
+    expect(killers.has(id('test/exact-and-row.test.ts', 'case 1'))).toBe(false);
+    const messages = stage?.messages.join('\n') ?? '';
+    // mutator numbers the second test of a run with the same full name: `fee for 4999#2`, `case 1#2`.
+    expect(messages).toMatch(
+      /could not read the full name of every test \(a test title that is not a literal\)[^\n]*test\/loop-each\.test\.ts#fee for 4999, test\/loop-each\.test\.ts#fee for 4999#2/,
+    );
+    expect(messages).toMatch(
+      /\(a describe title that is not a literal\)[^\n]*test\/dynamic-describe\.test\.ts#dyn 1 > works/,
+    );
+    expect(messages).toMatch(
+      /are the title of one test and also match the title of a table-driven test[^\n]*test\/exact-and-row\.test\.ts#case 1, test\/exact-and-row\.test\.ts#case 1#2/,
+    );
+  });
 });
