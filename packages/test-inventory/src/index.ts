@@ -250,13 +250,7 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
 
     return resolved ? program.getSourceFile(resolved.resolvedFileName) : undefined;
   };
-  // Without a tsconfig, or with imports kept as written, `import { type X } from './x'` still loads './x'.
-  const inlineTypeImportsErased =
-    compilerOptions !== DEFAULT_COMPILER_OPTIONS &&
-    !compilerOptions.verbatimModuleSyntax &&
-    !compilerOptions.preserveValueImports &&
-    compilerOptions.importsNotUsedAsValues !== ts.ImportsNotUsedAsValues.Preserve;
-  const safety = moduleSafety(root, checker, resolveModule, inlineTypeImportsErased);
+  const safety = moduleSafety(root, checker, resolveModule);
   /** Why the runner may report tests under a file that static analysis did not see (see `inexactNames`). */
   const inexactFile = (source: ts.SourceFile | undefined) => {
     if (!source || !closedCollection(source, safety.local) || safety.imports(source).unknown)
@@ -4498,6 +4492,8 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
    */
   let callable = new Set<string>();
   let inFactory = false;
+  /** In a mock factory: constants holding what its parameters returned (`const actual = await importOriginal()`). */
+  let factoryValues = new Set<string>();
   /**
    * A call of the runner's API, by the identifier its callee chain starts with (`vi.mock`, `it.each(rows)`). The
    * factories of `vi.mock`, `vi.doMock`, `vi.hoisted` (and Jest's) run while the file is collected, so their code is
@@ -4745,7 +4741,21 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
     while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root))
       root = skipParens(root.expression);
 
-    if (inFactory) return true;
+    if (inFactory) {
+      // In a mock factory, what it obtained from its own parameters (`await importOriginal()`), directly or held in a
+      // constant: the original module.
+      let obtained = root;
+
+      if (ts.isAwaitExpression(obtained)) obtained = skipParens(obtained.expression);
+
+      if (ts.isCallExpression(obtained)) {
+        const callee = skipParens(obtained.expression);
+
+        if (ts.isIdentifier(callee) && callable.has(callee.text)) return true;
+      }
+
+      if (ts.isIdentifier(root) && factoryValues.has(root.text)) return true;
+    }
 
     if (!ts.isIdentifier(root))
       return ts.isArrayLiteralExpression(root) || ts.isObjectLiteralExpression(root);
@@ -4832,7 +4842,7 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
       )
     )
       return false;
-    const saved = { callable, inFactory };
+    const saved = { callable, inFactory, factoryValues };
 
     if (factory) {
       // A parameter the body declares again or assigns may no longer be the factory's own.
@@ -4843,9 +4853,33 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
         ),
       );
       inFactory = true;
+      factoryValues = new Set();
+
+      if (ts.isBlock(fn.body))
+        for (const statement of fn.body.statements)
+          if (
+            ts.isVariableStatement(statement) &&
+            (statement.declarationList.flags & ts.NodeFlags.Const) !== 0
+          )
+            for (const declaration of statement.declarationList.declarations) {
+              let value = declaration.initializer ? skipParens(declaration.initializer) : undefined;
+
+              if (value && ts.isAwaitExpression(value)) value = skipParens(value.expression);
+
+              if (
+                ts.isIdentifier(declaration.name) &&
+                !shadowed.has(declaration.name.text) &&
+                value &&
+                ts.isCallExpression(value) &&
+                ts.isIdentifier(skipParens(value.expression)) &&
+                callable.has((skipParens(value.expression) as ts.Identifier).text)
+              )
+                factoryValues.add(declaration.name.text);
+            }
     } else {
       callable = new Set();
       inFactory = false;
+      factoryValues = new Set();
     }
 
     try {
@@ -4855,7 +4889,7 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
           ? inert(fn.body)
           : closedExpression(fn.body);
     } finally {
-      ({ callable, inFactory } = saved);
+      ({ callable, inFactory, factoryValues } = saved);
     }
   };
   /**
@@ -4975,8 +5009,73 @@ function conditionalRegistration(node: ts.CallExpression): boolean {
   const factory = registrationFactory(node);
 
   return (
-    factory !== undefined && propertyChain(factory).some((name) => name === 'skipIf' || name === 'runIf')
+    (factory !== undefined && propertyChain(factory).some((name) => name === 'skipIf' || name === 'runIf')) ||
+    registrationOptions(node).unknown
   );
+}
+
+/** Vitest test options that set a modifier (`it('x', { only: true }, fn)`). */
+const OPTION_MODIFIERS = new Map<string, TestCaseType['modifiers'][number]>([
+  ['only', 'only'],
+  ['skip', 'skip'],
+  ['todo', 'todo'],
+  ['fails', 'expected_failure'],
+  ['concurrent', 'concurrent'],
+]);
+
+/**
+ * The modifiers an options object of a registration sets (`{ only: true }`), and whether its arguments may set ones
+ * static analysis cannot read (an options value that is not a literal object, or a modifier that is not `true` or
+ * `false`): such a test may or may not run.
+ */
+function registrationOptions(node: ts.CallExpression): {
+  modifiers: TestCaseType['modifiers'];
+  unknown: boolean;
+} {
+  const modifiers: TestCaseType['modifiers'] = [];
+  let unknown = false;
+
+  for (const argument of node.arguments.slice(1)) {
+    const value = skipParens(argument);
+
+    // The callback, and a timeout.
+    if (isFunction(value) || ts.isNumericLiteral(value)) continue;
+
+    if (!ts.isObjectLiteralExpression(value)) {
+      unknown = true;
+      continue;
+    }
+
+    for (const property of value.properties) {
+      const name =
+        property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+          ? property.name.text
+          : undefined;
+
+      if (!ts.isPropertyAssignment(property) || name === undefined) {
+        unknown = true;
+        continue;
+      }
+      const modifier = OPTION_MODIFIERS.get(name);
+
+      if (modifier === undefined) continue;
+
+      if (property.initializer.kind === ts.SyntaxKind.TrueKeyword) modifiers.push(modifier);
+      else if (property.initializer.kind !== ts.SyntaxKind.FalseKeyword) unknown = true;
+    }
+  }
+
+  return { modifiers, unknown };
+}
+
+/** A registration with the modifiers its options object sets added. */
+function withOptions(node: ts.CallExpression, found: Registration | undefined): Registration | undefined {
+  if (!found) return undefined;
+  const { modifiers } = registrationOptions(node);
+
+  return modifiers.length === 0
+    ? found
+    : { ...found, modifiers: [...new Set([...found.modifiers, ...modifiers])] };
 }
 
 /** Vitest takes `(name, fn, timeout | options)` as well as `(name, options, fn)`: the callback is the last function. */
@@ -5007,6 +5106,10 @@ function registrationFactory(node: ts.CallExpression): ts.Expression | undefined
  * function that registers.
  */
 function testRegistration(node: ts.CallExpression): Registration | undefined {
+  return withOptions(node, plainTestRegistration(node));
+}
+
+function plainTestRegistration(node: ts.CallExpression): Registration | undefined {
   const direct = makesRegistration(node) ? undefined : registration(node, runner.tests);
 
   if (direct && Array.isArray(direct))
@@ -5044,6 +5147,10 @@ function testRegistration(node: ts.CallExpression): Registration | undefined {
 }
 
 function describeRegistration(node: ts.CallExpression): Registration | undefined {
+  return withOptions(node, plainDescribeRegistration(node));
+}
+
+function plainDescribeRegistration(node: ts.CallExpression): Registration | undefined {
   const direct = makesRegistration(node) ? undefined : registration(node, runner.suites);
 
   if (direct && Array.isArray(direct)) {
@@ -5648,7 +5755,6 @@ function moduleSafety(
   root: string,
   checker: ts.TypeChecker,
   resolve: (name: string, from: string) => ts.SourceFile | undefined,
-  inlineTypeImportsErased = false,
 ) {
   const importsOf = new Map<ts.SourceFile, RuntimeImports>();
   const verdicts = new Map<ts.SourceFile, 'registers' | 'open' | 'safe'>();
@@ -5697,15 +5803,9 @@ function moduleSafety(
     for (const node of descendants(source)) {
       if (ts.isImportDeclaration(node)) {
         const clause = node.importClause;
-        const erased =
-          clause !== undefined &&
-          (clause.isTypeOnly ||
-            (!clause.name &&
-              clause.namedBindings !== undefined &&
-              ts.isNamedImports(clause.namedBindings) &&
-              clause.namedBindings.elements.length > 0 &&
-              inlineTypeImportsErased &&
-              clause.namedBindings.elements.every((element) => element.isTypeOnly)));
+        // Only `import type` is always erased: `import { type X }` is kept as `import {}` under the
+        // `verbatimModuleSyntax` of whichever tsconfig the runner applies to the file.
+        const erased = clause?.isTypeOnly ?? false;
 
         if (!erased && ts.isStringLiteralLike(node.moduleSpecifier)) add(node.moduleSpecifier.text);
       } else if (ts.isExportDeclaration(node)) {

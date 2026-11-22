@@ -209,6 +209,7 @@ describe('full names static analysis cannot read', () => {
         "vi.mock('../src/value.js', (orig) => { function orig() { sharedSuite(); } orig(); return {}; });",
       mockReassigned:
         "vi.mock('../src/value.js', async (orig) => { orig = sharedSuite; await orig(); return {}; });",
+      mockFactoryReadsImport: "vi.mock('../src/value.js', () => ({ ...helpers, value: helpers.run }));",
       mockBracket: "vi['mock']('../src/value.js', () => { sharedSuite(); return {}; });",
       mockComputedKey: "const key = 'mock'; vi[key]('../src/value.js', () => ({}));",
       mockByReference:
@@ -509,26 +510,63 @@ describe('full names static analysis cannot read', () => {
     expect(marked('test/plain-data.test.ts')).toBeUndefined();
   });
 
-  it('follows inline type-only imports unless the project erases them', () => {
+  it('follows inline type-only imports, which a nearer tsconfig may keep, and erases only import type', () => {
     const files = {
       'test/shared-suite.ts':
         "import { it } from 'vitest';\nexport type Shared = number;\nexport function shared() { it('hidden', () => {}); }\n",
       'test/uses-type.test.ts':
         "import { it } from 'vitest';\nimport { type Shared } from './shared-suite.js';\nconst n: Shared = 1;\nit('t', () => { n; });\n",
+      'test/uses-import-type.test.ts':
+        "import { it } from 'vitest';\nimport type { Shared } from './shared-suite.js';\nconst n: Shared = 1;\nit('t', () => { n; });\n",
     };
-    const marked = (extra: Record<string, string>) =>
+    const marked = (extra: Record<string, string>, file = 'test/uses-type.test.ts') =>
       inventoryTests({
         recognition: vitest.recognition,
         root: tempProject({ ...files, ...extra }),
         config: VeritasConfig.parse({}),
-      }).files.find((f) => f.path === 'test/uses-type.test.ts')?.inexactNames;
+      }).files.find((f) => f.path === file)?.inexactNames;
 
-    // No tsconfig: whether the import is kept is not known.
-    expect(marked({})).toBe('imported_registrations');
-    expect(marked({ 'tsconfig.json': '{ "compilerOptions": { "verbatimModuleSyntax": true } }' })).toBe(
-      'imported_registrations',
-    );
-    expect(marked({ 'tsconfig.json': '{ "compilerOptions": { "strict": true } }' })).toBeUndefined();
+    // Whichever tsconfig the runner applies (the root one, a referenced one, a nearer one) may keep it.
+    for (const tsconfig of <Record<string, string>[]>[
+      {},
+      { 'tsconfig.json': '{ "compilerOptions": { "strict": true } }' },
+      {
+        'tsconfig.json': '{ "files": [], "references": [{ "path": "./tsconfig.app.json" }] }',
+        'tsconfig.app.json': '{ "compilerOptions": { "verbatimModuleSyntax": true } }',
+      },
+    ])
+      expect(marked(tsconfig)).toBe('imported_registrations');
+    expect(marked({}, 'test/uses-import-type.test.ts')).toBeUndefined();
+  });
+
+  it('reads Vitest test options that set a modifier, and takes other options as conditional', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/options.test.ts': `
+        import { describe, it } from 'vitest';
+        const opts = { only: true };
+        it('focused', { only: true }, () => {});
+        it('skipped', { skip: true, timeout: 10 }, () => {});
+        it('failing', () => {}, { fails: true });
+        it('unknown', opts, () => {});
+        it('timed', () => {}, 1000);
+        describe('suite', { concurrent: true }, () => { it('inside', () => {}); });
+      `,
+    });
+    const tests = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    }).tests;
+
+    expect(tests.map((t) => [t.name, t.modifiers, t.conditional])).toEqual([
+      ['focused', ['only'], undefined],
+      ['skipped', ['skip'], undefined],
+      ['failing', ['expected_failure'], undefined],
+      ['unknown', [], true],
+      ['timed', [], undefined],
+      ['inside', ['concurrent'], undefined],
+    ]);
   });
 
   it('records registrations through aliases and namespace imports, and leaves the file closed', () => {
