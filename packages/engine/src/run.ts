@@ -1638,9 +1638,14 @@ export function outstandingBudget(
  * every mutant within its time budget.
  */
 export function cacheableMutationResult(
-  result: Pick<MutationRunResult, 'status' | 'excludedFiles' | 'timeBudgetExhausted'>,
+  result: Pick<MutationRunResult, 'status' | 'excludedFiles' | 'timeBudgetExhausted' | 'testRunUnverified'>,
 ): boolean {
-  return result.status === 'succeeded' && !result.excludedFiles?.length && !result.timeBudgetExhausted;
+  return (
+    result.status === 'succeeded' &&
+    !result.excludedFiles?.length &&
+    !result.timeBudgetExhausted &&
+    !result.testRunUnverified
+  );
 }
 
 /** Whether a mutation run got as far as running mutants: it succeeded and at least one mutant ran to an outcome. */
@@ -1663,7 +1668,8 @@ export function startedMutants(result: { status: string; mutants: readonly Mutan
  * mutants outside the change are left out on purpose. A complete run without a single mutant is `partial` too:
  * it is no evidence about the tests. So is a run that left source files out because their instrumented copy did
  * not parse, and a run that stopped starting mutants because its time budget ran out, `--since` or not: those
- * mutants were selected and not run. A `partial` stage means the run cannot report `pass`.
+ * mutants were selected and not run. So is a run in which Veritas could not check that the selected tests ran
+ * (`testRunUnverified`). A `partial` stage means the run cannot report `pass`.
  */
 export function mutationStageStatus(
   result: {
@@ -1671,6 +1677,7 @@ export function mutationStageStatus(
     mutants: Mutant[];
     excludedFiles?: string[];
     timeBudgetExhausted?: { notRun: number };
+    testRunUnverified?: boolean;
   },
   options: { incremental?: boolean } = {},
 ): { status: StageResult['status']; undecided: number; empty: boolean } {
@@ -1685,7 +1692,8 @@ export function mutationStageStatus(
   const overBudget = (result.timeBudgetExhausted?.notRun ?? 0) > 0;
 
   return {
-    status: undecided > 0 || empty || excluded || overBudget ? 'partial' : 'succeeded',
+    status:
+      undecided > 0 || empty || excluded || overBudget || result.testRunUnverified ? 'partial' : 'succeeded',
     undecided,
     empty,
   };

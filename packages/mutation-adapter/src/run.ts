@@ -570,18 +570,37 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   // A run without tests leaves every mutant "not covered", which reads as a result; it is a failure of the setup.
   const found = selectedTestFileCount(`${run.stderr}\n${run.stderrTail ?? ''}`);
   const selected = options.testFiles;
+  const selectedList = selected
+    ? ` of the ${selected.length} that import the code in scope (${listSome(selected)})`
+    : '';
+  const lookAt = `Check that the include and exclude patterns of the ${runner.displayName} config, and of its projects, match the test files`;
+  let testRunUnverified = false;
 
   if (found === 0) {
     return result('failed', {
       ...common,
       agentReport,
-      detail: `no test ran: the project's ${runner.displayName} config selected no test file${
-        selected ? ` of the ${selected.length} that import the code in scope (${listSome(selected)})` : ''
-      }, so every mutant would have been reported as not covered. Check that the include and exclude patterns of the ${runner.displayName} config, and of its projects, match the test files`,
+      detail: `no test ran: the project's ${runner.displayName} config selected no test file${selectedList}, so every mutant would have been reported as not covered. ${lookAt}`,
     });
   }
 
-  if (found !== null && selected && found < selected.length)
+  if (found === null) {
+    // This mutator does not say how many test files ran (another version than the pinned one may word it
+    // differently). With no test reaching any mutant either, nothing shows that a test ran: fail closed.
+    const reached = mutants.some((m) => m.killedBy.length > 0 || m.coveredBy.length > 0);
+
+    if (!reached && mutants.length > 0 && mutants.every((m) => m.status === 'no_coverage')) {
+      return result('failed', {
+        ...common,
+        agentReport,
+        detail: `no test is known to have run: mutator did not print how many test files the project's ${runner.displayName} config selected${selectedList}, and no test reached any mutant, so every mutant would have been reported as not covered. ${lookAt}`,
+      });
+    }
+    testRunUnverified = true;
+    warnings.push(
+      `mutator did not print how many test files the project's ${runner.displayName} config selected, so Veritas could not check that the selected tests ran; mutation results are partial`,
+    );
+  } else if (selected && found < selected.length)
     warnings.push(
       `${selected.length - found} of the ${selected.length} test file(s) that import the code in scope did not run, because the project's ${runner.displayName} config does not select them (its include or exclude patterns); mutants only they could kill are reported as not covered`,
     );
@@ -611,6 +630,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     killMatrix: agent?.killMatrix ?? null,
     detail: null,
     ...(budget === null ? {} : { timeBudgetExhausted: budget }),
+    ...(testRunUnverified ? { testRunUnverified: true as const } : {}),
   });
 }
 

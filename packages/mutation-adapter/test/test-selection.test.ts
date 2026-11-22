@@ -32,8 +32,8 @@ function recordingCli(root: string): string {
   return bin;
 }
 
-/** A stand-in mutator that prints the given progress line and writes a report with one mutant left uncovered. */
-function reportingCli(root: string, progress: string | null): string {
+/** A stand-in mutator that prints the given progress line and writes a report with one mutant, uncovered by default. */
+function reportingCli(root: string, progress: string | null, killed = false): string {
   const bin = path.join(root, 'stub-cli.js');
   const report = {
     schemaVersion: '2',
@@ -48,13 +48,15 @@ function reportingCli(root: string, progress: string | null): string {
             mutatorName: 'NumericLiteral',
             replacement: '0',
             location: { start: { line: 1, column: 18 }, end: { line: 1, column: 19 } },
-            status: 'NoCoverage',
+            ...(killed
+              ? { status: 'Killed', killedBy: ['test/a.test.ts#a'], coveredBy: ['test/a.test.ts#a'] }
+              : { status: 'NoCoverage' }),
           },
         ],
       },
     },
     // mutator lists only the tests that covered or killed a mutant.
-    testFiles: {},
+    testFiles: killed ? { 'test/a.test.ts': { tests: [{ id: 'test/a.test.ts#a', name: 'a' }] } } : {},
   };
   write(root, {
     'package.json': '{"type":"commonjs"}',
@@ -73,9 +75,9 @@ function reportingCli(root: string, progress: string | null): string {
 }
 
 describe('a mutation run in which no test ran', () => {
-  const run = (progress: string | null, selected?: string[]) => {
+  const run = (progress: string | null, selected?: string[], killed = false) => {
     const root = tempDir('no-test-ran');
-    const bin = reportingCli(root, progress);
+    const bin = reportingCli(root, progress, killed);
 
     return runMutation({
       testRunner: vitest,
@@ -115,13 +117,27 @@ describe('a mutation run in which no test ran', () => {
     );
   });
 
-  it('keeps a run in which tests ran but covered no mutant, or that printed no progress, as it is', async () => {
-    expect((await run('dry run: 2/2 test files, 1 source files', ['test/a.test.ts'])).status).toBe(
-      'succeeded',
-    );
+  it('keeps a run in which tests ran but covered no mutant as it is', async () => {
+    const result = await run('dry run: 2/2 test files, 1 source files', ['test/a.test.ts']);
+    expect(result.status).toBe('succeeded');
+    expect(result.testRunUnverified).toBeUndefined();
+  });
+
+  it('fails closed when mutator printed no count and no test reached any mutant', async () => {
     const silent = await run(null, ['test/a.test.ts']);
+    expect(silent.status).toBe('failed');
+    expect(silent.detail).toContain(
+      "no test is known to have run: mutator did not print how many test files the project's Vitest config selected of the 1 that import the code in scope (test/a.test.ts)",
+    );
+  });
+
+  it('marks a run without the count as unverified when tests did reach mutants', async () => {
+    const silent = await run(null, ['test/a.test.ts'], true);
     expect(silent.status).toBe('succeeded');
-    expect(silent.mutants).toHaveLength(1);
+    expect(silent.testRunUnverified).toBe(true);
+    expect(silent.warnings.join('\n')).toContain(
+      'Veritas could not check that the selected tests ran; mutation results are partial',
+    );
   });
 });
 

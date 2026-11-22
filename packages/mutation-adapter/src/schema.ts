@@ -94,6 +94,11 @@ export const MutationRunResult = z.object({
   timeBudgetExhausted: z
     .object({ seconds: z.number().int().nonnegative(), notRun: z.number().int().nonnegative() })
     .optional(),
+  /**
+   * Set when mutator did not print how many test files the test runner config selected, so Veritas could not check
+   * that the selected tests ran. The mutation stage is `partial`.
+   */
+  testRunUnverified: z.literal(true).optional(),
   /** The run that checked the tests static analysis could not link; absent when the stage did not try one. */
   confirmation: MutationConfirmation.optional(),
 });

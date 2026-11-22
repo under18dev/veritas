@@ -49,6 +49,16 @@ describe('mutationStageStatus', () => {
     });
   });
 
+  it('is partial, and not cached, when Veritas could not check that the selected tests ran', () => {
+    const result = {
+      status: 'succeeded' as const,
+      mutants: [mutant('killed')],
+      testRunUnverified: true as const,
+    };
+    expect(mutationStageStatus(result).status).toBe('partial');
+    expect(cacheableMutationResult(result)).toBe(false);
+  });
+
   it('keeps a failed or unsupported run as it is', () => {
     expect(mutationStageStatus({ status: 'failed', mutants: [] }).status).toBe('failed');
     expect(mutationStageStatus({ status: 'unsupported', mutants: [mutant('pending')] }).status).toBe(
