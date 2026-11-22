@@ -318,6 +318,50 @@ describe('full names static analysis cannot read', () => {
     expect(marked('test/imports-registering.test.ts')).toBe('imported_registrations');
   });
 
+  it('records registrations through aliases and namespace imports, and leaves the file closed', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/aliases.test.ts': `
+        import { beforeEach as before, describe as d, expect, it, it as row, test as t } from 'vitest';
+        import * as v from 'vitest';
+        import { value } from '../src/value.js';
+        before(() => { value(0); });
+        it.each(['own'])('%s', (s) => { expect(s).toBe('own'); });
+        row.each([1])('strong %s', (n) => { expect(value(n)).toBe(n); });
+        t.skip('skipped', () => {});
+        d('suite', () => { v.it.each([2])('ns %s', (n) => { expect(value(n)).toBe(n); }); });
+        v.describe('ns suite', () => { v.test('inner', () => { expect(value(1)).toBe(1); }); });
+      `,
+      'test/extend.test.ts': `
+        import { expect, it } from 'vitest';
+        const myTest = it.extend({});
+        myTest('hidden', () => { expect(1).toBe(1); });
+      `,
+    });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
+
+    expect(
+      inventory.tests
+        .filter((t) => t.file === 'test/aliases.test.ts')
+        .map((t) => [[...t.suitePath, t.name].join(' > '), t.modifiers]),
+    ).toEqual([
+      ['%s', ['each']],
+      ['strong %s', ['each']],
+      ['skipped', ['skip']],
+      ['suite > ns %s', ['each']],
+      ['ns suite > inner', []],
+    ]);
+    expect(inventory.files.find((f) => f.path === 'test/aliases.test.ts')?.inexactNames).toBeUndefined();
+    // A call of the runner's test API that is not a registration the inventory reads may register tests.
+    expect(inventory.files.find((f) => f.path === 'test/extend.test.ts')?.inexactNames).toBe(
+      'open_collection',
+    );
+  });
+
   it('records which titles of a table-driven test the runner formats', () => {
     const root = tempProject({
       'src/value.ts': 'export const value = (input: number) => input;\n',

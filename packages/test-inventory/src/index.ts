@@ -2800,7 +2800,7 @@ function inBeforeEach(node: ts.Node): boolean {
     if (isFunctionLike(current) && ts.isCallExpression(current.parent)) {
       const callee = current.parent.expression;
 
-      if (ts.isIdentifier(callee) && runner.beforeEach.has(callee.text)) return true;
+      if (runner.beforeEach.has(runnerExport(callee)?.name ?? '')) return true;
     }
 
   return false;
@@ -4452,8 +4452,7 @@ function closedCollection(source: ts.SourceFile): boolean {
       ((member !== undefined && DEFERRING.has(member)) ||
         testRegistration(call) !== undefined ||
         describeRegistration(call) !== undefined ||
-        (ts.isIdentifier(skipParens(call.expression)) &&
-          runner.hooks.has(runnerName(skipParens(call.expression) as ts.Identifier))));
+        runner.hooks.has(runnerExport(skipParens(call.expression))?.name ?? ''));
 
     return call.arguments.every((argument) => {
       if (isFunction(argument)) return defers || closedFunction(argument, true);
@@ -4484,6 +4483,8 @@ function closedCollection(source: ts.SourceFile): boolean {
 
     // Whether `callee` is called itself, rather than one of its members (`expect(x).toBe(1)` calls `toBe`).
     let called = true;
+    // The member accessed on the root, which names the export when the root is a namespace (`vitest.it`).
+    let first: string | undefined;
 
     for (;;) {
       callee = skipParens(callee);
@@ -4498,13 +4499,28 @@ function closedCollection(source: ts.SourceFile): boolean {
         called = true;
       } else if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
         // `vi['mock']` is `vi.mock`; a key computed at run time could name anything.
-        if (accessedMember(callee) === undefined) return false;
+        first = accessedMember(callee);
+
+        if (first === undefined) return false;
         callee = callee.expression;
         called = false;
       } else break;
     }
 
-    return ts.isIdentifier(callee) && runnerOwn(runnerName(callee));
+    if (!ts.isIdentifier(callee)) return false;
+    const resolved = runnerName(callee);
+    const name = resolved === NAMESPACE ? first : resolved;
+
+    if (name === undefined || !runnerOwn(name)) return false;
+
+    // A call of `it`, `test` or `describe` that the inventory does not record as a registration (`it.extend(…)`, a
+    // form it does not read) may register tests it does not see.
+    return (
+      !ts.isCallExpression(node) ||
+      !(runner.tests.has(name) || runner.suites.has(name)) ||
+      testRegistration(node) !== undefined ||
+      describeRegistration(node) !== undefined
+    );
   };
   /** The member a property or element access names, when written as a name or a literal key. */
   const accessedMember = (node: ts.Expression): string | undefined =>
@@ -4814,8 +4830,9 @@ function testRegistration(node: ts.CallExpression): Registration | undefined {
   const factory = registrationFactory(node);
 
   if (factory) {
-    const chain = propertyChain(factory);
-    const root = rootIdentifier(factory);
+    const resolved = runnerExport(factory);
+    const chain = resolved?.chain ?? [];
+    const root = resolved?.name;
 
     if (root && runner.tests.has(root) && chain.some((name) => runner.registrationFactories.has(name))) {
       const eachModifiers = chain.filter((name): name is TestCaseType['modifiers'][number] =>
@@ -4851,8 +4868,9 @@ function describeRegistration(node: ts.CallExpression): Registration | undefined
   const factory = registrationFactory(node);
 
   if (!factory) return undefined;
-  const chain = propertyChain(factory);
-  const root = rootIdentifier(factory);
+  const resolved = runnerExport(factory);
+  const chain = resolved?.chain ?? [];
+  const root = resolved?.name;
 
   if (!root || !runner.suites.has(root) || !chain.some((name) => runner.registrationFactories.has(name)))
     return undefined;
@@ -4891,14 +4909,15 @@ function runnerName(identifier: ts.Identifier): string {
 
       if (
         !bindings ||
-        !ts.isNamedImports(bindings) ||
         !ts.isStringLiteral((statement as ts.ImportDeclaration).moduleSpecifier) ||
         !runner.modules.has(((statement as ts.ImportDeclaration).moduleSpecifier as ts.StringLiteral).text)
       )
         continue;
 
-      for (const element of bindings.elements)
-        if (element.propertyName) aliases.set(element.name.text, element.propertyName.text);
+      if (ts.isNamespaceImport(bindings)) aliases.set(bindings.name.text, NAMESPACE);
+      else
+        for (const element of bindings.elements)
+          if (element.propertyName) aliases.set(element.name.text, element.propertyName.text);
     }
     runnerAliases.set(source, aliases);
   }
@@ -4906,18 +4925,38 @@ function runnerName(identifier: ts.Identifier): string {
   return aliases.get(identifier.text) ?? identifier.text;
 }
 
-/** The modifiers of a call to one of `names` (`it.skip(...)`), or undefined when it calls none of them. */
-function registration(node: ts.CallExpression, names: Set<string>): TestCaseType['modifiers'] | undefined {
-  const chain: string[] = [];
-  let expression: ts.Expression = node.expression;
+/** What `runnerName` returns for a namespace import of the runner (`import * as vitest from 'vitest'`). */
+const NAMESPACE = '*';
 
-  while (ts.isPropertyAccessExpression(expression)) {
-    chain.push(expression.name.text);
-    expression = expression.expression;
+/**
+ * The runner export an expression starts from, with the members accessed on it (`[ 'each', 'skip' ]` for
+ * `it.skip.each`, outermost first): through aliases (`import { it as row }`) and namespace imports
+ * (`vitest.it.each`). Undefined when it does not start from a name, or a member is not a plain name.
+ */
+function runnerExport(expression: ts.Expression): { name: string; chain: string[] } | undefined {
+  const chain: string[] = [];
+  let current = expression;
+
+  while (ts.isPropertyAccessExpression(current)) {
+    chain.push(current.name.text);
+    current = current.expression;
   }
 
-  if (!ts.isIdentifier(expression)) return undefined;
-  const name = runnerName(expression);
+  if (!ts.isIdentifier(current)) return undefined;
+  const name = runnerName(current);
+
+  if (name !== NAMESPACE) return { name, chain };
+  const member = chain.pop();
+
+  return member === undefined ? undefined : { name: member, chain };
+}
+
+/** The modifiers of a call to one of `names` (`it.skip(...)`), or undefined when it calls none of them. */
+function registration(node: ts.CallExpression, names: Set<string>): TestCaseType['modifiers'] | undefined {
+  const resolved = runnerExport(node.expression);
+
+  if (resolved === undefined) return undefined;
+  const { name, chain } = resolved;
 
   if (!names.has(name)) return undefined;
   const found = chain.filter((member): member is TestCaseType['modifiers'][number] =>
@@ -7188,7 +7227,7 @@ function usesSuiteParameters(
       call.arguments.includes(current as ts.Expression) &&
       (describeRegistration(call) !== undefined ||
         testRegistration(call) !== undefined ||
-        (ts.isIdentifier(call.expression) && runner.hooks.has(call.expression.text)));
+        runner.hooks.has(runnerExport(call.expression)?.name ?? ''));
 
     if (!registers) {
       suite = current;
