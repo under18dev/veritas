@@ -8,6 +8,16 @@ import type {
   TestCase,
   TestPropertyEdge,
 } from '@under18dev/veritas-core';
+import {
+  inferredUnlinked,
+  killedWithoutLink,
+  linkUnknown as linkUnknownOf,
+  OUTCOME_RULE,
+  type OutcomeEvidence,
+  outcomeName,
+  outcomeOfRule,
+  outcomeRule,
+} from './decision.js';
 
 /** Integer points that decide a threshold: both sides of `x op v`. */
 export function boundaryPoints(predicate: NonNullable<Property['predicate']>): string[] {
@@ -52,30 +62,55 @@ export interface AssessInput {
  * an inference a killed mutant overturns, unlike a test that asserts nothing or only constants.
  */
 export function unlinkedByInference(test: TestCase): boolean {
-  const s = test.suspicions;
-
-  if (s.includes('type_level_only') || s.includes('tautological_assertion') || s.includes('no_assertion'))
-    return false;
-  const linkUnknown =
-    s.includes('unresolved_import') ||
-    s.includes('opaque_call') ||
-    s.includes('progress_only') ||
-    s.includes('caller_supplied') ||
-    s.includes('reachable_by_name');
-
-  return s.includes('target_not_called') || (!test.targetCalls.some((c) => c.asserted) && !linkUnknown);
+  return inferredUnlinked(
+    outcomeEvidence(test, {
+      mutationAvailable: false,
+      killed: 0,
+      relevantKilled: 0,
+      relevantSurvived: 0,
+      linkedProperties: 0,
+      conflictedProperties: 0,
+      unexercisedBoundaries: 0,
+    }),
+  );
 }
 
-/**
- * Assess each test from an evidence vector. Outcomes:
- * - tautological_or_disconnected: no assertion on a project call (constant assertions, no call, no assertion). A
- *   test static analysis could not link but that killed a mutant is not: the kill shows it observes project code;
- * - spec_conflict: a linked property is conflicted;
- * - weak_or_incomplete: a relevant mutant it covers survived, or a decisive boundary is not exercised;
- * - meaningful_with_evidence: asserts a project call, kills relevant mutants, no relevant survivors it covers,
- *   and exercises the boundary of every linked threshold property;
- * - inconclusive: anything that cannot be decided (e.g. no mutation data, no linked property).
- */
+/** The evidence record of the decision kernel: what the test case says, with the counts read from the run. */
+function outcomeEvidence(
+  test: TestCase,
+  run: Pick<
+    OutcomeEvidence,
+    | 'mutationAvailable'
+    | 'killed'
+    | 'relevantKilled'
+    | 'relevantSurvived'
+    | 'linkedProperties'
+    | 'conflictedProperties'
+    | 'unexercisedBoundaries'
+  >,
+): OutcomeEvidence {
+  const s = test.suspicions;
+
+  return {
+    expectedFailure: test.modifiers.includes('expected_failure'),
+    skippedOrTodo: test.modifiers.includes('skip') || test.modifiers.includes('todo'),
+    typeLevelOnly: s.includes('type_level_only'),
+    // Static analysis is certain about these: the test asserts nothing, or only constants. A mutant such a test
+    // kills can only fail it by making the code it runs throw, so a kill does not make it check a result.
+    assertsNothing: s.includes('tautological_assertion') || s.includes('no_assertion'),
+    targetNotCalled: s.includes('target_not_called'),
+    assertedCall: test.targetCalls.some((c) => c.asserted),
+    unresolvedImport: s.includes('unresolved_import'),
+    opaqueCall: s.includes('opaque_call'),
+    progressOnly: s.includes('progress_only'),
+    callerSupplied: s.includes('caller_supplied'),
+    // Project code could reach what the test reads without being handed it (a mocked module, a global): possible,
+    // not shown, so the link is unknown rather than absent.
+    reachableByName: s.includes('reachable_by_name'),
+    ...run,
+  };
+}
+
 interface InputIndex {
   edges: Map<string, AssessInput['edges']>;
   killed: Map<string, AssessInput['mutants']>;
@@ -100,6 +135,19 @@ function indexOf(input: AssessInput): InputIndex {
   return index;
 }
 
+/**
+ * Assess each test from an evidence vector. Outcomes:
+ * - tautological_or_disconnected: no assertion on a project call (constant assertions, no call, no assertion). A
+ *   test static analysis could not link but that killed a mutant is not: the kill shows it observes project code;
+ * - spec_conflict: a linked property is conflicted;
+ * - weak_or_incomplete: a relevant mutant it covers survived, or a decisive boundary is not exercised;
+ * - meaningful_with_evidence: asserts a project call, kills relevant mutants, no relevant survivors it covers,
+ *   and exercises the boundary of every linked threshold property;
+ * - inconclusive: anything that cannot be decided (e.g. no mutation data, no linked property).
+ * A skipped or todo test does not run, so the mutation results credited to it are not used: it can only be
+ * tautological_or_disconnected, spec_conflict or weak_or_incomplete (an unexercised boundary) from static analysis,
+ * and is inconclusive otherwise. The outcome itself is decided in `decision.ts`.
+ */
 export function assessTest(
   test: TestCase,
   input: AssessInput,
@@ -123,19 +171,6 @@ export function assessTest(
       .flatMap((c) => c.args.filter((a): a is string => a !== null))
       .flatMap(argumentValues),
   );
-  const assertedCall = test.targetCalls.some((c) => c.asserted);
-  const unresolved = test.suspicions.includes('unresolved_import');
-  const opaque = test.suspicions.includes('opaque_call');
-  const progressOnly = test.suspicions.includes('progress_only');
-  const callerSupplied = test.suspicions.includes('caller_supplied');
-  // Project code could reach what the test reads without being handed it (a mocked module, a global): possible, not
-  // shown, so the link is unknown rather than absent.
-  const reachable = test.suspicions.includes('reachable_by_name');
-  const routes = [...new Set(test.targetCalls.flatMap((c) => c.reachedVia ?? []))];
-  // Static analysis could not see everything the test reaches, or the test checks when a call settles rather than
-  // what it returns: either way a missing link is not proof of none.
-  const linkUnknown = unresolved || opaque || progressOnly || callerSupplied || reachable;
-
   const boundaryCoverage: EvidenceVector['boundaryCoverage'] = [];
 
   for (const p of properties) {
@@ -148,6 +183,25 @@ export function assessTest(
       exercised: hit.length > 0 ? 'yes' : 'no',
     });
   }
+  const evidence = outcomeEvidence(test, {
+    mutationAvailable: input.mutationAvailable,
+    killed: killed.length,
+    relevantKilled: relevantKilled.length,
+    relevantSurvived: relevantSurvived.length,
+    linkedProperties: properties.length,
+    conflictedProperties: properties.filter((p) => p.status === 'conflicted').length,
+    unexercisedBoundaries: boundaryCoverage.filter((b) => b.exercised === 'no').length,
+  });
+  const {
+    assertedCall,
+    unresolvedImport: unresolved,
+    opaqueCall: opaque,
+    progressOnly,
+    callerSupplied,
+    reachableByName: reachable,
+  } = evidence;
+  const routes = [...new Set(test.targetCalls.flatMap((c) => c.reachedVia ?? []))];
+  const linkUnknown = linkUnknownOf(evidence);
   // Distinguishability claims name the tests whose inputs they checked.
   const testClaims = input.claims.filter(
     (c) =>
@@ -218,148 +272,154 @@ export function assessTest(
   };
 
   const rationale: string[] = [];
-  let outcome: TestAssessment['outcome'];
-  const typeLevelOnly = test.suspicions.includes('type_level_only');
-  // Static analysis is certain about these: the test asserts nothing, or only constants. A mutant such a test kills
-  // can only fail it by making the code it runs throw, so a kill does not make it check a result.
-  const assertsNothing =
-    test.suspicions.includes('tautological_assertion') || test.suspicions.includes('no_assertion');
+  const rule = outcomeRule(evidence);
+  const outcome = outcomeName(outcomeOfRule(rule));
   // A killed mutant is evidence against an inferred missing link: the test failed when project code changed, so it
   // does observe project behaviour.
-  const unlinked = unlinkedByInference(test);
-  const killEvidence = unlinked && killed.length > 0;
-  const disconnected = !typeLevelOnly && (assertsNothing || (unlinked && !killEvidence));
+  const killEvidence = killedWithoutLink(evidence);
 
-  if (test.modifiers.includes('expected_failure')) {
-    // An inverted test passes only when what it asserts fails, so a kill, a survivor or a passing run says the
-    // opposite of what its assertions read as; Veritas does not turn that around.
-    outcome = 'inconclusive';
-    rationale.push(
-      'marked as expected to fail (it.fails, test.failing): it passes only when its assertions fail, so its results do not show what its assertions check',
-    );
-  } else if (typeLevelOnly) {
-    // A type check is a real check of the project, but of its types: no run, mutant or solver here evaluates it.
-    outcome = 'inconclusive';
-    rationale.push(
-      'checks only TypeScript types (expectTypeOf, assertType), which Veritas does not evaluate',
-    );
-  } else if (disconnected) {
-    outcome = 'tautological_or_disconnected';
+  switch (rule) {
+    case OUTCOME_RULE.expectedFailure:
+      // An inverted test passes only when what it asserts fails, so a kill, a survivor or a passing run says the
+      // opposite of what its assertions read as; Veritas does not turn that around.
+      rationale.push(
+        'marked as expected to fail (it.fails, test.failing): it passes only when its assertions fail, so its results do not show what its assertions check',
+      );
+      break;
+    case OUTCOME_RULE.typeLevelOnly:
+      // A type check is a real check of the project, but of its types: no run, mutant or solver here evaluates it.
+      rationale.push(
+        'checks only TypeScript types (expectTypeOf, assertType), which Veritas does not evaluate',
+      );
+      break;
+    case OUTCOME_RULE.disconnected:
+      if (test.suspicions.length) rationale.push(`static analysis: ${test.suspicions.join(', ')}`);
 
-    if (test.suspicions.length) rationale.push(`static analysis: ${test.suspicions.join(', ')}`);
+      if (!assertedCall) rationale.push('no assertion checks the result of a project function');
 
-    if (!assertedCall) rationale.push('no assertion checks the result of a project function');
+      // Only a test that ran mutants can be said to have missed them; others were outside the mutation scope.
+      // Without a full run, it is known to have run only the mutants no test killed: mutator stops at the first
+      // failing test.
+      if (!evidence.skippedOrTodo && input.mutationAvailable && covered.length > 0 && killed.length === 0) {
+        const known = input.ranMutantIds?.get(test.id);
+        const decided = covered.filter((m) => m.status === 'killed' || m.status === 'survived');
+        const ran = decided.filter((m) => input.killMatrix || m.status === 'survived' || known?.has(m.id));
+        const unchecked = decided.length - ran.length;
 
-    // Only a test that ran mutants can be said to have missed them; others were outside the mutation scope. Without
-    // a full run, it is known to have run only the mutants no test killed: mutator stops at the first failing test.
-    if (input.mutationAvailable && covered.length > 0 && killed.length === 0) {
-      const known = input.ranMutantIds?.get(test.id);
-      const decided = covered.filter((m) => m.status === 'killed' || m.status === 'survived');
-      const ran = decided.filter((m) => input.killMatrix || m.status === 'survived' || known?.has(m.id));
-      const unchecked = decided.length - ran.length;
+        if (ran.length > 0) rationale.push(`killed none of the ${ran.length} mutant(s) it runs`);
 
-      if (ran.length > 0) rationale.push(`killed none of the ${ran.length} mutant(s) it runs`);
-
-      if (unchecked > 0)
+        if (unchecked > 0)
+          rationale.push(
+            `${unchecked} other mutant(s) it covers were killed by another test first, so whether it detects them was not checked`,
+          );
+      }
+      break;
+    case OUTCOME_RULE.linkUnknown:
+      // Only reachable when the link is unknown: the asserted value may come from project code, so do not judge it.
+      if (unresolved)
         rationale.push(
-          `${unchecked} other mutant(s) it covers were killed by another test first, so whether it detects them was not checked`,
+          'the asserted call could not be linked to a project symbol because its import did not resolve',
         );
-    }
-  } else if (!assertedCall && !killEvidence) {
-    // Only reachable when the link is unknown: the asserted value may come from project code, so do not judge it.
-    outcome = 'inconclusive';
 
-    if (unresolved)
-      rationale.push(
-        'the asserted call could not be linked to a project symbol because its import did not resolve',
-      );
-
-    if (opaque)
-      rationale.push(
-        'the asserted values come from a child process or a dynamic import, which static analysis cannot follow',
-      );
-
-    if (progressOnly)
-      rationale.push(
-        'asserts only on constants recorded after awaiting a project call: it checks that the call settles (does not block), which static analysis cannot link to the call',
-      );
-
-    if (reachable)
-      rationale.push(
-        `project code it calls can reach what it reads (${routes.join('; ') || 'by name'}); not shown to be what the assertion checks`,
-      );
-
-    if (callerSupplied)
-      rationale.push(
-        "registered inside a shared or parameterized suite: what it calls comes from the suite's caller, which static analysis does not follow",
-      );
-  } else if (killEvidence) {
-    // A kill shows the test observes project behaviour, not which property it checks: without an assertion linked
-    // to project code, the properties of the functions it calls may not be what it checks.
-    outcome = 'inconclusive';
-  } else if (properties.some((p) => p.status === 'conflicted')) {
-    outcome = 'spec_conflict';
-    rationale.push(
-      `linked property is conflicted: ${properties
-        .filter((p) => p.status === 'conflicted')
-        .map((p) => p.id)
-        .join(', ')}`,
-    );
-  } else if (relevantSurvived.length > 0 || boundaryCoverage.some((b) => b.exercised === 'no')) {
-    outcome = 'weak_or_incomplete';
-
-    if (relevantSurvived.length > 0) {
-      rationale.push(
-        `${relevantSurvived.length} specification-relevant mutant(s) it runs survived: ${relevantSurvived.map((m) => `${m.location.file}:${m.location.range?.start} ${m.original} -> ${m.replacement}`).join('; ')}`,
-      );
-    }
-
-    for (const b of boundaryCoverage.filter((b) => b.exercised === 'no'))
-      rationale.push(`boundary not exercised: ${b.boundary}`);
-
-    for (const c of testClaims.filter((c) => relevantSurvived.some((m) => m.id === c.mutantId))) {
-      if (c.status === 'counterexample_found')
+      if (opaque)
         rationale.push(
-          `its input ${JSON.stringify(c.counterexample)} distinguishes mutant ${c.mutantId} from the original, but no assertion caught it (${c.id})`,
+          'the asserted values come from a child process or a dynamic import, which static analysis cannot follow',
         );
-      else if (c.status === 'proven_within_model')
-        rationale.push(
-          `none of its inputs distinguishes mutant ${c.mutantId}; a new input is needed (${c.id})`,
-        );
-    }
-  } else if (!input.mutationAvailable) {
-    outcome = 'inconclusive';
-    rationale.push('asserts a project result, but detection power was not measured (no mutation results)');
-  } else if (properties.length === 0) {
-    outcome = 'inconclusive';
-    rationale.push('asserts a project result, but no property is linked to the functions it calls');
-  } else if (
-    linkUnknown &&
-    relevantKilled.length > 0 &&
-    boundaryCoverage.every((b) => b.exercised === 'yes')
-  ) {
-    // Kills are recorded per test, so the code static analysis cannot follow (an unresolved import, a child
-    // process or a dynamic import) may be what detected them.
-    outcome = 'inconclusive';
-    rationale.push(
-      `kills ${relevantKilled.length} specification-relevant mutant(s), but ${unresolved ? 'another call goes through an unresolved import' : 'it also runs code in a child process or through a dynamic import'} and may be what detected them`,
-    );
-  } else if (relevantKilled.length > 0 && boundaryCoverage.every((b) => b.exercised === 'yes')) {
-    outcome = 'meaningful_with_evidence';
-    rationale.push(
-      `kills ${relevantKilled.length} specification-relevant mutant(s) and survivors it covers: none`,
-    );
 
-    if (boundaryCoverage.length)
-      rationale.push(`exercises decisive inputs: ${boundaryCoverage.map((b) => b.boundary).join('; ')}`);
-  } else {
-    outcome = 'inconclusive';
-    rationale.push(
-      ranMutants
-        ? 'linked to properties but killed no specification-relevant mutant or boundary coverage is partial'
-        : 'linked to properties, but it ran no mutant of this run (outside the mutation scope, or coverage not reported)',
-    );
+      if (progressOnly)
+        rationale.push(
+          'asserts only on constants recorded after awaiting a project call: it checks that the call settles (does not block), which static analysis cannot link to the call',
+        );
+
+      if (reachable)
+        rationale.push(
+          `project code it calls can reach what it reads (${routes.join('; ') || 'by name'}); not shown to be what the assertion checks`,
+        );
+
+      if (callerSupplied)
+        rationale.push(
+          "registered inside a shared or parameterized suite: what it calls comes from the suite's caller, which static analysis does not follow",
+        );
+      break;
+    case OUTCOME_RULE.killedWithoutLink:
+      // A kill shows the test observes project behaviour, not which property it checks: without an assertion linked
+      // to project code, the properties of the functions it calls may not be what it checks. The rationale is put
+      // in front below.
+      break;
+    case OUTCOME_RULE.specConflict:
+      rationale.push(
+        `linked property is conflicted: ${properties
+          .filter((p) => p.status === 'conflicted')
+          .map((p) => p.id)
+          .join(', ')}`,
+      );
+      break;
+    case OUTCOME_RULE.weak: {
+      // Survivors credited to a skipped or todo test are not its evidence: only the boundaries decide it.
+      const survivors = evidence.skippedOrTodo ? [] : relevantSurvived;
+
+      if (survivors.length > 0) {
+        rationale.push(
+          `${survivors.length} specification-relevant mutant(s) it runs survived: ${survivors.map((m) => `${m.location.file}:${m.location.range?.start} ${m.original} -> ${m.replacement}`).join('; ')}`,
+        );
+      }
+
+      for (const b of boundaryCoverage.filter((b) => b.exercised === 'no'))
+        rationale.push(`boundary not exercised: ${b.boundary}`);
+
+      for (const c of testClaims.filter((c) => survivors.some((m) => m.id === c.mutantId))) {
+        if (c.status === 'counterexample_found')
+          rationale.push(
+            `its input ${JSON.stringify(c.counterexample)} distinguishes mutant ${c.mutantId} from the original, but no assertion caught it (${c.id})`,
+          );
+        else if (c.status === 'proven_within_model')
+          rationale.push(
+            `none of its inputs distinguishes mutant ${c.mutantId}; a new input is needed (${c.id})`,
+          );
+      }
+      break;
+    }
+    case OUTCOME_RULE.noMutationResults:
+      rationale.push('asserts a project result, but detection power was not measured (no mutation results)');
+      break;
+    case OUTCOME_RULE.noLinkedProperty:
+      rationale.push('asserts a project result, but no property is linked to the functions it calls');
+      break;
+    case OUTCOME_RULE.killsThroughUnknownLink:
+      // Kills are recorded per test, so the code static analysis cannot follow (an unresolved import, a child
+      // process or a dynamic import) may be what detected them.
+      rationale.push(
+        `kills ${relevantKilled.length} specification-relevant mutant(s), but ${unresolved ? 'another call goes through an unresolved import' : 'it also runs code in a child process or through a dynamic import'} and may be what detected them`,
+      );
+      break;
+    case OUTCOME_RULE.noRelevantKill:
+      rationale.push(
+        ranMutants
+          ? 'linked to properties but killed no specification-relevant mutant or boundary coverage is partial'
+          : 'linked to properties, but it ran no mutant of this run (outside the mutation scope, or coverage not reported)',
+      );
+      break;
+    case OUTCOME_RULE.skippedOrTodo:
+      // A skipped or todo test does not run: it is judged only on what static analysis sees.
+      rationale.push(
+        'skipped or marked todo, so it does not run: it is not judged on mutation results, and static analysis finds nothing that decides it',
+      );
+      break;
+    default:
+      rationale.push(
+        `kills ${relevantKilled.length} specification-relevant mutant(s) and survivors it covers: none`,
+      );
+
+      if (boundaryCoverage.length)
+        rationale.push(`exercises decisive inputs: ${boundaryCoverage.map((b) => b.boundary).join('; ')}`);
   }
+
+  // Kills and survivors credited to a test that does not run can only come from results attributed to the wrong
+  // test; they stay in the evidence vector but decide nothing.
+  if (evidence.skippedOrTodo && (killed.length > 0 || covered.length > 0))
+    rationale.push(
+      `skipped or marked todo, so it does not run: the mutation results credited to it (${killed.length} killed, ${survived.length} survived) are not evidence of what it checks and are not used`,
+    );
 
   if (killEvidence)
     rationale.unshift(
