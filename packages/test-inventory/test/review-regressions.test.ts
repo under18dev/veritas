@@ -257,3 +257,28 @@ describe('mock detection is scoped to the test and to real Vitest mock APIs', ()
     expect(byName(result, 'outside').usesMocks).toBe(false);
   });
 });
+
+describe('registration functions taken from a namespace import of the runner', () => {
+  it('inventories tests registered through a constant bound to a member of the namespace', () => {
+    const result = inventory({
+      'test/namespace.test.ts': [
+        "import * as v from 'vitest';",
+        'const test = v.test;',
+        'const fixture = v.test.extend({});',
+        "const named = v['it'];",
+        "test('works', () => { v.expect(1).toBe(1); });",
+        "test.skip('skipped', () => {});",
+        "test.each([1, 2])('row %s', (n) => { v.expect(n).toBeGreaterThan(0); });",
+        "fixture('with fixtures', () => {});",
+        "named('by a literal key', () => {});",
+        '',
+      ].join('\n'),
+    });
+
+    expect(byName(result, 'works').modifiers).toEqual([]);
+    expect(byName(result, 'skipped').modifiers).toEqual(['skip']);
+    expect(byName(result, 'row %s').modifiers).toContain('each');
+    expect(byName(result, 'with fixtures')).toBeDefined();
+    expect(byName(result, 'by a literal key')).toBeDefined();
+  });
+});

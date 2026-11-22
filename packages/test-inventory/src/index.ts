@@ -6265,9 +6265,18 @@ function resolveDeclaration(declaration: ts.Declaration): string {
     (skipParens(value.expression) as ts.PropertyAccessExpression).name.text === 'extend'
   )
     value = skipParens((skipParens(value.expression) as ts.PropertyAccessExpression).expression);
+  let resolved: string;
 
-  if (!ts.isIdentifier(value)) return NOT_RUNNER;
-  const resolved = runnerName(value);
+  // A member of the runner's namespace (`const test = v.test`, `v.test.extend(…)`) is that export.
+  if (ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) {
+    const object = skipParens(value.expression);
+    const member = memberName(value);
+
+    if (!ts.isIdentifier(object) || member === undefined || runnerName(object) !== NAMESPACE)
+      return NOT_RUNNER;
+    resolved = member;
+  } else if (ts.isIdentifier(value)) resolved = runnerName(value);
+  else return NOT_RUNNER;
 
   // A plain alias (`const it = vit`) stands for whatever its value is; an `.extend` chain only for a test or suite
   // registration function.
