@@ -258,7 +258,8 @@ export async function mutationConfig(
           const include = select(test, vitestRoot);
 
           if (include.length > 0) {
-            const { projects: _projects, ...own } = test;
+            // Vitest runs the root's globalSetup once for the whole run, not again for this project.
+            const { projects: _projects, globalSetup: _globalSetup, ...own } = test;
             projects.push({
               ...config,
               root: vitestRoot,

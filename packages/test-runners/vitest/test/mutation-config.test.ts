@@ -287,9 +287,10 @@ describe('writeMutationVitestConfig', () => {
     const root = tempDir('dedupe');
     write(root, {
       'vitest.config.mjs': `export default {
-        test: { name: 'root', globals: true, include: ['test/**/*.test.mjs'], projects: ['.', 'packages/*', 'packages/a'] },
+        test: { name: 'root', globals: true, globalSetup: ['./gs.mjs'], include: ['test/**/*.test.mjs'], projects: ['.', 'packages/*', 'packages/a'] },
       };`,
       'packages/a/vitest.config.mjs': "export default { test: { name: 'a', globals: true } };",
+      'gs.mjs': 'export default () => {};',
       'packages/a/a.test.mjs': "it('a', () => {});",
       'test/r.test.mjs': "it('r', () => {});",
       'test/s.test.mjs': "it('s', () => { throw new Error('not selected'); });",
@@ -301,8 +302,10 @@ describe('writeMutationVitestConfig', () => {
       toolchain,
     });
     expectListed(root, configPath, ['packages/a/a.test.mjs', 'test/r.test.mjs']);
-    const names = (await resolve(configPath)).test.projects?.map((p) => p.test.name);
-    expect(names).toEqual(['root', 'a']);
+    const projects = (await resolve(configPath)).test.projects;
+    expect(projects?.map((p) => p.test.name)).toEqual(['root', 'a']);
+    // The root's globalSetup runs once for the run, not again as part of the root's own project.
+    expect(projects?.[0]?.test.globalSetup).toBeUndefined();
   }, 90_000);
 
   it('treats negated include patterns as excludes, as tinyglobby does', async () => {
