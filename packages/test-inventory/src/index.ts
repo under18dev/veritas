@@ -250,7 +250,21 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
   /** Why the runner may report tests under a file that static analysis did not see (see `inexactNames`). */
   const inexactFile = (source: ts.SourceFile | undefined, loaded: string[]) => {
     if (!source || !closedCollection(source)) return { inexactNames: 'open_collection' as const };
-    const registering = loaded.some((dependency) => {
+    // Modules the runner loads for a mock (`vi.mock(path)`, `vi.importActual(path)`) run their code too.
+    const mocked = mockedModules(source);
+
+    if (mocked === undefined) return { inexactNames: 'open_collection' as const };
+    const mockedFiles: string[] = [];
+
+    for (const name of mocked) {
+      if (!name.startsWith('.') && !path.isAbsolute(name)) continue;
+      const target = resolveModule(name, source.fileName);
+
+      // A local module that cannot be followed may register anything.
+      if (!target) return { inexactNames: 'open_collection' as const };
+      mockedFiles.push(toPosixRelative(root, target.fileName), ...localDependencies(target, checker, root));
+    }
+    const registering = [...new Set([...loaded, ...mockedFiles])].some((dependency) => {
       const known = registers.get(dependency);
 
       if (known !== undefined) return known;
@@ -4336,6 +4350,50 @@ function visitTests(
   walk(source, suitePath, inheritedModifiers, undefined, false, []);
 }
 
+/** Members of the runner's mock object that load the module named by their first argument. */
+const MODULE_LOADERS = new Set([
+  'mock',
+  'doMock',
+  'unstable_mockModule',
+  'setMock',
+  'importActual',
+  'importMock',
+  'requireActual',
+  'requireMock',
+  'createMockFromModule',
+]);
+
+/**
+ * The module names a file passes to the runner's mock API that loads them (`vi.mock('./x.js')`,
+ * `vi.importActual('./x.js')`, `jest.requireActual('./x')`, `vi.mock(import('./x.js'))`), anywhere in the file;
+ * undefined when one is not a literal.
+ */
+function mockedModules(source: ts.SourceFile): string[] | undefined {
+  const names: string[] = [];
+
+  for (const node of descendants(source)) {
+    if (!ts.isCallExpression(node)) continue;
+    const callee = skipParens(node.expression);
+
+    if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) continue;
+    const member = memberName(callee);
+    const object = skipParens(callee.expression);
+
+    if (member === undefined || !MODULE_LOADERS.has(member) || !ts.isIdentifier(object)) continue;
+
+    if (!runner.mockObjects.has(runnerName(object))) continue;
+    let argument = node.arguments[0] ? skipParens(node.arguments[0]) : undefined;
+
+    if (argument && ts.isCallExpression(argument) && argument.expression.kind === ts.SyntaxKind.ImportKeyword)
+      argument = argument.arguments[0];
+
+    if (!argument || !ts.isStringLiteralLike(argument)) return undefined;
+    names.push(argument.text);
+  }
+
+  return names;
+}
+
 /** Whether a file calls `it`, `test` or `describe` (or one of their variants) anywhere. */
 function registersTests(source: ts.SourceFile): boolean {
   return descendants(source).some(
@@ -4378,42 +4436,71 @@ function closedCollection(source: ts.SourceFile): boolean {
    * factories of `vi.mock`, `vi.doMock`, `vi.hoisted` (and Jest's) run while the file is collected, so their code is
    * checked like a `describe` callback.
    */
+  /**
+   * Whether the arguments of one call in a runner call chain are safe to evaluate now. Every argument is evaluated
+   * (`beforeEach(setup())`). An inline function is passed, not run, only where the runner is known to defer it:
+   * test, hook and `describe` callbacks (a `describe` callback is checked as collection code elsewhere), mock
+   * implementations (`vi.fn`, `mockImplementation`), fixtures and matchers (`test.extend`, `expect.extend`). A mock
+   * factory or `vi.hoisted` runs now, and so may a function given to any other API (`expect(fn).toThrow()`,
+   * `assert.throws(fn)`, `vi.waitFor(fn)`): its body is checked as running now. A mock factory may only be inline.
+   */
+  const argumentsOk = (call: ts.CallExpression): boolean => {
+    const member = accessedMember(skipParens(call.expression));
+    const factory = member !== undefined && MOCK_FACTORIES.has(member);
+    const defers =
+      !factory &&
+      ((member !== undefined && DEFERRING.has(member)) ||
+        testRegistration(call) !== undefined ||
+        describeRegistration(call) !== undefined ||
+        (ts.isIdentifier(skipParens(call.expression)) &&
+          runner.hooks.has(runnerName(skipParens(call.expression) as ts.Identifier))));
+
+    return call.arguments.every((argument) => {
+      if (isFunction(argument)) return defers || closedFunction(argument, true);
+
+      // A factory passed by reference (`vi.mock(path, factory)`) is not checked: only data may be passed.
+      if (factory)
+        return (
+          ts.isStringLiteralLike(argument) ||
+          ts.isNumericLiteral(argument) ||
+          (ts.isObjectLiteralExpression(argument) && inert(argument))
+        );
+
+      return inert(argument);
+    });
+  };
+  /** A call whose result is called in turn by a registration (`it.each(rows)(name, fn)`, `test.skipIf(c)(…)`). */
+  const registrationFactoryCall = (node: ts.CallExpression | ts.TaggedTemplateExpression): boolean => {
+    const member = accessedMember(skipParens(ts.isCallExpression(node) ? node.expression : node.tag));
+
+    return (
+      member !== undefined && (runner.registrationFactories.has(member) || runner.tableFactories.has(member))
+    );
+  };
   const runnerCall = (node: ts.CallExpression | ts.TaggedTemplateExpression): boolean => {
     let callee: ts.Expression = ts.isCallExpression(node) ? node.expression : node.tag;
-    const member = accessedMember(skipParens(callee));
 
-    if (
-      ts.isCallExpression(node) &&
-      member !== undefined &&
-      MOCK_FACTORIES.has(member) &&
-      !node.arguments.every((argument) =>
-        isFunction(argument)
-          ? closedFunction(argument, true)
-          : // A factory passed by reference (`vi.mock(path, factory)`) is not checked: only data may be passed.
-            ts.isStringLiteralLike(argument) ||
-            ts.isNumericLiteral(argument) ||
-            (ts.isObjectLiteralExpression(argument) && inert(argument)),
-      )
-    )
-      return false;
+    if (ts.isCallExpression(node) ? !argumentsOk(node) : !inert(node.template)) return false;
 
-    // The call's own arguments are evaluated now, whatever the call does with them (`beforeEach(setup())`);
-    // inline functions are not run by being passed.
-    if (ts.isCallExpression(node) ? !node.arguments.every(inert) : !inert(node.template)) return false;
+    // Whether `callee` is called itself, rather than one of its members (`expect(x).toBe(1)` calls `toBe`).
+    let called = true;
 
     for (;;) {
       callee = skipParens(callee);
 
-      if (ts.isCallExpression(callee)) {
-        if (!callee.arguments.every(inert)) return false;
-        callee = callee.expression;
-      } else if (ts.isTaggedTemplateExpression(callee)) {
-        if (!inert(callee.template)) return false;
-        callee = callee.tag;
+      if (ts.isCallExpression(callee) || ts.isTaggedTemplateExpression(callee)) {
+        // Calling what a call returned runs code static analysis does not see (`vi.fn(fn)()`), unless that call
+        // makes a registration function.
+        if (called && !registrationFactoryCall(callee)) return false;
+
+        if (ts.isCallExpression(callee) ? !argumentsOk(callee) : !inert(callee.template)) return false;
+        callee = ts.isCallExpression(callee) ? callee.expression : callee.tag;
+        called = true;
       } else if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
         // `vi['mock']` is `vi.mock`; a key computed at run time could name anything.
         if (accessedMember(callee) === undefined) return false;
         callee = callee.expression;
+        called = false;
       } else break;
     }
 
@@ -4665,6 +4752,20 @@ function closedCollection(source: ts.SourceFile): boolean {
 
 /** Members of the runner's mock object whose function arguments run while a test file is collected. */
 const MOCK_FACTORIES = new Set(['mock', 'doMock', 'hoisted', 'unstable_mockModule', 'setMock']);
+
+/** Members of the runner's API that keep a function argument to run later (a mock implementation, a fixture). */
+const DEFERRING = new Set([
+  'fn',
+  'mockImplementation',
+  'mockImplementationOnce',
+  'mockReturnValue',
+  'mockReturnValueOnce',
+  'mockResolvedValue',
+  'mockResolvedValueOnce',
+  'mockRejectedValue',
+  'mockRejectedValueOnce',
+  'extend',
+]);
 
 type Registration = { name?: string; callback?: ts.Expression; modifiers: TestCaseType['modifiers'] };
 

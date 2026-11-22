@@ -175,7 +175,7 @@ describe('full names static analysis cannot read', () => {
 
   it('marks a file whose collection runs anything but declarations and the runner API', () => {
     const header = [
-      "import { beforeEach, describe, expect, it, vi } from 'vitest';",
+      "import { assert, beforeEach, describe, expect, it, vi } from 'vitest';",
       "import { sharedSuite, helpers } from './shared-suite.js';",
       "import { value } from '../src/value.js';",
     ].join('\n');
@@ -215,6 +215,13 @@ describe('full names static analysis cannot read', () => {
         "const factory = () => { sharedSuite(); return {}; }; vi.mock('../src/value.js', factory);",
       hoistedByReference: 'const h = vi.hoisted(helpers.run);',
       hookArgument: 'beforeEach(sharedSuite());',
+      calledMock: 'vi.fn(() => sharedSuite())();',
+      calledMockInConst: 'const r = vi.fn(() => sharedSuite())();',
+      calledHoisted: 'vi.hoisted(() => () => sharedSuite())();',
+      expectFunction: 'expect(() => sharedSuite()).toThrow();',
+      assertFunction: 'assert.throws(() => sharedSuite());',
+      waitFor: 'vi.waitFor(() => sharedSuite());',
+      mockedPathNotLiteral: "const where = './x.js'; vi.mock(where);",
       testArgument: "it('x', sharedSuite());",
       titleArgument: 'describe(String(sharedSuite()), () => {});',
       runnerApiArgument: 'const spy = vi.fn(sharedSuite());',
@@ -255,6 +262,21 @@ describe('full names static analysis cannot read', () => {
       mockOriginalBlock:
         "vi.mock('../src/value.js', async (importOriginal) => { const actual = await importOriginal<object>(); return { ...actual, value: vi.fn() }; }); it('m', () => {});",
       hoistedFn: "const mocks = vi.hoisted(() => ({ value: vi.fn() })); it('h', () => { mocks.value(); });",
+      mockNotCalled: "const f = vi.fn(() => double(1)); it('f', () => { f(); });",
+      implementationNotCalled:
+        "const g = vi.fn().mockImplementation(() => double(1)); it('g', () => { g(); });",
+      expectValue: 'expect(value).toBeDefined();',
+      expectExtend:
+        "expect.extend({ toBeTwo(received: number) { return { pass: received === 2, message: () => 'two' }; } });",
+      automockPlain: "vi.mock('./pure-helper.js'); it('a', () => {});",
+    };
+    // Modules a mock loads run their code too: one that registers tests registers them under this file.
+    const loadsRegistering: Record<string, string> = {
+      importActual:
+        "vi.mock('../src/value.js', async () => ({ ...(await vi.importActual('./shared-suite.js')) })); it('x', () => {});",
+      returnsImportActual:
+        "vi.mock('../src/value.js', () => vi.importActual('./shared-suite.js')); it('x', () => {});",
+      automock: "vi.mock('./shared-suite.js'); it('x', () => {});",
     };
     const files: Record<string, string> = {
       'src/value.ts': 'export const value = (input: number) => input;\n',
@@ -269,6 +291,8 @@ describe('full names static analysis cannot read', () => {
     };
     for (const [name, code] of Object.entries(open))
       files[`test/open-${name}.test.ts`] = `${header}\n${code}\n`;
+    for (const [name, code] of Object.entries(loadsRegistering))
+      files[`test/loads-${name}.test.ts`] = ["import { it, vi } from 'vitest';", code, ''].join('\n');
     for (const [name, code] of Object.entries(closed))
       files[`test/closed-${name}.test.ts`] = [
         "import { beforeEach, describe, expect, it, vi } from 'vitest';",
@@ -288,6 +312,8 @@ describe('full names static analysis cannot read', () => {
       expect(marked(`test/open-${name}.test.ts`), name).toBe('open_collection');
     for (const name of Object.keys(closed))
       expect(marked(`test/closed-${name}.test.ts`), name).toBeUndefined();
+    for (const name of Object.keys(loadsRegistering))
+      expect(marked(`test/loads-${name}.test.ts`), name).toBe('imported_registrations');
     // Importing a module that registers tests is enough: its tests run under this file.
     expect(marked('test/imports-registering.test.ts')).toBe('imported_registrations');
   });
