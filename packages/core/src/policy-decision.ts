@@ -18,7 +18,8 @@ import type { StageStatus, VerificationStatus } from './schema/status.js';
  * Enumerations are encoded as small integers where the translator has to read them (rule and verdict codes).
  *
  * The `invariant_*` predicates are declared as `holds_for_all` properties in the repository's own
- * `.veritas/config.json`; `veritas prove --engine both` proves each of them within the model with Z3 and with
+ * `.veritas/config.json`. Once a maintainer has accepted them (`veritas spec accept`, recorded in
+ * `.veritas/approvals.json`), `veritas prove --engine both` proves each of them within the model with Z3 and with
  * the Lean kernel (`scripts/check-self-verification.mjs` checks the run). The proof covers this kernel only, not
  * how `evaluatePolicy` counts the evidence it passes in. An exhaustive test over a reduced domain checks the same
  * predicates without a solver. Not translatable today: the stage and claim classifiers take a string literal

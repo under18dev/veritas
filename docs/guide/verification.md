@@ -207,7 +207,13 @@ succeeded   prove
             D-stage.succeeded-needs-tests (lean): proven_within_model [kernel_checked]
 ```
 
-The version of a declared property is derived from its description, target, kind and domain, including the formal settings it takes its bounds from. Change any of them and the approval no longer applies: the property is `proposed` again until you accept it again. This holds in a fresh checkout and on CI too, since the version does not depend on earlier runs.
+The version of a declared property is derived from its description, target, kind and domain, including the formal settings it takes its bounds from. Change any of them and the approval no longer applies: the property is `proposed` again until you accept it again. This holds in a fresh checkout and on CI too, since the version does not depend on earlier runs. The prove stage names the decision that no longer applies:
+
+```text
+D-stage.succeeded-needs-tests: the accept recorded by you (A-7d000af7e5fa) was for version 3103021279 of the declaration; it is now version 2952988804 and needs a new decision
+```
+
+A declared property that is not accepted, whether it never was or its approval went stale, is not verified, and like any other unaccepted property it does not change the exit code by itself. Where every declaration must be verified, check the run as the Veritas repository does (below).
 
 The results mean what they mean for any other property:
 
@@ -219,7 +225,7 @@ The results mean what they mean for any other property:
 
 To check only declared properties, turn off reading documents and inferring rules from code: set `sources.local` to `false` and `analysis.inferSpecsFromCode` to `false`.
 
-The Veritas repository checks itself this way. Its `.veritas/config.json` declares the invariants of the run policy in `packages/core/src/policy-decision.ts`, such as "the verdict is `pass` only when nothing is open" and "exit code 1 only for a policy failure", and `node scripts/check-self-verification.mjs` fails unless every declared property is accepted, proven by Z3 with a confirmed replay, and kernel-checked by Lean. `fixtures/declared-properties` keeps a negative control, a deliberately false invariant that must come back with a counterexample (`--expect-counterexample`). The proof covers the decision rules only: how Veritas counts the evidence it passes to them is checked by tests, not proven.
+The Veritas repository checks itself this way. Its `.veritas/config.json` declares the invariants of the run policy in `packages/core/src/policy-decision.ts`, such as "the verdict is `pass` only when nothing is open" and "exit code 1 only for a policy failure". A maintainer reviews each declaration and records the decision with `veritas spec accept`, which writes `.veritas/approvals.json`; that file is committed next to the configuration. `node scripts/check-self-verification.mjs` (after `pnpm build` and `veritas prove --engine both`) fails unless every declared property is accepted, proven by Z3 with a confirmed replay, and kernel-checked by Lean, in the newest run, and that run is of the current checkout: the same configuration and sources, the same commit when the tree is clean, and the current version of every declaration. A run that did not record its claims fails too. `fixtures/declared-properties` keeps a negative control, a deliberately false invariant that must come back with a counterexample (`--expect-counterexample`). The proof covers the decision rules only: how Veritas counts the evidence it passes to them is checked by tests, not proven.
 
 ## What `proven_within_model` means
 
