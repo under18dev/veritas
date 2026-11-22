@@ -522,6 +522,16 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect(mutatorTestId(`${FILE}#suite 1 > works#2`, ' > ', once)).toBe(literal.id);
   });
 
+  it('takes no skipped test as the owner of a numbered name', () => {
+    // `describe.each([1, 1])('suite %s', () => it('works'))` next to `describe('suite 1', () => it.skip('works#2'))`.
+    const rows = { ...entry(['suite %s'], 'works'), tableTitles: [0] };
+    const skipped = entry(['suite 1'], 'works#2', ['skip']);
+    const index = new TestNameIndex([rows, skipped], ' > ');
+    index.observe([`${FILE}#suite 1 > works`, `${FILE}#suite 1 > works#2`]);
+
+    expect(mutatorTestId(`${FILE}#suite 1 > works#2`, ' > ', index)).toBe(rows.id);
+  });
+
   it('does not take a plain name for a row index', () => {
     const indexed = entry([], 'case %#');
     const plain = entry([], 'case missing', []);

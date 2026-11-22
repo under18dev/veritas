@@ -401,6 +401,13 @@ export class TestNameIndex implements TestNameLookup {
     const file = hash < 0 ? '' : name.slice(0, hash);
     let lookup = keys;
     let exact = this.exactOf(keys);
+    // A skipped test with the title did not run: the name comes from another test, if any.
+    let skippedExact: string | undefined;
+
+    if (typeof exact === 'string' && this.skipped.has(exact)) {
+      skippedExact = exact;
+      exact = undefined;
+    }
     const candidates = new Set<string>();
     this.fitting(keys, candidates);
     let duplicate =
@@ -443,6 +450,12 @@ export class TestNameIndex implements TestNameLookup {
 
     // A skipped test did not run: a name it has exactly that a running template fits is the template's, and one no
     // running template fits came from a test static analysis did not see.
+    if (skippedExact !== undefined && exact === undefined && candidates.size === 0) {
+      this.withheld.set(name, { kind: 'skipped_exact' });
+
+      return null;
+    }
+
     if (exact !== undefined && this.skipped.has(exact)) {
       if (![...candidates].some((id) => id !== exact)) {
         this.withheld.set(name, { kind: 'skipped_exact' });
