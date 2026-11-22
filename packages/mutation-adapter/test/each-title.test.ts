@@ -391,6 +391,18 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect(index.withheld.size).toBe(0);
   });
 
+  it('takes a test id as skipped only when every registration with it is', () => {
+    // `it('works', fn); it.skip('works', fn)`: one id, and the first registration runs.
+    const running = entry([], 'works', []);
+    const skipped = { ...running, modifiers: ['skip'] };
+
+    expect(mutatorTestId(`${FILE}#works`, ' > ', new TestNameIndex([running, skipped], ' > '))).toBe(
+      running.id,
+    );
+    const onlySkipped = new TestNameIndex([skipped, { ...skipped }], ' > ');
+    expect(mutatorTestId(`${FILE}#works`, ' > ', onlySkipped)).not.toBe(running.id);
+  });
+
   it('keeps a skipped table out of the candidates even when its table may be empty', () => {
     // `it.skip.each(cases)('case %s')`: conditional because of the table, and skipped all the same.
     const rows = { ...entry([], 'case %s', ['each', 'skip']), conditional: true as const };

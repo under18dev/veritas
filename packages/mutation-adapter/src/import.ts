@@ -294,6 +294,9 @@ export class TestNameIndex implements TestNameLookup {
         .map((test) => test.file),
     );
 
+    // Registrations with one id (`it('works'); it.skip('works')`): the id is skipped only when all of them are.
+    const skippedById = new Map<string, boolean>();
+
     for (const test of tests) {
       const inexact = test.inexactName ?? (test.granularity === 'suite' ? 'dynamic_title' : undefined);
 
@@ -310,7 +313,7 @@ export class TestNameIndex implements TestNameLookup {
           !test.optionsUnknown) ||
         (focusedFiles.has(test.file) && !focused && !test.optionsUnknown);
 
-      if (skipped) this.skipped.add(test.id);
+      skippedById.set(test.id, (skippedById.get(test.id) ?? true) && skipped);
 
       if (uncertain(test) || skipped || (onlyFiles.has(test.file) && !test.modifiers?.includes('only')))
         this.mayNotRun.add(test.id);
@@ -331,6 +334,8 @@ export class TestNameIndex implements TestNameLookup {
       set.add(joinTitles(segments, separator), { id: test.id, segments });
       this.templates.set(test.file, set);
     }
+
+    for (const [id, skipped] of skippedById) if (skipped) this.skipped.add(id);
 
     for (const file of files)
       if (file.inexactNames !== undefined && !this.inexact.has(file.path))
