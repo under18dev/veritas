@@ -19,6 +19,7 @@ import {
   gitCommit,
   gitOutput,
   hashValue,
+  type IntDomain,
   type JsParam,
   type LogSink,
   logEvent,
@@ -71,6 +72,7 @@ import {
 import {
   applyApprovals,
   buildRegistry,
+  declaredDomain,
   declaredProperties,
   formalizeDeclared,
   formalizeProperty,
@@ -176,6 +178,22 @@ export function leanSkipReason(z3Status: VerificationStatus, translatable: boole
   if (!translatable) return 'skipped, outside the Lean subset';
 
   return null;
+}
+
+/**
+ * The integer domain and array bound a property is modelled with: the declaration's own for a declared property,
+ * otherwise the formal settings. Models compared with the property's (mutants) must use the same ones.
+ */
+export function formalBounds(
+  property: Property,
+  config: Pick<VeritasConfig, 'formal'>,
+): { integer: IntDomain; maxArrayLength: number } {
+  return (
+    declaredDomain(property) ?? {
+      integer: config.formal.integerDomain,
+      maxArrayLength: config.formal.maxArrayLength,
+    }
+  );
 }
 
 export const PROFILE_STAGES: Record<Profile, StageName[]> = {
@@ -1222,6 +1240,9 @@ async function runInContext(
         const f = spec.formalized.get(p.id);
 
         if (!f) continue;
+        // A declared property may set its own bounds; the mutant is modelled with the same ones, so that it has
+        // the signature of the original in the property's model.
+        const bounds = formalBounds(p, config);
 
         for (const m of mutants.filter((m) => m.status !== 'pending' && m.status !== 'ignored')) {
           const found = mutantSource(m);
@@ -1231,8 +1252,8 @@ async function runInContext(
             file: found.fn.file,
             source: found.mutated,
             exportName: found.fn.name,
-            domain,
-            maxArrayLength: config.formal.maxArrayLength,
+            domain: bounds.integer,
+            maxArrayLength: bounds.maxArrayLength,
             modelName: `${f.exportName}__mutant`,
           });
           let ir: PropertyIR;
