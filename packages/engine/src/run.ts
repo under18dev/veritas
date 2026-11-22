@@ -77,6 +77,7 @@ import {
   formalizeDeclared,
   formalizeProperty,
   loadApprovals,
+  normalizeTarget,
 } from '@under18dev/veritas-property-engine';
 import { type PbtResult, runPropertyTest } from '@under18dev/veritas-property-testing';
 import { detectLean, leanTranslatable, proveWithLean } from '@under18dev/veritas-solver-lean';
@@ -192,7 +193,7 @@ export function runSourceHash(
   files: readonly unknown[],
 ): string {
   if (config.properties.length === 0) return hashValue(files);
-  const targets = [...new Set(config.properties.map((p) => p.target.slice(0, p.target.lastIndexOf('#'))))]
+  const targets = [...new Set(config.properties.map((p) => normalizeTarget(p.target).replace(/#[^#]*$/, '')))]
     .sort()
     .map((file) => {
       let content: string | null = null;

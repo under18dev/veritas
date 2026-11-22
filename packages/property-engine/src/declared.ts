@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
 import {
   type DeclaredProperty,
   type IntDomain,
@@ -12,6 +13,19 @@ import { contentHash } from './registry.js';
 
 /** Prefix of the property ids of declared properties: `D-<declaration id>`. */
 export const DECLARED_PREFIX = 'D-';
+
+/**
+ * A declared target in the form of the code index's symbol ids: the file part project-relative and POSIX
+ * (`./src/a.ts#f`, `src\a.ts#f` and `src/x/../a.ts#f` all become `src/a.ts#f`), so that it matches the symbols
+ * tests and mutants are linked to, and so that spellings of the same file give the same property version. A path
+ * that leaves the project (`../x.ts`) or is absolute keeps that form and is refused when it is formalized.
+ */
+export function normalizeTarget(target: string): string {
+  const hash = target.lastIndexOf('#');
+  const file = path.posix.normalize(target.slice(0, hash).replaceAll('\\', '/'));
+
+  return `${file.startsWith('./') ? file.slice(2) : file}${target.slice(hash)}`;
+}
 
 /** The bounds a declared property is checked over, after the formal settings fill in what it leaves unset. */
 export interface DeclaredDomain {
@@ -57,7 +71,7 @@ export function declaredProperties(
       version: 1,
       description: d.description,
       template: 'state_invariant',
-      targetSymbols: [d.target],
+      targetSymbols: [normalizeTarget(d.target)],
       status: 'proposed',
       origin: 'human',
       sourceIds: [],

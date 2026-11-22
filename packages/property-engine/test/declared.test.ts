@@ -9,6 +9,7 @@ import {
   declaredDomain,
   declaredProperties,
   formalizeDeclared,
+  normalizeTarget,
 } from '../src/index.js';
 
 const DEFAULTS = { integerDomain: { min: '-10000', max: '10000' }, maxArrayLength: 3 };
@@ -89,6 +90,27 @@ describe('declaredProperties', () => {
     for (const p of changed) expect(p?.version).not.toBe(a?.version);
     // The id stays: an approval of the old version no longer applies.
     for (const p of changed) expect(p?.id).toBe(a?.id);
+  });
+
+  it('writes the target in the form of the code index, whatever spelling of the file it was given', () => {
+    const canonical = 'src/kernel.ts#invariant_meaningfulNeedsKill';
+    const [expected] = declaredProperties([decl(canonical)], DEFAULTS);
+
+    for (const spelling of [
+      './src/kernel.ts#invariant_meaningfulNeedsKill',
+      'src\\kernel.ts#invariant_meaningfulNeedsKill',
+      'src/sub/../kernel.ts#invariant_meaningfulNeedsKill',
+      './src//kernel.ts#invariant_meaningfulNeedsKill',
+    ]) {
+      const [p] = declaredProperties([decl(spelling)], DEFAULTS);
+      expect(p?.targetSymbols, spelling).toEqual([canonical]);
+      // The same file is the same declaration: an approval carries over.
+      expect(p?.version, spelling).toBe(expected?.version);
+      expect(formalizeDeclared({ root: project(), property: p as Property }).status, spelling).toBe(
+        'formalized',
+      );
+    }
+    expect(normalizeTarget('../outside.ts#f')).toBe('../outside.ts#f');
   });
 
   it('is accepted only through an approval of its current version', () => {
