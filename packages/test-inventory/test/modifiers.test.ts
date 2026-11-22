@@ -245,6 +245,10 @@ describe('full names static analysis cannot read', () => {
       customMatcher:
         "expect.extend({ toRegister() { sharedSuite(); return { pass: true, message: () => '' }; } });\nexpect(0).toRegister();",
       customMatcherNegated: 'expect(0).not.toRegister();',
+      builtInNameMatcher:
+        "expect.extend({ toBe() { sharedSuite(); return { pass: true, message: () => '' }; } });\nexpect(1).toBe(1);",
+      matchersFromPackage: "import { matchers } from 'external-test-package';\nexpect.extend(matchers);",
+      matchersSpread: 'expect.extend({ ...helpers });',
       returnsFunction: 'expect(() => sharedSuite).not.toThrow();',
       returnsFunctionFromBlock: 'expect(() => { return sharedSuite; }).not.toThrow();',
       expectSpyOnce: "expect(vi.spyOn(helpers, 'run').mockImplementationOnce(() => [1])).not.toThrow();",
@@ -542,6 +546,11 @@ describe('full names static analysis cannot read', () => {
         "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun(sharedSuite!);\nit('p', () => {});\n",
       'test/passes-inline-choice.test.ts':
         "import { it } from 'vitest';\nimport { run } from './run-helper.js';\nconst flag = true;\nrun(flag ? () => 1 : () => 2);\nit('p', () => {});\n",
+      // A setup helper registering matchers that call a package.
+      'test/matchers-helper.ts':
+        "import { expect } from 'vitest';\nimport { pkgRun } from 'external-test-package';\nexpect.extend({ toBe() { pkgRun(); return { pass: true, message: () => '' }; } });\nexport const ready = true;\n",
+      'test/uses-matchers-helper.test.ts':
+        "import { expect, it } from 'vitest';\nimport { ready } from './matchers-helper.js';\nit('m', () => { expect(ready).toBe(true); });\n",
       // What a function passed to a local call returns may be called in turn.
       'test/passes-returning.test.ts':
         "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun({ fn: () => sharedSuite });\nit('p', () => {});\n",
@@ -581,6 +590,7 @@ describe('full names static analysis cannot read', () => {
       expect(marked(`test/passes-${name}.test.ts`), name).toBe('open_collection');
     expect(marked('test/passes-inline-choice.test.ts')).toBeUndefined();
     expect(marked('test/passes-returning.test.ts')).toBe('open_collection');
+    expect(marked('test/uses-matchers-helper.test.ts')).toBe('imported_open_module');
     expect(marked('test/passes-returning-inline.test.ts')).toBeUndefined();
     // Calling a function that loads a package through createRequire may reach it.
     expect(marked('test/uses-created-require.test.ts')).toBe('open_collection');

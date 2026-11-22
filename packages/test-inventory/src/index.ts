@@ -4683,8 +4683,44 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
    * factory or `vi.hoisted` runs now, and so may a function given to any other API (`expect(fn).toThrow()`,
    * `assert.throws(fn)`, `vi.waitFor(fn)`): its body is checked as running now. A mock factory may only be inline.
    */
+  /**
+   * The matchers given to `expect.extend`, which run whenever a matcher of that name is called, built-in names
+   * included (`expect.extend({ toBe() { … } })`): each is checked as code that runs now. Only an object literal of
+   * methods and functions can be read.
+   */
+  const matchersOk = (argument: ts.Expression): boolean => {
+    const matchers = skipParens(argument);
+
+    return (
+      ts.isObjectLiteralExpression(matchers) &&
+      matchers.properties.every((property) => {
+        if (property.name && ts.isComputedPropertyName(property.name) && !inert(property.name.expression))
+          return false;
+
+        if (ts.isMethodDeclaration(property)) return closedFunction(property, 'immediate');
+
+        if (ts.isPropertyAssignment(property)) {
+          const value = skipParens(property.initializer);
+
+          return isFunction(value) ? closedFunction(value, 'immediate') : passable(value);
+        }
+
+        return ts.isShorthandPropertyAssignment(property) && passable(property.name);
+      })
+    );
+  };
   const argumentsOk = (call: ts.CallExpression): boolean => {
     const member = accessedMember(skipParens(call.expression));
+
+    if (member === 'extend') {
+      const callee = skipParens(call.expression);
+      const owner =
+        ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)
+          ? runnerExport(skipParens(callee.expression))?.name
+          : undefined;
+
+      if (owner !== undefined && runner.expect.has(owner)) return call.arguments.every(matchersOk);
+    }
     const factory = member !== undefined && MOCK_FACTORIES.has(member);
     const defers =
       !factory &&
@@ -5111,9 +5147,12 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
    * call its own parameters (`importOriginal()`), await, and return.
    */
   const closedFunction = (
-    fn: ts.ArrowFunction | ts.FunctionExpression,
+    fn: ts.ArrowFunction | ts.FunctionExpression | ts.MethodDeclaration,
     mode: 'describe' | 'factory' | 'immediate',
   ): boolean => {
+    const body = fn.body;
+
+    if (body === undefined) return false;
     // Default values are used when the caller passes nothing, and the function may call them
     // (`expect((run = sharedSuite) => run()).not.toThrow()`).
     if (
@@ -5131,7 +5170,7 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
       // A parameter the body declares again or assigns may no longer be the factory's own.
       // Only a mock factory's parameters are the runner's (`importOriginal`); a function run by another API, or by
       // a local function, gets them from code not checked here.
-      const shadowed = rebound(fn.body);
+      const shadowed = rebound(body);
       callable = new Set(
         factory
           ? fn.parameters.flatMap((parameter) =>
@@ -5144,8 +5183,8 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
       inFactory = true;
       factoryValues = new Set();
 
-      if (ts.isBlock(fn.body))
-        for (const statement of fn.body.statements)
+      if (ts.isBlock(body))
+        for (const statement of body.statements)
           if (
             ts.isVariableStatement(statement) &&
             (statement.declarationList.flags & ts.NodeFlags.Const) !== 0
@@ -5159,7 +5198,7 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
                 ts.isIdentifier(declaration.name) &&
                 // A `const` cannot be assigned again; a second declaration of the name (in a nested scope) could
                 // stand for something else.
-                declarationsOf(fn.body, declaration.name.text) === 1 &&
+                declarationsOf(body, declaration.name.text) === 1 &&
                 value &&
                 ts.isCallExpression(value) &&
                 obtainsModule(value)
@@ -5173,13 +5212,13 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
     }
 
     try {
-      return ts.isBlock(fn.body)
-        ? fn.body.statements.every(closed)
+      return ts.isBlock(body)
+        ? body.statements.every(closed)
         : mode === 'immediate'
-          ? passable(fn.body)
+          ? passable(body)
           : mode === 'factory'
-            ? inert(fn.body)
-            : closedExpression(fn.body);
+            ? inert(body)
+            : closedExpression(body);
     } finally {
       ({ callable, inFactory, factoryValues, immediate } = saved);
     }
