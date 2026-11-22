@@ -31,6 +31,10 @@ type Token =
 export interface TitleTemplate {
   readonly tokens: readonly Token[];
   readonly placeholders: number;
+  /** It has `%c`, which is read as any text (nothing, or `%c` left in place). */
+  readonly styled?: boolean;
+  /** It repeats `%#` or `%$`, which Jest formats only partly: what it reports is read less exactly. */
+  readonly repeatedIndex?: boolean;
 }
 
 /** printf conversions that print at least one character for any value. */
@@ -67,6 +71,9 @@ export function compileTitleTemplate(template: string): TitleTemplate {
   let placeholders = 0;
   // `%#` and `%$` met so far: Jest replaces only the first of each.
   const indexes = new Set<string>();
+  let styled = false;
+  let repeatedIndex = false;
+  let appended = false;
 
   for (let i = 0; i < template.length; ) {
     const char = template[i] as string;
@@ -84,8 +91,16 @@ export function compileTitleTemplate(template: string): TitleTemplate {
           const first = !indexes.has(next);
           indexes.add(next);
           tokens.push(...(first ? [DIGIT, DIGITS] : [ONE, ANY]));
-        } else if (next === 's' || next === 'c') tokens.push(ANY);
-        else tokens.push(ONE, ANY);
+
+          if (!first) repeatedIndex = true;
+
+          // A second `%#` is not one of `util.format`'s placeholders, so Jest appends the row's values after the title.
+          if (!first && next === '#') appended = true;
+        } else if (next === 's' || next === 'c') {
+          tokens.push(ANY);
+
+          if (next === 'c') styled = true;
+        } else tokens.push(ONE, ANY);
         placeholders++;
         i += 2;
         continue;
@@ -106,7 +121,10 @@ export function compileTitleTemplate(template: string): TitleTemplate {
     i++;
   }
 
-  return { tokens, placeholders };
+  // `each([[5]])('r %# %# end')` is reported `r 0 %# end 5`.
+  if (appended) tokens.push(ANY);
+
+  return { tokens, placeholders, styled, repeatedIndex };
 }
 
 /** Titles joined into one full name with the runner's separator between them. */
@@ -118,7 +136,12 @@ export function joinTitles(titles: readonly TitleTemplate[], separator: string):
     tokens.push(...title.tokens);
   });
 
-  return { tokens, placeholders: titles.reduce((sum, title) => sum + title.placeholders, 0) };
+  return {
+    tokens,
+    placeholders: titles.reduce((sum, title) => sum + title.placeholders, 0),
+    styled: titles.some((title) => title.styled),
+    repeatedIndex: titles.some((title) => title.repeatedIndex),
+  };
 }
 
 const isDigit = (char: string) => char >= '0' && char <= '9';

@@ -239,7 +239,14 @@ function withoutDuplicateSuffix(key: string): string | undefined {
 export class TestNameIndex implements TestNameLookup {
   private readonly exact: Map<string, string | null>;
   /** The templates of each file's table-driven tests, indexed by their literal prefix. */
-  private readonly templates = new Map<string, TemplateSet<{ id: string; segments: TitleTemplate[] }>>();
+  private readonly templates = new Map<
+    string,
+    TemplateSet<{ id: string; segments: TitleTemplate[]; styled: boolean }>
+  >();
+  /** Files with a template read less exactly (a repeated `%#` or `%$`), where a `%c` template owns no name alone. */
+  private readonly looseFiles = new Set<string>();
+  /** Templates with `%c`, which is read as any text. */
+  private readonly styled = new Set<string>();
   /** Tests that may run more than once under one name: table-driven, or registered in a loop or on a condition. */
   private readonly repeatable = new Set<string>();
   /** Every name mutator reported (see `observe`). */
@@ -331,7 +338,12 @@ export class TestNameIndex implements TestNameLookup {
       );
       const set = this.templates.get(test.file) ?? new TemplateSet();
       // Kept even without placeholders: a title with escapes only (`100%% sure`) is reported changed (`100% sure`).
-      set.add(joinTitles(segments, separator), { id: test.id, segments });
+      const template = joinTitles(segments, separator);
+      set.add(template, { id: test.id, segments, styled: template.styled === true });
+
+      if (template.styled) this.styled.add(test.id);
+
+      if (template.repeatedIndex) this.looseFiles.add(test.file);
       this.templates.set(test.file, set);
     }
 
@@ -492,6 +504,9 @@ export class TestNameIndex implements TestNameLookup {
     } else if (candidates.size === 0) return undefined;
     else if (because !== undefined) reason = { kind: 'inexact_file', because };
     else if (candidates.size > 1) reason = { kind: 'templates' };
+    else if (this.looseFiles.has(file) && [...candidates].some((id) => this.styled.has(id)))
+      // A template read less exactly may be the one that ran, while `%c` read as any text took its name.
+      reason = { kind: 'templates' };
     else return [...candidates][0];
 
     this.withheld.set(name, reason);

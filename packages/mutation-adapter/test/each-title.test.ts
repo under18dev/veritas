@@ -77,6 +77,28 @@ describe('title templates of table-driven tests', () => {
     }
   });
 
+  it('allows the row values Jest appends after a second %#, and lets no %c template own a name in such a file', () => {
+    // jest-each: `each([[5]])('r %# %# end')` reports `r 0 %# end 5`.
+    expect(matches('r %# %# end', 'r 0 %# end 5')).toBe(true);
+    expect(matches('r %# %# end', 'r 0 %# end')).toBe(true);
+
+    const file = 'test/a.test.ts';
+    const repeated = { id: 'T-repeated', file, suitePath: [], name: 'r %# %# end', modifiers: ['each'] };
+    const styled = { id: 'T-styled', file, suitePath: [], name: 'r %c', modifiers: ['each'] };
+    const index = new TestNameIndex([repeated, styled], ' ');
+
+    expect([repeated.id, styled.id]).not.toContain(mutatorTestId(`${file}#r 0 %# end 5`, ' ', index, false));
+    // A name only the %c template fits is not its alone next to a template read less exactly.
+    const loose = { id: 'T-loose', file, suitePath: [], name: 'q %$ and %$', modifiers: ['each'] };
+    const withLoose = new TestNameIndex([loose, { ...styled, name: 'q %c' }], ' ');
+    expect(mutatorTestId(`${file}#q zzz`, ' ', withLoose, false)).not.toBe(styled.id);
+    expect(withLoose.withheld.get(`${file}#q zzz`)).toEqual({ kind: 'templates' });
+    // Without such a template, the %c template owns it.
+    expect(
+      mutatorTestId(`${file}#q zzz`, ' ', new TestNameIndex([{ ...styled, name: 'q %c' }], ' '), false),
+    ).toBe(styled.id);
+  });
+
   it('reads a second %# or %$ as digits or its own text, since Jest replaces only the first', () => {
     expect(matches('row %# of %#', 'row 0 of %#')).toBe(true);
     expect(matches('row %# of %#', 'row 0 of 0')).toBe(true);
