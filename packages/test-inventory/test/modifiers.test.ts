@@ -400,6 +400,14 @@ describe('full names static analysis cannot read', () => {
       passed:
         "import { it } from 'vitest';\nconst keep = (f: unknown) => f;\nkeep(it);\nexport const shared = () => 1;",
       barrel: "export * from 'vitest';\nexport const shared = () => 1;",
+      requireDestructured:
+        "export function shared() { const { it: t } = require('vitest'); t('x', () => {}); }",
+      requireMember: "export function shared() { require('vitest').it('x', () => {}); }",
+      dynamicImport:
+        "export async function shared() { const { it: t } = await import('vitest'); t('x', () => {}); }",
+      importActual:
+        "import { vi } from 'vitest';\nexport async function shared() { const m: any = await vi.importActual('vitest'); m.it('x', () => {}); }",
+      importEquals: "import v = require('vitest');\nexport function shared() { v.it('x', () => {}); }",
     };
     const files: Record<string, string> = {
       'test/pure-build.ts': 'export const build = () => ({ a: 1 });\n',

@@ -340,3 +340,21 @@ describe('Jest tests', () => {
     expect(byName(tests, 'helper called after').suspicions).not.toContain('reachable_by_name');
   });
 });
+
+describe('Jest modules obtained at run time', () => {
+  it('opens a file whose helper gets the runner API from jest.requireActual', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/helper.ts':
+        "export function shared() { const g: any = jest.requireActual('@jest/globals'); g.it('hidden', () => {}); }\n",
+      'test/uses.test.ts': "import { shared } from './helper';\nshared();\nit('own', () => {});\n",
+      'test/plain-helper.ts': 'export const build = () => 1;\n',
+      'test/plain.test.ts':
+        "import { build } from './plain-helper';\nconst n = build();\nit('p', () => { n; });\n",
+    });
+    const files = inventory(root).files;
+
+    expect(files.find((f) => f.path === 'test/uses.test.ts')?.inexactNames).toBe('open_collection');
+    expect(files.find((f) => f.path === 'test/plain.test.ts')?.inexactNames).toBeUndefined();
+  });
+});

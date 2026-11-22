@@ -5612,6 +5612,15 @@ function moduleSafety(
         found.external = true;
     };
 
+    /**
+     * A module loaded by `require`, `import()` or `import x = require()`: the runner's own, obtained this way, hands
+     * out its registration API as a value the inventory does not follow.
+     */
+    const loadedAtRunTime = (name: string) => {
+      if (runner.modules.has(name)) found.unknown = true;
+      else add(name);
+    };
+
     for (const node of descendants(source)) {
       if (ts.isImportDeclaration(node)) {
         const clause = node.importClause;
@@ -5635,7 +5644,7 @@ function moduleSafety(
         if (ts.isExternalModuleReference(node.moduleReference)) {
           const expression = node.moduleReference.expression;
 
-          if (ts.isStringLiteralLike(expression)) add(expression.text);
+          if (ts.isStringLiteralLike(expression)) loadedAtRunTime(expression.text);
           else found.unknown = true;
         }
       } else if (ts.isCallExpression(node)) {
@@ -5646,9 +5655,19 @@ function moduleSafety(
           node.expression.kind === ts.SyntaxKind.ImportKeyword ||
           (ts.isIdentifier(callee) && callee.text === 'require')
         ) {
-          if (argument && ts.isStringLiteralLike(argument)) add(argument.text);
+          if (argument && ts.isStringLiteralLike(argument)) loadedAtRunTime(argument.text);
           else found.unknown = true;
-        } else if (ts.isIdentifier(callee) && (callee.text === 'eval' || callee.text === 'Function'))
+        } else if (
+          (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
+          MODULE_LOADERS.has(memberName(callee) ?? '') &&
+          runner.mockObjects.has(runnerExport(skipParens(callee.expression))?.name ?? '') &&
+          argument &&
+          ts.isStringLiteralLike(argument) &&
+          runner.modules.has(argument.text)
+        )
+          // `vi.importActual('vitest')`, `jest.requireActual('@jest/globals')`: the runner's API as a value.
+          found.unknown = true;
+        else if (ts.isIdentifier(callee) && (callee.text === 'eval' || callee.text === 'Function'))
           found.unknown = true;
       } else if (ts.isNewExpression(node)) {
         if (ts.isIdentifier(node.expression) && node.expression.text === 'Function') found.unknown = true;
