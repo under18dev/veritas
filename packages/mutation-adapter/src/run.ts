@@ -87,7 +87,9 @@ const INEXACT_BECAUSE: Record<Extract<WithheldReason, { kind: 'inexact_file' }>[
   dynamic_title: 'a test title that is not a literal',
   dynamic_suite: 'a describe title that is not a literal',
   registered_in_function: 'a test registered inside a function',
-  registered_by_call: 'a call that may register tests, such as a shared suite',
+  open_collection:
+    'code at the top level or in a describe callback that may register tests, such as a call of a shared suite',
+  imported_registrations: 'a local module it imports registers tests',
 };
 
 /** One warning for each reason names in mutator's report were credited to no test (see `TestNameIndex`). */

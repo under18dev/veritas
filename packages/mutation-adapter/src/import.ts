@@ -9,7 +9,13 @@ import {
   VeritasError,
 } from '@under18dev/veritas-core';
 import { z } from 'zod';
-import { compileTitleTemplate, matchesTitleTemplate, type TitleTemplate } from './each-title.js';
+import {
+  compileTitleTemplate,
+  joinTitles,
+  literalTitle,
+  matchesTitleTemplate,
+  type TitleTemplate,
+} from './each-title.js';
 
 export type ReportSource = 'mutator' | 'stryker' | 'mutation-testing-elements';
 
@@ -149,14 +155,19 @@ export interface NamedTest {
   modifiers?: readonly string[];
   granularity?: 'test' | 'suite';
   inexactName?: 'dynamic_title' | 'dynamic_suite' | 'registered_in_function';
-  /** The test is registered on a condition, so it may not have run. */
+  /** The test is registered on a condition, so it may not have run (or, in a loop, may have run more than once). */
   conditional?: true;
+  /**
+   * Positions in `[...suitePath, name]` of the titles the runner formats for each row; the others are reported as
+   * written. When a table-driven test has none recorded (an older inventory), every title is read as a template.
+   */
+  tableTitles?: readonly number[];
 }
 
 /** A test file as name resolution needs it: whether it may register tests static analysis did not see. */
 export interface NamedTestFile {
   path: string;
-  inexactNames?: 'registered_by_call';
+  inexactNames?: 'open_collection' | 'imported_registrations';
 }
 
 /** Why static analysis could not read the full name of every test a file runs. */
@@ -198,9 +209,6 @@ function withoutDuplicateSuffix(key: string): string | undefined {
   return match ? `${key.slice(0, hash)}#${match[1]}` : undefined;
 }
 
-/** One title of a full name: a template, or the literal title when it has no placeholder. */
-type Segment = TitleTemplate | string;
-
 /**
  * Test ids by full name (as `testIdsByFullName`), plus the templates of table-driven tests: a test with the `each`
  * modifier (its own `.each`/`.for`, or an enclosing `describe.each`) whose full name has placeholders matches the
@@ -218,15 +226,21 @@ type Segment = TitleTemplate | string;
  *   full name of every test (a title or suite title that is not a literal, a test registered inside a function, or a
  *   call that may register tests, see `NamedTestFile`), since the runner may have named such a test.
  *
- * mutator numbers the second and later tests that share a full name (`case 1#2`; see `observe`). Such a name is
- * resolved through the name it shares as well.
+ * mutator numbers the second and later tests that share a full name (`case 1#2`; see `observe`). A name with such a
+ * suffix is resolved through the name it shares as well, but only when mutator also reported that name and more than
+ * one run of a test could have had it: two tests fit it, a test that fits it is table-driven or registered in a loop
+ * or on a condition, or its file has tests static analysis could not name. Otherwise `#2` is part of the title.
  */
 export class TestNameIndex implements TestNameLookup {
   private readonly exact: Map<string, string | null>;
   private readonly templates = new Map<
     string,
-    { id: string; template: TitleTemplate; segments: Segment[] }[]
+    { id: string; template: TitleTemplate; segments: TitleTemplate[] }[]
   >();
+  /** Tests that may run more than once under one name: table-driven, or registered in a loop or on a condition. */
+  private readonly repeatable = new Set<string>();
+  /** Every name mutator reported (see `observe`). */
+  private readonly observed = new Set<string>();
   /** Files whose tests static analysis could not all name exactly, and why (the first reason found). */
   private readonly inexact = new Map<string, InexactReason>();
   /** Tests that may not have run: skipped, todo, conditional, or without `.only` in a file that has one. */
@@ -259,17 +273,19 @@ export class TestNameIndex implements TestNameLookup {
       )
         this.mayNotRun.add(test.id);
 
-      if (!test.modifiers?.includes('each')) continue;
-      const titles = [...test.suitePath, test.name];
-      const template = compileTitleTemplate(titles.join(separator));
+      if (test.conditional) this.repeatable.add(test.id);
 
-      if (template === undefined) continue;
+      if (!test.modifiers?.includes('each')) continue;
+      this.repeatable.add(test.id);
+      const titles = [...test.suitePath, test.name];
+      // Only the titles the runner formats have placeholders; a `%s` in a plain suite title is text.
+      const formatted = test.tableTitles ? new Set(test.tableTitles) : undefined;
+      const segments = titles.map((title, k) =>
+        formatted === undefined || formatted.has(k) ? compileTitleTemplate(title) : literalTitle(title),
+      );
       const list = this.templates.get(test.file) ?? [];
-      list.push({
-        id: test.id,
-        template,
-        segments: titles.map((title) => compileTitleTemplate(title) ?? title),
-      });
+      // Kept even without placeholders: a title with escapes only (`100%% sure`) is reported changed (`100% sure`).
+      list.push({ id: test.id, template: joinTitles(segments, separator), segments });
       this.templates.set(test.file, list);
     }
 
@@ -284,6 +300,7 @@ export class TestNameIndex implements TestNameLookup {
    */
   observe(names: Iterable<string>): void {
     for (const name of names) {
+      this.observed.add(name);
       const base = withoutDuplicateSuffix(name);
 
       if (base !== undefined) this.duplicated.add(base);
@@ -323,43 +340,56 @@ export class TestNameIndex implements TestNameLookup {
 
         if (
           titles.length === segments.length &&
-          segments.every((segment, k) =>
-            typeof segment === 'string'
-              ? segment === titles[k]
-              : matchesTitleTemplate(segment, titles[k] ?? ''),
-          )
+          segments.every((segment, k) => matchesTitleTemplate(segment, titles[k] ?? ''))
         )
           into.add(id);
       }
     }
   }
 
+  /** Whether more than one run of a test may have had a name the tests `ids` fit, in `file`. */
+  private repeats(ids: ReadonlySet<string>, file: string): boolean {
+    return ids.size > 1 || [...ids].some((id) => this.repeatable.has(id)) || this.inexact.has(file);
+  }
+
   private decide(keys: readonly string[]): string | null | undefined {
     const name = keys[0] ?? '';
+    const hash = name.indexOf('#');
+    const file = hash < 0 ? '' : name.slice(0, hash);
     let lookup = keys;
     let exact = this.exactOf(keys);
     const candidates = new Set<string>();
     this.fitting(keys, candidates);
-    let duplicate = this.duplicated.has(name);
+    let duplicate =
+      this.duplicated.has(name) &&
+      (exact === null || this.repeats(new Set([...candidates, ...(exact ? [exact] : [])]), file));
 
     if (exact === undefined) {
-      // Not a title as written: it may be mutator's numbered copy of a name another test of the run has.
+      // Not a title as written: it may be mutator's numbered copy of a name it also reported.
       const bases = keys.map(withoutDuplicateSuffix);
 
-      if (bases.every((base) => base !== undefined)) {
+      if (bases.every((base) => base !== undefined) && this.observed.has(bases[0] ?? '')) {
         const viaBase = new Set<string>();
-        exact = this.exactOf(bases);
+        const baseExact = this.exactOf(bases);
         this.fitting(bases, viaBase);
-        duplicate = exact !== undefined || viaBase.size > 0;
-        lookup = bases;
 
-        for (const id of viaBase) candidates.add(id);
+        if (baseExact === null) return null;
+
+        if (baseExact !== undefined) viaBase.add(baseExact);
+
+        if (viaBase.size > 0 && this.repeats(viaBase, file)) {
+          if (baseExact !== undefined) viaBase.delete(baseExact);
+          exact = baseExact;
+          duplicate = true;
+          lookup = bases;
+
+          for (const id of viaBase) candidates.add(id);
+        }
       }
     }
 
     if (exact === null) return null;
-    const hash = name.indexOf('#');
-    const because = this.inexact.get(hash < 0 ? '' : name.slice(0, hash));
+    const because = this.inexact.get(file);
     let reason: WithheldReason | undefined;
 
     if (exact !== undefined) {

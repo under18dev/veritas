@@ -2,13 +2,8 @@ import { stableId } from '@under18dev/veritas-core';
 import { describe, expect, it } from 'vitest';
 import { compileTitleTemplate, matchesTitleTemplate, mutatorTestId, TestNameIndex } from '../src/index.js';
 
-const matches = (template: string, name: string): boolean => {
-  const compiled = compileTitleTemplate(template);
-
-  if (compiled === undefined) throw new Error(`no placeholder in ${template}`);
-
-  return matchesTitleTemplate(compiled, name);
-};
+const matches = (template: string, name: string): boolean =>
+  matchesTitleTemplate(compileTitleTemplate(template), name);
 
 describe('title templates of table-driven tests', () => {
   it('matches printf-style placeholders to the text they format', () => {
@@ -21,16 +16,34 @@ describe('title templates of table-driven tests', () => {
     expect(matches('Should throw for invalid IPv4: %s', 'Should throw for invalid IPv6: 1::2::3')).toBe(
       false,
     );
-    expect(matches('Should throw for invalid IPv4: %s', 'Should throw for invalid IPv4: ')).toBe(false);
+    expect(matches('pretty %p', 'pretty ')).toBe(false);
+  });
+
+  it('lets %s and $key print an empty string, and the other conversions at least one character', () => {
+    expect(matches('Should throw for invalid IPv4: %s', 'Should throw for invalid IPv4: ')).toBe(true);
+    expect(matches('rejects <%s>', 'rejects <>')).toBe(true);
+    expect(matches('name <$name>', 'name <>')).toBe(true);
+    expect(matches('%s%s!', '!')).toBe(true);
+    expect(matches('%s', '')).toBe(true);
+    for (const conversion of ['%d', '%i', '%f', '%j', '%o', '%O', '%p'])
+      expect(matches(`<${conversion}>`, '<>'), conversion).toBe(false);
   });
 
   it('matches the row index of %# and %$, and reads %% as a literal percent', () => {
     expect(matches('case %#', 'case 0')).toBe(true);
+    expect(matches('case %#', 'case 12')).toBe(true);
     expect(matches('case %$: %s', 'case 1: a')).toBe(true);
+    // The row index is digits only.
+    expect(matches('case %#', 'case missing')).toBe(false);
+    expect(matches('case %$', 'case ')).toBe(false);
+    expect(matches('case %#', 'case -1')).toBe(false);
     expect(matches('100%% of %s', '100% of x')).toBe(true);
     expect(matches('100%% of %s', '100%% of x')).toBe(false);
-    expect(compileTitleTemplate('100%% sure')).toBeUndefined();
-    expect(compileTitleTemplate('50% off, 10%')).toBeUndefined();
+    // A title with escapes only is reported with them resolved.
+    expect(compileTitleTemplate('100%% sure').placeholders).toBe(0);
+    expect(matches('100%% sure', '100% sure')).toBe(true);
+    expect(matches('100%% sure', '100%% sure')).toBe(false);
+    expect(compileTitleTemplate('50% off, 10%').placeholders).toBe(0);
   });
 
   it('lets %c print nothing', () => {
@@ -47,7 +60,7 @@ describe('title templates of table-driven tests', () => {
     expect(
       matches('convertIPv4ToString($input) === $expected', 'convertIPv4ToString(0.0.0.1) == 0.0.0.1'),
     ).toBe(false);
-    expect(compileTitleTemplate('costs 5$')).toBeUndefined();
+    expect(compileTitleTemplate('costs 5$').placeholders).toBe(0);
   });
 
   it('reads interpolated keys with Unicode identifier characters, as Vitest does', () => {
@@ -68,14 +81,15 @@ describe('title templates of table-driven tests', () => {
     expect(matches('with $missing', 'with $missing')).toBe(true);
   });
 
-  it('needs a character for each of two adjacent placeholders', () => {
-    expect(matches('%s%s!', 'ab!')).toBe(true);
-    expect(matches('%s%s!', 'a!')).toBe(false);
+  it('needs a character for each adjacent placeholder that always prints one', () => {
+    expect(matches('%d%d!', '12!')).toBe(true);
+    expect(matches('%d%d!', '1!')).toBe(false);
+    expect(matches('%d%s!', '1!')).toBe(true);
   });
 
   it('places literals leftmost, so a value that contains the next literal still matches', () => {
     expect(matches('%s, then %s, end', 'a, then b, then c, end')).toBe(true);
-    expect(matches('%s, then %s', 'x, then ')).toBe(false);
+    expect(matches('%d, then %d', 'x, then ')).toBe(false);
   });
 
   it('matches long names without catastrophic backtracking', () => {
@@ -201,12 +215,12 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
 
   it('matches no template in a file that calls a function which may register tests', () => {
     const each = entry([], '$name');
-    const index = new TestNameIndex([each], ' > ', [{ path: FILE, inexactNames: 'registered_by_call' }]);
+    const index = new TestNameIndex([each], ' > ', [{ path: FILE, inexactNames: 'open_collection' }]);
 
     expect(mutatorTestId(`${FILE}#is free at 5000`, ' > ', index)).not.toBe(each.id);
     expect(index.withheld.get(`${FILE}#is free at 5000`)).toEqual({
       kind: 'inexact_file',
-      because: 'registered_by_call',
+      because: 'open_collection',
     });
   });
 
@@ -256,6 +270,66 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     const alone = new TestNameIndex([literal, loop], ' > ');
     alone.observe([`${FILE}#fee for 5000`, `${FILE}#fee for 4999`]);
     expect(mutatorTestId(`${FILE}#fee for 5000`, ' > ', alone)).toBe(literal.id);
+  });
+
+  it('credits an empty row value to its template', () => {
+    const empty = entry([], 'rejects <%s>');
+    const index = new TestNameIndex([empty], ' > ');
+
+    expect(mutatorTestId(`${FILE}#rejects <>`, ' > ', index)).toBe(empty.id);
+  });
+
+  it('reads placeholders only in the titles the runner formats', () => {
+    // Two plain suites, one titled with a literal `%s`, each with an it.each.
+    const literal = { ...entry(['parse %s'], 'value %d'), tableTitles: [1] };
+    const json = { ...entry(['parse json'], 'value %d'), tableTitles: [1] };
+    const index = new TestNameIndex([literal, json], ' > ');
+
+    expect(mutatorTestId(`${FILE}#parse json > value 1`, ' > ', index)).toBe(json.id);
+    expect(mutatorTestId(`${FILE}#parse %s > value 1`, ' > ', index)).toBe(literal.id);
+    expect(index.withheld.size).toBe(0);
+
+    // A describe.each title is formatted too.
+    const nested = { ...entry(['parse %s'], 'value 1'), tableTitles: [0] };
+    expect(mutatorTestId(`${FILE}#parse xml > value 1`, ' > ', new TestNameIndex([nested], ' > '))).toBe(
+      nested.id,
+    );
+  });
+
+  it('resolves a table-driven title with escapes only, and credits no other template with it', () => {
+    const sure = entry([], '100%% sure');
+    const index = new TestNameIndex([sure], ' > ');
+    expect(mutatorTestId(`${FILE}#100% sure`, ' > ', index)).toBe(sure.id);
+
+    const broad = entry([], '100%% %s');
+    const both = new TestNameIndex([sure, broad], ' > ');
+    expect([sure.id, broad.id]).not.toContain(mutatorTestId(`${FILE}#100% sure`, ' > ', both));
+    expect(both.withheld.get(`${FILE}#100% sure`)).toEqual({ kind: 'templates' });
+  });
+
+  it('reads a #2 suffix as part of the title when no second run of the name is possible', () => {
+    const suffixed = entry([], 'case %s#2');
+    const literal = entry([], 'case x', []);
+    const index = new TestNameIndex([suffixed, literal], ' > ');
+    index.observe([`${FILE}#case x`, `${FILE}#case x#2`]);
+
+    expect(mutatorTestId(`${FILE}#case x#2`, ' > ', index)).toBe(suffixed.id);
+    expect(mutatorTestId(`${FILE}#case x`, ' > ', index)).toBe(literal.id);
+    expect(index.withheld.size).toBe(0);
+
+    // Without the unnumbered name in the report, the suffix is not mutator's.
+    const alone = new TestNameIndex([entry([], 'case %s')], ' > ');
+    alone.observe([`${FILE}#case x#2`]);
+    expect(mutatorTestId(`${FILE}#case x#2`, ' > ', alone)).toBe(entry([], 'case %s').id);
+  });
+
+  it('does not take a plain name for a row index', () => {
+    const indexed = entry([], 'case %#');
+    const plain = entry([], 'case missing', []);
+    const index = new TestNameIndex([indexed, plain], ' > ');
+
+    expect(mutatorTestId(`${FILE}#case missing`, ' > ', index)).toBe(plain.id);
+    expect(mutatorTestId(`${FILE}#case 0`, ' > ', index)).toBe(indexed.id);
   });
 
   it('matches no template in a file with a test whose title is not a literal', () => {
