@@ -167,46 +167,99 @@ describe('full names static analysis cannot read', () => {
     ]);
     // Test ids stay as they were: the suite title that is not a literal is still left out of the suite path.
     expect(inventory.tests[2]?.id).toBe(testId('test/names.test.ts', ['inner'], 'works'));
-    // `shared()` in the describe callback is a call that registers tests.
+    // `shared()` in the describe callback and the loops run code that may register tests.
     expect(inventory.files.find((f) => f.path === 'test/names.test.ts')?.inexactNames).toBe(
-      'registered_by_call',
+      'open_collection',
     );
   });
 
-  it('marks a file that calls a function which may register tests where tests are registered', () => {
+  it('marks a file whose collection runs anything but declarations and the runner API', () => {
+    const header = [
+      "import { beforeEach, describe, expect, it, vi } from 'vitest';",
+      "import { sharedSuite, helpers } from './shared-suite.js';",
+      "import { value } from '../src/value.js';",
+    ].join('\n');
+    const open: Record<string, string> = {
+      call: 'sharedSuite();',
+      assigned: 'const registered = sharedSuite();',
+      exported: 'export const s = sharedSuite();',
+      forEach: '[sharedSuite].forEach((f) => f());',
+      localForEach: 'const list = [1]; list.forEach((n) => value(n));',
+      voided: 'void sharedSuite();',
+      constructed: 'new Map();',
+      constructedConst: 'const app = new Map();',
+      and: 'value(1) && sharedSuite();',
+      conditional: 'const x = value(1) ? sharedSuite() : null;',
+      tried: 'try { sharedSuite(); } catch {}',
+      switched: 'switch (value(1)) { default: sharedSuite(); }',
+      labeled: 'outer: { sharedSuite(); }',
+      iife: '(() => sharedSuite())();',
+      awaited: 'await sharedSuite();',
+      sideEffect: "import './shared-suite.js';",
+      dynamicImport: "await import('./shared-suite.js');",
+      tagged: 'const t = String.raw`x`;',
+      method: 'helpers.run();',
+      inDescribe: "describe('outer', () => { if (true) { helpers.run(); } });",
+      passed: "describe('outer', sharedSuite);",
+      eachRows: "describe.each(sharedSuite())('row %s', () => {});",
+    };
+    const closed: Record<string, string> = {
+      plain:
+        "describe('suite', () => { beforeEach(() => { value(1); }); it('works', () => { value(2); expect(1).toBe(1); }); });",
+      constants:
+        "const cases = [{ name: 'a', total: 1 }]; const fee = (n: number) => value(n); it.each(cases)('$name', ({ total }) => { expect(fee(total)).toBe(total); });",
+      runnerApi:
+        "vi.mock('../src/value.js'); const spy = vi.fn(); expect.extend({}); it('spy', () => { spy(); });",
+      declarations:
+        "type T = number; interface I { a: T } function helper() { return value(1); } class Box { static size = 1; } it('d', () => { helper(); new Box(); });",
+      template: `const n = 1; it(\`case \${n}\`, () => { expect(value(n)).toBe(n); });`,
+    };
+    const files: Record<string, string> = {
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/shared-suite.ts': [
+        "import { expect, it } from 'vitest';",
+        "import { value } from '../src/value.js';",
+        "export function sharedSuite() { it('is shared', () => expect(value(1)).toBe(1)); return [1]; }",
+        'export const helpers = { run: sharedSuite };',
+      ].join('\n'),
+      'test/pure-helper.ts': 'export const double = (n: number) => n * 2;\n',
+      'test/imports-registering.test.ts': `${header}\nit('own', () => {});\n`,
+    };
+    for (const [name, code] of Object.entries(open))
+      files[`test/open-${name}.test.ts`] = `${header}\n${code}\n`;
+    for (const [name, code] of Object.entries(closed))
+      files[`test/closed-${name}.test.ts`] = [
+        "import { beforeEach, describe, expect, it, vi } from 'vitest';",
+        "import { double } from './pure-helper.js';",
+        "import { value } from '../src/value.js';",
+        code,
+        '',
+      ].join('\n');
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root: tempProject(files),
+      config: VeritasConfig.parse({}),
+    });
+    const marked = (file: string) => inventory.files.find((f) => f.path === file)?.inexactNames;
+
+    for (const name of Object.keys(open))
+      expect(marked(`test/open-${name}.test.ts`), name).toBe('open_collection');
+    for (const name of Object.keys(closed))
+      expect(marked(`test/closed-${name}.test.ts`), name).toBeUndefined();
+    // Importing a module that registers tests is enough: its tests run under this file.
+    expect(marked('test/imports-registering.test.ts')).toBe('imported_registrations');
+  });
+
+  it('records which titles of a table-driven test the runner formats', () => {
     const root = tempProject({
       'src/value.ts': 'export const value = (input: number) => input;\n',
-      'test/shared-suite.ts': `
-        import { expect, it } from 'vitest';
+      'test/titles.test.ts': `
+        import { describe, expect, it } from 'vitest';
         import { value } from '../src/value.js';
-        export function sharedSuite() { it('is shared', () => expect(value(1)).toBe(1)); }
-        export const helpers = { run: sharedSuite };
-      `,
-      'test/top.test.ts': `
-        import { it, vi } from 'vitest';
-        import { sharedSuite } from './shared-suite.js';
-        vi.mock('../src/value.js');
-        it('own', () => {});
-        sharedSuite();
-      `,
-      'test/nested.test.ts': `
-        import { describe, it } from 'vitest';
-        import { helpers } from './shared-suite.js';
-        describe('outer', () => { if (true) { helpers.run(); } });
-      `,
-      'test/passed.test.ts': `
-        import { describe } from 'vitest';
-        import { sharedSuite } from './shared-suite.js';
-        describe('outer', sharedSuite);
-      `,
-      'test/clean.test.ts': `
-        import { beforeEach, describe, expect, it } from 'vitest';
-        import { value } from '../src/value.js';
-        const app = { get: (_path: string) => {} };
-        app.get('/x');
-        describe('suite', () => {
-          beforeEach(() => { value(1); });
-          it('works', () => { value(2); expect(1).toBe(1); });
+        describe('parse %s', () => {
+          it.each([1])('value %d', (n) => expect(value(n)).toBe(n));
+          describe.each([['a']])('mode %s', () => { it('plain %s', () => expect(value(1)).toBe(1)); });
+          it('literal', () => expect(value(1)).toBe(1));
         });
       `,
     });
@@ -215,12 +268,12 @@ describe('full names static analysis cannot read', () => {
       root,
       config: VeritasConfig.parse({}),
     });
-    const marked = (file: string) => inventory.files.find((f) => f.path === file)?.inexactNames;
 
-    expect(marked('test/top.test.ts')).toBe('registered_by_call');
-    expect(marked('test/nested.test.ts')).toBe('registered_by_call');
-    expect(marked('test/passed.test.ts')).toBe('registered_by_call');
-    expect(marked('test/clean.test.ts')).toBeUndefined();
+    expect(inventory.tests.map((t) => [t.name, t.tableTitles])).toEqual([
+      ['value %d', [1]],
+      ['plain %s', [1]],
+      ['literal', undefined],
+    ]);
   });
 
   it('records tests registered on a condition', () => {

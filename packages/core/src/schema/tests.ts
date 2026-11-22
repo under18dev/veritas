@@ -73,6 +73,12 @@ export const TestCase = z.object({
    * otherwise.
    */
   conditional: z.literal(true).optional(),
+  /**
+   * For a table-driven test, the positions in `[...suitePath, name]` of the titles the runner formats for each row:
+   * the test's own title for `.each`/`.for`, and the titles of enclosing `describe.each`/`describe.for`. The other
+   * titles are reported as written. Absent for a test with no such title.
+   */
+  tableTitles: z.array(z.number().int().nonnegative()).optional(),
 });
 export type TestCase = z.infer<typeof TestCase>;
 
