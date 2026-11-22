@@ -191,7 +191,7 @@ describe('declared properties', () => {
 
 describe('check-self-verification', () => {
   type CheckInput = {
-    declared: { id: string; version: number }[];
+    declared: { id: string; version: number; status: string }[];
     expectCounterexample: string[];
     current: { configHash: string; sourceHash: string; gitCommit: string | null };
     meta: { configHash: string; sourceHash: string; gitCommit: string | null };
@@ -219,7 +219,7 @@ describe('check-self-verification', () => {
   };
   const same = { configHash: 'c', sourceHash: 's', gitCommit: 'g' };
   const input = (claims: Partial<Claim>[] | null, extra: Partial<CheckInput> = {}): CheckInput => ({
-    declared: [{ id: 'a', version: 7 }],
+    declared: [{ id: 'a', version: 7, status: 'accepted' }],
     expectCounterexample: [],
     current: same,
     meta: same,
@@ -248,9 +248,17 @@ describe('check-self-verification', () => {
         'an unsupported claim besides the proofs',
         input([...proven, { ...z3('unsupported'), engine: 'none' }]),
       ],
-      ['not accepted', input(proven, { properties: [{ id: 'D-a', status: 'proposed', version: 7 }] })],
+      [
+        'not accepted when the run checked it',
+        input(proven, { properties: [{ id: 'D-a', status: 'proposed', version: 7 }] }),
+      ],
+      ['rejected after the run', input(proven, { declared: [{ id: 'a', version: 7, status: 'rejected' }] })],
+      ['not accepted now', input(proven, { declared: [{ id: 'a', version: 7, status: 'proposed' }] })],
       ['missing from the run', input(proven, { properties: [] })],
-      ['an older version of the declaration', input(proven, { declared: [{ id: 'a', version: 8 }] })],
+      [
+        'an older version of the declaration',
+        input(proven, { declared: [{ id: 'a', version: 8, status: 'accepted' }] }),
+      ],
       ['another configuration', input(proven, { meta: { ...same, configHash: 'x' } })],
       ['other sources', input(proven, { meta: { ...same, sourceHash: 'x' } })],
       ['another commit', input(proven, { meta: { ...same, gitCommit: 'x' } })],
@@ -277,6 +285,18 @@ describe('check-self-verification', () => {
     const dir = copyFixture('declared-properties');
     const control = ['--expect-counterexample', 'stage.unguarded-succeeded-needs-tests'];
     expect(runCli(['prove', '--engine', 'both', '--json'], dir).status).toBe(1);
+    expect(check(dir, ...control).status).toBe(0);
+
+    // A rejection recorded after the run counts, without a new run.
+    const ledgerFile = path.join(dir, '.veritas/approvals.json');
+    const ledger = readFileSync(ledgerFile, 'utf8');
+    expect(
+      runCli(['spec', 'reject', GUARDED, '--actor', 'reviewer', '--reason', 'changed my mind'], dir).status,
+    ).toBe(0);
+    const rejected = check(dir, ...control);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stdout).toContain(`FAIL ${GUARDED}: rejected, not accepted`);
+    writeFileSync(ledgerFile, ledger);
     expect(check(dir, ...control).status).toBe(0);
 
     // A declaration edited after the run: its version and the configuration no longer match.

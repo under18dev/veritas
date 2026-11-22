@@ -78,7 +78,7 @@ function runDir(root, run) {
 
 /**
  * The verdict for every declared property, as lines, and whether all of them passed. `declared` are the current
- * declarations with the property version they have now; `current` the hashes and commit of the checkout
+ * declarations with the property version and review status they have now (the current approvals applied); `current` the hashes and commit of the checkout
  * (`gitCommit` null when the tree is not clean or not a git repository); `meta` the run's artifact metadata;
  * `properties`, `claims` and `stages` the data of its properties.json, claims.json (null when missing) and run.json.
  */
@@ -113,7 +113,7 @@ export function checkRun({ declared, expectCounterexample, current, meta, proper
   for (const id of expectCounterexample)
     if (!ids.includes(id)) fail(`${id}: --expect-counterexample names no declared property`);
 
-  for (const { id, version } of declared) {
+  for (const { id, version, status } of declared) {
     const propertyId = `${DECLARED_PREFIX}${id}`;
     const property = properties.find((p) => p.id === propertyId);
 
@@ -129,8 +129,15 @@ export function checkRun({ declared, expectCounterexample, current, meta, proper
       continue;
     }
 
+    // Accepted now, by the approvals ledger as it is (a decision recorded after the run counts), and when the run
+    // checked it (a proposed property is only checked as an experiment).
+    if (status !== 'accepted') {
+      fail(`${propertyId}: ${status}, not accepted`);
+      continue;
+    }
+
     if (property.status !== 'accepted') {
-      fail(`${propertyId}: ${property.status}, not accepted`);
+      fail(`${propertyId}: ${property.status} when the run checked it, not accepted; run prove again`);
       continue;
     }
     const own = claims.filter((c) => c.propertyId === propertyId && c.kind === 'conformance');
@@ -202,7 +209,7 @@ async function main() {
   const core = await load('core');
   const { analyzeCode } = await load('code-intelligence');
   const { runSourceHash } = await load('engine');
-  const { declaredProperties } = await load('property-engine');
+  const { applyApprovals, declaredProperties, loadApprovals } = await load('property-engine');
   let loaded;
 
   try {
@@ -213,10 +220,22 @@ async function main() {
   const { config } = loaded;
 
   if (config.properties.length === 0) throw new InputError('the configuration declares no property');
-  const declared = declaredProperties(config.properties, {
+  let ledger;
+
+  try {
+    ledger = loadApprovals(args.root);
+  } catch (error) {
+    throw new InputError(`cannot load the approvals of ${args.root}: ${error.message}`);
+  }
+  const fresh = declaredProperties(config.properties, {
     integerDomain: config.formal.integerDomain,
     maxArrayLength: config.formal.maxArrayLength,
-  }).map((p) => ({ id: p.id.slice(DECLARED_PREFIX.length), version: p.version }));
+  });
+  const declared = applyApprovals(fresh, ledger).properties.map((p) => ({
+    id: p.id.slice(DECLARED_PREFIX.length),
+    version: p.version,
+    status: p.status,
+  }));
   // The commit only identifies the checked code when nothing is modified; the hashes are compared either way.
   const clean = core.gitOutput(args.root, ['status', '--porcelain'])?.trim() === '';
   const current = {
