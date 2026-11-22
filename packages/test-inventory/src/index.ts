@@ -3321,9 +3321,36 @@ function isOpaqueCall(node: ts.CallExpression | ts.NewExpression, checker: ts.Ty
   });
 }
 
-/** `import()`, `require(...)`, `createRequire(...)`, or a loader made by `createRequire`: modules loaded at run time. */
+/** Whether a callee is a `getBuiltinModule` member (`process.getBuiltinModule`), on any object. */
+function getsBuiltinModule(callee: ts.Expression): boolean {
+  const node = skipParens(callee);
+
+  return (
+    (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+    memberName(node) === 'getBuiltinModule'
+  );
+}
+
+/** Whether a member is called right away (`process.getBuiltinModule('fs')`), through parentheses at most. */
+function calledDirectly(node: ts.Expression): boolean {
+  let current: ts.Node = node;
+
+  while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
+
+  return ts.isCallExpression(current.parent) && current.parent.expression === current;
+}
+
+/** The text of a property name or binding name that is an identifier or a string literal; undefined otherwise. */
+function nameText(name: ts.Node): string | undefined {
+  return ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : undefined;
+}
+
+/**
+ * `import()`, `require(...)`, `createRequire(...)`, `process.getBuiltinModule(...)`, or a loader made by
+ * `createRequire`: modules loaded at run time.
+ */
 function isRuntimeLoad(node: ts.CallExpression, checker: ts.TypeChecker): boolean {
-  if (node.expression.kind === ts.SyntaxKind.ImportKeyword) return true;
+  if (node.expression.kind === ts.SyntaxKind.ImportKeyword || getsBuiltinModule(node.expression)) return true;
   // `require(...)` and `createRequire(...)` load modules at run time, which static imports do not show.
   if (ts.isIdentifier(node.expression) && ['require', 'createRequire'].includes(node.expression.text))
     return true;
@@ -4404,23 +4431,67 @@ function requiresCreated(source: ts.SourceFile, load: (name: string) => void, un
         if ((element.propertyName ?? element.name).text === 'createRequire') named.add(element.name.text);
   }
 
-  // The same module obtained with CommonJS: `const { createRequire } = require('node:module')`,
-  // `const m = require('module')`, `require('module').createRequire(…)`.
-  const requiresModule = (node: ts.Node): boolean => {
-    const call = ts.isExpression(node) ? skipParens(node) : node;
+  // The same module obtained at run time: with CommonJS (`const { createRequire } = require('node:module')`,
+  // `const m = require('module')`, `require('module').createRequire(…)`), with `process.getBuiltinModule('module')`,
+  // or awaited from a dynamic import (`const { createRequire } = await import('node:module')`,
+  // `(await import('module')).createRequire(…)`).
+  const loadsModule = (call: ts.CallExpression): boolean => {
+    const callee = skipParens(call.expression);
+    const argument = call.arguments[0];
 
     return (
-      ts.isCallExpression(call) &&
-      ts.isIdentifier(skipParens(call.expression)) &&
-      (skipParens(call.expression) as ts.Identifier).text === 'require' &&
-      call.arguments[0] !== undefined &&
-      ts.isStringLiteralLike(call.arguments[0]) &&
-      (call.arguments[0].text === 'module' || call.arguments[0].text === 'node:module')
+      (call.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(callee) && callee.text === 'require') ||
+        getsBuiltinModule(callee)) &&
+      argument !== undefined &&
+      ts.isStringLiteralLike(argument) &&
+      (argument.text === 'module' || argument.text === 'node:module')
     );
   };
-  const moduleObjects = descendants(source).filter(requiresModule) as ts.CallExpression[];
+  /** Whether an expression is the module object: a call that loads it, or a dynamic import of it awaited. */
+  const requiresModule = (node: ts.Node): boolean => {
+    const value = ts.isExpression(node) ? skipParens(node) : node;
 
-  for (const call of moduleObjects) {
+    if (ts.isAwaitExpression(value)) {
+      const awaited = skipParens(value.expression);
+
+      return (
+        ts.isCallExpression(awaited) &&
+        awaited.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        loadsModule(awaited)
+      );
+    }
+
+    return (
+      ts.isCallExpression(value) &&
+      value.expression.kind !== ts.SyntaxKind.ImportKeyword &&
+      loadsModule(value)
+    );
+  };
+  /** The node a value stands as, through parentheses. */
+  const outermost = (node: ts.Node): ts.Node => {
+    let current = node;
+
+    while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
+
+    return current;
+  };
+
+  // A dynamic import of the module used other than awaited (`import('module').then(…)`) is not followed.
+  for (const node of descendants(source))
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      loadsModule(node) &&
+      !ts.isAwaitExpression(outermost(node).parent)
+    )
+      unknown();
+  const moduleObjects = descendants(source).filter(
+    (node) => (ts.isCallExpression(node) || ts.isAwaitExpression(node)) && requiresModule(node),
+  ) as ts.Expression[];
+
+  for (const object of moduleObjects) {
+    const call = outermost(object);
     const parent = call.parent;
 
     if (ts.isVariableDeclaration(parent) && parent.initializer === call) {
@@ -6829,8 +6900,10 @@ function moduleSafety(
 
         if (
           node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-          (ts.isIdentifier(callee) && callee.text === 'require')
+          (ts.isIdentifier(callee) && callee.text === 'require') ||
+          getsBuiltinModule(callee)
         ) {
+          // `process.getBuiltinModule('node:vm')` loads a module at run time as `require` does.
           if (argument && ts.isStringLiteralLike(argument)) loadedAtRunTime(argument.text);
           else found.unknown = true;
         } else if (
@@ -6853,8 +6926,18 @@ function moduleSafety(
           found.unknown = true;
       } else if (ts.isNewExpression(node)) {
         if (ts.isIdentifier(node.expression) && node.expression.text === 'Function') found.unknown = true;
+      } else if (
+        ts.isBindingElement(node) &&
+        nameText(node.propertyName ?? node.name) === 'getBuiltinModule'
+      ) {
+        // `const { getBuiltinModule } = process`.
+        found.unknown = true;
       } else if (ts.isElementAccessExpression(node) || ts.isPropertyAccessExpression(node)) {
         const object = skipParens(node.expression);
+
+        // `process.getBuiltinModule` other than called (`const load = process.getBuiltinModule`) loads what it is
+        // later given, which is not followed.
+        if (memberName(node) === 'getBuiltinModule' && !calledDirectly(node)) found.unknown = true;
 
         if (ts.isIdentifier(object) && GLOBAL_OBJECTS.has(object.text)) {
           const name = memberName(node);

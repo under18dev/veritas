@@ -546,6 +546,32 @@ describe('full names static analysis cannot read', () => {
         "export function shared() { const k = 'constructor' as 'a'; const f: any = shared; (f[k] as any)(\"it('hidden', () => {})\")(); }",
       computedDestructured:
         "export function shared(k = 'constructor') { const { [k]: g }: any = shared; g(\"it('hidden', () => {})\")(); }",
+      builtinVm:
+        "export function shared() { (process as any).getBuiltinModule('node:vm').runInThisContext(\"it('hidden', () => {})\"); }",
+      builtinVmBare:
+        "export function shared() { const vm: any = process.getBuiltinModule('vm'); vm.runInThisContext(\"it('hidden', () => {})\"); }",
+      builtinRunner:
+        "export function shared() { (process as any).getBuiltinModule('vitest').it('x', () => {}); }",
+      builtinName:
+        "export function shared(name = 'node:vm') { (process as any).getBuiltinModule(name).runInThisContext(\"it('hidden', () => {})\"); }",
+      builtinValue:
+        "export function shared() { const load: any = process.getBuiltinModule; load('vm').runInThisContext(\"it('hidden', () => {})\"); }",
+      builtinDestructured:
+        "export function shared() { const { getBuiltinModule: load }: any = process; load('vm').runInThisContext(\"it('hidden', () => {})\"); }",
+      builtinCreateRequire:
+        "export function shared() { (process as any).getBuiltinModule('module').createRequire(import.meta.url)('vitest').it('x', () => {}); }",
+      builtinCreateRequireBound:
+        "const m: any = process.getBuiltinModule('node:module');\nconst load = m.createRequire(import.meta.url);\nexport function shared() { load('vitest').it('x', () => {}); }",
+      importedCreateRequire:
+        "export async function shared() { const { createRequire } = await import('node:module'); createRequire(import.meta.url)('vitest').it('x', () => {}); }",
+      importedCreateRequireMember:
+        "export async function shared() { (await import('module')).createRequire(import.meta.url)('vitest').it('x', () => {}); }",
+      importedModuleNamespace:
+        "export async function shared() { const m = await import('node:module'); m.createRequire(import.meta.url)('vitest').it('x', () => {}); }",
+      importedCreateRequireAlias:
+        "export async function shared() { const { createRequire } = await import('node:module'); const cr = createRequire; cr(import.meta.url)('vitest').it('x', () => {}); }",
+      importedModuleThen:
+        "export function shared() { import('node:module').then((m: any) => m.createRequire(import.meta.url)('vitest').it('x', () => {})); }",
       vmRun:
         "import { runInThisContext } from 'node:vm';\nexport function shared() { runInThisContext(\"it('hidden', () => {})\"); }",
       vmScript:
@@ -664,6 +690,16 @@ describe('full names static analysis cannot read', () => {
       ].join('\n'),
       'test/uses-plain-indexing.test.ts':
         "import { it } from 'vitest';\nimport { shared } from './plain-indexing.js';\nshared([], {}, 'a');\nit('r', () => {});\n",
+      // A helper loading builtins at run time, and a local module through a require made from an imported module.
+      'test/builtin-loads.ts': [
+        "export function exists() { return (process as any).getBuiltinModule('node:fs').existsSync('x'); }",
+        'export async function local() {',
+        "  const { createRequire } = await import('node:module');",
+        "  return createRequire(import.meta.url)('./plain-reflection.js');",
+        '}',
+      ].join('\n'),
+      'test/uses-builtin-loads.test.ts':
+        "import { it } from 'vitest';\nimport { exists, local } from './builtin-loads.js';\nexists(); local();\nit('r', () => {});\n",
       'test/uses-plain-reflection.test.ts':
         "import { it } from 'vitest';\nimport { shared } from './plain-reflection.js';\nshared(1, {});\nit('r', () => {});\n",
       // A setup helper registering matchers that call a package.
@@ -713,6 +749,7 @@ describe('full names static analysis cannot read', () => {
     expect(marked('test/uses-matchers-helper.test.ts')).toBe('imported_open_module');
     expect(marked('test/uses-plain-reflection.test.ts')).toBeUndefined();
     expect(marked('test/uses-plain-indexing.test.ts')).toBeUndefined();
+    expect(marked('test/uses-builtin-loads.test.ts')).toBeUndefined();
     expect(marked('test/passes-returning-inline.test.ts')).toBeUndefined();
     // Calling a function that loads a package through createRequire may reach it.
     expect(marked('test/uses-created-require.test.ts')).toBe('open_collection');
