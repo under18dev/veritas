@@ -441,6 +441,12 @@ describe('full names static analysis cannot read', () => {
       importEquals: "import v = require('vitest');\nexport function shared() { v.it('x', () => {}); }",
       createRequireAlias:
         "import { createRequire } from 'node:module';\nconst cr = createRequire;\nexport function shared() { cr(import.meta.url)('vitest').it('x', () => {}); }",
+      vmRun:
+        "import { runInThisContext } from 'node:vm';\nexport function shared() { runInThisContext(\"it('hidden', () => {})\"); }",
+      vmScript:
+        "import vm from 'vm';\nexport function shared() { new vm.Script(\"it('hidden', () => {})\").runInThisContext(); }",
+      vmRequire:
+        "export function shared() { require('node:vm').runInThisContext(\"it('hidden', () => {})\"); }",
       requireAlias: "export function shared() { const r = require; r('vitest').it('x', () => {}); }",
       requireCall: "export function shared() { require.call(null, 'vitest').it('x', () => {}); }",
       moduleRequire: "export function shared() { module.require('vitest').it('x', () => {}); }",
@@ -667,6 +673,7 @@ describe('full names static analysis cannot read', () => {
         it('reference after options', { only: true }, check);
         it('options before reference', opts, check);
         it('options after inline', () => {}, opts);
+        it.only('reference with timeout', check, 1000);
       `,
     });
     const tests = inventoryTests({
@@ -685,6 +692,7 @@ describe('full names static analysis cannot read', () => {
       ['reference after options', ['only'], undefined],
       ['options before reference', [], true],
       ['options after inline', [], true],
+      ['reference with timeout', ['only'], undefined],
     ]);
   });
 

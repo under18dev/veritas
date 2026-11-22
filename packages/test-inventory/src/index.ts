@@ -5378,6 +5378,16 @@ function surelyHasRows(node: ts.CallExpression): boolean {
   );
 }
 
+/** A number written as a literal (`1000`, `-1`), as a timeout is. */
+function numericLiteral(node: ts.Expression): boolean {
+  return (
+    ts.isNumericLiteral(node) ||
+    (ts.isPrefixUnaryExpression(node) &&
+      (node.operator === ts.SyntaxKind.MinusToken || node.operator === ts.SyntaxKind.PlusToken) &&
+      ts.isNumericLiteral(node.operand))
+  );
+}
+
 /** Vitest test options that set a modifier (`it('x', { only: true }, fn)`). */
 const OPTION_MODIFIERS = new Map<string, TestCaseType['modifiers'][number]>([
   ['only', 'only'],
@@ -5405,19 +5415,23 @@ function registrationOptions(node: ts.CallExpression): {
   const set = new Map<TestCaseType['modifiers'][number], boolean>();
 
   const after = node.arguments.slice(1);
+  // The last argument that is not a timeout (`it('x', check, 1000)`): where the callback goes.
+  let last = after.length - 1;
+
+  while (last >= 0 && numericLiteral(skipParens(after[last] as ts.Expression))) last--;
 
   for (const [index, argument] of after.entries()) {
     const value = skipParens(argument);
 
     // The callback, and a timeout.
-    if (isFunction(value) || ts.isNumericLiteral(value)) continue;
+    if (isFunction(value) || numericLiteral(value)) continue;
 
     // A name in the last place is the callback (`it('x', check)`, `it('x', { only: true }, check)`), unless an inline
     // callback comes before it: then it is options (`it('x', () => {}, opts)`). A name before the last place is in
     // the options place.
     if (
       ts.isIdentifier(value) &&
-      index === after.length - 1 &&
+      index === last &&
       !after.slice(0, index).some((earlier) => isFunction(skipParens(earlier)))
     )
       continue;
@@ -6167,6 +6181,12 @@ function moduleSafety(
     const found: RuntimeImports = { locals: [], external: false, unknown: false };
     const add = (name: string) => {
       const target = resolve(name, source.fileName);
+
+      // `node:vm` runs source text in this process (`runInThisContext("it('x', …)")`), which is not followed.
+      if (name === 'vm' || name === 'node:vm' || name.startsWith('vm/') || name.startsWith('node:vm/')) {
+        found.unknown = true;
+        return;
+      }
 
       if (target && local(target)) {
         if (!found.locals.includes(target)) found.locals.push(target);
