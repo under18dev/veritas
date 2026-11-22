@@ -17,8 +17,23 @@ export interface TitleTemplate {
 
 /** printf conversions that print their value (at least one character for anything they format). */
 const PRINTF = new Set(['s', 'd', 'i', 'f', 'j', 'o', 'O', 'p', '#', '$']);
-/** Characters of an interpolated key after `$` (`$name.path`, `$0`, `$$x`), as Vitest reads them. */
-const KEY = /[\w$.]/;
+/**
+ * Characters of an interpolated key after `$` (`$name.path`, `$0`, `$$x`, `$número`), as Vitest reads them
+ * (`/\$([$\p{ID_Continue}.]+)/u`). Jest reads keys differently in places: a key with other characters (`$a-b`) or a
+ * value that formats to nothing makes a name this reading does not match. That only leaves a kill uncredited; it
+ * never credits a test the runner did not name.
+ */
+const KEY = /^[$\p{ID_Continue}.]$/u;
+
+/** The length in UTF-16 units of the key character at `at`, or 0 when there is none. */
+function keyChar(template: string, at: number): number {
+  const code = template.codePointAt(at);
+
+  if (code === undefined) return 0;
+  const char = String.fromCodePoint(code);
+
+  return KEY.test(char) ? char.length : 0;
+}
 
 /**
  * Compile a title template; undefined when it has no placeholder, so that only an exact name can match it. Runs in
@@ -58,10 +73,14 @@ export function compileTitleTemplate(template: string): TitleTemplate | undefine
       }
     }
 
-    if (char === '$' && next !== undefined && (next === '#' || KEY.test(next))) {
+    if (char === '$' && next !== undefined && (next === '#' || keyChar(template, i + 1) > 0)) {
       let end = i + 2;
 
-      if (next !== '#') while (end < template.length && KEY.test(template[end] as string)) end++;
+      if (next !== '#') {
+        end = i + 1;
+
+        for (let step = keyChar(template, end); step > 0; step = keyChar(template, end)) end += step;
+      }
       placeholder(1);
       i = end;
       continue;

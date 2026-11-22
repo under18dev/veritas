@@ -91,21 +91,24 @@ export function mutatorTestName(name: string, projectPrefix = true): { file: str
 
 /**
  * Test ids by `<file>#<full name>`: a `Map` from `testIdsByFullName`, or anything with the same `get`. A name mapped
- * to null belongs to more than one inventoried test. `match`, when present, resolves a name no test has exactly, such
- * as the title a runner formats for one row of a table-driven test (see `TestNameIndex`).
+ * to null belongs to more than one inventoried test. `resolve`, when present, decides instead, from the keys of every
+ * reading of one name (with and without a `[project] ` label), as a `TestNameIndex` does to match the names of
+ * table-driven tests to their templates. Null from either means the name may belong to more than one test.
  */
 export interface TestNameLookup {
   get(key: string): string | null | undefined;
-  match?(key: string): string | null | undefined;
+  resolve?(keys: readonly string[]): string | null | undefined;
+  /** Every test name of the report, given before any is resolved (see `TestNameIndex.observe`). */
+  observe?(names: Iterable<string>): void;
 }
 
 /**
  * The test id test-inventory assigns to the test behind a mutator test name. With `testIds` (keyed by
- * `<file>#<full name>`), the name is looked up exactly, as written first and, with `projectPrefix`, then without a
- * leading `[project] ` label (so a title that starts with brackets is not cut); only when neither is known is it
- * matched against the templates of table-driven tests (`testIds.match`). Otherwise the id comes from the name split
- * with `separator`. A name that belongs to, or matches the templates of, more than one inventoried test gets an id of
- * its own that matches none of them, so no kill is credited to a test that may not have run.
+ * `<file>#<full name>`), the name is looked up as written and, with `projectPrefix`, without a leading `[project] `
+ * label (so a title that starts with brackets is not cut): by `testIds.resolve` when it has one, otherwise exactly,
+ * the first reading that is known winning. Otherwise the id comes from the name split with `separator`. A name that
+ * may belong to more than one inventoried test gets an id of its own that matches none of them, so no kill is
+ * credited to a test that may not have run.
  */
 export function mutatorTestId(
   name: string,
@@ -114,39 +117,38 @@ export function mutatorTestId(
   projectPrefix = true,
 ): string {
   if (testIds !== undefined) {
-    const variants = (projectPrefix ? [false, true] : [false]).map((strip) => mutatorTestName(name, strip));
+    const keys = (projectPrefix ? [false, true] : [false]).map((strip) => {
+      const { file, full } = mutatorTestName(name, strip);
 
-    for (const { file, full } of variants) {
-      const known = testIds.get(`${file}#${full}`);
+      return `${file}#${full}`;
+    });
+    const known = testIds.resolve
+      ? testIds.resolve(keys)
+      : keys.map((key) => testIds.get(key)).find((id) => id !== undefined);
 
-      if (known !== undefined) return known ?? stableId('T', { file, ambiguous: full });
-    }
-    const matched = new Set<string | null>();
-
-    for (const { file, full } of variants) {
-      const found = testIds.match?.(`${file}#${full}`);
-
-      if (found !== undefined) matched.add(found);
-    }
-
-    if (matched.size > 0) {
-      const [only] = matched;
+    if (known !== undefined) {
+      if (known !== null) return known;
       const { file, full } = mutatorTestName(name, false);
 
-      return matched.size === 1 && typeof only === 'string' ? only : stableId('T', { file, ambiguous: full });
+      return stableId('T', { file, ambiguous: full });
     }
   }
 
   return stableId('T', mutatorTestRef(name, separator, projectPrefix));
 }
 
-/** An inventoried test as name resolution needs it; `modifiers` tells table-driven tests (`each`) apart. */
+/**
+ * An inventoried test as name resolution needs it: `modifiers` tells table-driven tests (`each`) apart, and
+ * `granularity` and `inexactName` the tests whose full name static analysis could not read exactly.
+ */
 export interface NamedTest {
   id: string;
   file: string;
   suitePath: readonly string[];
   name: string;
   modifiers?: readonly string[];
+  granularity?: 'test' | 'suite';
+  inexactName?: 'dynamic_title' | 'dynamic_suite' | 'registered_in_function';
 }
 
 /**
@@ -168,24 +170,58 @@ export function testIdsByFullName(
   return ids;
 }
 
+/** Why a name was credited to no test: what else it could belong to. */
+export type WithheldReason =
+  | { kind: 'templates' }
+  | { kind: 'exact_and_template' }
+  | { kind: 'inexact_file'; because: NonNullable<NamedTest['inexactName']> };
+
+/** mutator's suffix for the second and later tests of a run with one full name (`case 1#2`). */
+const DUPLICATE = /^(.*)#([2-9]|[1-9]\d+)$/s;
+
+/** `<file>#<full name>` without mutator's duplicate suffix; undefined when it has none. */
+function withoutDuplicateSuffix(key: string): string | undefined {
+  const hash = key.indexOf('#');
+  const match = hash < 0 ? null : DUPLICATE.exec(key.slice(hash + 1));
+
+  return match ? `${key.slice(0, hash)}#${match[1]}` : undefined;
+}
+
 /**
  * Test ids by full name (as `testIdsByFullName`), plus the templates of table-driven tests: a test with the `each`
  * modifier (its own `.each`/`.for`, or an enclosing `describe.each`) whose full name has placeholders matches the
- * names the runner formats from it, in the same file. `mutatorTestId` tries exact names first. A name that matches
- * the templates of more than one test resolves to null and is kept in `ambiguous`, so the caller can say why no test
- * was credited.
+ * names the runner formats from it, in the same file.
+ *
+ * A kill is never credited to a test other than the one the runner named, so a name is credited to no test (null)
+ * and kept in `withheld` with the reason when it may belong to more than one: when it fits the templates of two
+ * tests; when one test has it exactly and it also fits the template of another (`case 1` and `case %s`); and when it
+ * fits a template in a file where static analysis could not read the full name of some test (a title or a suite
+ * title that is not a literal, or a test registered inside a function), since the runner may have named that test.
+ *
+ * mutator numbers the second and later tests that share a full name (`case 1#2`; see `observe`). Such a name is
+ * resolved through the name it shares as well, and in a file where static analysis could not read every full name
+ * it is credited to no test even when one test has it exactly, since the other test of that name may be one whose
+ * name was not read.
  */
 export class TestNameIndex implements TestNameLookup {
   private readonly exact: Map<string, string | null>;
   private readonly templates = new Map<string, { id: string; template: TitleTemplate }[]>();
-  private readonly matched = new Map<string, string | null | undefined>();
-  /** Names (`<file>#<full name>`) that matched the templates of more than one test. */
-  readonly ambiguous = new Set<string>();
+  /** Files with a test whose full name is not known exactly, and why (the first such test). */
+  private readonly inexact = new Map<string, NonNullable<NamedTest['inexactName']>>();
+  /** Names (`<file>#<full name>`) more than one test of the run had, by mutator's numbered copies of them. */
+  private readonly duplicated = new Set<string>();
+  private readonly resolved = new Map<string, string | null | undefined>();
+  /** Names (`<file>#<full name>`, as the runner reports them) credited to no test, and why. */
+  readonly withheld = new Map<string, WithheldReason>();
 
   constructor(tests: readonly NamedTest[], separator: string) {
     this.exact = testIdsByFullName(tests, separator);
 
     for (const test of tests) {
+      const inexact = test.inexactName ?? (test.granularity === 'suite' ? 'dynamic_title' : undefined);
+
+      if (inexact !== undefined && !this.inexact.has(test.file)) this.inexact.set(test.file, inexact);
+
       if (!test.modifiers?.includes('each')) continue;
       const template = compileTitleTemplate([...test.suitePath, test.name].join(separator));
 
@@ -196,26 +232,90 @@ export class TestNameIndex implements TestNameLookup {
     }
   }
 
+  /**
+   * Take note of every test name of the run (mutator's `testFiles` and the names it credits), before resolving any:
+   * a name with mutator's duplicate suffix shows that its unnumbered name belongs to more than one test of the run.
+   */
+  observe(names: Iterable<string>): void {
+    for (const name of names) {
+      const base = withoutDuplicateSuffix(name);
+
+      if (base !== undefined) this.duplicated.add(base);
+    }
+  }
+
   get(key: string): string | null | undefined {
     return this.exact.get(key);
   }
 
-  match(key: string): string | null | undefined {
-    if (this.matched.has(key)) return this.matched.get(key);
-    const hash = key.indexOf('#');
-    const full = key.slice(hash + 1);
-    const ids = new Set(
-      (this.templates.get(hash < 0 ? '' : key.slice(0, hash)) ?? [])
-        .filter(({ template }) => matchesTitleTemplate(template, full))
-        .map(({ id }) => id),
-    );
-    const [only] = ids;
-    const id = only === undefined ? undefined : ids.size === 1 ? only : null;
+  resolve(keys: readonly string[]): string | null | undefined {
+    const cacheKey = keys.join('\n');
 
-    if (id === null) this.ambiguous.add(key);
-    this.matched.set(key, id);
+    if (this.resolved.has(cacheKey)) return this.resolved.get(cacheKey);
+    const id = this.decide(keys);
+    this.resolved.set(cacheKey, id);
 
     return id;
+  }
+
+  private exactOf(keys: readonly string[]): string | null | undefined {
+    return keys.map((key) => this.exact.get(key)).find((id) => id !== undefined);
+  }
+
+  private fitting(keys: readonly string[], into: Set<string>): void {
+    for (const key of keys) {
+      const hash = key.indexOf('#');
+      const full = key.slice(hash + 1);
+
+      for (const { id, template } of this.templates.get(hash < 0 ? '' : key.slice(0, hash)) ?? [])
+        if (matchesTitleTemplate(template, full)) into.add(id);
+    }
+  }
+
+  private decide(keys: readonly string[]): string | null | undefined {
+    const name = keys[0] ?? '';
+    let exact = this.exactOf(keys);
+    const candidates = new Set<string>();
+    this.fitting(keys, candidates);
+    let duplicate = this.duplicated.has(name);
+
+    if (exact === undefined) {
+      // Not a title as written: it may be mutator's numbered copy of a name another test of the run has.
+      const bases = keys.map(withoutDuplicateSuffix);
+
+      if (bases.every((base) => base !== undefined)) {
+        const viaBase = new Set<string>();
+        exact = this.exactOf(bases);
+        this.fitting(bases, viaBase);
+        duplicate = exact !== undefined || viaBase.size > 0;
+
+        for (const id of viaBase) candidates.add(id);
+      }
+    }
+
+    if (exact === null) return null;
+
+    if (exact !== undefined) candidates.add(exact);
+
+    if (candidates.size === 0) return undefined;
+    const hash = name.indexOf('#');
+    const because = this.inexact.get(hash < 0 ? '' : name.slice(0, hash));
+    let reason: WithheldReason | undefined;
+
+    if (candidates.size > 1)
+      reason =
+        exact !== undefined
+          ? { kind: 'exact_and_template' }
+          : because !== undefined
+            ? { kind: 'inexact_file', because }
+            : { kind: 'templates' };
+    else if (because !== undefined && (exact === undefined || duplicate))
+      reason = { kind: 'inexact_file', because };
+
+    if (reason === undefined) return [...candidates][0];
+    this.withheld.set(name, reason);
+
+    return null;
   }
 }
 
@@ -258,6 +358,14 @@ export function importMutationReport(json: unknown, options: ImportOptions): Mut
 
   for (const [file, { tests }] of Object.entries(report.testFiles ?? {})) {
     for (const t of tests) testNames.set(t.id, options.source === 'mutator' ? t.id : `${file}#${t.name}`);
+  }
+  if (options.source === 'mutator' && options.testIds?.observe) {
+    const names = new Set(testNames.keys());
+
+    for (const entry of Object.values(report.files))
+      for (const m of entry.mutants)
+        for (const id of [...(m.killedBy ?? []), ...(m.coveredBy ?? [])]) names.add(id);
+    options.testIds.observe(names);
   }
   const testRef = (id: string): string => {
     if (options.source === 'mutator')

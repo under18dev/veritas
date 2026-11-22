@@ -24,7 +24,7 @@ import {
   transformErrorLine,
   withoutDebug,
 } from './diagnose.js';
-import { importMutationReport, type NamedTest, TestNameIndex } from './import.js';
+import { importMutationReport, type NamedTest, TestNameIndex, type WithheldReason } from './import.js';
 import { countMutants, emptyCounts, type MutationRunResult, type MutationRunStatus } from './schema.js';
 
 export interface RunMutationOptions {
@@ -73,6 +73,35 @@ export interface RunMutationOptions {
    * full-name separator.
    */
   tests?: readonly NamedTest[];
+}
+
+const INEXACT_BECAUSE: Record<Extract<WithheldReason, { kind: 'inexact_file' }>['because'], string> = {
+  dynamic_title: 'a test title that is not a literal',
+  dynamic_suite: 'a describe title that is not a literal',
+  registered_in_function: 'a test registered inside a function',
+};
+
+/** One warning for each reason names in mutator's report were credited to no test (see `TestNameIndex`). */
+function withheldWarnings(index: TestNameIndex): string[] {
+  const groups = new Map<string, string[]>();
+
+  for (const [name, reason] of index.withheld) {
+    const what =
+      reason.kind === 'templates'
+        ? 'match the titles of more than one table-driven test (.each)'
+        : reason.kind === 'exact_and_template'
+          ? 'are the title of one test and also match the title of a table-driven test (.each)'
+          : `fit the title of a test in a file where static analysis could not read the full name of every test (${INEXACT_BECAUSE[reason.because]}), so they may belong to a test whose name was not read`;
+    const list = groups.get(what) ?? [];
+    list.push(redact(summarize(name, 1, 200)));
+    groups.set(what, list);
+  }
+
+  return [...groups].map(([what, names]) => {
+    names.sort();
+
+    return `${names.length} test name(s) in mutator's report ${what}; their kills and coverage are credited to no test: ${listSome(names)}`;
+  });
 }
 
 const MUTANT_KEY = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
@@ -571,12 +600,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     warnings.push('--kill-matrix was requested but the agent report has no killMatrix');
   }
 
-  if (testIds !== undefined && testIds.ambiguous.size > 0) {
-    const names = [...testIds.ambiguous].sort().map((name) => redact(summarize(name, 1, 200)));
-    warnings.push(
-      `${names.length} test name(s) in mutator's report match the titles of more than one table-driven test (.each); their kills and coverage are credited to none of them: ${listSome(names)}`,
-    );
-  }
+  if (testIds !== undefined) warnings.push(...withheldWarnings(testIds));
   const counts = countMutants(mutants);
   // On a very long run the head of stderr can fill up before mutator's last lines; its tail keeps them.
   const budget = timeBudgetExhausted(run.stderr) ?? timeBudgetExhausted(run.stderrTail ?? '');

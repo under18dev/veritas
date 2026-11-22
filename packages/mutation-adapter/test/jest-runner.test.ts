@@ -145,7 +145,7 @@ describe('mutation with the Jest provider', () => {
     expect(result.mutants[0]?.killedBy).not.toContain('T-of');
     expect(result.mutants[0]?.killedBy).not.toContain('T-is');
     expect(result.warnings).toContain(
-      "1 test name(s) in mutator's report match the titles of more than one table-driven test (.each); their kills and coverage are credited to none of them: test/a.test.ts#rounding of 1.5 is 2",
+      "1 test name(s) in mutator's report match the titles of more than one table-driven test (.each); their kills and coverage are credited to no test: test/a.test.ts#rounding of 1.5 is 2",
     );
   });
 });

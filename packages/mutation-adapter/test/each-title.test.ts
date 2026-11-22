@@ -50,6 +50,14 @@ describe('title templates of table-driven tests', () => {
     expect(compileTitleTemplate('costs 5$')).toBeUndefined();
   });
 
+  it('reads interpolated keys with Unicode identifier characters, as Vitest does', () => {
+    expect(matches('価格は$金額です', '価格は500です')).toBe(true);
+    expect(matches('$número items', '3 items')).toBe(true);
+    expect(matches('$a𝑥 done', '1 done')).toBe(true);
+    expect(matches('$número items', '3 número items')).toBe(true);
+    expect(matches('$número items', '3 items!')).toBe(false);
+  });
+
   it('treats regular expression characters literally', () => {
     expect(matches('a.b (%s) [x]* ^$', 'a.b (1) [x]* ^$')).toBe(true);
     expect(matches('a.b (%s)', 'aXb (1)')).toBe(false);
@@ -110,7 +118,7 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect(
       mutatorTestId(`${FILE}#convertIPv4ToString > convertIPv4ToString(0.0.0.1) === 0.0.0.1`, ' > ', index),
     ).toBe(table.id);
-    expect(index.ambiguous.size).toBe(0);
+    expect(index.withheld.size).toBe(0);
   });
 
   it('expands describe.each titles in the suite path, nested', () => {
@@ -141,13 +149,104 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect(mutatorTestId(`${FILE}#shippingFee at the threshold costs 0`, ' ', index, false)).toBe(row.id);
   });
 
-  it('prefers an exact name over a template', () => {
+  it("credits no test when a name is one test's title and fits the template of another", () => {
+    const literal = entry([], 'case 1', []);
+    const template = entry([], 'case %s');
+    const index = new TestNameIndex([template, literal], ' > ');
+    const id = mutatorTestId(`${FILE}#case 1`, ' > ', index);
+
+    expect([literal.id, template.id]).not.toContain(id);
+    expect([...index.withheld]).toEqual([[`${FILE}#case 1`, { kind: 'exact_and_template' }]]);
+    expect(mutatorTestId(`${FILE}#case 2`, ' > ', index)).toBe(template.id);
+  });
+
+  it("credits an exact name when no other test's template fits it", () => {
     const literal = entry(['suite'], 'handles null', []);
-    const template = entry(['suite'], 'handles %s');
+    const template = entry(['other'], 'handles %s');
     const index = new TestNameIndex([template, literal], ' > ');
 
     expect(mutatorTestId(`${FILE}#suite > handles null`, ' > ', index)).toBe(literal.id);
-    expect(mutatorTestId(`${FILE}#suite > handles 1`, ' > ', index)).toBe(template.id);
+    expect(mutatorTestId(`${FILE}#other > handles %s`, ' > ', index)).toBe(template.id);
+    expect(index.withheld.size).toBe(0);
+  });
+
+  it("resolves mutator's numbered copies of a shared name through that name", () => {
+    const template = entry([], 'case %s');
+    const literal = entry([], 'case 1', []);
+    const rows = new TestNameIndex([template], ' > ');
+    rows.observe([`${FILE}#case 1`, `${FILE}#case 1#2`]);
+
+    // Two rows of one template may format to the same name.
+    expect(mutatorTestId(`${FILE}#case 1#2`, ' > ', rows)).toBe(template.id);
+
+    const both = new TestNameIndex([template, literal], ' > ');
+    both.observe([`${FILE}#case 1`, `${FILE}#case 1#2`]);
+    expect([template.id, literal.id]).not.toContain(mutatorTestId(`${FILE}#case 1#2`, ' > ', both));
+    expect(both.withheld.get(`${FILE}#case 1#2`)).toEqual({ kind: 'exact_and_template' });
+
+    // A title that really ends in #2 is still found exactly.
+    const issue = entry([], 'fixes #2', []);
+    expect(mutatorTestId(`${FILE}#fixes #2`, ' > ', new TestNameIndex([issue], ' > '))).toBe(issue.id);
+  });
+
+  it('credits no test with a shared name in a file where some full name was not read', () => {
+    const literal = entry([], 'fee for 5000', []);
+    const loop = { ...entry([], '<dynamic test>', []), granularity: 'suite' as const };
+    const index = new TestNameIndex([literal, loop], ' > ');
+    index.observe([`${FILE}#fee for 5000`, `${FILE}#fee for 5000#2`, `${FILE}#fee for 4999`]);
+
+    for (const name of ['fee for 5000', 'fee for 5000#2']) {
+      expect(mutatorTestId(`${FILE}#${name}`, ' > ', index)).not.toBe(literal.id);
+      expect(index.withheld.get(`${FILE}#${name}`)).toEqual({
+        kind: 'inexact_file',
+        because: 'dynamic_title',
+      });
+    }
+    // A name only one test has is still credited when a test has it exactly.
+    const alone = new TestNameIndex([literal, loop], ' > ');
+    alone.observe([`${FILE}#fee for 5000`, `${FILE}#fee for 4999`]);
+    expect(mutatorTestId(`${FILE}#fee for 5000`, ' > ', alone)).toBe(literal.id);
+  });
+
+  it('matches no template in a file with a test whose title is not a literal', () => {
+    const each = entry([], 'fee for %s');
+    const loop = { ...entry([], '<dynamic test>', []), granularity: 'suite' as const };
+    const index = new TestNameIndex([each, loop], ' > ');
+
+    for (const name of ['fee for 5000', 'fee for 4999']) {
+      expect(mutatorTestId(`${FILE}#${name}`, ' > ', index)).not.toBe(each.id);
+      expect(index.withheld.get(`${FILE}#${name}`)).toEqual({
+        kind: 'inexact_file',
+        because: 'dynamic_title',
+      });
+    }
+    // A name no template fits is left as it was, with no warning.
+    expect(mutatorTestId(`${FILE}#other`, ' > ', index)).not.toBe(each.id);
+    expect(index.withheld.has(`${FILE}#other`)).toBe(false);
+  });
+
+  it('matches no template in a file with a describe whose title is not a literal', () => {
+    const each = entry(['%s'], 'works');
+    const dynamic = { ...entry([], 'works', []), inexactName: 'dynamic_suite' as const };
+    const index = new TestNameIndex([each, dynamic], ' > ');
+
+    expect([each.id, dynamic.id]).not.toContain(mutatorTestId(`${FILE}#dyn 1 > works`, ' > ', index));
+    expect(index.withheld.get(`${FILE}#dyn 1 > works`)).toEqual({
+      kind: 'inexact_file',
+      because: 'dynamic_suite',
+    });
+  });
+
+  it('matches no template in a file with a test registered inside a function', () => {
+    const each = entry([], '%s');
+    const shared = { ...entry([], 'works', []), inexactName: 'registered_in_function' as const };
+    const index = new TestNameIndex([each, shared], ' ');
+
+    expect([each.id, shared.id]).not.toContain(mutatorTestId(`${FILE}#suite works`, ' ', index, false));
+    // Templates of other files still match.
+    const elsewhere = { ...entry([], 'fee for %s'), file: 'other.test.ts', id: 'T-other' };
+    const other = new TestNameIndex([elsewhere, shared], ' ');
+    expect(mutatorTestId('other.test.ts#fee for 1', ' ', other, false)).toBe('T-other');
   });
 
   it('credits no test when a name matches the templates of two tests, and says which name', () => {
@@ -157,7 +256,7 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     const id = mutatorTestId(`${FILE}#suite > it works`, ' > ', index);
 
     expect([a.id, b.id]).not.toContain(id);
-    expect([...index.ambiguous]).toEqual([`${FILE}#suite > it works`]);
+    expect([...index.withheld]).toEqual([[`${FILE}#suite > it works`, { kind: 'templates' }]]);
     expect(mutatorTestId(`${FILE}#suite > x works`, ' > ', index)).toBe(a.id);
   });
 });
