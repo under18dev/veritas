@@ -164,11 +164,11 @@ Properties you [declare in the configuration](/guide/verification#declare-a-prop
 The `self-verification` job in the repository's `.github/workflows/ci.yml` runs on Ubuntu:
 
 1. It installs Lean with elan and builds the packages. Z3 is bundled.
-2. `veritas --json prove --engine both` at the repository root. The configuration declares the invariants of the run policy (`packages/core/src/policy-decision.ts`), and `.veritas/approvals.json` holds the maintainer's decisions. A non-zero exit code fails the job.
+2. `veritas --json prove --engine both` at the repository root. The configuration declares the invariants of the run policy (`packages/core/src/policy-decision.ts`) and of the test-outcome rules (`packages/assessment/src/decision.ts`), and `.veritas/approvals.json` holds the maintainer's decisions. A non-zero exit code fails the job.
 3. `node scripts/check-self-verification.mjs` checks the run. It fails unless every declared property is accepted, proven within the model by Z3 with the result checked against the function in JavaScript (`replay confirmed`), and kernel-checked by Lean. `unknown`, `timeout`, `unsupported`, `semantic_mismatch` and `error` all fail, as does a run of another commit, configuration, source or declaration version.
 4. A negative control: prove runs in a copy of `fixtures/declared-properties`, which declares a deliberately false invariant. Prove must exit `1` (a confirmed violation), and the check must find a Z3 counterexample reproduced in JavaScript and no proof (`--expect-counterexample`). A solver or translator that proved everything would fail here.
 
-The job caches no Veritas results: each workflow run starts without `.veritas/cache` and without earlier runs, so a stale result cannot pass. The runs are uploaded as the `self-verification-runs` artifact. Lean takes about a minute.
+The job caches no Veritas results: each workflow run starts without `.veritas/cache` and without earlier runs, so a stale result cannot pass. The runs are uploaded as the `self-verification-runs` artifact. Lean takes about two minutes.
 
 ### Do the same in your repository
 

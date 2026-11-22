@@ -143,6 +143,8 @@ Veritas は関数の Lean モデルと Property の定理を生成し、`lake bu
 
 Veritas は、決まった手順のタクティクを順に試し、カーネルが最初に受け入れた証明を採用します。どの手順で証明できたかは結果に記録されます。Property が呼ぶ関数がさらに別の関数を呼ぶとき（たとえば、規則から判定を、判定から終了コードを決める関数）は、最初に `abstract-calls-split` を試します。内側の呼び出しの結果に一度だけ名前を付け、その呼び出しを場合分けする方法で、結果を使う箇所ごとに呼び出しの中身を複製することはしません。
 
+Property が読む真偽値が 8 個を超えるときは、すべてを一度に場合分けすると場合の数が多くなりすぎるので、最初に `name-int-calls-cases` を試します。整数を返す関数の呼び出し結果すべてに名前を付け、真偽値を 1 つずつ場合分けして、決まった分岐からすぐに閉じ、残った整数の比較を `omega` に任せます。この手順のファイルは、定理の前に小さな補題を 1 つ証明し、その定理についてだけ Lean の計算量の上限（`maxHeartbeats`）を引き上げます。公理の検査はほかの証明と同じです。
+
 ## Property を宣言する {#declare-a-property}
 
 文書から見つけた規則のほかに、自分で書いた規則も Property にできます。規則が成り立つときに `true` を返す関数を export し、`.veritas/config.json` で宣言します。
@@ -227,7 +229,7 @@ accept されていない宣言（一度も accept していないもの、承�
 
 宣言した Property だけを検査したいときは、文書を読むこととコードから規則を推測することを止めます。`sources.local` と `analysis.inferSpecsFromCode` を `false` にしてください。
 
-Veritas のリポジトリも、この方法で自分自身を検査しています。リポジトリの `.veritas/config.json` は、`packages/core/src/policy-decision.ts` にある実行ポリシーの不変条件（「何も残っていないときだけ判定が `pass` になる」「終了コード 1 はポリシー違反のときだけ」など）を宣言しています。宣言はメンテナーがレビューし、`veritas spec accept` で決定を記録します。記録先の `.veritas/approvals.json` は、設定と一緒にコミットします。`node scripts/check-self-verification.mjs`（`pnpm build` と `veritas prove --engine both` のあとに実行）は、最新の実行で、宣言したすべての Property が accept され、Z3 で証明されて再実行でも確かめられ、Lean のカーネルでも検査されていなければ失敗します。その実行が今のチェックアウトのものであることも確かめます。設定とソース（解析したファイルと、宣言した対象のファイルすべて）が同じであること、作業ツリーに変更がなければコミットが同じであること、どの宣言も今のバージョンであることです。結果を記録しないまま終わった実行も失敗にします。`fixtures/declared-properties` には陰性対照として、わざと偽にした不変条件を置いてあり、これは反例が出なければいけません（`--expect-counterexample`）。証明の対象は判定の規則だけです。Veritas が規則に渡す証拠をどう数えるかは、テストで確かめていて、証明はしていません。CI では、これを変更のたびに実行しています。[CI](/ja/guide/ci#verify-declared-properties-in-ci) を参照してください。
+Veritas のリポジトリも、この方法で自分自身を検査しています。リポジトリの `.veritas/config.json` は、`packages/core/src/policy-decision.ts` にある実行ポリシーの不変条件（「何も残っていないときだけ判定が `pass` になる」「終了コード 1 はポリシー違反のときだけ」など）と、`packages/assessment/src/decision.ts` にあるテストの判定規則の不変条件（「`meaningful_with_evidence` になるのは証拠がすべてそろったときだけ」「失敗が期待されるテストは常に `inconclusive`」など）を宣言しています。宣言はメンテナーがレビューし、`veritas spec accept` で決定を記録します。記録先の `.veritas/approvals.json` は、設定と一緒にコミットします。`node scripts/check-self-verification.mjs`（`pnpm build` と `veritas prove --engine both` のあとに実行）は、最新の実行で、宣言したすべての Property が accept され、Z3 で証明されて再実行でも確かめられ、Lean のカーネルでも検査されていなければ失敗します。その実行が今のチェックアウトのものであることも確かめます。設定とソース（解析したファイルと、宣言した対象のファイルすべて）が同じであること、作業ツリーに変更がなければコミットが同じであること、どの宣言も今のバージョンであることです。結果を記録しないまま終わった実行も失敗にします。`fixtures/declared-properties` には陰性対照として、わざと偽にした不変条件を置いてあり、これは反例が出なければいけません（`--expect-counterexample`）。証明の対象は判定の規則だけです。Veritas が規則に渡す証拠をどう数えるかは、テストで確かめていて、証明はしていません。CI では、これを変更のたびに実行しています。[CI](/ja/guide/ci#verify-declared-properties-in-ci) を参照してください。
 
 ## `proven_within_model` の意味
 

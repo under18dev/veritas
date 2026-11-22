@@ -164,11 +164,11 @@ jobs:
 リポジトリの `.github/workflows/ci.yml` にある `self-verification` ジョブが、Ubuntu で次を実行します。
 
 1. elan で Lean をインストールし、パッケージをビルドします。Z3 は同梱されています。
-2. リポジトリのルートで `veritas --json prove --engine both` を実行します。設定には実行ポリシー（`packages/core/src/policy-decision.ts`）の不変条件を宣言してあり、`.veritas/approvals.json` にメンテナーの決定が記録されています。終了コードが 0 でなければジョブは失敗します。
+2. リポジトリのルートで `veritas --json prove --engine both` を実行します。設定には実行ポリシー（`packages/core/src/policy-decision.ts`）とテストの判定規則（`packages/assessment/src/decision.ts`）の不変条件を宣言してあり、`.veritas/approvals.json` にメンテナーの決定が記録されています。終了コードが 0 でなければジョブは失敗します。
 3. `node scripts/check-self-verification.mjs` が実行結果を確かめます。宣言したすべての Property が accept され、Z3 でモデルの範囲内で証明され、その結果が JavaScript で関数に対して確かめられ（`replay confirmed`）、Lean のカーネルでも検査されていなければ失敗します。`unknown`、`timeout`、`unsupported`、`semantic_mismatch`、`error` はどれも失敗です。コミット、設定、ソース、宣言のバージョンのどれかが違う実行も失敗にします。
 4. 陰性対照として、`fixtures/declared-properties` のコピーで prove を実行します。このフィクスチャは、わざと偽にした不変条件を宣言しています。prove は終了コード `1`（確定した違反）で終わらなければならず、検査では、JavaScript で再現した Z3 の反例があり、証明がないことを確かめます（`--expect-counterexample`）。何でも証明してしまうソルバーや変換器は、ここで失敗します。
 
-このジョブは Veritas の結果を一切キャッシュしません。ワークフローの実行はいつも `.veritas/cache` も過去の実行もない状態から始まるので、古い結果で通ることはありません。実行結果は `self-verification-runs` という artifact として保存します。Lean の検査には 1 分ほどかかります。
+このジョブは Veritas の結果を一切キャッシュしません。ワークフローの実行はいつも `.veritas/cache` も過去の実行もない状態から始まるので、古い結果で通ることはありません。実行結果は `self-verification-runs` という artifact として保存します。Lean の検査には 2 分ほどかかります。
 
 ### 自分のリポジトリで同じことをする
 
