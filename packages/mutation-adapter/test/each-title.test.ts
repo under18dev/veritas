@@ -55,6 +55,28 @@ describe('title templates of table-driven tests', () => {
     expect(matches('case %s %d %p', 'case 1 %d %p')).toBe(true);
   });
 
+  it('reads an interpolated key up to the next whitespace or |, as Jest may read any column key', () => {
+    // Jest `$a-b` for a column `a-b` reports `x 5`.
+    expect(matches('x $a-b', 'x 5')).toBe(true);
+    expect(matches('x $a-b done', 'x 5 done')).toBe(true);
+    expect(matches('x $-a', 'x 5')).toBe(true);
+    expect(matches('costs 5$ total', 'costs 5$ total')).toBe(true);
+    expect(matches('x $a-b done', 'x 5 not done')).toBe(true);
+    expect(matches('x $a-b done', 'x 5 gone')).toBe(false);
+
+    for (const separator of [' ', ' > ']) {
+      const file = 'test/a.test.ts';
+      const key = { id: 'T-key', file, suitePath: [], name: 'x $a-b', modifiers: ['each'] };
+      const styled = { id: 'T-styled', file, suitePath: [], name: 'x %c', modifiers: ['each'] };
+      const index = new TestNameIndex([key, styled], separator);
+
+      // Both fit: neither is credited, where before `x %c` alone fitted.
+      expect([key.id, styled.id], separator).not.toContain(
+        mutatorTestId(`${file}#x 5`, separator, index, false),
+      );
+    }
+  });
+
   it('reads a second %# or %$ as digits or its own text, since Jest replaces only the first', () => {
     expect(matches('row %# of %#', 'row 0 of %#')).toBe(true);
     expect(matches('row %# of %#', 'row 0 of 0')).toBe(true);

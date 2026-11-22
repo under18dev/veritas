@@ -5,8 +5,8 @@
  * name matches when its text fits.
  *
  * Placeholders, as Vitest and Jest format them: printf-style `%s %d %i %f %j %o %O %p %c` and the row numbers `%#`
- * and `%$` (`%%` is a literal `%`), and the object and template-table interpolation `$name`, `$name.path`, `$0` and
- * `$#`. What each can print:
+ * and `%$` (`%%` is a literal `%`), and the object and template-table interpolation `$name`, `$name.path`, `$0`,
+ * `$a-b` (Jest) and `$#`, read up to the next whitespace or `|`. What each can print:
  * - `%s` and `$name` print a string as it is, so they may print nothing (`''`);
  * - `%#` and `%$` print the row index (from 0 and from 1): digits only, the first of each; Jest replaces only the
  *   first, so a later one may stay as its own text;
@@ -36,22 +36,13 @@ export interface TitleTemplate {
 /** printf conversions that print at least one character for any value. */
 const PRINTF = new Set(['d', 'i', 'f', 'j', 'o', 'O', 'p']);
 /**
- * Characters of an interpolated key after `$` (`$name.path`, `$0`, `$$x`, `$número`), as Vitest reads them
- * (`/\$([$\p{ID_Continue}.]+)/u`). Jest reads keys differently in places: a key with other characters (`$a-b`) makes
- * a name this reading does not match. That only leaves a kill uncredited; it never credits a test the runner did not
- * name.
+ * Whether a character may be part of an interpolated key, as either runner may read it: Vitest reads
+ * `$[$\p{ID_Continue}.]+`, while Jest reads any key of the row's object (`$a-b` for a column `a-b`) and its `.path`.
+ * Anything but whitespace and the `|` of a template table is taken, so that a key is never cut short: what follows
+ * a shorter key is covered too, which only lets a name fit more widely.
  */
-const KEY = /^[$\p{ID_Continue}.]$/u;
-
-/** The length in UTF-16 units of the key character at `at`, or 0 when there is none. */
-function keyChar(template: string, at: number): number {
-  const code = template.codePointAt(at);
-
-  if (code === undefined) return 0;
-  const char = String.fromCodePoint(code);
-
-  return KEY.test(char) ? char.length : 0;
-}
+const keyCharacter = (char: string | undefined): boolean =>
+  char !== undefined && !/\s/.test(char) && char !== '|';
 
 const ANY: Token = { kind: 'any' };
 const ONE: Token = { kind: 'one' };
@@ -101,16 +92,12 @@ export function compileTitleTemplate(template: string): TitleTemplate {
       }
     }
 
-    if (char === '$' && next !== undefined && (next === '#' || keyChar(template, i + 1) > 0)) {
-      let end = i + 2;
+    if (char === '$' && keyCharacter(next)) {
+      let end = i + 1;
 
-      if (next !== '#') {
-        end = i + 1;
-
-        for (let step = keyChar(template, end); step > 0; step = keyChar(template, end)) end += step;
-      }
-      // `$#` is Jest's row index, and literal text in Vitest; a key may print an empty string.
-      tokens.push(...(next === '#' ? [ONE, ANY] : [ANY]));
+      while (keyCharacter(template[end])) end++;
+      // A key (or Jest's `$#`, literal text in Vitest) may print anything, an empty string included.
+      tokens.push(ANY);
       placeholders++;
       i = end;
       continue;
