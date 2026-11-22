@@ -1,0 +1,115 @@
+{
+  "schemaVersion": "1.0.0",
+  "approvals": [
+    {
+      "id": "A-ecaca0979898",
+      "propertyId": "D-policy.pass-means-nothing-open",
+      "propertyVersion": 1926101356,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "self-verification: states the verdict and exit-code rules of the run policy as documented (exit codes 0/1/3/4, inconclusive never passes)",
+      "decidedAt": "2026-11-22T05:20:47.783Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-c81c6aa5af0c",
+      "propertyId": "D-policy.inconclusive-is-never-pass",
+      "propertyVersion": 1557312210,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "self-verification: states the verdict and exit-code rules of the run policy as documented (exit codes 0/1/3/4, inconclusive never passes)",
+      "decidedAt": "2026-11-22T05:20:49.802Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-85f5d1a0aeb1",
+      "propertyId": "D-policy.success-exit-only-when-passing",
+      "propertyVersion": 3692077735,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "self-verification: states the verdict and exit-code rules of the run policy as documented (exit codes 0/1/3/4, inconclusive never passes)",
+      "decidedAt": "2026-11-22T05:20:51.393Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-d95fb4e49ae1",
+      "propertyId": "D-policy.exit-code-follows-verdict",
+      "propertyVersion": 3088919646,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "self-verification: states the verdict and exit-code rules of the run policy as documented (exit codes 0/1/3/4, inconclusive never passes)",
+      "decidedAt": "2026-11-22T05:20:53.072Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-804b97fe6d55",
+      "propertyId": "D-policy.failures-exit-one",
+      "propertyVersion": 1664906632,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "self-verification: states the verdict and exit-code rules of the run policy as documented (exit codes 0/1/3/4, inconclusive never passes)",
+      "decidedAt": "2026-11-22T05:20:54.496Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-1e6dd47c236b",
+      "propertyId": "D-policy.tool-error-never-succeeds",
+      "propertyVersion": 281321974,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "self-verification: states the verdict and exit-code rules of the run policy as documented (exit codes 0/1/3/4, inconclusive never passes)",
+      "decidedAt": "2026-11-22T05:20:55.879Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-49be8b9801df",
+      "propertyId": "D-policy.inconclusive-fail-exits-four",
+      "propertyVersion": 1050069360,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "self-verification: states the verdict and exit-code rules of the run policy as documented (exit codes 0/1/3/4, inconclusive never passes)",
+      "decidedAt": "2026-11-22T05:20:56.996Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-b689c6bcfafd",
+      "propertyId": "D-policy.exit-one-means-policy-failure",
+      "propertyVersion": 3758673526,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "self-verification: states the verdict and exit-code rules of the run policy as documented (exit codes 0/1/3/4, inconclusive never passes)",
+      "decidedAt": "2026-11-22T05:20:57.718Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-3d1102752264",
+      "propertyId": "D-policy.exit-three-means-tool-error",
+      "propertyVersion": 1740518730,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "self-verification: states the verdict and exit-code rules of the run policy as documented (exit codes 0/1/3/4, inconclusive never passes)",
+      "decidedAt": "2026-11-22T05:20:58.311Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-cba8c561efb6",
+      "propertyId": "D-policy.exit-four-means-inconclusive-fail",
+      "propertyVersion": 977342983,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "self-verification: states the verdict and exit-code rules of the run policy as documented (exit codes 0/1/3/4, inconclusive never passes)",
+      "decidedAt": "2026-11-22T05:20:58.856Z",
+      "sourceIds": []
+    },
+    {
+      "id": "A-42bac46e60cc",
+      "propertyId": "D-policy.open-findings-never-fail",
+      "propertyVersion": 1969944321,
+      "decision": "accept",
+      "actor": "tanahiro2010",
+      "reason": "self-verification: states the verdict and exit-code rules of the run policy as documented (exit codes 0/1/3/4, inconclusive never passes)",
+      "decidedAt": "2026-11-22T05:20:59.382Z",
+      "sourceIds": []
+    }
+  ]
+}

@@ -5,8 +5,8 @@ import type { StageStatus, VerificationStatus } from './schema/status.js';
  * decides the run, the verdict and the exit code. `evaluatePolicy` in `policy.ts` is the shell: it counts the
  * findings, stages, claims and thresholds, calls this kernel and writes the reasons.
  *
- * The file is kept in the subset that the formal translator reads, so that the rules can later be proved
- * within a bounded model:
+ * The file is kept in the subset that the formal translator reads, so that the rules are proved within a
+ * bounded model:
  * - no runtime imports (type-only imports are fine) and calls only to functions in this file;
  * - parameters and results are numbers, booleans or flat records of numbers and booleans;
  * - inside the kernel functions, only `const`, `if`, the conditional operator, `&&`, `||`, `!` and comparisons;
@@ -16,12 +16,13 @@ import type { StageStatus, VerificationStatus } from './schema/status.js';
  *   whose integer domain includes negative numbers (a negative count is treated like 0).
  *
  * Enumerations are encoded as small integers where the translator has to read them (rule and verdict codes).
- * Not yet translatable today:
- * - the stage and claim classifiers take a string literal union;
- * - the `invariant_*` predicates call the kernel with the record parameter, which the translator does not pass
- *   on yet;
- * - `verdictName` returns a string literal union and reads an array.
- * Until then the invariants are checked by an exhaustive test over a reduced domain, which is not a proof.
+ *
+ * The `invariant_*` predicates are declared as `holds_for_all` properties in the repository's own
+ * `.veritas/config.json`; `veritas prove --engine both` proves each of them within the model with Z3 and with
+ * the Lean kernel (`scripts/check-self-verification.mjs` checks the run). The proof covers this kernel only, not
+ * how `evaluatePolicy` counts the evidence it passes in. An exhaustive test over a reduced domain checks the same
+ * predicates without a solver. Not translatable today: the stage and claim classifiers take a string literal
+ * union, and `verdictName` returns one and reads an array.
  */
 
 /** `pass` is only possible when every stage succeeded and nothing is inconclusive. */
@@ -156,8 +157,8 @@ export function verdictName(verdict: number): PolicyVerdict {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Invariants. Each predicate must be true for every record; the exhaustive test checks them over a reduced
-// domain until the translator can prove them.
+// Invariants. Each predicate must be true for every record. They are declared properties of the repository's
+// self-verification (proved within the model) and are also checked by the exhaustive test over a reduced domain.
 
 /** `pass` only when there is nothing at all to report. */
 export function invariant_passMeansNothingOpen(c: PolicyCounts): boolean {
