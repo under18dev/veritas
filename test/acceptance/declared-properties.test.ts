@@ -139,6 +139,50 @@ describe('declared properties', () => {
     );
   }, 600_000);
 
+  it('accepts a declaration in a fresh checkout with no run, and the next prove treats it as accepted', () => {
+    const dir = copyFixture('declared-properties');
+    rmSync(path.join(dir, '.veritas/approvals.json'));
+    rmSync(path.join(dir, '.veritas/runs'), { recursive: true, force: true });
+    const listed = runCli(['spec', 'list', '--json'], dir);
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(
+      json<{ runId: string | null; properties: { id: string; status: string }[] }>(listed),
+    ).toMatchObject({
+      runId: null,
+      properties: [
+        { id: GUARDED, status: 'proposed' },
+        { id: UNGUARDED, status: 'proposed' },
+      ],
+    });
+    const accepted = runCli(
+      ['spec', 'accept', GUARDED, '--actor', 'reviewer', '--reason', 'reviewed', '--json'],
+      dir,
+    );
+    expect(accepted.status, accepted.stderr).toBe(0);
+    expect(runCli(['spec', 'show', GUARDED, '--json'], dir).stdout).toContain('"status": "accepted"');
+
+    const prove = runCli(['prove', '--engine', 'z3', '--json'], dir);
+    expect(prove.status, prove.stderr).toBe(0);
+    const summary = json<Summary>(prove);
+    const properties = read<{ properties: { id: string; status: string }[]; staleApprovals: string[] }>(
+      dir,
+      summary.runId,
+      'properties.json',
+    );
+    expect(properties.properties.map((p) => [p.id, p.status])).toEqual([
+      [GUARDED, 'accepted'],
+      [UNGUARDED, 'proposed'],
+    ]);
+    expect(properties.staleApprovals).toEqual([]);
+    expect(read<Claim[]>(dir, summary.runId, 'claims.json')).toContainEqual(
+      expect.objectContaining({
+        propertyId: GUARDED,
+        status: 'proven_within_model',
+        semanticValidation: 'confirmed',
+      }),
+    );
+  }, 600_000);
+
   it('reports a declaration it cannot check as unsupported, with the reason, never dropping it', () => {
     const dir = copyFixture('declared-properties');
     const declare = (id: string, target: string) => ({

@@ -57,13 +57,13 @@ Collects specification evidence: README, docs, JSDoc, schemas, git history and e
 
 ### `list_properties`
 
-Lists the properties of the latest run with the approval ledger applied: review status, origin and sources. Approvals cannot be changed through MCP; use `veritas spec accept` or `veritas spec reject`.
+Lists the properties of the latest run, and the properties declared in the configuration (in their current version, also before the first run), with the approval ledger applied: review status, origin and sources. Approvals cannot be changed through MCP; use `veritas spec accept` or `veritas spec reject`.
 
 | Input    | Type                                                                         | Required |
 | -------- | ---------------------------------------------------------------------------- | -------- |
 | `status` | `proposed`, `reviewed`, `accepted`, `rejected`, `conflicted` or `superseded` | no       |
 
-- Returns: `runId` and `properties`, filtered by `status` when given.
+- Returns: `runId` (null before the first run) and `properties`, filtered by `status` when given.
 
 ### `analyze_tests`
 

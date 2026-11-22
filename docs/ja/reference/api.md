@@ -120,12 +120,13 @@ const markdown = renderReport(buildReportInput('/path/to/project'), 'markdown');
 
 ## 仕様
 
-| エクスポート                                                         | 対応する CLI                         | 用途                                                                                                      |
-| -------------------------------------------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| `listProperties(root)`                                               | `veritas spec list`                  | 承認の記録を反映した、最新の実行の Property                                                               |
-| `showProperty(root, id)`                                             | `veritas spec show`                  | 1 つの Property と、その承認の記録                                                                        |
-| `decideProperty(root, id, 'accept' \| 'reject', { reason, actor? })` | `veritas spec accept`、`spec reject` | `.veritas/approvals.json` に判断を追記する。判断した人は `VERITAS_ACTOR`、git の `user.name` の順に決まる |
-| `diffLatest(root)`                                                   | `veritas spec diff`                  | 直近 2 回の実行の Property の差分                                                                         |
+| エクスポート                                                                  | 対応する CLI                         | 用途                                                                                                                                           |
+| ----------------------------------------------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `listProperties(root, { config? })`                                           | `veritas spec list`                  | 承認の記録を反映した、最新の実行の Property。`config` を渡すと、設定で宣言した Property も最新の内容で含む（最初の実行の前は `runId` が null） |
+| `showProperty(root, id, { config? })`                                         | `veritas spec show`                  | 1 つの Property と、その承認の記録                                                                                                             |
+| `decideProperty(root, id, 'accept' \| 'reject', { reason, actor?, config? })` | `veritas spec accept`、`spec reject` | `.veritas/approvals.json` に判断を追記する。判断した人は `VERITAS_ACTOR`、git の `user.name` の順に決まる                                      |
+| `propertyConfig(root, { allowCodeConfig? })`                                  | `spec` コマンドが使う                | `config` に渡す設定。設定がないとき、またはこの文脈で読めないコードの設定のときは undefined                                                    |
+| `diffLatest(root)`                                                            | `veritas spec diff`                  | 直近 2 回の実行の Property の差分                                                                                                              |
 
 ## Property-based テスト
 

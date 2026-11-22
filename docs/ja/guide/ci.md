@@ -155,6 +155,44 @@ jobs:
 
 プロジェクトの devDependencies に `@under18dev/veritas` が入っている必要があります。`veritas run` のステップは、終了コードでジョブを失敗させます。
 
+## 宣言した Property を CI で検査する {#verify-declared-properties-in-ci}
+
+[設定で宣言した Property](/ja/guide/verification#declare-a-property) は、変更のたびに検査できます。宣言を破るプルリクエストは失敗します。Veritas のリポジトリは、自分の実行ポリシーをこの方法で検査しています。
+
+### Veritas が自分自身を検査する方法
+
+リポジトリの `.github/workflows/ci.yml` にある `self-verification` ジョブが、Ubuntu で次を実行します。
+
+1. elan で Lean をインストールし、パッケージをビルドします。Z3 は同梱されています。
+2. リポジトリのルートで `veritas --json prove --engine both` を実行します。設定には実行ポリシー（`packages/core/src/policy-decision.ts`）の不変条件を宣言してあり、`.veritas/approvals.json` にメンテナーの決定が記録されています。終了コードが 0 でなければジョブは失敗します。
+3. `node scripts/check-self-verification.mjs` が実行結果を確かめます。宣言したすべての Property が accept され、Z3 でモデルの範囲内で証明され、その結果が JavaScript で関数に対して確かめられ（`replay confirmed`）、Lean のカーネルでも検査されていなければ失敗します。`unknown`、`timeout`、`unsupported`、`semantic_mismatch`、`error` はどれも失敗です。コミット、設定、ソース、宣言のバージョンのどれかが違う実行も失敗にします。
+4. 陰性対照として、`fixtures/declared-properties` のコピーで prove を実行します。このフィクスチャは、わざと偽にした不変条件を宣言しています。prove は終了コード `1`（確定した違反）で終わらなければならず、検査では、JavaScript で再現した Z3 の反例があり、証明がないことを確かめます（`--expect-counterexample`）。何でも証明してしまうソルバーや変換器は、ここで失敗します。
+
+このジョブは Veritas の結果を一切キャッシュしません。ワークフローの実行はいつも `.veritas/cache` も過去の実行もない状態から始まるので、古い結果で通ることはありません。実行結果は `self-verification-runs` という artifact として保存します。Lean の検査には 1 分ほどかかります。
+
+### 自分のリポジトリで同じことをする
+
+1. `.veritas/config.json` に Property を宣言してレビューし、`veritas spec accept D-<id> --reason "<理由>"` で決定を記録します。最初の実行の前でもできます。`.veritas/config.json` と `.veritas/approvals.json` をコミットします。
+2. `policy.confirmedViolation` と `policy.inconclusiveBehavior` を `fail` にします。反例が出れば終了コード `1`、判定できない結果（`unknown`、`timeout`、`unsupported`）が残れば `4` になります。
+3. prove を実行し、終了コードでジョブを失敗させます。Lean が必要なのは `--engine both` か `lean` を使うときだけです。Lean が使えないとき、`--engine both` は Z3 の結果だけを記録して終了コード `0` で終わるので、prove の前に Lean が入っていることを確かめます（`lean --version`）。
+4. accept されていない Property は検査されず、終了コードも変えません。すべての宣言が accept されていることを求めるなら、一覧も確かめます。
+
+```yaml
+- name: Install Lean (elan)
+  run: |
+    curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o "$RUNNER_TEMP/elan-init.sh"
+    sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain stable --no-modify-path
+    echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+- run: lean --version
+- run: npx veritas --json prove --engine both
+- name: Every declared property is accepted
+  run: >-
+    npx veritas spec list --json
+    | jq -e '[.properties[] | select(.id | startswith("D-")) | select(.status != "accepted")] | length == 0'
+```
+
+`.veritas/` はワークフローの実行をまたいでキャッシュしないでください。`scripts/check-self-verification.mjs` は Veritas のリポジトリにあるスクリプトで、公開しているパッケージには含まれていません。すべての Property に Lean の証明を求めるなど、さらに厳しい検査を加えるときの参考にしてください。
+
 ## ほかの CI で CLI を使う
 
 ```bash

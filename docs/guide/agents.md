@@ -80,7 +80,7 @@ Each client session starts its own server process. `discover_specs`, `analyze_te
 | Tool                         | What it does                                                                                                                 |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `discover_specs`             | Collects specification evidence, offline                                                                                     |
-| `list_properties`            | Lists properties of the latest run with status, origin and sources                                                           |
+| `list_properties`            | Lists properties of the latest run and the declared ones with status, origin and sources                                     |
 | `analyze_tests`              | Indexes code and tests and assesses each test (no mutation run)                                                              |
 | `run_mutation`               | Runs mutation testing and relates mutants to properties and tests                                                            |
 | `verify_property`            | Checks formalized properties with the backend in `formal.backend` (Z3 by default, Lean, or both) and replays counterexamples |

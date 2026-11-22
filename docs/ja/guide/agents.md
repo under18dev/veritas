@@ -80,7 +80,7 @@ claude mcp add veritas -- npx -y -p @under18dev/veritas veritas-mcp --root /path
 | ツール                       | 内容                                                                                                                     |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `discover_specs`             | 仕様の根拠をオフラインで集める                                                                                           |
-| `list_properties`            | 最新の実行の Property を、状態、由来、出典と一緒に一覧にする                                                             |
+| `list_properties`            | 最新の実行の Property と宣言した Property を、状態、由来、出典と一緒に一覧にする                                         |
 | `analyze_tests`              | コードとテストを解析し、テストを評価する（mutation testing は実行しない）                                                |
 | `run_mutation`               | mutation testing を実行し、mutant を Property とテストに結び付ける                                                       |
 | `verify_property`            | 形式化した Property を `formal.backend` のバックエンド（既定は Z3。Lean か、その両方も選べる）で検査し、反例を実行し直す |

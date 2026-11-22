@@ -110,7 +110,7 @@ veritas explain F-0b43c88cc3a6
 
 ### `spec`
 
-`spec accept` と `spec reject` は、判断した人、日時、理由を `.veritas/approvals.json` に追記します。判断した人の名前は `--actor`、`VERITAS_ACTOR`、git の `user.name` の順に決まります。判断は、そのときの Property のバージョンにだけ効きます。Property の内容が変わったら、もう一度判断してください。Property が `accepted` になるのは、判断を記録したときだけです。[仕様の確定](/ja/guide/specifications)を参照してください。
+`spec accept` と `spec reject` は、判断した人、日時、理由を `.veritas/approvals.json` に追記します。判断した人の名前は `--actor`、`VERITAS_ACTOR`、git の `user.name` の順に決まります。判断は、そのときの Property のバージョンにだけ効きます。Property の内容が変わったら、もう一度判断してください。Property が `accepted` になるのは、判断を記録したときだけです。設定で宣言した Property は、最初の実行の前でも一覧、表示、判断ができます。`spec` が設定から組み立て、次の実行と同じバージョンに対して判断を記録します。[仕様の確定](/ja/guide/specifications)を参照してください。
 
 ### `test`
 

@@ -11,5 +11,5 @@ off (`sources.local: false`). Both declarations are accepted in `.veritas/approv
 | `invariant_loops`                              | uses a loop: a declaration on it is `unsupported` (outside the formal subset)                       |
 | `invariant_hidden`                             | not exported: a declaration on it is `unsupported`                                                  |
 
-`scripts/check-self-verification.mjs fixtures/declared-properties --expect-counterexample
+`scripts/check-self-verification.mjs --root fixtures/declared-properties --expect-counterexample
 stage.unguarded-succeeded-needs-tests` checks a `veritas prove --engine both` run of this fixture.

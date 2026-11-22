@@ -120,12 +120,13 @@ const markdown = renderReport(buildReportInput('/path/to/project'), 'markdown');
 
 ## Specifications
 
-| Export                                                               | CLI equivalent                       | Purpose                                                                                                         |
-| -------------------------------------------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| `listProperties(root)`                                               | `veritas spec list`                  | Properties of the latest run with the approval ledger applied                                                   |
-| `showProperty(root, id)`                                             | `veritas spec show`                  | One property and its approval records                                                                           |
-| `decideProperty(root, id, 'accept' \| 'reject', { reason, actor? })` | `veritas spec accept`, `spec reject` | Append a decision to `.veritas/approvals.json`; the actor defaults to `VERITAS_ACTOR`, then the git `user.name` |
-| `diffLatest(root)`                                                   | `veritas spec diff`                  | Differences between the properties of the two most recent runs                                                  |
+| Export                                                                        | CLI equivalent                       | Purpose                                                                                                                                                                    |
+| ----------------------------------------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `listProperties(root, { config? })`                                           | `veritas spec list`                  | Properties of the latest run with the approval ledger applied; with `config`, also its declared properties in their current version (`runId` is null before the first run) |
+| `showProperty(root, id, { config? })`                                         | `veritas spec show`                  | One property and its approval records                                                                                                                                      |
+| `decideProperty(root, id, 'accept' \| 'reject', { reason, actor?, config? })` | `veritas spec accept`, `spec reject` | Append a decision to `.veritas/approvals.json`; the actor defaults to `VERITAS_ACTOR`, then the git `user.name`                                                            |
+| `propertyConfig(root, { allowCodeConfig? })`                                  | used by the `spec` commands          | The configuration to pass as `config`; undefined when there is none or it is code this context may not load                                                                |
+| `diffLatest(root)`                                                            | `veritas spec diff`                  | Differences between the properties of the two most recent runs                                                                                                             |
 
 ## Property-based tests
 

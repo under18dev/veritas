@@ -57,13 +57,13 @@ veritas-mcp [--root <dir>] [--max-concurrent <n>] [--allow-write]
 
 ### `list_properties`
 
-承認の記録を反映した、最新の実行の Property を、レビューの状態、由来、出典とともに一覧にします。MCP から承認を変えることはできません。`veritas spec accept` か `veritas spec reject` を使ってください。
+承認の記録を反映した、最新の実行の Property と設定で宣言した Property（最新の内容で。最初の実行の前でも含む）を、レビューの状態、由来、出典とともに一覧にします。MCP から承認を変えることはできません。`veritas spec accept` か `veritas spec reject` を使ってください。
 
 | 入力     | 型                                                                                    | 必須   |
 | -------- | ------------------------------------------------------------------------------------- | ------ |
 | `status` | `proposed`、`reviewed`、`accepted`、`rejected`、`conflicted`、`superseded` のいずれか | いいえ |
 
-- 戻り値: `runId` と `properties`（`status` を指定したときは、その状態のものだけ）
+- 戻り値: `runId`（最初の実行の前は null）と `properties`（`status` を指定したときは、その状態のものだけ）
 
 ### `analyze_tests`
 
