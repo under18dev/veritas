@@ -6,10 +6,11 @@ Unknown keys are rejected.
 
 ### Top level
 
-| Setting         | Type   | Default   | Allowed values         | Description                                                            |
-| --------------- | ------ | --------- | ---------------------- | ---------------------------------------------------------------------- |
-| `$schema`       | string | unset     |                        | JSON Schema reference for editor completion; Veritas does not read it. |
-| `schemaVersion` | string | `"1.0.0"` | only `"1.0.0"` (fixed) | Version of this configuration format.                                  |
+| Setting         | Type            | Default   | Allowed values         | Description                                                                                                         |
+| --------------- | --------------- | --------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `$schema`       | string          | unset     |                        | JSON Schema reference for editor completion; Veritas does not read it.                                              |
+| `schemaVersion` | string          | `"1.0.0"` | only `"1.0.0"` (fixed) | Version of this configuration format.                                                                               |
+| `properties`    | array of object | `[]`      |                        | Properties declared by hand. Each one is proposed until accepted with `veritas spec accept`, like a discovered one. |
 
 ### `project`
 
@@ -130,3 +131,15 @@ Unknown keys are rejected.
 | Setting           | Type    | Default | Allowed values   | Description                                             |
 | ----------------- | ------- | ------- | ---------------- | ------------------------------------------------------- |
 | `limits.memoryMb` | integer | `2048`  | >= 256, <= 65536 | Memory limit for project code and Z3 processes, in MiB. |
+
+### `properties` entries
+
+| Setting                              | Type    | Default | Allowed values                              | Description                                                                                                                                                           |
+| ------------------------------------ | ------- | ------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `properties[].id`                    | string  | unset   | matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$` | Required. Stable name of the declaration. The property id is `D-<id>`, so approvals follow the declaration, not its position in the file.                             |
+| `properties[].kind`                  | string  | unset   | `holds_for_all`                             | Required. What the property states. `holds_for_all`: the target returns true for every input in the domain.                                                           |
+| `properties[].target`                | string  | unset   | matches `^[^#\0]+#[A-Za-z_$][\w$]*$`        | Required. Function the property is about, as `<file relative to the project root>#<exported name>`. It must return a boolean and stay in the supported formal subset. |
+| `properties[].description`           | string  | unset   |                                             | Required. What the property means, in words, for reviewers and reports.                                                                                               |
+| `properties[].domain.integer.min`    | string  | unset   | matches `^-?\d+$`                           | Smallest integer input checked.                                                                                                                                       |
+| `properties[].domain.integer.max`    | string  | unset   | matches `^-?\d+$`                           | Largest integer input checked.                                                                                                                                        |
+| `properties[].domain.maxArrayLength` | integer | unset   | >= 1, <= 8                                  | Longest array modelled; unset uses formal.maxArrayLength.                                                                                                             |

@@ -297,6 +297,20 @@ function configurationReference() {
     parts.push(`### \`${name}\``, '', settingsTable(rows), '');
   }
 
+  // Lists of records (the declared `properties`): one table of the fields each entry takes.
+  for (const { name, node } of top) {
+    if (node.type !== 'array' || node.items?.type !== 'object' || !node.items.properties) continue;
+    const rows = [];
+    const required = new Set(node.items.required ?? []);
+    leaves(node.items, `${name}[]`, undefined, rows);
+    for (const row of rows) {
+      const field = row.key.slice(`${name}[].`.length);
+
+      if (required.has(field)) row.description = `Required. ${row.description}`;
+    }
+    parts.push(`### \`${name}\` entries`, '', settingsTable(rows), '');
+  }
+
   return `${parts.join('\n').trimEnd()}\n`;
 }
 
