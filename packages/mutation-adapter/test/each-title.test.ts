@@ -377,6 +377,20 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     );
   });
 
+  it('takes a test that is both focused and skipped as one that may run', () => {
+    // Vitest gives `only` precedence: `it('case 1', { skip: true, only: true })` runs, and focuses the file.
+    const rows = entry([], 'case %s');
+    const both = entry([], 'case 1', ['skip', 'only']);
+    const index = new TestNameIndex([rows, both], ' > ');
+
+    expect([rows.id, both.id]).not.toContain(mutatorTestId(`${FILE}#case 1`, ' > ', index));
+    expect(mutatorTestId(`${FILE}#case 2`, ' > ', index)).not.toBe(both.id);
+    // `todo` with `only` too; and such a test establishes no focus over the plain test next to it.
+    const todoOnly = entry([], 'later', ['todo', 'only']);
+    const works = entry([], 'works', []);
+    expect(mutatorTestId(`${FILE}#works`, ' > ', new TestNameIndex([todoOnly, works], ' > '))).toBe(works.id);
+  });
+
   it('takes a focused table that may be empty as no guarantee of focus', () => {
     // `it.only.each([])('row %s')` registers nothing: the inventory records it as conditional.
     const emptyRows = { ...entry([], 'row %s', ['each', 'only']), conditional: true as const };

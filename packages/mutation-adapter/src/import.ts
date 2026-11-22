@@ -266,13 +266,21 @@ export class TestNameIndex implements TestNameLookup {
     // Files with a focused test that surely runs: the runner runs only the focused tests of such a file. Not a file
     // with a test registered on a condition, which includes options static analysis cannot read: that test may be
     // focused too.
-    const conditionalFiles = new Set(tests.filter((test) => test.conditional).map((test) => test.file));
+    /**
+     * Whether a test may or may not run: registered on a condition, or both focused and skipped (`{ skip: true,
+     * only: true }`, which Vitest runs and focuses on, while an enclosing `describe.skip` still skips it).
+     */
+    const uncertain = (test: NamedTest) =>
+      test.conditional === true ||
+      ((test.modifiers?.includes('only') ?? false) &&
+        (test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false));
+    const conditionalFiles = new Set(tests.filter(uncertain).map((test) => test.file));
     const focusedFiles = new Set(
       tests
         .filter(
           (test) =>
             test.modifiers?.includes('only') &&
-            !test.conditional &&
+            !uncertain(test) &&
             // Registered at collection level: a `.only` inside a function runs only if the function is called.
             test.inexactName === undefined &&
             !conditionalFiles.has(test.file) &&
@@ -289,15 +297,16 @@ export class TestNameIndex implements TestNameLookup {
       // `skip` and `todo` (its own, `xit`, or an enclosing `describe.skip`) are known not to run; `skipIf`,
       // `runIf` and other conditions are not known either way.
       const skipped =
-        (test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false) ||
-        (focusedFiles.has(test.file) && !test.modifiers?.includes('only'));
+        !uncertain(test) &&
+        ((test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false) ||
+          (focusedFiles.has(test.file) && !test.modifiers?.includes('only')));
 
       if (skipped) this.skipped.add(test.id);
 
-      if (test.conditional || skipped || (onlyFiles.has(test.file) && !test.modifiers?.includes('only')))
+      if (uncertain(test) || skipped || (onlyFiles.has(test.file) && !test.modifiers?.includes('only')))
         this.mayNotRun.add(test.id);
 
-      if (test.conditional) this.repeatable.add(test.id);
+      if (uncertain(test)) this.repeatable.add(test.id);
 
       // A skipped table-driven test ran no row, so no reported name is its.
       if (!test.modifiers?.includes('each') || skipped) continue;
