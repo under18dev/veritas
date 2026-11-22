@@ -8,6 +8,7 @@ import {
   symbolId,
 } from '@under18dev/veritas-core';
 import ts from 'typescript';
+import { substitute } from './shapes.js';
 
 export interface UnsupportedReason {
   line: number;
@@ -195,7 +196,7 @@ function findFunction(sf: ts.SourceFile, name: string): ts.FunctionLikeDeclarati
 interface Scope {
   sf: ts.SourceFile;
   vars: Map<string, Expr>;
-  /** Sorts of the function parameters. */
+  /** Sorts of the model parameters (record fields and array slots flattened). */
   paramSorts: Map<string, Sort>;
   functions: Map<string, FunctionModel>;
   translateCallee: (name: string) => FunctionModel;
@@ -320,17 +321,18 @@ function expr(node: ts.Expression, scope: Scope): Expr {
         `call to ${node.expression.getText(scope.sf)} is outside the supported subset`,
       );
     }
-    const callee = scope.translateCallee(node.expression.text);
-
-    if (callee.jsParams?.some((p) => p.kind !== 'scalar'))
-      throw new Unsupported(
-        node,
-        'call',
-        `${node.expression.text} takes a record or array parameter; such calls are not supported`,
-      );
-
-    return { kind: 'call', fn: callee.name, args: node.arguments.map((a) => expr(a, scope)) };
+    return call(node, node.expression.text, scope);
   }
+
+  if (ts.isObjectLiteralExpression(node))
+    throw new Unsupported(
+      node,
+      'object literal',
+      'object literals are only supported as the record argument of a call to a function in the same file',
+    );
+
+  if (ts.isArrayLiteralExpression(node))
+    throw new Unsupported(node, 'array literal', 'array literals are outside the supported subset');
 
   if (ts.isAwaitExpression(node)) throw new Unsupported(node, 'await', 'asynchronous code is not supported');
 
@@ -387,6 +389,226 @@ function expr(node: ts.Expression, scope: Scope): Expr {
     ts.SyntaxKind[node.kind],
     `${ts.SyntaxKind[node.kind]} is outside the supported subset`,
   );
+}
+
+const SORT_NAME: Record<Sort, string> = { int: 'number', bool: 'boolean' };
+
+/** The sort of a translated expression (the IR is checked again before it reaches a solver). */
+function sortOf(e: Expr, scope: Scope): Sort | undefined {
+  switch (e.kind) {
+    case 'int':
+      return 'int';
+    case 'bool':
+      return 'bool';
+    case 'var':
+      return scope.paramSorts.get(e.name);
+    case 'unary':
+      return e.op === 'neg' ? 'int' : 'bool';
+    case 'binary':
+      return ['+', '-', '*', 'div', 'mod'].includes(e.op) ? 'int' : 'bool';
+    case 'ite':
+      return sortOf(e.whenTrue, scope);
+    case 'call':
+      return scope.functions.get(e.fn)?.returns;
+  }
+}
+
+function expectSort(node: ts.Node, e: Expr, sort: Sort, what: string, scope: Scope): Expr {
+  const actual = sortOf(e, scope);
+
+  if (actual !== sort)
+    throw new Unsupported(
+      node,
+      'call',
+      `${what} must be a ${SORT_NAME[sort]}${actual ? `, but ${node.getText(scope.sf)} is a ${SORT_NAME[actual]}` : ''}`,
+    );
+
+  return e;
+}
+
+/** A plain identifier property key of an object literal, or undefined for computed or unusual keys. */
+function literalKey(name: ts.PropertyName): string | undefined {
+  if ((ts.isIdentifier(name) || ts.isStringLiteral(name)) && /^[A-Za-z_$][\w$]*$/.test(name.text))
+    return name.text;
+
+  return undefined;
+}
+
+/**
+ * The flattened values of a record argument, in the order of the callee's fields. The argument must be a record
+ * parameter with exactly the callee's fields and sorts, or an object literal that lists exactly those fields once.
+ * The subset has no mutation, so passing a record by reference cannot change what the callee reads.
+ */
+function recordArgument(
+  arg: ts.Expression,
+  param: Extract<JsParam, { kind: 'record' }>,
+  sorts: Map<string, Sort>,
+  callee: string,
+  scope: Scope,
+): Expr[] {
+  const what = `parameter ${param.name} of ${callee}`;
+  const keys = new Set(param.fields.map((f) => f.key));
+  const fail = (node: ts.Node, reason: string): never => {
+    throw new Unsupported(node, 'record argument', `${reason} (${what} takes { ${[...keys].join(', ')} })`);
+  };
+  const node = skipParentheses(arg);
+
+  if (ts.isIdentifier(node)) {
+    const target = scope.aggregates.get(node.text);
+
+    if (target?.kind !== 'record')
+      fail(
+        node,
+        `${node.text} is not a record parameter; pass a record parameter or an object literal with the same fields`,
+      );
+    const record = target as Extract<Aggregate, { kind: 'record' }>;
+
+    for (const key of record.fields.keys())
+      if (!keys.has(key)) fail(node, `${node.text} has property ${key}, which ${what} does not declare`);
+
+    return param.fields.map((f) => {
+      const field = record.fields.get(f.key);
+
+      if (!field) return fail(node, `${node.text} lacks property ${f.key}`);
+      const sort = sorts.get(f.param) as Sort;
+
+      if (field.sort !== sort)
+        fail(
+          node,
+          `property ${f.key} of ${node.text} is a ${SORT_NAME[field.sort]}, but ${what} declares a ${SORT_NAME[sort]}`,
+        );
+
+      return { kind: 'var', name: field.param };
+    });
+  }
+
+  if (!ts.isObjectLiteralExpression(node))
+    return fail(
+      node,
+      `${node.getText(scope.sf)} is neither a record parameter nor an object literal; only those can be passed as a record`,
+    );
+  const values = new Map<string, Expr>();
+
+  for (const prop of node.properties) {
+    if (ts.isSpreadAssignment(prop)) fail(prop, 'spread properties are not supported in a record argument');
+
+    if (ts.isShorthandPropertyAssignment(prop) && prop.objectAssignmentInitializer)
+      fail(prop, 'shorthand properties with a default are not supported');
+
+    if (!ts.isPropertyAssignment(prop) && !ts.isShorthandPropertyAssignment(prop))
+      fail(prop, 'methods and accessors are not supported in a record argument');
+    const named = prop as ts.PropertyAssignment | ts.ShorthandPropertyAssignment;
+    const key = literalKey(named.name);
+
+    if (key === undefined)
+      fail(prop, `property key ${named.name.getText(scope.sf)} is computed or not a plain identifier`);
+    const k = key as string;
+
+    if (values.has(k)) fail(prop, `property ${k} is given twice`);
+
+    if (!keys.has(k)) fail(prop, `property ${k} is not declared by ${what}`);
+    const field = param.fields.find((f) => f.key === k) as { key: string; param: string };
+    const value = ts.isPropertyAssignment(named) ? named.initializer : named.name;
+    values.set(
+      k,
+      expectSort(
+        value,
+        expr(value, scope),
+        sorts.get(field.param) as Sort,
+        `property ${k} of ${what}`,
+        scope,
+      ),
+    );
+  }
+
+  return param.fields.map((f) => values.get(f.key) ?? fail(node, `property ${f.key} is missing`));
+}
+
+/** The flattened values of an array argument: an array parameter with the same element type. */
+function arrayArgument(
+  arg: ts.Expression,
+  param: Extract<JsParam, { kind: 'array' }>,
+  sorts: Map<string, Sort>,
+  callee: string,
+  scope: Scope,
+): Expr[] {
+  const node = skipParentheses(arg);
+  const target = ts.isIdentifier(node) ? scope.aggregates.get(node.text) : undefined;
+  const sort = sorts.get(param.elements[0] as string) as Sort;
+  const what = `parameter ${param.name} of ${callee}`;
+
+  if (target?.kind !== 'array')
+    throw new Unsupported(
+      node,
+      'array argument',
+      `${node.getText(scope.sf)} is not an array parameter; only an array parameter can be passed as ${what}`,
+    );
+
+  if (target.sort !== sort)
+    throw new Unsupported(
+      node,
+      'array argument',
+      `${target.name} holds ${SORT_NAME[target.sort]}s, but ${what} holds ${SORT_NAME[sort]}s`,
+    );
+
+  if (target.elements.length !== param.elements.length)
+    throw new Unsupported(
+      node,
+      'array argument',
+      `${target.name} and ${what} model different numbers of slots`,
+    );
+
+  return [target.length, ...target.elements].map((name) => ({ kind: 'var', name }));
+}
+
+function skipParentheses(node: ts.Expression): ts.Expression {
+  return ts.isParenthesizedExpression(node) ? skipParentheses(node.expression) : node;
+}
+
+/**
+ * A call to a function in the same file. Record and array arguments are passed as their flattened values, and
+ * the callee's out-of-bounds conditions are carried over to the caller with the arguments substituted.
+ */
+function call(node: ts.CallExpression, name: string, scope: Scope): Expr {
+  const callee = scope.translateCallee(name);
+  const shapes: JsParam[] =
+    callee.jsParams ?? callee.params.map((p) => ({ kind: 'scalar', name: p.name, param: p.name }));
+
+  if (node.arguments.length !== shapes.length)
+    throw new Unsupported(
+      node,
+      'call',
+      `${name} takes ${shapes.length} argument(s) but is called with ${node.arguments.length}`,
+    );
+  const sorts = new Map(callee.params.map((p) => [p.name, p.sort]));
+  const args = shapes.flatMap((shape, i): Expr[] => {
+    const arg = node.arguments[i] as ts.Expression;
+
+    if (ts.isSpreadElement(arg)) throw new Unsupported(arg, 'spread', 'spread arguments are not supported');
+
+    if (shape.kind === 'record') return recordArgument(arg, shape, sorts, name, scope);
+
+    if (shape.kind === 'array') return arrayArgument(arg, shape, sorts, name, scope);
+
+    return [
+      expectSort(
+        arg,
+        expr(arg, scope),
+        sorts.get(shape.param) as Sort,
+        `argument ${shape.name} of ${name}`,
+        scope,
+      ),
+    ];
+  });
+
+  if (callee.outOfBounds?.length) {
+    const subst = new Map(callee.params.map((p, i) => [p.name, args[i] as Expr]));
+
+    for (const c of callee.outOfBounds)
+      scope.outOfBounds.push(and(pathCondition(scope.path), substitute(c, subst)));
+  }
+
+  return { kind: 'call', fn: callee.name, args };
 }
 
 /** Translate a statement list into one expression; every path must end in `return`. */
@@ -539,6 +761,7 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
         for (const f of shape.fields) {
           const param = flat(p, pname, f.key);
           fields.set(f.key, { param, sort: f.sort });
+          paramSorts.set(param, f.sort);
           params.push({ name: param, sort: f.sort });
         }
         aggregates.set(pname, { kind: 'record', name: pname, fields });
@@ -551,8 +774,12 @@ export function translateFunction(options: TranslateOptions): TranslationResult 
         const length = flat(p, pname, 'length');
         const elements = Array.from({ length: maxArrayLength }, (_, i) => flat(p, pname, String(i)));
         params.push({ name: length, sort: 'int' });
+        paramSorts.set(length, 'int');
 
-        for (const e of elements) params.push({ name: e, sort: shape.sort });
+        for (const e of elements) {
+          params.push({ name: e, sort: shape.sort });
+          paramSorts.set(e, shape.sort);
+        }
         lengths.add(length);
         aggregates.set(pname, { kind: 'array', name: pname, length, elements, sort: shape.sort });
         jsParams.push({ kind: 'array', name: pname, length, elements });

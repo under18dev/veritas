@@ -108,8 +108,8 @@ describe('records and arrays in the formal subset', () => {
   it('rejects everything else on records and arrays with a precise reason', () => {
     const cases: [string, RegExp][] = [
       [
-        'export function f(o: { a: number }): number { return g(o); }\nfunction g(o: { a: number }): number { return o.a; }',
-        /record or array/,
+        'export function f(o: { a: number }): number { return g({ ...o }); }\nfunction g(o: { a: number }): number { return o.a; }',
+        /spread properties are not supported/,
       ],
       [
         'export function f(xs: number[]): number { return xs[xs.length - 1]; }',

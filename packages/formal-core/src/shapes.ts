@@ -28,7 +28,8 @@ export function shapeInput(ir: PropertyIR, input: Record<string, string | boolea
   return out;
 }
 
-function substitute(expr: Expr, subst: Map<string, Expr>): Expr {
+/** Replace variables by expressions. */
+export function substitute(expr: Expr, subst: Map<string, Expr>): Expr {
   switch (expr.kind) {
     case 'var':
       return subst.get(expr.name) ?? expr;
