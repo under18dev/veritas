@@ -20,6 +20,7 @@ import {
   isRelativeGlob,
   listSome,
   mutatorProgress,
+  selectedTestFileCount,
   timeBudgetExhausted,
   transformErrorLine,
   withoutDebug,
@@ -565,6 +566,25 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       detail: `could not parse ${rawReportPath}: ${redact((error as Error).message)}`,
     });
   }
+
+  // A run without tests leaves every mutant "not covered", which reads as a result; it is a failure of the setup.
+  const found = selectedTestFileCount(`${run.stderr}\n${run.stderrTail ?? ''}`);
+  const selected = options.testFiles;
+
+  if (found === 0) {
+    return result('failed', {
+      ...common,
+      agentReport,
+      detail: `no test ran: the project's ${runner.displayName} config selected no test file${
+        selected ? ` of the ${selected.length} that import the code in scope (${listSome(selected)})` : ''
+      }, so every mutant would have been reported as not covered. Check that the include and exclude patterns of the ${runner.displayName} config, and of its projects, match the test files`,
+    });
+  }
+
+  if (found !== null && selected && found < selected.length)
+    warnings.push(
+      `${selected.length - found} of the ${selected.length} test file(s) that import the code in scope did not run, because the project's ${runner.displayName} config does not select them (its include or exclude patterns); mutants only they could kill are reported as not covered`,
+    );
 
   if (options.killMatrix && agent?.killMatrix === undefined) {
     warnings.push('--kill-matrix was requested but the agent report has no killMatrix');

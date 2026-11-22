@@ -32,6 +32,99 @@ function recordingCli(root: string): string {
   return bin;
 }
 
+/** A stand-in mutator that prints the given progress line and writes a report with one mutant left uncovered. */
+function reportingCli(root: string, progress: string | null): string {
+  const bin = path.join(root, 'stub-cli.js');
+  const report = {
+    schemaVersion: '2',
+    thresholds: { high: 80, low: 60 },
+    files: {
+      'src/a.ts': {
+        language: 'typescript',
+        source: 'export const a = 1;\n',
+        mutants: [
+          {
+            id: 'm1',
+            mutatorName: 'NumericLiteral',
+            replacement: '0',
+            location: { start: { line: 1, column: 18 }, end: { line: 1, column: 19 } },
+            status: 'NoCoverage',
+          },
+        ],
+      },
+    },
+    // mutator lists only the tests that covered or killed a mutant.
+    testFiles: {},
+  };
+  write(root, {
+    'package.json': '{"type":"commonjs"}',
+    'stub-cli.js': [
+      "const help = '--root --reporter json, agent --report-dir --include --config --[no-]typecheck --time-budget';",
+      "if (process.argv.includes('--help')) { console.log(help); process.exit(0); }",
+      "const fs = require('node:fs');",
+      "const dir = process.argv[process.argv.indexOf('--report-dir') + 1];",
+      ...(progress === null ? [] : [`console.error(${JSON.stringify(progress)});`]),
+      `fs.writeFileSync(dir + '/mutation.json', ${JSON.stringify(JSON.stringify(report))});`,
+      "console.log('{}');",
+    ].join('\n'),
+  });
+
+  return bin;
+}
+
+describe('a mutation run in which no test ran', () => {
+  const run = (progress: string | null, selected?: string[]) => {
+    const root = tempDir('no-test-ran');
+    const bin = reportingCli(root, progress);
+
+    return runMutation({
+      testRunner: vitest,
+      root,
+      config: config(),
+      reportDir: path.join(root, 'out'),
+      mutatorBin: bin,
+      ...(selected === undefined ? {} : { testFiles: selected }),
+    });
+  };
+
+  it('fails when the test runner config selected no test file', async () => {
+    const result = await run('dry run: 0/0 test files, 1 source files');
+    expect(result.status).toBe('failed');
+    expect(result.mutants).toEqual([]);
+    expect(result.detail).toContain(
+      "no test ran: the project's Vitest config selected no test file, so every mutant",
+    );
+  });
+
+  it('names the selected test files when none of them ran', async () => {
+    const result = await run('dry run: 0/0 test files, 1 source files', ['test/a.test.ts']);
+    expect(result.status).toBe('failed');
+    expect(result.detail).toContain(
+      "no test ran: the project's Vitest config selected no test file of the 1 that import the code in scope (test/a.test.ts)",
+    );
+  });
+
+  it('warns when the config selected fewer test files than were chosen', async () => {
+    const result = await run('dry run: 1/1 test files, 1 source files', [
+      'test/a.test.ts',
+      'test/b.case.test.ts',
+    ]);
+    expect(result.status).toBe('succeeded');
+    expect(result.warnings.join('\n')).toContain(
+      "1 of the 2 test file(s) that import the code in scope did not run, because the project's Vitest config does not select them",
+    );
+  });
+
+  it('keeps a run in which tests ran but covered no mutant, or that printed no progress, as it is', async () => {
+    expect((await run('dry run: 2/2 test files, 1 source files', ['test/a.test.ts'])).status).toBe(
+      'succeeded',
+    );
+    const silent = await run(null, ['test/a.test.ts']);
+    expect(silent.status).toBe('succeeded');
+    expect(silent.mutants).toHaveLength(1);
+  });
+});
+
 describe('test selection for mutator', () => {
   it('passes --config and --no-typecheck before the time budget', () => {
     const args = buildMutatorArgs({
