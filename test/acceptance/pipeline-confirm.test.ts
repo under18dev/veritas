@@ -157,26 +157,47 @@ describe('table-driven tests end to end', () => {
       "it.each([[1]])('case %s', () => { shippingFee(1); expect(true).toBe(true); });",
       "it('case 1', () => { expect(shippingFee(5000)).toBe(0); expect(shippingFee(4999)).toBe(500); });",
     ]);
+    // A vacuous it.each next to a call of an imported shared suite, which registers a test this file runs.
+    write('test/shared-suite.ts', [
+      'export function sharedShipping() {',
+      "  it('is free at 5000', () => { expect(shippingFee(5000)).toBe(0); expect(shippingFee(4999)).toBe(500); });",
+      '}',
+    ]);
+    write('test/probe.test.ts', [
+      "import { sharedShipping } from './shared-suite.js';",
+      "it.each([{ name: 'small order', total: 10 }])('$name', ({ total }) => { shippingFee(total); expect(true).toBe(true); });",
+      'sharedShipping();',
+    ]);
+    // A broad it.each next to a plain test in a describe: the template cannot take the plain test's two titles.
+    write('test/broad-each.test.ts', [
+      "it.each([{ name: 'small order', total: 10 }])('$name', ({ total }) => { shippingFee(total); expect(true).toBe(true); });",
+      "describe('threshold', () => {",
+      "  it('is free at 5000', () => { expect(shippingFee(5000)).toBe(0); expect(shippingFee(4999)).toBe(500); });",
+      '});',
+    ]);
     const run = json<RunJson>(runCli(['mutate', '--kill-matrix', '--json'], dir));
     const stage = run.stages.find((s) => s.stage === 'mutate');
     expect(stage?.status).toBe('succeeded');
-    const tests = readRunArtifact<{ tests: { id: string; file: string; name: string }[] }>(
-      dir,
-      run.runId,
-      'test-map.json',
-    ).tests;
+    const tests = readRunArtifact<{
+      tests: { id: string; file: string; name: string; suitePath: string[] }[];
+    }>(dir, run.runId, 'test-map.json').tests;
     const killers = new Set(
       readRunArtifact<{ mutants: { killedBy: string[] }[] }>(dir, run.runId, 'mutation.json').mutants.flatMap(
         (m) => m.killedBy,
       ),
     );
-    const id = (file: string, name: string) =>
-      tests.find((t) => t.file === file && t.name === name)?.id as string;
+    const id = (file: string, name: string, suitePath: string[] = []) =>
+      tests.find(
+        (t) => t.file === file && t.name === name && t.suitePath.join(' > ') === suitePath.join(' > '),
+      )?.id as string;
 
     expect(killers.has(id('test/loop-each.test.ts', 'fee for %s'))).toBe(false);
-    expect(killers.has(id('test/dynamic-describe.test.ts', 'works'))).toBe(false);
+    expect(killers.has(id('test/dynamic-describe.test.ts', 'works', ['%s']))).toBe(false);
     expect(killers.has(id('test/exact-and-row.test.ts', 'case %s'))).toBe(false);
     expect(killers.has(id('test/exact-and-row.test.ts', 'case 1'))).toBe(false);
+    expect(killers.has(id('test/probe.test.ts', '$name'))).toBe(false);
+    expect(killers.has(id('test/broad-each.test.ts', '$name'))).toBe(false);
+    expect(killers.has(id('test/broad-each.test.ts', 'is free at 5000', ['threshold']))).toBe(true);
     const messages = stage?.messages.join('\n') ?? '';
     // mutator numbers the second test of a run with the same full name: `fee for 4999#2`, `case 1#2`.
     expect(messages).toMatch(
@@ -184,6 +205,9 @@ describe('table-driven tests end to end', () => {
     );
     expect(messages).toMatch(
       /\(a describe title that is not a literal\)[^\n]*test\/dynamic-describe\.test\.ts#dyn 1 > works/,
+    );
+    expect(messages).toMatch(
+      /\(a call that may register tests, such as a shared suite\)[^\n]*test\/probe\.test\.ts#is free at 5000/,
     );
     expect(messages).toMatch(
       /are the title of one test and also match the title of a table-driven test[^\n]*test\/exact-and-row\.test\.ts#case 1, test\/exact-and-row\.test\.ts#case 1#2/,
