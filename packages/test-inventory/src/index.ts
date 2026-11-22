@@ -5003,18 +5003,72 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
    * Destructuring reads properties (an object pattern) or runs an iterator (an array pattern): only from a value that
    * runs no code when read, and for an array pattern, a literal array or a constant of plain data.
    */
-  const destructurable = (declaration: ts.VariableDeclaration): boolean => {
-    if (ts.isIdentifier(declaration.name)) return true;
-    const source = declaration.initializer ? skipParens(declaration.initializer) : undefined;
+  const destructurable = (declaration: ts.VariableDeclaration): boolean =>
+    patternSource(declaration.name, declaration.initializer);
+  /** Whether a value is a constant of plain data or read from one, so that everything inside it is plain too. */
+  const plainRoot = (node: ts.Expression): boolean => {
+    let root = skipParens(node);
 
-    if (!source) return false;
+    while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root))
+      root = skipParens(root.expression);
 
-    if (ts.isObjectBindingPattern(declaration.name)) return readable(source);
+    return ts.isIdentifier(root) && (dataConstants.has(root.text) || (local?.dataValue(root) ?? false));
+  };
+  /**
+   * Whether destructuring `source` with `pattern` runs no code, nested patterns included: an object pattern reads
+   * from a value that runs no code when read, an array pattern iterates a literal array or plain data, and each
+   * nested pattern's own part of the source is checked in turn (or must be plain data when it cannot be told).
+   */
+  const patternSource = (pattern: ts.BindingName, value: ts.Expression | undefined): boolean => {
+    if (ts.isIdentifier(pattern)) return true;
 
-    return (
-      ts.isArrayLiteralExpression(source) ||
-      (ts.isIdentifier(source) && (dataConstants.has(source.text) || (local?.dataValue(source) ?? false)))
-    );
+    if (value === undefined) return false;
+    let source = skipParens(value);
+
+    while (ts.isAsExpression(source) || ts.isSatisfiesExpression(source) || ts.isNonNullExpression(source))
+      source = skipParens(source.expression);
+
+    if (plainRoot(source)) return true;
+
+    if (ts.isObjectBindingPattern(pattern)) {
+      if (!readable(source)) return false;
+
+      return pattern.elements.every((element) => {
+        if (ts.isIdentifier(element.name)) return true;
+        const key = element.propertyName ?? element.name;
+        const name = ts.isIdentifier(key) || ts.isStringLiteral(key) ? key.text : undefined;
+        let part: ts.Expression | undefined;
+
+        if (name !== undefined && ts.isObjectLiteralExpression(source)) {
+          for (const property of source.properties) {
+            // A spread or computed key may supply the property: the part cannot be told.
+            if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property))
+              part = undefined;
+            else if (
+              property.name &&
+              !ts.isComputedPropertyName(property.name) &&
+              property.name.text === name
+            )
+              part = ts.isPropertyAssignment(property) ? property.initializer : property.name;
+          }
+        }
+
+        return patternSource(element.name, part ?? element.initializer);
+      });
+    }
+
+    if (!ts.isArrayLiteralExpression(source)) return false;
+
+    return pattern.elements.every((element, index) => {
+      if (ts.isOmittedExpression(element) || ts.isIdentifier(element.name)) return true;
+      const before = source.elements.slice(0, index + 1);
+
+      // After a spread the item at this position cannot be told.
+      if (element.dotDotDotToken || before.some((item) => ts.isSpreadElement(item))) return false;
+      const part = source.elements[index];
+
+      return patternSource(element.name, part && !ts.isOmittedExpression(part) ? part : element.initializer);
+    });
   };
   /** Default values in a parameter or binding pattern, which run when the function is called. */
   const inertBinding = (name: ts.BindingName): boolean =>
@@ -5316,6 +5370,8 @@ function registrationOptions(node: ts.CallExpression): {
 
   // Only a runner that reads an options object (Vitest); Jest's extra argument is a timeout.
   if (!runner.testOptions) return { modifiers, unknown };
+  // Each modifier's value as the object ends up with it: later keys override earlier ones.
+  const set = new Map<TestCaseType['modifiers'][number], boolean>();
 
   for (const argument of node.arguments.slice(1)) {
     const value = skipParens(argument);
@@ -5334,18 +5390,26 @@ function registrationOptions(node: ts.CallExpression): {
           ? property.name.text
           : undefined;
 
+      // A spread or a computed key may set or override any modifier.
       if (!ts.isPropertyAssignment(property) || name === undefined) {
         unknown = true;
+        set.clear();
         continue;
       }
       const modifier = OPTION_MODIFIERS.get(name);
 
       if (modifier === undefined) continue;
 
-      if (property.initializer.kind === ts.SyntaxKind.TrueKeyword) modifiers.push(modifier);
-      else if (property.initializer.kind !== ts.SyntaxKind.FalseKeyword) unknown = true;
+      if (property.initializer.kind === ts.SyntaxKind.TrueKeyword) set.set(modifier, true);
+      else if (property.initializer.kind === ts.SyntaxKind.FalseKeyword) set.set(modifier, false);
+      else {
+        unknown = true;
+        set.delete(modifier);
+      }
     }
   }
+
+  for (const [modifier, on] of set) if (on) modifiers.push(modifier);
 
   return { modifiers, unknown };
 }

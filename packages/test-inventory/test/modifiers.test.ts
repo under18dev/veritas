@@ -585,6 +585,12 @@ describe('full names static analysis cannot read', () => {
         "import { it } from 'vitest';\nimport { options } from './getter-data.js';\nconst [first] = options.rows;\nit('a', () => { first; });\n",
       'test/destructure-data.test.ts':
         "import { it } from 'vitest';\nimport { options } from './data.js';\nconst { rows } = options;\nconst [x] = [1];\nconst list = [1, 2];\nconst [y] = list;\nconst { a } = { a: 1 };\nit.each(rows)('%s', () => { x; y; a; });\n",
+      'test/destructure-nested-import.test.ts':
+        "import { it } from 'vitest';\nimport { options } from './getter-data.js';\nconst { nested: { rows } } = { nested: options };\nit.each(rows)('%s', () => {});\n",
+      'test/destructure-nested-array-import.test.ts':
+        "import { it } from 'vitest';\nimport { options } from './getter-data.js';\nconst [[first]] = [options.rows];\nit('a', () => { first; });\n",
+      'test/destructure-nested-data.test.ts':
+        "import { it } from 'vitest';\nconst local = { b: 2 };\nconst { nested: { a } } = { nested: { a: 1 } };\nconst [[x]] = [[1]];\nconst { inner: { b } } = { inner: local };\nit('n', () => { a; x; b; });\n",
       'test/plain-data.test.ts':
         "import { it } from 'vitest';\nimport { options } from './data.js';\nconst local = { rows: [1, 2] } as const;\nit.each(options.rows)('%s', () => {});\nit.each([...local.rows])('n %s', () => {});\n",
     });
@@ -603,10 +609,13 @@ describe('full names static analysis cannot read', () => {
       'copy-import',
       'destructure-import',
       'destructure-array-import',
+      'destructure-nested-import',
+      'destructure-nested-array-import',
     ])
       expect(marked(`test/${file}.test.ts`), file).toBe('open_collection');
     expect(marked('test/plain-data.test.ts')).toBeUndefined();
     expect(marked('test/destructure-data.test.ts')).toBeUndefined();
+    expect(marked('test/destructure-nested-data.test.ts')).toBeUndefined();
   });
 
   it('follows inline type-only imports, which a nearer tsconfig may keep, and erases only import type', () => {
@@ -649,6 +658,10 @@ describe('full names static analysis cannot read', () => {
         it('failing', () => {}, { fails: true });
         it('unknown', opts, () => {});
         it('timed', () => {}, 1000);
+        const base = { timeout: 1 };
+        it('unskipped', { skip: true, ...{ skip: false } }, () => {});
+        it('overridden', { skip: true, timeout: 5, skip: false }, () => {});
+        it('skipped again', { ...base, skip: true }, () => {});
         describe('suite', { concurrent: true }, () => { it('inside', () => {}); });
       `,
     });
@@ -664,6 +677,9 @@ describe('full names static analysis cannot read', () => {
       ['failing', ['expected_failure'], undefined],
       ['unknown', [], true],
       ['timed', [], undefined],
+      ['unskipped', [], true],
+      ['overridden', [], undefined],
+      ['skipped again', ['skip'], true],
       ['inside', ['concurrent'], undefined],
     ]);
   });
