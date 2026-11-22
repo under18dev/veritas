@@ -160,11 +160,13 @@ function prepare(ir: PropertyIR, theoremName: string): Prepared {
   const defs: string[] = [];
 
   for (const f of ordered(ir.functions)) {
-    if (f.jsParams?.some((p) => p.kind !== 'scalar') || f.outOfBounds?.length) {
+    // Record fields are plain Int/Bool parameters. Arrays are not: slots beyond the length are not part of the
+    // JavaScript value, and the bounds obligation is only checked by the SMT backend.
+    if (f.jsParams?.some((p) => p.kind === 'array') || f.outOfBounds?.length) {
       throw new VeritasError(
         'user',
         'IR_UNSUPPORTED',
-        `function ${f.name} takes a record or array; the Lean backend covers integer and boolean parameters only`,
+        `function ${f.name} takes an array; the Lean backend covers integer, boolean and record parameters only`,
       );
     }
 
