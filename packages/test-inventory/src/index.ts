@@ -40,8 +40,10 @@ export const TestInventory = z.object({
        * `await`, a side-effect or dynamic import, a statement such as `if` or `for`), which may register tests.
        * `imported_registrations`: a local file it imports registers tests (calls `it`, `test` or `describe`), which
        * the runner reports under this file.
+       * `imported_open_module`: a local file it imports runs something other than declarations and the runner's API
+       * when it loads (a call such as a package's shared suite), which may register tests under this file.
        */
-      inexactNames: z.enum(['open_collection', 'imported_registrations']).optional(),
+      inexactNames: z.enum(['open_collection', 'imported_registrations', 'imported_open_module']).optional(),
     }),
   ),
   diagnostics: z.array(z.object({ file: z.string(), message: z.string() })),
@@ -246,15 +248,15 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
 
     return resolved ? program.getSourceFile(resolved.resolvedFileName) : undefined;
   };
-  const registers = new Map<string, boolean>();
+  const moduleVerdicts = new Map<ts.SourceFile, 'registers' | 'open' | 'closed'>();
   /** Why the runner may report tests under a file that static analysis did not see (see `inexactNames`). */
-  const inexactFile = (source: ts.SourceFile | undefined, loaded: string[]) => {
+  const inexactFile = (source: ts.SourceFile | undefined) => {
     if (!source || !closedCollection(source)) return { inexactNames: 'open_collection' as const };
     // Modules the runner loads for a mock (`vi.mock(path)`, `vi.importActual(path)`) run their code too.
     const mocked = mockedModules(source);
 
     if (mocked === undefined) return { inexactNames: 'open_collection' as const };
-    const mockedFiles: string[] = [];
+    const mockedFiles: ts.SourceFile[] = [];
 
     for (const name of mocked) {
       if (!name.startsWith('.') && !path.isAbsolute(name)) continue;
@@ -262,20 +264,32 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
 
       // A local module that cannot be followed may register anything.
       if (!target) return { inexactNames: 'open_collection' as const };
-      mockedFiles.push(toPosixRelative(root, target.fileName), ...localDependencies(target, checker, root));
+      mockedFiles.push(target, ...runtimeLoaded(target, checker, root));
     }
-    const registering = [...new Set([...loaded, ...mockedFiles])].some((dependency) => {
-      const known = registers.get(dependency);
+    // Every local module the file loads when it runs (not `import type`), and what those load in turn.
+    const loadedModules = [...new Set([...runtimeLoaded(source, checker, root), ...mockedFiles])];
+    const verdicts = loadedModules.map((loadedSource) => {
+      let verdict = moduleVerdicts.get(loadedSource);
 
-      if (known !== undefined) return known;
-      const loadedSource = sourceFiles.get(path.resolve(root, dependency));
-      const found = loadedSource !== undefined && registersTests(loadedSource);
-      registers.set(dependency, found);
+      if (verdict === undefined) {
+        // A module registering tests registers them under the file that loads it; one that runs anything but
+        // declarations and the runner's API when it loads (`sharedSuite()` of a package) may do so too.
+        // Project code (`projectSet`) is not held to the allowlist: it does not load test packages, and its top level
+        // routinely builds values (`new Map()`); helpers and other test code are.
+        verdict = registersTests(loadedSource)
+          ? 'registers'
+          : projectSet.has(path.resolve(loadedSource.fileName)) || closedCollection(loadedSource)
+            ? 'closed'
+            : 'open';
+        moduleVerdicts.set(loadedSource, verdict);
+      }
 
-      return found;
+      return verdict;
     });
 
-    return registering ? { inexactNames: 'imported_registrations' as const } : {};
+    if (verdicts.includes('registers')) return { inexactNames: 'imported_registrations' as const };
+
+    return verdicts.includes('open') ? { inexactNames: 'imported_open_module' as const } : {};
   };
   const files = uniqueFiles.map((file) => {
     const source = sourceFiles.get(file);
@@ -291,7 +305,7 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
       // An unparsed file is unknown too.
       unseenReach:
         !source || reached.some((reachedFile) => reachedFile && hasUnseenReach(reachedFile, checker)),
-      ...inexactFile(source, loaded),
+      ...inexactFile(source),
     };
   });
 
@@ -4377,11 +4391,11 @@ function mockedModules(source: ts.SourceFile): string[] | undefined {
 
     if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) continue;
     const member = memberName(callee);
-    const object = skipParens(callee.expression);
 
-    if (member === undefined || !MODULE_LOADERS.has(member) || !ts.isIdentifier(object)) continue;
+    // `vi.mock`, an aliased `jest`, or a namespaced one (`import * as j from '@jest/globals'; j.jest.mock`).
+    if (member === undefined || !MODULE_LOADERS.has(member)) continue;
 
-    if (!runner.mockObjects.has(runnerName(object))) continue;
+    if (!runner.mockObjects.has(runnerExport(skipParens(callee.expression))?.name ?? '')) continue;
     let argument = node.arguments[0] ? skipParens(node.arguments[0]) : undefined;
 
     if (argument && ts.isCallExpression(argument) && argument.expression.kind === ts.SyntaxKind.ImportKeyword)
@@ -5532,6 +5546,57 @@ function localDependencies(start: ts.SourceFile, checker: ts.TypeChecker, root: 
   return loadedFiles(start, checker, root)
     .map((source) => toPosixRelative(root, source.fileName))
     .sort();
+}
+
+/**
+ * The local files a source runs when it runs, transitively: what its imports and re-exports name, except those that
+ * are erased (`import type`, `export type`, or an import of type-only names), and its literal dynamic imports.
+ */
+function runtimeLoaded(start: ts.SourceFile, checker: ts.TypeChecker, root: string): ts.SourceFile[] {
+  const seen = new Set<ts.SourceFile>([start]);
+  const queue = [start];
+
+  for (let current = queue.shift(); current; current = queue.shift())
+    for (const node of descendants(current)) {
+      let specifier: ts.Expression | undefined;
+
+      if (ts.isImportDeclaration(node)) {
+        const clause = node.importClause;
+        const erased =
+          clause !== undefined &&
+          (clause.isTypeOnly ||
+            (!clause.name &&
+              clause.namedBindings !== undefined &&
+              ts.isNamedImports(clause.namedBindings) &&
+              clause.namedBindings.elements.length > 0 &&
+              clause.namedBindings.elements.every((element) => element.isTypeOnly)));
+
+        if (!erased) specifier = node.moduleSpecifier;
+      } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && !node.isTypeOnly)
+        specifier = node.moduleSpecifier;
+      else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
+        specifier = node.arguments[0];
+
+      if (!specifier || !ts.isStringLiteralLike(specifier)) continue;
+      const target = checker
+        .getSymbolAtLocation(specifier)
+        ?.declarations?.find((declaration) => ts.isSourceFile(declaration));
+
+      if (!target || !ts.isSourceFile(target) || target.isDeclarationFile || seen.has(target)) continue;
+      const relative = path.relative(root, path.resolve(target.fileName));
+
+      if (
+        relative.startsWith('..') ||
+        path.isAbsolute(relative) ||
+        relative.split(path.sep).includes('node_modules')
+      )
+        continue;
+      seen.add(target);
+      queue.push(target);
+    }
+  seen.delete(start);
+
+  return [...seen];
 }
 
 /** The local files a source names in its imports, re-exports and literal dynamic imports, in source order. */

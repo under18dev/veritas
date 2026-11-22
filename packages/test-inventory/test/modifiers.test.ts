@@ -285,6 +285,8 @@ describe('full names static analysis cannot read', () => {
       returnsImportActual:
         "vi.mock('../src/value.js', () => vi.importActual('./shared-suite.js')); it('x', () => {});",
       automock: "vi.mock('./shared-suite.js'); it('x', () => {});",
+      namespacedLoader:
+        "import * as v from 'vitest'; v.vi.importActual('./shared-suite.js'); it('x', () => {});",
     };
     const files: Record<string, string> = {
       'src/value.ts': 'export const value = (input: number) => input;\n',
@@ -296,6 +298,20 @@ describe('full names static analysis cannot read', () => {
       ].join('\n'),
       'test/pure-helper.ts': 'export const double = (n: number) => n * 2;\n',
       'test/imports-registering.test.ts': `${header}\nit('own', () => {});\n`,
+      // A helper that runs a package's shared suite when it loads; project code may build values at load.
+      'test/open-helper.ts': [
+        "import { sharedSuite } from 'external-test-package';",
+        'sharedSuite();',
+        'export const helperValue = 1;',
+        'export type HelperType = number;',
+      ].join('\n'),
+      'src/store.ts': 'export const store = new Map<string, number>();\n',
+      'test/imports-open.test.ts':
+        "import { expect, it } from 'vitest';\nimport { helperValue } from './open-helper.js';\nit('o', () => { expect(helperValue).toBe(1); });\n",
+      'test/imports-open-type.test.ts':
+        "import { it } from 'vitest';\nimport type { HelperType } from './open-helper.js';\nconst n: HelperType = 1;\nit('t', () => {});\n",
+      'test/imports-project.test.ts':
+        "import { expect, it } from 'vitest';\nimport { store } from '../src/store.js';\nit('p', () => { expect(store.size).toBe(0); });\n",
     };
     for (const [name, code] of Object.entries(open))
       files[`test/open-${name}.test.ts`] = `${header}\n${code}\n`;
@@ -322,6 +338,10 @@ describe('full names static analysis cannot read', () => {
       expect(marked(`test/closed-${name}.test.ts`), name).toBeUndefined();
     for (const name of Object.keys(loadsRegistering))
       expect(marked(`test/loads-${name}.test.ts`), name).toBe('imported_registrations');
+    expect(marked('test/imports-open.test.ts')).toBe('imported_open_module');
+    // `import type` is erased; project code is not held to the allowlist.
+    expect(marked('test/imports-open-type.test.ts')).toBeUndefined();
+    expect(marked('test/imports-project.test.ts')).toBeUndefined();
     // Importing a module that registers tests is enough: its tests run under this file.
     expect(marked('test/imports-registering.test.ts')).toBe('imported_registrations');
   });

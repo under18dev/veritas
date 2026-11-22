@@ -90,6 +90,7 @@ const INEXACT_BECAUSE: Record<Extract<WithheldReason, { kind: 'inexact_file' }>[
   open_collection:
     'code at the top level or in a describe callback that may register tests, such as a call of a shared suite',
   imported_registrations: 'a local module it imports registers tests',
+  imported_open_module: 'a local module it imports runs code when loaded that may register tests',
 };
 
 /** One warning for each reason names in mutator's report were credited to no test (see `TestNameIndex`). */
