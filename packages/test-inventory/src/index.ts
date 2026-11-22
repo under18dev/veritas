@@ -253,7 +253,7 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
   const safety = moduleSafety(root, checker, resolveModule);
   /** Why the runner may report tests under a file that static analysis did not see (see `inexactNames`). */
   const inexactFile = (source: ts.SourceFile | undefined) => {
-    if (!source || !closedCollection(source, safety.localCallee) || safety.imports(source).unknown)
+    if (!source || !closedCollection(source, safety.local) || safety.imports(source).unknown)
       return { inexactNames: 'open_collection' as const };
     // Modules the runner loads for a mock (`vi.mock(path)`, `vi.importActual(path)`) run their code too.
     const mocked = mockedModules(source);
@@ -4415,10 +4415,7 @@ function registersTests(source: ts.SourceFile): boolean {
  * Anything else (a call such as `runTests()`, `new`, `await`, a dynamic import, `if`, `for`, `try`) makes the file
  * open.
  */
-function closedCollection(
-  source: ts.SourceFile,
-  localCallee?: (call: ts.CallExpression) => boolean,
-): boolean {
+function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
   const runnerOwn = (name: string) =>
     runner.tests.has(name) ||
     runner.suites.has(name) ||
@@ -4827,7 +4824,44 @@ function closedCollection(
    * A call of a local function that cannot reach code static analysis does not see (`localCallee`), with arguments
    * checked as for an API that may call them.
    */
-  const localCall = (call: ts.CallExpression): boolean => (localCallee?.(call) ?? false) && argumentsOk(call);
+  const localCall = (call: ts.CallExpression): boolean =>
+    (local?.callee(call) ?? false) && argumentsOk(call) && call.arguments.every(passable);
+  /**
+   * An argument of a local call, which the function may call anything in: inline functions are checked as run,
+   * names only when they are data or local functions that reach nothing unseen, and objects and arrays item by item;
+   * a member access, a method or an accessor may be a function from anywhere.
+   */
+  const passable = (node: ts.Expression): boolean => {
+    const expression = skipParens(node);
+
+    if (isFunction(expression)) return closedFunction(expression, true);
+
+    if (ts.isIdentifier(expression))
+      return dataConstants.has(expression.text) || (local?.functionValue(expression) ?? false);
+
+    if (ts.isSpreadElement(expression)) return passable(expression.expression);
+
+    if (ts.isArrayLiteralExpression(expression))
+      return expression.elements.every((element) => ts.isOmittedExpression(element) || passable(element));
+
+    if (ts.isObjectLiteralExpression(expression))
+      return expression.properties.every((property) => {
+        if (property.name && ts.isComputedPropertyName(property.name) && !inert(property.name.expression))
+          return false;
+
+        if (ts.isPropertyAssignment(property)) return passable(property.initializer);
+
+        if (ts.isShorthandPropertyAssignment(property)) return passable(property.name);
+
+        if (ts.isSpreadAssignment(property)) return passable(property.expression);
+
+        return false;
+      });
+
+    if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) return false;
+
+    return inert(expression);
+  };
   /** An expression run as a statement at collection level: a directive, or a call of the runner's API. */
   const closedExpression = (node: ts.Expression): boolean => {
     const expression = skipParens(node);
@@ -5660,14 +5694,20 @@ function moduleSafety(
         } else if (
           (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
           MODULE_LOADERS.has(memberName(callee) ?? '') &&
-          runner.mockObjects.has(runnerExport(skipParens(callee.expression))?.name ?? '') &&
-          argument &&
-          ts.isStringLiteralLike(argument) &&
-          runner.modules.has(argument.text)
-        )
-          // `vi.importActual('vitest')`, `jest.requireActual('@jest/globals')`: the runner's API as a value.
-          found.unknown = true;
-        else if (ts.isIdentifier(callee) && (callee.text === 'eval' || callee.text === 'Function'))
+          runner.mockObjects.has(runnerExport(skipParens(callee.expression))?.name ?? '')
+        ) {
+          // A module a mock loads (`jest.requireActual('./x')`) runs too; the runner's own, so obtained, hands out
+          // its registration API as a value.
+          const named =
+            argument &&
+            ts.isCallExpression(argument) &&
+            argument.expression.kind === ts.SyntaxKind.ImportKeyword
+              ? argument.arguments[0]
+              : argument;
+
+          if (named && ts.isStringLiteralLike(named)) loadedAtRunTime(named.text);
+          else found.unknown = true;
+        } else if (ts.isIdentifier(callee) && (callee.text === 'eval' || callee.text === 'Function'))
           found.unknown = true;
       } else if (ts.isNewExpression(node)) {
         if (ts.isIdentifier(node.expression) && node.expression.text === 'Function') found.unknown = true;
@@ -5813,14 +5853,35 @@ function moduleSafety(
 
     return [...seen];
   };
+  /** Whether no module the closure of `file` loads reaches a package or code not followed. */
+  const reachesNothingUnseen = (file: ts.SourceFile): boolean => {
+    let result = pure.get(file);
+
+    if (result === undefined) {
+      result = closure([file]).every((loaded) => !imports(loaded).external && !imports(loaded).unknown);
+      pure.set(file, result);
+    }
+
+    return result;
+  };
   const localCallee = (call: ts.CallExpression): boolean => {
     const callee = skipParens(call.expression);
     const target = ts.isIdentifier(callee)
       ? callee
-      : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(skipParens(callee.expression))
+      : ts.isPropertyAccessExpression(callee) &&
+          ts.isIdentifier(skipParens(callee.expression)) &&
+          ts.isIdentifier(callee.name)
         ? callee.name
         : undefined;
-    if (!target) return false;
+
+    return target !== undefined && functionValue(target, call.getSourceFile());
+  };
+  /**
+   * Whether a name stands for a local function that cannot reach code static analysis does not see: declared in a
+   * local module whose closure loads no package and reaches nothing not followed, and, outside `from`, in a module
+   * that registers no tests. Uses no verdict, so it never recurses through `closedCollection`.
+   */
+  const functionValue = (target: ts.Identifier, from: ts.SourceFile = target.getSourceFile()): boolean => {
     let symbol = checker.getSymbolAtLocation(target);
 
     if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
@@ -5840,32 +5901,39 @@ function moduleSafety(
     const file = declaration.getSourceFile();
 
     // A function registering tests in the test file itself is inventoried as `registered_in_function`.
-    if (!local(file) || (file !== call.getSourceFile() && verdict(file) === 'registers')) return false;
-    let result = pure.get(file);
+    if (!local(file) || (file !== from && registersTests(file))) return false;
 
-    if (result === undefined) {
-      result = closure([file]).every((loaded) => !imports(loaded).external && !imports(loaded).unknown);
-      pure.set(file, result);
-    }
-
-    return result;
+    return reachesNothingUnseen(file);
   };
   const verdict = (source: ts.SourceFile): 'registers' | 'open' | 'safe' => {
     let found = verdicts.get(source);
 
     if (found) return found;
-    const loaded = imports(source);
+    // Whatever a module's top level does is safe when nothing it loads reaches a package or unseen code; otherwise
+    // its top level may only declare and call the runner's API or local functions that reach nothing unseen.
     found = registersTests(source)
       ? 'registers'
-      : loaded.unknown || (loaded.external && !closedCollection(source, localCallee))
+      : imports(source).unknown
         ? 'open'
-        : 'safe';
+        : reachesNothingUnseen(source) || closedCollection(source, calls)
+          ? 'safe'
+          : 'open';
     verdicts.set(source, found);
 
     return found;
   };
 
-  return { imports, closure, verdict, localCallee };
+  const calls: LocalCalls = { callee: localCallee, functionValue: (node) => functionValue(node) };
+
+  return { imports, closure, verdict, local: calls };
+}
+
+/** Local functions a collection-time call may reach without opening the file (see `moduleSafety`). */
+interface LocalCalls {
+  /** Whether the call's callee is such a function. */
+  callee(call: ts.CallExpression): boolean;
+  /** Whether a name passed as an argument is such a function. */
+  functionValue(node: ts.Identifier): boolean;
 }
 
 /** The local files a source names in its imports, re-exports and literal dynamic imports, in source order. */

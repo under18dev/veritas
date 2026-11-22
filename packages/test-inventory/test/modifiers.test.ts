@@ -443,6 +443,45 @@ describe('full names static analysis cannot read', () => {
     expect(marked('test/builds.test.ts')).toBeUndefined();
   });
 
+  it('follows what local modules reach through other modules, in cycles too, and what local calls are given', () => {
+    const root = tempProject({
+      // A helper whose top level calls a local function that reaches a package.
+      'test/bridge.ts':
+        "import { sharedSuite } from 'external-test-package';\nexport function runSharedSuite() { return sharedSuite(); }\n",
+      'test/reaches-package.ts':
+        "import { runSharedSuite } from './bridge.js';\nexport const value = runSharedSuite();\n",
+      'test/uses-reaching.test.ts':
+        "import { it } from 'vitest';\nimport { value } from './reaches-package.js';\nit('r', () => { value; });\n",
+      // Two helpers that load a package and call each other's export at their top level.
+      'test/cycle-a.ts':
+        "import { pkg } from 'external-test-package';\nimport { b } from './cycle-b.js';\nexport function a() { return pkg; }\nexport const x = b();\n",
+      'test/cycle-b.ts':
+        "import { pkg } from 'external-test-package';\nimport { a } from './cycle-a.js';\nexport function b() { return pkg; }\nexport const y = a();\n",
+      'test/uses-cycle.test.ts':
+        "import { it } from 'vitest';\nimport { x } from './cycle-a.js';\nit('c', () => { x; });\n",
+      // A local function given something callable from a package.
+      'test/run-helper.ts': 'export function run(options: { fn: () => unknown }) { return options.fn(); }\n',
+      'test/passes-package-function.test.ts':
+        "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun({ fn: sharedSuite });\nit('p', () => {});\n",
+      'test/passes-spread.test.ts':
+        "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun({ ...{ fn: sharedSuite } });\nit('p', () => {});\n",
+      'test/passes-inline.test.ts':
+        "import { it } from 'vitest';\nimport { run } from './run-helper.js';\nconst n = 2;\nrun({ fn: () => n });\nit('p', () => {});\n",
+    });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
+    const marked = (file: string) => inventory.files.find((f) => f.path === file)?.inexactNames;
+
+    expect(marked('test/uses-reaching.test.ts')).toBe('imported_open_module');
+    expect(marked('test/uses-cycle.test.ts')).toBe('imported_open_module');
+    expect(marked('test/passes-package-function.test.ts')).toBe('open_collection');
+    expect(marked('test/passes-spread.test.ts')).toBe('open_collection');
+    expect(marked('test/passes-inline.test.ts')).toBeUndefined();
+  });
+
   it('records registrations through aliases and namespace imports, and leaves the file closed', () => {
     const root = tempProject({
       'src/value.ts': 'export const value = (input: number) => input;\n',
