@@ -312,6 +312,37 @@ describe('full names static analysis cannot read', () => {
         "import { it } from 'vitest';\nimport type { HelperType } from './open-helper.js';\nconst n: HelperType = 1;\nit('t', () => {});\n",
       'test/imports-project.test.ts':
         "import { expect, it } from 'vitest';\nimport { store } from '../src/store.js';\nit('p', () => { expect(store.size).toBe(0); });\n",
+      // Support modules that load no package may run any code when they load.
+      'test/fixtures.ts': [
+        "import { readFileSync } from 'node:fs';",
+        "import path from 'path';",
+        "export const big = 'a'.repeat(64);",
+        'export const seen = new Map<string, string>();',
+        'export const read = (file: string) => readFileSync(path.join(file), "utf8");',
+        'export function prepare() { seen.set(big, big); return big.length; }',
+      ].join('\n'),
+      'test/imports-fixtures.test.ts':
+        "import { expect, it } from 'vitest';\nimport { big, prepare } from './fixtures.js';\nconst size = prepare();\nprepare();\nit('f', () => { expect(big.length).toBe(size); });\n",
+      // One that loads a package but only declares at its top level is safe too.
+      'test/package-declarations.ts': [
+        "import { pkg } from 'external-test-package';",
+        'export const make = () => pkg();',
+      ].join('\n'),
+      'test/imports-package-declarations.test.ts':
+        "import { it } from 'vitest';\nimport { make } from './package-declarations.js';\nit('m', () => { make(); });\n",
+      // Calling, at collection time, a local function whose module loads a package may reach it.
+      'test/calls-package-function.test.ts':
+        "import { it } from 'vitest';\nimport { make } from './package-declarations.js';\nmake();\nit('m', () => {});\n",
+      // A same-file function, in a file that loads no package, may be called.
+      'test/calls-own-function.test.ts':
+        "import { expect, it } from 'vitest';\nfunction rows() { return [1, 2]; }\nconst cases = rows();\nrows();\nit('o', () => { expect(cases).toHaveLength(2); });\n",
+      // Code reached by a computed name is not followed.
+      'test/dynamic-helper.ts': "export const run = () => (globalThis as any)['it']('x', () => {});\n",
+      'test/imports-dynamic.test.ts':
+        "import { it } from 'vitest';\nimport { run } from './dynamic-helper.js';\nit('d', () => { run; });\n",
+      'test/eval-helper.ts': "export const value = eval('1');\n",
+      'test/imports-eval.test.ts':
+        "import { it } from 'vitest';\nimport { value } from './eval-helper.js';\nit('e', () => { value; });\n",
     };
     for (const [name, code] of Object.entries(open))
       files[`test/open-${name}.test.ts`] = `${header}\n${code}\n`;
@@ -342,6 +373,12 @@ describe('full names static analysis cannot read', () => {
     // `import type` is erased; project code is not held to the allowlist.
     expect(marked('test/imports-open-type.test.ts')).toBeUndefined();
     expect(marked('test/imports-project.test.ts')).toBeUndefined();
+    expect(marked('test/imports-fixtures.test.ts')).toBeUndefined();
+    expect(marked('test/imports-package-declarations.test.ts')).toBeUndefined();
+    expect(marked('test/calls-package-function.test.ts')).toBe('open_collection');
+    expect(marked('test/calls-own-function.test.ts')).toBeUndefined();
+    expect(marked('test/imports-dynamic.test.ts')).toBe('imported_open_module');
+    expect(marked('test/imports-eval.test.ts')).toBe('imported_open_module');
     // Importing a module that registers tests is enough: its tests run under this file.
     expect(marked('test/imports-registering.test.ts')).toBe('imported_registrations');
   });

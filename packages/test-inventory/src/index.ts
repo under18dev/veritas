@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs';
+import { builtinModules } from 'node:module';
 import path from 'node:path';
 import {
   type MockCallRole,
@@ -40,8 +41,9 @@ export const TestInventory = z.object({
        * `await`, a side-effect or dynamic import, a statement such as `if` or `for`), which may register tests.
        * `imported_registrations`: a local file it imports registers tests (calls `it`, `test` or `describe`), which
        * the runner reports under this file.
-       * `imported_open_module`: a local file it imports runs something other than declarations and the runner's API
-       * when it loads (a call such as a package's shared suite), which may register tests under this file.
+       * `imported_open_module`: a local file it imports loads a package and runs something other than declarations
+       * and the runner's API when it loads (a call such as a package's shared suite), or reaches code by a computed
+       * name (`eval`, `globalThis[key]`), which may register tests under this file.
        */
       inexactNames: z.enum(['open_collection', 'imported_registrations', 'imported_open_module']).optional(),
     }),
@@ -248,15 +250,16 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
 
     return resolved ? program.getSourceFile(resolved.resolvedFileName) : undefined;
   };
-  const moduleVerdicts = new Map<ts.SourceFile, 'registers' | 'open' | 'closed'>();
+  const safety = moduleSafety(root, checker, resolveModule);
   /** Why the runner may report tests under a file that static analysis did not see (see `inexactNames`). */
   const inexactFile = (source: ts.SourceFile | undefined) => {
-    if (!source || !closedCollection(source)) return { inexactNames: 'open_collection' as const };
+    if (!source || !closedCollection(source, safety.localCallee))
+      return { inexactNames: 'open_collection' as const };
     // Modules the runner loads for a mock (`vi.mock(path)`, `vi.importActual(path)`) run their code too.
     const mocked = mockedModules(source);
 
     if (mocked === undefined) return { inexactNames: 'open_collection' as const };
-    const mockedFiles: ts.SourceFile[] = [];
+    const roots: ts.SourceFile[] = [...safety.imports(source).locals];
 
     for (const name of mocked) {
       if (!name.startsWith('.') && !path.isAbsolute(name)) continue;
@@ -264,28 +267,10 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
 
       // A local module that cannot be followed may register anything.
       if (!target) return { inexactNames: 'open_collection' as const };
-      mockedFiles.push(target, ...runtimeLoaded(target, checker, root));
+      roots.push(target);
     }
     // Every local module the file loads when it runs (not `import type`), and what those load in turn.
-    const loadedModules = [...new Set([...runtimeLoaded(source, checker, root), ...mockedFiles])];
-    const verdicts = loadedModules.map((loadedSource) => {
-      let verdict = moduleVerdicts.get(loadedSource);
-
-      if (verdict === undefined) {
-        // A module registering tests registers them under the file that loads it; one that runs anything but
-        // declarations and the runner's API when it loads (`sharedSuite()` of a package) may do so too.
-        // Project code (`projectSet`) is not held to the allowlist: it does not load test packages, and its top level
-        // routinely builds values (`new Map()`); helpers and other test code are.
-        verdict = registersTests(loadedSource)
-          ? 'registers'
-          : projectSet.has(path.resolve(loadedSource.fileName)) || closedCollection(loadedSource)
-            ? 'closed'
-            : 'open';
-        moduleVerdicts.set(loadedSource, verdict);
-      }
-
-      return verdict;
-    });
+    const verdicts = safety.closure(roots).map((loaded) => safety.verdict(loaded));
 
     if (verdicts.includes('registers')) return { inexactNames: 'imported_registrations' as const };
 
@@ -4430,7 +4415,10 @@ function registersTests(source: ts.SourceFile): boolean {
  * Anything else (a call such as `runTests()`, `new`, `await`, a dynamic import, `if`, `for`, `try`) makes the file
  * open.
  */
-function closedCollection(source: ts.SourceFile): boolean {
+function closedCollection(
+  source: ts.SourceFile,
+  localCallee?: (call: ts.CallExpression) => boolean,
+): boolean {
   const runnerOwn = (name: string) =>
     runner.tests.has(name) ||
     runner.suites.has(name) ||
@@ -4683,6 +4671,8 @@ function closedCollection(source: ts.SourceFile): boolean {
     // A `describe` anywhere (`const suite = describe('shared', sharedSuite)`) runs its callback now.
     if (ts.isCallExpression(node) && describeRegistration(node)) return closedExpression(node);
 
+    if (ts.isCallExpression(node) && localCall(node)) return true;
+
     if (ts.isCallExpression(node) || ts.isTaggedTemplateExpression(node)) return runnerCall(node);
 
     if (
@@ -4833,6 +4823,11 @@ function closedCollection(source: ts.SourceFile): boolean {
       ({ callable, inFactory } = saved);
     }
   };
+  /**
+   * A call of a local function that cannot reach code static analysis does not see (`localCallee`), with arguments
+   * checked as for an API that may call them.
+   */
+  const localCall = (call: ts.CallExpression): boolean => (localCallee?.(call) ?? false) && argumentsOk(call);
   /** An expression run as a statement at collection level: a directive, or a call of the runner's API. */
   const closedExpression = (node: ts.Expression): boolean => {
     const expression = skipParens(node);
@@ -4840,7 +4835,11 @@ function closedCollection(source: ts.SourceFile): boolean {
     // A directive such as 'use strict'.
     if (ts.isStringLiteral(expression)) return true;
 
-    if (!ts.isCallExpression(expression) || !runnerCall(expression)) return false;
+    if (!ts.isCallExpression(expression)) return false;
+
+    if (localCall(expression)) return true;
+
+    if (!runnerCall(expression)) return false;
 
     if (!describeRegistration(expression)) return true;
     const callback = callbackArgument(expression);
@@ -5548,18 +5547,72 @@ function localDependencies(start: ts.SourceFile, checker: ts.TypeChecker, root: 
     .sort();
 }
 
+/** What a module loads when it runs: local modules, and whether it loads a package or something not followed. */
+interface RuntimeImports {
+  locals: ts.SourceFile[];
+  /** It loads a package that is neither a Node.js builtin nor the test runner's. */
+  external: boolean;
+  /**
+   * It loads a local module that does not resolve, or loads or reaches code by a name computed at run time
+   * (`import(name)`, `require(name)`, `eval`, `Function`, `globalThis[key]`, `globalThis.it`).
+   */
+  unknown: boolean;
+}
+
+const BUILTINS = new Set(builtinModules);
+const GLOBAL_OBJECTS = new Set(['globalThis', 'global', 'window', 'self']);
+
 /**
- * The local files a source runs when it runs, transitively: what its imports and re-exports name, except those that
- * are erased (`import type`, `export type`, or an import of type-only names), and its literal dynamic imports.
+ * Whether local modules are safe to load next to a test file, and whether a test file may call a local function at
+ * collection time, cached for one inventory. Tests are registered only by calling the runner's API, which
+ * `registersTests` sees, or by code static analysis does not see: a package, or code reached by a computed name.
+ * - A module's own verdict: `registers` when it calls the runner's registration API; `open` when it reaches code
+ *   not followed (`unknown`), or loads a package and runs anything but declarations and the runner's API at its top
+ *   level (it may call into that package when it loads); `safe` otherwise, whatever else its top level does.
+ * - A local function may be called at collection time when its module and every module that loads in turn load no
+ *   package and reach nothing not followed: then nothing it calls can register tests unseen.
  */
-function runtimeLoaded(start: ts.SourceFile, checker: ts.TypeChecker, root: string): ts.SourceFile[] {
-  const seen = new Set<ts.SourceFile>([start]);
-  const queue = [start];
+function moduleSafety(
+  root: string,
+  checker: ts.TypeChecker,
+  resolve: (name: string, from: string) => ts.SourceFile | undefined,
+) {
+  const importsOf = new Map<ts.SourceFile, RuntimeImports>();
+  const verdicts = new Map<ts.SourceFile, 'registers' | 'open' | 'safe'>();
+  const pure = new Map<ts.SourceFile, boolean>();
+  const local = (target: ts.SourceFile) => {
+    const relative = path.relative(root, path.resolve(target.fileName));
 
-  for (let current = queue.shift(); current; current = queue.shift())
-    for (const node of descendants(current)) {
-      let specifier: ts.Expression | undefined;
+    return (
+      !target.isDeclarationFile &&
+      !relative.startsWith('..') &&
+      !path.isAbsolute(relative) &&
+      !relative.split(path.sep).includes('node_modules')
+    );
+  };
+  const imports = (source: ts.SourceFile): RuntimeImports => {
+    const cached = importsOf.get(source);
 
+    if (cached) return cached;
+    const found: RuntimeImports = { locals: [], external: false, unknown: false };
+    const add = (name: string) => {
+      const target = resolve(name, source.fileName);
+
+      if (target && local(target)) {
+        if (!found.locals.includes(target)) found.locals.push(target);
+      } else if (name.startsWith('.') || path.isAbsolute(name)) found.unknown = true;
+      else if (
+        !(
+          name.startsWith('node:') ||
+          BUILTINS.has(name) ||
+          BUILTINS.has(name.split('/')[0] ?? '') ||
+          runner.modules.has(name)
+        )
+      )
+        found.external = true;
+    };
+
+    for (const node of descendants(source)) {
       if (ts.isImportDeclaration(node)) {
         const clause = node.importClause;
         const erased =
@@ -5571,32 +5624,120 @@ function runtimeLoaded(start: ts.SourceFile, checker: ts.TypeChecker, root: stri
               clause.namedBindings.elements.length > 0 &&
               clause.namedBindings.elements.every((element) => element.isTypeOnly)));
 
-        if (!erased) specifier = node.moduleSpecifier;
-      } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && !node.isTypeOnly)
-        specifier = node.moduleSpecifier;
-      else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
-        specifier = node.arguments[0];
+        if (!erased && ts.isStringLiteralLike(node.moduleSpecifier)) add(node.moduleSpecifier.text);
+      } else if (ts.isExportDeclaration(node)) {
+        if (node.moduleSpecifier && !node.isTypeOnly && ts.isStringLiteralLike(node.moduleSpecifier))
+          add(node.moduleSpecifier.text);
+      } else if (ts.isImportEqualsDeclaration(node)) {
+        if (ts.isExternalModuleReference(node.moduleReference)) {
+          const expression = node.moduleReference.expression;
 
-      if (!specifier || !ts.isStringLiteralLike(specifier)) continue;
-      const target = checker
-        .getSymbolAtLocation(specifier)
-        ?.declarations?.find((declaration) => ts.isSourceFile(declaration));
+          if (ts.isStringLiteralLike(expression)) add(expression.text);
+          else found.unknown = true;
+        }
+      } else if (ts.isCallExpression(node)) {
+        const callee = skipParens(node.expression);
+        const argument = node.arguments[0];
 
-      if (!target || !ts.isSourceFile(target) || target.isDeclarationFile || seen.has(target)) continue;
-      const relative = path.relative(root, path.resolve(target.fileName));
+        if (
+          node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+          (ts.isIdentifier(callee) && callee.text === 'require')
+        ) {
+          if (argument && ts.isStringLiteralLike(argument)) add(argument.text);
+          else found.unknown = true;
+        } else if (ts.isIdentifier(callee) && (callee.text === 'eval' || callee.text === 'Function'))
+          found.unknown = true;
+      } else if (ts.isNewExpression(node)) {
+        if (ts.isIdentifier(node.expression) && node.expression.text === 'Function') found.unknown = true;
+      } else if (ts.isElementAccessExpression(node) || ts.isPropertyAccessExpression(node)) {
+        const object = skipParens(node.expression);
 
-      if (
-        relative.startsWith('..') ||
-        path.isAbsolute(relative) ||
-        relative.split(path.sep).includes('node_modules')
-      )
-        continue;
-      seen.add(target);
-      queue.push(target);
+        if (ts.isIdentifier(object) && GLOBAL_OBJECTS.has(object.text)) {
+          const name = memberName(node);
+
+          if (
+            name === undefined ||
+            name === 'eval' ||
+            name === 'Function' ||
+            runner.tests.has(name) ||
+            runner.suites.has(name) ||
+            runner.hooks.has(name)
+          )
+            found.unknown = true;
+        }
+      }
     }
-  seen.delete(start);
+    importsOf.set(source, found);
 
-  return [...seen];
+    return found;
+  };
+  /** The modules `roots` load when they run, themselves included, transitively. */
+  const closure = (roots: readonly ts.SourceFile[]): ts.SourceFile[] => {
+    const seen = new Set(roots);
+    const queue = [...roots];
+
+    for (let current = queue.shift(); current; current = queue.shift())
+      for (const next of imports(current).locals)
+        if (!seen.has(next)) {
+          seen.add(next);
+          queue.push(next);
+        }
+
+    return [...seen];
+  };
+  const localCallee = (call: ts.CallExpression): boolean => {
+    const callee = skipParens(call.expression);
+    const target = ts.isIdentifier(callee)
+      ? callee
+      : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(skipParens(callee.expression))
+        ? callee.name
+        : undefined;
+    if (!target) return false;
+    let symbol = checker.getSymbolAtLocation(target);
+
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+
+    if (
+      !declaration ||
+      !(
+        ts.isFunctionDeclaration(declaration) ||
+        (ts.isVariableDeclaration(declaration) &&
+          (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 &&
+          declaration.initializer !== undefined &&
+          isFunction(skipParens(declaration.initializer)))
+      )
+    )
+      return false;
+    const file = declaration.getSourceFile();
+
+    // A function registering tests in the test file itself is inventoried as `registered_in_function`.
+    if (!local(file) || (file !== call.getSourceFile() && verdict(file) === 'registers')) return false;
+    let result = pure.get(file);
+
+    if (result === undefined) {
+      result = closure([file]).every((loaded) => !imports(loaded).external && !imports(loaded).unknown);
+      pure.set(file, result);
+    }
+
+    return result;
+  };
+  const verdict = (source: ts.SourceFile): 'registers' | 'open' | 'safe' => {
+    let found = verdicts.get(source);
+
+    if (found) return found;
+    const loaded = imports(source);
+    found = registersTests(source)
+      ? 'registers'
+      : loaded.unknown || (loaded.external && !closedCollection(source, localCallee))
+        ? 'open'
+        : 'safe';
+    verdicts.set(source, found);
+
+    return found;
+  };
+
+  return { imports, closure, verdict, localCallee };
 }
 
 /** The local files a source names in its imports, re-exports and literal dynamic imports, in source order. */
