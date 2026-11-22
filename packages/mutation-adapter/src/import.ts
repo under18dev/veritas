@@ -14,6 +14,7 @@ import {
   joinTitles,
   literalTitle,
   matchesTitleTemplate,
+  TemplateSet,
   type TitleTemplate,
 } from './each-title.js';
 
@@ -233,10 +234,8 @@ function withoutDuplicateSuffix(key: string): string | undefined {
  */
 export class TestNameIndex implements TestNameLookup {
   private readonly exact: Map<string, string | null>;
-  private readonly templates = new Map<
-    string,
-    { id: string; template: TitleTemplate; segments: TitleTemplate[] }[]
-  >();
+  /** The templates of each file's table-driven tests, indexed by their literal prefix. */
+  private readonly templates = new Map<string, TemplateSet<{ id: string; segments: TitleTemplate[] }>>();
   /** Tests that may run more than once under one name: table-driven, or registered in a loop or on a condition. */
   private readonly repeatable = new Set<string>();
   /** Every name mutator reported (see `observe`). */
@@ -283,10 +282,10 @@ export class TestNameIndex implements TestNameLookup {
       const segments = titles.map((title, k) =>
         formatted === undefined || formatted.has(k) ? compileTitleTemplate(title) : literalTitle(title),
       );
-      const list = this.templates.get(test.file) ?? [];
+      const set = this.templates.get(test.file) ?? new TemplateSet();
       // Kept even without placeholders: a title with escapes only (`100%% sure`) is reported changed (`100% sure`).
-      list.push({ id: test.id, template: joinTitles(segments, separator), segments });
-      this.templates.set(test.file, list);
+      set.add(joinTitles(segments, separator), { id: test.id, segments });
+      this.templates.set(test.file, set);
     }
 
     for (const file of files)
@@ -327,23 +326,20 @@ export class TestNameIndex implements TestNameLookup {
 
   /** The tests whose templates fit a name; with `byTitle`, only those that fit it title by title. */
   private fitting(keys: readonly string[], into: Set<string>, byTitle = false): void {
-    for (const key of keys) {
+    for (const key of new Set(keys)) {
       const hash = key.indexOf('#');
       const full = key.slice(hash + 1);
       const titles = byTitle ? full.split(this.separator) : [];
 
-      for (const { id, template, segments } of this.templates.get(hash < 0 ? '' : key.slice(0, hash)) ?? []) {
-        if (!byTitle) {
-          if (matchesTitleTemplate(template, full)) into.add(id);
-          continue;
-        }
-
+      // A name that fits title by title fits the joined template too, so only those are checked further.
+      for (const { id, segments } of this.templates.get(hash < 0 ? '' : key.slice(0, hash))?.matching(full) ??
+        [])
         if (
-          titles.length === segments.length &&
-          segments.every((segment, k) => matchesTitleTemplate(segment, titles[k] ?? ''))
+          !byTitle ||
+          (titles.length === segments.length &&
+            segments.every((segment, k) => matchesTitleTemplate(segment, titles[k] ?? '')))
         )
           into.add(id);
-      }
     }
   }
 

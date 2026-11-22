@@ -101,6 +101,33 @@ describe('title templates of table-driven tests', () => {
     expect(template && matchesTitleTemplate(template, name)).toBe(false);
     expect(performance.now() - started).toBeLessThan(200);
   });
+
+  it('resolves many names against many templates of one file in seconds', () => {
+    const file = 'test/big.test.ts';
+    const tests = Array.from({ length: 2000 }, (_, i) => ({
+      id: `T-${i}`,
+      file,
+      // Half differ in their literal prefix, half share it and differ in their literal suffix.
+      suitePath: i % 2 === 0 ? [`suite ${i}`] : ['suite'],
+      name: i % 2 === 0 ? 'case %s' : `%s case ${i}`,
+      modifiers: ['each'],
+      tableTitles: [1],
+    }));
+    const index = new TestNameIndex(tests, ' > ');
+    const started = performance.now();
+    let credited = 0;
+
+    for (let j = 0; j < 20000; j++) {
+      const i = j % 2000;
+      const full = i % 2 === 0 ? `suite ${i} > case row ${j}` : `suite > row ${j} case ${i}`;
+
+      if (mutatorTestId(`${file}#${full}`, ' > ', index) === `T-${i}`) credited++;
+    }
+
+    expect(credited).toBe(20000);
+    // About half a second on a laptop; the bound only catches a return to checking every template.
+    expect(performance.now() - started).toBeLessThan(20_000);
+  }, 60_000);
 });
 
 describe('resolving mutator names of table-driven tests to inventoried tests', () => {
