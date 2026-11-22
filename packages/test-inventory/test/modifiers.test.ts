@@ -203,6 +203,17 @@ describe('full names static analysis cannot read', () => {
       passed: "describe('outer', sharedSuite);",
       eachRows: "describe.each(sharedSuite())('row %s', () => {});",
       enumMember: 'enum E { A = sharedSuite().length }',
+      mockRedeclaredVar:
+        "vi.mock('../src/value.js', (orig) => { var orig = sharedSuite; orig(); return {}; });",
+      mockRedeclaredFunction:
+        "vi.mock('../src/value.js', (orig) => { function orig() { sharedSuite(); } orig(); return {}; });",
+      mockReassigned:
+        "vi.mock('../src/value.js', async (orig) => { orig = sharedSuite; await orig(); return {}; });",
+      mockBracket: "vi['mock']('../src/value.js', () => { sharedSuite(); return {}; });",
+      mockComputedKey: "const key = 'mock'; vi[key]('../src/value.js', () => ({}));",
+      mockByReference:
+        "const factory = () => { sharedSuite(); return {}; }; vi.mock('../src/value.js', factory);",
+      hoistedByReference: 'const h = vi.hoisted(helpers.run);',
       describeInConst: "const suite = describe('shared', sharedSuite);",
       describeInConstBody: "export const s = describe('shared', () => { sharedSuite(); });",
       describeInArray: "const all = [describe('shared', () => { helpers.run(); })];",
@@ -224,6 +235,8 @@ describe('full names static analysis cannot read', () => {
       declarations:
         "type T = number; interface I { a: T } function helper() { return value(1); } class Box { static size = 1; } it('d', () => { helper(); new Box(); });",
       template: `const n = 1; it(\`case \${n}\`, () => { expect(value(n)).toBe(n); });`,
+      mockSpy: "vi.mock('../src/value.js', { spy: true }); it('s', () => {});",
+      mockBracketClosed: "vi['mock']('../src/value.js', () => ({ value: vi.fn() })); it('b', () => {});",
       describeInConstClosed: "const suite = describe('own', () => { it('x', () => { value(1); }); });",
       enumLiteral: "enum E { A = 1, B = A + 1, C = 'c' } it('e', () => { expect(E.B).toBe(2); });",
       mockOriginal:

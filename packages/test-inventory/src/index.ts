@@ -4380,13 +4380,20 @@ function closedCollection(source: ts.SourceFile): boolean {
    */
   const runnerCall = (node: ts.CallExpression | ts.TaggedTemplateExpression): boolean => {
     let callee: ts.Expression = ts.isCallExpression(node) ? node.expression : node.tag;
-    const member = skipParens(callee);
+    const member = accessedMember(skipParens(callee));
 
     if (
       ts.isCallExpression(node) &&
-      ts.isPropertyAccessExpression(member) &&
-      MOCK_FACTORIES.has(member.name.text) &&
-      !node.arguments.every((argument) => !isFunction(argument) || closedFunction(argument, true))
+      member !== undefined &&
+      MOCK_FACTORIES.has(member) &&
+      !node.arguments.every((argument) =>
+        isFunction(argument)
+          ? closedFunction(argument, true)
+          : // A factory passed by reference (`vi.mock(path, factory)`) is not checked: only data may be passed.
+            ts.isStringLiteralLike(argument) ||
+            ts.isNumericLiteral(argument) ||
+            (ts.isObjectLiteralExpression(argument) && inert(argument)),
+      )
     )
       return false;
 
@@ -4400,12 +4407,53 @@ function closedCollection(source: ts.SourceFile): boolean {
         if (!inert(callee.template)) return false;
         callee = callee.tag;
       } else if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
-        if (ts.isElementAccessExpression(callee) && !inert(callee.argumentExpression)) return false;
+        // `vi['mock']` is `vi.mock`; a key computed at run time could name anything.
+        if (accessedMember(callee) === undefined) return false;
         callee = callee.expression;
       } else break;
     }
 
     return ts.isIdentifier(callee) && runnerOwn(runnerName(callee));
+  };
+  /** The member a property or element access names, when written as a name or a literal key. */
+  const accessedMember = (node: ts.Expression): string | undefined =>
+    ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) ? memberName(node) : undefined;
+  /** Names a function body declares or assigns anywhere, which may then stand for something other than a parameter. */
+  const rebound = (body: ts.Node): Set<string> => {
+    const names = new Set<string>();
+    const bind = (name: ts.BindingName | undefined) => {
+      if (!name) return;
+
+      if (ts.isIdentifier(name)) names.add(name.text);
+      else for (const element of name.elements) if (!ts.isOmittedExpression(element)) bind(element.name);
+    };
+
+    for (const node of descendants(body)) {
+      if (ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node))
+        bind(node.name);
+      else if (
+        (ts.isFunctionDeclaration(node) ||
+          ts.isClassDeclaration(node) ||
+          ts.isClassExpression(node) ||
+          ts.isFunctionExpression(node)) &&
+        node.name
+      )
+        names.add(node.name.text);
+      else if (
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+        ts.isIdentifier(skipParens(node.left))
+      )
+        names.add((skipParens(node.left) as ts.Identifier).text);
+      else if (
+        (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+        ts.isIdentifier(node.operand)
+      )
+        names.add(node.operand.text);
+    }
+
+    return names;
   };
   /**
    * An expression that calls nothing when evaluated, other than the runner's API: literals, names, member access,
@@ -4564,8 +4612,12 @@ function closedCollection(source: ts.SourceFile): boolean {
     const saved = { callable, inFactory };
 
     if (factory) {
+      // A parameter the body declares again or assigns may no longer be the factory's own.
+      const shadowed = rebound(fn.body);
       callable = new Set(
-        fn.parameters.flatMap((parameter) => (ts.isIdentifier(parameter.name) ? [parameter.name.text] : [])),
+        fn.parameters.flatMap((parameter) =>
+          ts.isIdentifier(parameter.name) && !shadowed.has(parameter.name.text) ? [parameter.name.text] : [],
+        ),
       );
       inFactory = true;
     } else {
