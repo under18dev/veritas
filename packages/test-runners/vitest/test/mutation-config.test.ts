@@ -226,7 +226,7 @@ describe('writeMutationVitestConfig', () => {
       toolchain: { ...toolchain, viteUrl: null },
     });
     await expect((await import(pathToFileURL(configPath).href)).default({})).rejects.toThrow(
-      /cannot limit the Vitest project .*packages\/a\/vitest\.config\.mjs/,
+      /cannot limit the Vitest project .*packages[\\/]a[\\/]vitest\.config\.mjs/,
     );
   });
 
