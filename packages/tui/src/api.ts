@@ -26,6 +26,7 @@ import {
   parseConfig,
   type Run,
   resolveInsideRoot,
+  type VeritasConfig,
   VeritasError,
 } from '@under18dev/veritas-core';
 import {
@@ -145,6 +146,18 @@ export function replaceFile(root: string, file: string, content: string): void {
   }
 }
 
+/**
+ * The configuration whose declared properties the spec screens add to the latest run's, as the CLI does: the JSON
+ * configuration (the TUI never loads a code configuration), or none.
+ */
+function specOptions(root: string): { config?: VeritasConfig } {
+  const file = resolveInsideRoot(root, JSON_CONFIG);
+
+  if (CODE_CONFIGS.some((f) => existsSync(resolveInsideRoot(root, f))) || !existsSync(file)) return {};
+
+  return { config: parseConfig(JSON.parse(readFileSync(file, 'utf8')) as unknown, JSON_CONFIG) };
+}
+
 export function createApi(root: string): TuiApi {
   return {
     root,
@@ -176,14 +189,14 @@ export function createApi(root: string): TuiApi {
     init: () => initProject(root),
     properties: () => {
       try {
-        return listProperties(root).properties;
+        return listProperties(root, specOptions(root)).properties;
       } catch (error) {
         if (noRun(error)) return [];
         throw error;
       }
     },
-    property: (id) => showProperty(root, id),
-    decide: (id, decision, reason) => decideProperty(root, id, decision, { reason }),
+    property: (id) => showProperty(root, id, specOptions(root)),
+    decide: (id, decision, reason) => decideProperty(root, id, decision, { reason, ...specOptions(root) }),
     diff: () => {
       try {
         return diffLatest(root);

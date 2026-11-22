@@ -108,7 +108,7 @@ Only commands with the report stage (`run`, `prove`, and `replay` of such a run)
 
 ### `spec`
 
-`spec accept` and `spec reject` add a decision with the actor, time and reason to `.veritas/approvals.json`. The actor is `--actor`, else `VERITAS_ACTOR`, else the git `user.name`. A decision applies to the version of the property it was made for; if the property changes, decide again. Only a recorded decision makes a property `accepted`. See [Specifications](/guide/specifications).
+`spec accept` and `spec reject` add a decision with the actor, time and reason to `.veritas/approvals.json`. The actor is `--actor`, else `VERITAS_ACTOR`, else the git `user.name`. A decision applies to the version of the property it was made for; if the property changes, decide again. Only a recorded decision makes a property `accepted`. Properties declared in the configuration can be listed, shown and decided on before the first run: `spec` builds them from the configuration, at the version the next run gives them. See [Specifications](/guide/specifications).
 
 ### `test`
 

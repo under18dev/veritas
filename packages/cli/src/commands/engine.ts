@@ -18,6 +18,7 @@ import {
   listProperties,
   PROFILE_STAGES,
   type Profile,
+  propertyConfig,
   type ReportFormat,
   type RunSummary,
   readArtifact,
@@ -233,10 +234,17 @@ export async function explainCommand(opts: Opts, args: string[]): Promise<ExitCo
   return Exit.Success;
 }
 
+/** Spec commands also see the declared properties of the configuration, before or newer than the latest run. */
+async function specOptions(opts: Opts) {
+  const config = await propertyConfig(opts.root, { allowCodeConfig: Boolean(opts.allowCodeConfig) });
+
+  return config ? { config } : {};
+}
+
 export async function specCommand(opts: Opts, sub: string, args: string[]): Promise<ExitCode> {
   switch (sub) {
     case 'list': {
-      const { runId, properties } = listProperties(opts.root);
+      const { runId, properties } = listProperties(opts.root, await specOptions(opts));
 
       if (opts.json) emitJson({ runId, properties });
       else
@@ -246,7 +254,7 @@ export async function specCommand(opts: Opts, sub: string, args: string[]): Prom
       return Exit.Success;
     }
     case 'show': {
-      const result = showProperty(opts.root, args[0] as string);
+      const result = showProperty(opts.root, args[0] as string, await specOptions(opts));
       opts.json ? emitJson(result) : emitText(JSON.stringify(result, null, 2));
 
       return Exit.Success;
@@ -264,6 +272,7 @@ export async function specCommand(opts: Opts, sub: string, args: string[]): Prom
       const approval = await decideProperty(opts.root, args[0] as string, sub, {
         reason: opts.reason,
         ...(typeof opts.actor === 'string' ? { actor: opts.actor } : {}),
+        ...(await specOptions(opts)),
       });
       opts.json
         ? emitJson({ status: 'recorded', approval })
@@ -290,7 +299,7 @@ export async function specCommand(opts: Opts, sub: string, args: string[]): Prom
       return Exit.Success;
     }
     case 'export': {
-      emitJson(listProperties(opts.root));
+      emitJson(listProperties(opts.root, await specOptions(opts)));
 
       return Exit.Success;
     }

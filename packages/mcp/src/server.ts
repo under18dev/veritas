@@ -7,6 +7,7 @@ import {
   COMMAND_STAGES,
   explainFinding,
   listProperties,
+  propertyConfig,
   type RunSummary,
   readArtifact,
   readLatest,
@@ -215,7 +216,7 @@ export function createServer(options: ServerOptions): McpServer {
     'list_properties',
     {
       description:
-        'List properties of the latest run with their review status, origin and sources. Approvals cannot be changed through MCP.',
+        'List properties of the latest run, and the declared properties of the configuration, with their review status, origin and sources. Approvals cannot be changed through MCP.',
       inputSchema: {
         status: z
           .enum(['proposed', 'reviewed', 'accepted', 'rejected', 'conflicted', 'superseded'])
@@ -225,7 +226,8 @@ export function createServer(options: ServerOptions): McpServer {
     },
     async ({ status }) => {
       try {
-        const { runId, properties } = listProperties(root);
+        const config = await propertyConfig(root);
+        const { runId, properties } = listProperties(root, config ? { config } : {});
 
         return ok({ runId, properties: properties.filter((p) => !status || p.status === status) });
       } catch (error) {
