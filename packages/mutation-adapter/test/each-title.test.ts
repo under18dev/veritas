@@ -403,6 +403,21 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect(mutatorTestId(`${FILE}#case x#2`, ' > ', alone)).toBe(entry([], 'case %s').id);
   });
 
+  it('credits no test with a title ending in #2 when a second run of the shorter name is possible', () => {
+    const rows = { ...entry(['suite %s'], 'works'), tableTitles: [0] };
+    const literal = { ...entry(['suite 1'], 'works#2', []), conditional: true as const };
+    const index = new TestNameIndex([rows, literal], ' > ');
+    index.observe([`${FILE}#suite 1 > works`, `${FILE}#suite 1 > works#2`]);
+
+    expect([rows.id, literal.id]).not.toContain(mutatorTestId(`${FILE}#suite 1 > works#2`, ' > ', index));
+    expect(index.withheld.get(`${FILE}#suite 1 > works#2`)).toEqual({ kind: 'exact_and_template' });
+
+    // With no second run of `suite 1 > works` possible, the title is the test's.
+    const once = new TestNameIndex([entry(['suite 1'], 'works', []), literal], ' > ');
+    once.observe([`${FILE}#suite 1 > works`, `${FILE}#suite 1 > works#2`]);
+    expect(mutatorTestId(`${FILE}#suite 1 > works#2`, ' > ', once)).toBe(literal.id);
+  });
+
   it('does not take a plain name for a row index', () => {
     const indexed = entry([], 'case %#');
     const plain = entry([], 'case missing', []);

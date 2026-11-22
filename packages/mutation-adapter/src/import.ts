@@ -168,7 +168,7 @@ export interface NamedTest {
 /** A test file as name resolution needs it: whether it may register tests static analysis did not see. */
 export interface NamedTestFile {
   path: string;
-  inexactNames?: 'open_collection' | 'imported_registrations';
+  inexactNames?: 'open_collection' | 'imported_registrations' | 'imported_open_module';
 }
 
 /** Why static analysis could not read the full name of every test a file runs. */
@@ -367,20 +367,28 @@ export class TestNameIndex implements TestNameLookup {
       this.duplicated.has(name) &&
       (exact === null || this.repeats(new Set([...candidates, ...(exact ? [exact] : [])]), file));
 
-    if (exact === undefined) {
-      // Not a title as written: it may be mutator's numbered copy of a name it also reported.
-      const bases = keys.map(withoutDuplicateSuffix);
+    // The name may be mutator's numbered copy of a name it also reported (`works#2`), even when a test has it as its
+    // title: then both readings may hold.
+    const bases = keys.map(withoutDuplicateSuffix);
 
-      if (bases.every((base) => base !== undefined) && this.observed.has(bases[0] ?? '')) {
-        const viaBase = new Set<string>();
-        const baseExact = this.exactOf(bases);
-        this.fitting(bases, viaBase);
+    if (bases.every((base) => base !== undefined) && this.observed.has(bases[0] ?? '')) {
+      const viaBase = new Set<string>();
+      const baseExact = this.exactOf(bases);
+      this.fitting(bases, viaBase);
 
-        if (baseExact === null) return null;
+      if (baseExact !== undefined && baseExact !== null) viaBase.add(baseExact);
 
-        if (baseExact !== undefined) viaBase.add(baseExact);
+      if (baseExact === null || (viaBase.size > 0 && this.repeats(viaBase, file))) {
+        if (exact !== undefined) {
+          // A title that ends in `#2`, and a second run of the shorter name: which one ran is not known.
+          if (exact === null || baseExact === null || [...viaBase].some((id) => id !== exact)) {
+            this.withheld.set(name, { kind: 'exact_and_template' });
 
-        if (viaBase.size > 0 && this.repeats(viaBase, file)) {
+            return null;
+          }
+        } else {
+          if (baseExact === null) return null;
+
           if (baseExact !== undefined) viaBase.delete(baseExact);
           exact = baseExact;
           duplicate = true;
