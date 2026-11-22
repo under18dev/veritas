@@ -199,6 +199,8 @@ export async function proveWithLean(options: ProveWithLeanOptions): Promise<Lean
     let input: string | undefined;
 
     for (const strategy of strategies) {
+      // A strategy whose script hit its generation budget has nothing to try.
+      if (strategy.script.length === 0) continue;
       const source = irToLean(options.ir, { theoremName, strategy });
       input = write(`${PROOF_NAMESPACE}.lean`, source);
       const check = await checkLeanProject(dir, {

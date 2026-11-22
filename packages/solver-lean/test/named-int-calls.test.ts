@@ -230,6 +230,93 @@ describe('name-int-calls-cases', () => {
     expect(names[0]).toBe('name-int-calls-cases');
   });
 
+  it('abandons the script, without an attempt, when integer helpers multiply the named results', () => {
+    // f0(x) = x; f_k(x) = f_{k-1}(f_{k-1}(x)): every call gets its own name, 2^k of them.
+    const flags = Array.from({ length: 9 }, (_, i) => ({ name: `b${i}`, sort: 'bool' as const }));
+    const x: Expr = { kind: 'var', name: 'a' };
+    const functions: PropertyIR['functions'] = [
+      { name: 'f0', symbol: 's#f0', params: [{ name: 'a', sort: 'int' }], returns: 'int', body: x },
+    ];
+
+    for (let k = 1; k < 14; k++) {
+      const inner: Expr = { kind: 'call', fn: `f${k - 1}`, args: [x] };
+      functions.push({
+        name: `f${k}`,
+        symbol: `s#f${k}`,
+        params: [{ name: 'a', sort: 'int' }],
+        returns: 'int',
+        body: { kind: 'call', fn: `f${k - 1}`, args: [inner] },
+      });
+    }
+    const ir: PropertyIR = {
+      irVersion: 1,
+      params: [...flags, { name: 'x', sort: 'int', domain: { min: '-5', max: '5' } }],
+      preconditions: [],
+      functions,
+      body: {
+        kind: 'binary',
+        op: '>=',
+        left: { kind: 'call', fn: 'f13', args: [{ kind: 'var', name: 'x' }] },
+        right: { kind: 'int', value: '-5' },
+      },
+    };
+    const started = Date.now();
+    const strategy = leanProofStrategies(ir).find((s) => s.name === 'name-int-calls-cases');
+    expect(strategy?.script).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('counts parameter copies made by inlined helpers when sizing the term', () => {
+    // dup(p) = p && p; wrap(p) = dup(p): wrap copies p twice, so 16 nested wraps make 2^16 copies.
+    const flags = Array.from({ length: 9 }, (_, i) => ({ name: `b${i}`, sort: 'bool' as const }));
+    const p: Expr = { kind: 'var', name: 'p' };
+    let nested: Expr = { kind: 'var', name: 'b0' };
+
+    for (let k = 0; k < 16; k++) nested = { kind: 'call', fn: 'wrap', args: [nested] };
+    const ir: PropertyIR = {
+      irVersion: 1,
+      params: [...flags, { name: 'x', sort: 'int', domain: { min: '-5', max: '5' } }],
+      preconditions: [],
+      functions: [
+        {
+          name: 'dup',
+          symbol: 's#dup',
+          params: [{ name: 'p', sort: 'bool' }],
+          returns: 'bool',
+          body: { kind: 'binary', op: 'and', left: p, right: p },
+        },
+        {
+          name: 'wrap',
+          symbol: 's#wrap',
+          params: [{ name: 'p', sort: 'bool' }],
+          returns: 'bool',
+          body: { kind: 'call', fn: 'dup', args: [p] },
+        },
+        {
+          name: 'code',
+          symbol: 's#code',
+          params: [{ name: 'c', sort: 'bool' }],
+          returns: 'int',
+          body: {
+            kind: 'ite',
+            cond: { kind: 'var', name: 'c' },
+            whenTrue: { kind: 'int', value: '1' },
+            whenFalse: { kind: 'int', value: '0' },
+          },
+        },
+      ],
+      body: {
+        kind: 'binary',
+        op: '>=',
+        left: { kind: 'call', fn: 'code', args: [nested] },
+        right: { kind: 'int', value: '0' },
+      },
+    };
+    const started = Date.now();
+    expect(leanProofStrategies(ir).map((s) => s.name)).not.toContain('name-int-calls-cases');
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
   it('generates its script only when an attempt reads it', () => {
     const strategy = leanProofStrategies(holds('invariant_zeroNeedsAll'))[0];
     const descriptor = strategy ? Object.getOwnPropertyDescriptor(strategy, 'script') : undefined;

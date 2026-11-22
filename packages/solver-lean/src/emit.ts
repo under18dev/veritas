@@ -354,27 +354,47 @@ function inlinedSize(ir: PropertyIR, expr: Expr, limit: number = NAMED_CALLS_MAX
   const over = limit + 1;
   const nodes = new WeakMap<Expr, number>();
   const functions = new Map<string, number>();
-  const uses = new Map<string, Map<string, number>>();
   const add = (a: number, b: number) => Math.min(over, a + b);
-  /** How often each parameter occurs in a body (saturating, counted once per function). */
-  const usesIn = (fn: string, body: Expr): Map<string, number> => {
-    let counts = uses.get(fn);
+  const mul = (a: number, b: number) => (a === 0 || b === 0 ? 0 : Math.min(over, a * b));
+  const multMemo = new Map<string, number>();
+  const occMemo = new WeakMap<Expr, Map<string, number>>();
+  /** Copies of the variable `name` in `e` once its boolean calls are inlined (saturating). */
+  const occurrencesIn = (e: Expr, name: string): number => {
+    let perName = occMemo.get(e);
 
-    if (!counts) {
-      const found = new Map<string, number>();
-      const stack: Expr[] = [body];
+    if (!perName) {
+      perName = new Map();
+      occMemo.set(e, perName);
+    }
+    const known = perName.get(name);
 
-      while (stack.length > 0) {
-        const e = stack.pop() as Expr;
+    if (known !== undefined) return known;
+    let total = 0;
+    const f = e.kind === 'call' ? byName.get(e.fn) : undefined;
 
-        if (e.kind === 'var') found.set(e.name, add(found.get(e.name) ?? 0, 1));
-        else stack.push(...children(e));
+    if (e.kind === 'var') total = e.name === name ? 1 : 0;
+    else if (e.kind === 'call' && f?.returns === 'bool' && f.body) {
+      for (let i = 0; i < e.args.length && total < over; i++) {
+        const inArg = occurrencesIn(e.args[i] as Expr, name);
+
+        if (inArg > 0) total = add(total, mul(inArg, multiplicity(f, f.params[i]?.name ?? '')));
       }
-      counts = found;
-      uses.set(fn, counts);
+    } else for (const c of children(e)) total = add(total, occurrencesIn(c, name));
+    perName.set(name, total);
+
+    return total;
+  };
+  /** Copies of parameter `param` in the inlined body of `f`. */
+  const multiplicity = (f: FunctionModel, param: string): number => {
+    const key = `${f.name}\u0000${param}`;
+    let m = multMemo.get(key);
+
+    if (m === undefined) {
+      m = occurrencesIn(f.body as Expr, param);
+      multMemo.set(key, m);
     }
 
-    return counts;
+    return m;
   };
   const size = (e: Expr): number => {
     const known = nodes.get(e);
@@ -391,14 +411,13 @@ function inlinedSize(ir: PropertyIR, expr: Expr, limit: number = NAMED_CALLS_MAX
         own = size(body);
         functions.set(f.name, own);
       }
-      const counts = usesIn(f.name, body);
       total = own;
 
-      // Each use of a parameter in the body becomes a copy of the argument.
+      // Each copy of a parameter in the inlined body becomes a copy of the argument.
       for (let i = 0; i < e.args.length && total < over; i++) {
-        const count = counts.get(f.params[i]?.name ?? '') ?? 0;
+        const count = multiplicity(f, f.params[i]?.name ?? '');
 
-        if (count > 0) total = add(total, Math.min(over, size(e.args[i] as Expr) * count));
+        if (count > 0) total = add(total, mul(size(e.args[i] as Expr), count));
       }
     } else {
       total = 1;
@@ -437,11 +456,26 @@ function namedIntCallsApplies(ir: PropertyIR): boolean {
  * boolean parameters are then split one at a time, simplifying after each split so that decided branches close
  * early; what remains is a linear integer problem for `omega`.
  */
+/** Generation of the named-calls script stopped at a budget: the strategy is abandoned without an attempt. */
+class ScriptTooLarge extends Error {}
+
+/** At most this many named call results, and this many bytes of script, before the strategy is abandoned. */
+const NAMED_CALLS_MAX_RESULTS = 2_000;
+const NAMED_CALLS_MAX_SCRIPT_BYTES = 1_000_000;
+
 function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[]): string[] {
   const byName = new Map(ir.functions.map((f) => [f.name, f]));
   const returnsOf = (fn: string) => byName.get(fn)?.returns;
   const boolDefs = ir.functions.filter((f) => f.returns === 'bool').map((f) => qualified(f.name));
   const lines = [...introLine];
+  let bytes = 0;
+  let work = 0;
+  const push = (...more: string[]) => {
+    for (const l of more) bytes += l.length + 1;
+
+    if (bytes > NAMED_CALLS_MAX_SCRIPT_BYTES) throw new ScriptTooLarge();
+    lines.push(...more);
+  };
   const named = new Map<string, { h: string; ref: Expr }>();
   const namedVars = new Set<string>();
   const splits: string[] = [];
@@ -450,6 +484,7 @@ function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[
   const defs: { r: string; name: string; def: string; reduced: Expr }[] = [];
 
   const inlineBool = (expr: Expr): Expr => {
+    if (++work > NAMED_CALLS_MAX_TERM * 10) throw new ScriptTooLarge();
     const e = mapExpr(expr, inlineBool);
 
     if (e.kind !== 'call' || returnsOf(e.fn) !== 'bool') return e;
@@ -468,6 +503,7 @@ function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[
     let entry = named.get(key);
 
     if (!entry) {
+      if (named.size >= NAMED_CALLS_MAX_RESULTS) throw new ScriptTooLarge();
       const k = named.size;
       const name = `r$${k}`;
       const r = varName(name);
@@ -478,7 +514,7 @@ function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[
       copies.push(entry.h);
       const def = `hr_${k}`;
       const f = byName.get(e.fn) as FunctionModel;
-      lines.push(
+      push(
         `  obtain ⟨${r}, ${entry.h}, ${def}⟩ : ∃ ${r}, ${key} = ${r} ∧ ${key} = ${r} := ⟨_, rfl, rfl⟩`,
         `  try simp only [${entry.h}]${loc}`,
         `  simp only [${qualified(f.name)}] at ${def}`,
@@ -489,28 +525,28 @@ function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[
       defs.push({ r, name, def, reduced });
 
       if (itesOnlyOver(reduced, namedVars)) splits.push(def);
-    } else lines.push(`  try simp only [${entry.h}]${loc}`);
+    } else push(`  try simp only [${entry.h}]${loc}`);
 
     return entry.ref;
   };
 
   const place = (expr: Expr, loc: string): Expr => {
     if (boolDefs.length > 0 && calls(expr).some((fn) => returnsOf(fn) === 'bool'))
-      lines.push(`  try simp only [${boolDefs.join(', ')}]${loc}`);
+      push(`  try simp only [${boolDefs.join(', ')}]${loc}`);
 
     return nameCalls(inlineBool(expr), loc);
   };
 
   place(ir.body, '');
   // Left in place, `subst_vars` would put every call back.
-  lines.push(`  clear ${copies.join(' ')}`);
+  push(`  clear ${copies.join(' ')}`);
 
   const finish = ['  all_goals (try simp only [veritas_ite_eq] at *)', '  all_goals omega'];
 
   if (splits.length <= 1) {
     // One code mapped from named results: its few cases give each branch a known code to prune against.
-    for (const h of splits) lines.push(`  all_goals (repeat' (split at ${h}))`);
-    lines.push(
+    for (const h of splits) push(`  all_goals (repeat' (split at ${h}))`);
+    push(
       '  all_goals (try simp only [decide_eq_true_eq] at *)',
       '  all_goals (try subst_vars)',
       ...bools.map((b) => `  all_goals (cases ${b} <;> try simp at *)`),
@@ -520,7 +556,7 @@ function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[
     // Several: splitting each multiplies the branches. Instead, a named result is replaced by its value as soon
     // as the split booleans reduce its definition to one of its literal cases, inner results first, so that the
     // results built on it reduce in turn.
-    for (const d of defs) if (d.reduced.kind === 'var') lines.push(`  subst ${d.r}`);
+    for (const d of defs) if (d.reduced.kind === 'var') push(`  subst ${d.r}`);
     const resolvable = defs
       .map((d) => ({ ...d, leaves: literalLeaves(d.reduced) }))
       .filter((d): d is typeof d & { leaves: bigint[] } => d.leaves !== null);
@@ -547,11 +583,11 @@ function namedIntCallsScript(ir: PropertyIR, introLine: string[], bools: string[
       }
     }
     for (const b of bools) {
-      lines.push(`  all_goals (cases ${b} <;> try simp at *)`);
+      push(`  all_goals (cases ${b} <;> try simp at *)`);
 
-      if (steps.length > 0) lines.push(`  all_goals (${steps.join(' <;> ')})`);
+      if (steps.length > 0) push(`  all_goals (${steps.join(' <;> ')})`);
     }
-    lines.push(...finish);
+    push(...finish);
   }
 
   return lines;
@@ -567,8 +603,16 @@ function namedIntCallsStrategy(ir: PropertyIR, introLine: string[], bools: strin
 
   return {
     name: 'name-int-calls-cases',
+    // Empty when generation hits a budget; `proveWithLean` then skips the strategy without running Lean.
     get script() {
-      script ??= namedIntCallsScript(ir, introLine, bools);
+      if (script === undefined) {
+        try {
+          script = namedIntCallsScript(ir, introLine, bools);
+        } catch (error) {
+          if (!(error instanceof ScriptTooLarge)) throw error;
+          script = [];
+        }
+      }
 
       return script;
     },
