@@ -5249,7 +5249,8 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
           if (DEFERRING.has(member) && !call.arguments.every(passable)) return false;
 
-          if (member !== 'fn' && member !== 'extend' && DEFERRING.has(member)) replaced = true;
+          // A one-shot override (`mockImplementationOnce`) leaves the original for later calls.
+          if (PERMANENT_REPLACEMENTS.has(member)) replaced = true;
 
           if (member === 'spyOn' && !replaced) {
             const spied = call.arguments[0];
@@ -5317,6 +5318,14 @@ const NON_CALLING = new Set([
   'restoreAllMocks',
   'unstubAllGlobals',
   'unstubAllEnvs',
+]);
+
+/** Members of the runner's mock API that replace a spied method for every later call. */
+const PERMANENT_REPLACEMENTS = new Set([
+  'mockImplementation',
+  'mockReturnValue',
+  'mockResolvedValue',
+  'mockRejectedValue',
 ]);
 
 /** Members of the runner's API that keep a function argument to run later (a mock implementation, a fixture). */
@@ -5395,11 +5404,23 @@ function registrationOptions(node: ts.CallExpression): {
   // Each modifier's value as the object ends up with it: later keys override earlier ones.
   const set = new Map<TestCaseType['modifiers'][number], boolean>();
 
-  for (const argument of node.arguments.slice(1)) {
+  const after = node.arguments.slice(1);
+
+  for (const [index, argument] of after.entries()) {
     const value = skipParens(argument);
 
     // The callback, and a timeout.
     if (isFunction(value) || ts.isNumericLiteral(value)) continue;
+
+    // A name in the last place is the callback (`it('x', check)`, `it('x', { only: true }, check)`), unless an inline
+    // callback comes before it: then it is options (`it('x', () => {}, opts)`). A name before the last place is in
+    // the options place.
+    if (
+      ts.isIdentifier(value) &&
+      index === after.length - 1 &&
+      !after.slice(0, index).some((earlier) => isFunction(skipParens(earlier)))
+    )
+      continue;
 
     if (!ts.isObjectLiteralExpression(value)) {
       unknown = true;

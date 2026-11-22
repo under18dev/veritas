@@ -242,6 +242,7 @@ describe('full names static analysis cannot read', () => {
       expectAs: 'expect(sharedSuite as any).toBeDefined();',
       expectMockOf: 'expect(vi.fn(sharedSuite)).not.toThrow();',
       expectSpyOriginal: "expect(vi.spyOn(helpers, 'run')).not.toThrow();",
+      expectSpyOnce: "expect(vi.spyOn(helpers, 'run').mockImplementationOnce(() => [1])).not.toThrow();",
       expectMockImplementation: 'expect(vi.fn().mockImplementation(sharedSuite)).not.toThrow();',
       expectSpyImplementation:
         "expect(vi.spyOn(console, 'log').mockImplementation(() => sharedSuite())).not.toThrow();",
@@ -661,6 +662,11 @@ describe('full names static analysis cannot read', () => {
         it('spread then skip', { ...opts, skip: true }, () => {});
         describe.skip('D', opts, () => { it('inside', () => {}); });
         it('literal', { skip: true }, () => {});
+        function check() {}
+        it.only('by reference', check);
+        it('reference after options', { only: true }, check);
+        it('options before reference', opts, check);
+        it('options after inline', () => {}, opts);
       `,
     });
     const tests = inventoryTests({
@@ -675,6 +681,10 @@ describe('full names static analysis cannot read', () => {
       ['spread then skip', ['skip'], true],
       ['inside', ['skip'], true],
       ['literal', ['skip'], undefined],
+      ['by reference', ['only'], undefined],
+      ['reference after options', ['only'], undefined],
+      ['options before reference', [], true],
+      ['options after inline', [], true],
     ]);
   });
 
