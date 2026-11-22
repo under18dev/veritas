@@ -202,6 +202,14 @@ describe('full names static analysis cannot read', () => {
       inDescribe: "describe('outer', () => { if (true) { helpers.run(); } });",
       passed: "describe('outer', sharedSuite);",
       eachRows: "describe.each(sharedSuite())('row %s', () => {});",
+      enumMember: 'enum E { A = sharedSuite().length }',
+      describeDefault: "describe('d', (x = sharedSuite()) => {});",
+      describeDestructured: "describe('d', ({ a = sharedSuite() } = {}) => {});",
+      hoisted: 'const h = vi.hoisted(() => sharedSuite());',
+      mockFactory: "vi.mock('../src/value.js', () => { sharedSuite(); return {}; });",
+      doMockFactory: "vi.doMock('../src/value.js', () => ({ value: sharedSuite() }));",
+      mockFactoryImport:
+        "vi.mock('../src/value.js', async () => ({ ...(await import('./shared-suite.js')) }));",
     };
     const closed: Record<string, string> = {
       plain:
@@ -213,6 +221,12 @@ describe('full names static analysis cannot read', () => {
       declarations:
         "type T = number; interface I { a: T } function helper() { return value(1); } class Box { static size = 1; } it('d', () => { helper(); new Box(); });",
       template: `const n = 1; it(\`case \${n}\`, () => { expect(value(n)).toBe(n); });`,
+      enumLiteral: "enum E { A = 1, B = A + 1, C = 'c' } it('e', () => { expect(E.B).toBe(2); });",
+      mockOriginal:
+        "vi.mock('../src/value.js', async (orig) => ({ ...(await orig<object>()), value: vi.fn() })); it('m', () => {});",
+      mockOriginalBlock:
+        "vi.mock('../src/value.js', async (importOriginal) => { const actual = await importOriginal<object>(); return { ...actual, value: vi.fn() }; }); it('m', () => {});",
+      hoistedFn: "const mocks = vi.hoisted(() => ({ value: vi.fn() })); it('h', () => { mocks.value(); });",
     };
     const files: Record<string, string> = {
       'src/value.ts': 'export const value = (input: number) => input;\n',

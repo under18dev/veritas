@@ -4367,9 +4367,28 @@ function closedCollection(source: ts.SourceFile): boolean {
     runner.typeLevel.has(name) ||
     runner.assertObjects.has(name) ||
     runner.mockObjects.has(name);
-  /** A call of the runner's API, by the identifier its callee chain starts with (`vi.mock`, `it.each(rows)`). */
+  /**
+   * Inside a mock factory: the factory's own parameters, which it may call (`importOriginal()`), and whether `await`
+   * and `return` are allowed.
+   */
+  let callable = new Set<string>();
+  let inFactory = false;
+  /**
+   * A call of the runner's API, by the identifier its callee chain starts with (`vi.mock`, `it.each(rows)`). The
+   * factories of `vi.mock`, `vi.doMock`, `vi.hoisted` (and Jest's) run while the file is collected, so their code is
+   * checked like a `describe` callback.
+   */
   const runnerCall = (node: ts.CallExpression | ts.TaggedTemplateExpression): boolean => {
     let callee: ts.Expression = ts.isCallExpression(node) ? node.expression : node.tag;
+    const member = skipParens(callee);
+
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(member) &&
+      MOCK_FACTORIES.has(member.name.text) &&
+      !node.arguments.every((argument) => !isFunction(argument) || closedFunction(argument, true))
+    )
+      return false;
 
     for (;;) {
       callee = skipParens(callee);
@@ -4408,6 +4427,14 @@ function closedCollection(source: ts.SourceFile): boolean {
       return true;
 
     if (ts.isClassExpression(node)) return inertClass(node);
+
+    if (ts.isAwaitExpression(node)) return inFactory && inert(node.expression);
+
+    if (ts.isCallExpression(node)) {
+      const callee = skipParens(node.expression);
+
+      if (ts.isIdentifier(callee) && callable.has(callee.text)) return node.arguments.every(inert);
+    }
 
     if (ts.isCallExpression(node) || ts.isTaggedTemplateExpression(node)) return runnerCall(node);
 
@@ -4485,10 +4512,13 @@ function closedCollection(source: ts.SourceFile): boolean {
     )
       return true;
 
-    if (ts.isModuleDeclaration(node) || ts.isEnumDeclaration(node))
-      return (
-        (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Ambient) !== 0 || ts.isEnumDeclaration(node)
-      );
+    if (ts.isEnumDeclaration(node))
+      return node.members.every((member) => !member.initializer || inert(member.initializer));
+
+    if (ts.isModuleDeclaration(node))
+      return (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Ambient) !== 0;
+
+    if (ts.isReturnStatement(node)) return inFactory && (!node.expression || inert(node.expression));
 
     if (ts.isClassDeclaration(node)) return inertClass(node);
 
@@ -4499,7 +4529,56 @@ function closedCollection(source: ts.SourceFile): boolean {
         (declaration) => !declaration.initializer || inert(declaration.initializer),
       );
 
-    return ts.isExpressionStatement(node) && closedExpression(node.expression);
+    return (
+      ts.isExpressionStatement(node) &&
+      (closedExpression(node.expression) || (inFactory && inert(node.expression)))
+    );
+  };
+  /** Default values in a parameter or binding pattern, which run when the function is called. */
+  const inertBinding = (name: ts.BindingName): boolean =>
+    ts.isIdentifier(name) ||
+    name.elements.every(
+      (element) =>
+        ts.isOmittedExpression(element) ||
+        ((!element.initializer || inert(element.initializer)) &&
+          (!element.propertyName ||
+            !ts.isComputedPropertyName(element.propertyName) ||
+            inert(element.propertyName.expression)) &&
+          inertBinding(element.name)),
+    );
+  /**
+   * A function the runner calls while collecting: a `describe` callback, or a mock factory (`factory`), which may
+   * call its own parameters (`importOriginal()`), await, and return.
+   */
+  const closedFunction = (fn: ts.ArrowFunction | ts.FunctionExpression, factory: boolean): boolean => {
+    if (
+      !fn.parameters.every(
+        (parameter) =>
+          (!parameter.initializer || inert(parameter.initializer)) && inertBinding(parameter.name),
+      )
+    )
+      return false;
+    const saved = { callable, inFactory };
+
+    if (factory) {
+      callable = new Set(
+        fn.parameters.flatMap((parameter) => (ts.isIdentifier(parameter.name) ? [parameter.name.text] : [])),
+      );
+      inFactory = true;
+    } else {
+      callable = new Set();
+      inFactory = false;
+    }
+
+    try {
+      return ts.isBlock(fn.body)
+        ? fn.body.statements.every(closed)
+        : factory
+          ? inert(fn.body)
+          : closedExpression(fn.body);
+    } finally {
+      ({ callable, inFactory } = saved);
+    }
   };
   /** An expression run as a statement at collection level: a directive, or a call of the runner's API. */
   const closedExpression = (node: ts.Expression): boolean => {
@@ -4517,13 +4596,14 @@ function closedCollection(source: ts.SourceFile): boolean {
     if (callback === undefined || !isFunction(callback))
       return callback === undefined || callback === expression.arguments[0];
 
-    return ts.isBlock(callback.body)
-      ? callback.body.statements.every(closed)
-      : closedExpression(callback.body);
+    return closedFunction(callback, false);
   };
 
   return source.statements.every(closed);
 }
+
+/** Members of the runner's mock object whose function arguments run while a test file is collected. */
+const MOCK_FACTORIES = new Set(['mock', 'doMock', 'hoisted', 'unstable_mockModule', 'setMock']);
 
 type Registration = { name?: string; callback?: ts.Expression; modifiers: TestCaseType['modifiers'] };
 
