@@ -263,6 +263,17 @@ export class TestNameIndex implements TestNameLookup {
     const onlyFiles = new Set(
       tests.filter((test) => test.modifiers?.includes('only')).map((test) => test.file),
     );
+    // Files with a focused test that surely runs: the runner runs only the focused tests of such a file.
+    const focusedFiles = new Set(
+      tests
+        .filter(
+          (test) =>
+            test.modifiers?.includes('only') &&
+            !test.conditional &&
+            !test.modifiers.some((modifier) => modifier === 'skip' || modifier === 'todo'),
+        )
+        .map((test) => test.file),
+    );
 
     for (const test of tests) {
       const inexact = test.inexactName ?? (test.granularity === 'suite' ? 'dynamic_title' : undefined);
@@ -271,7 +282,9 @@ export class TestNameIndex implements TestNameLookup {
 
       // `skip` and `todo` (its own, `xit`, or an enclosing `describe.skip`) are known not to run; `skipIf`,
       // `runIf` and other conditions are not known either way.
-      const skipped = test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false;
+      const skipped =
+        (test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false) ||
+        (focusedFiles.has(test.file) && !test.modifiers?.includes('only'));
 
       if (skipped) this.skipped.add(test.id);
 

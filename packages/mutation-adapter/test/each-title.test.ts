@@ -352,6 +352,24 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect([conditional.id, plain.id]).not.toContain(mutatorTestId(`${FILE}#case 1`, ' > ', index));
   });
 
+  it('takes no template of an unfocused test as a candidate next to a focused test that surely runs', () => {
+    const focused = entry([], 'case 1', ['only']);
+    const rows = entry([], 'case %s');
+    const index = new TestNameIndex([focused, rows], ' > ');
+
+    expect(mutatorTestId(`${FILE}#case 1`, ' > ', index)).toBe(focused.id);
+    expect(index.withheld.size).toBe(0);
+    // A focused test registered on a condition may not run, and then the others run: the template stays.
+    const conditional = new TestNameIndex([{ ...focused, conditional: true as const }, rows], ' > ');
+    expect([focused.id, rows.id]).not.toContain(mutatorTestId(`${FILE}#case 1`, ' > ', conditional));
+    // A focused template next to an unfocused test is credited too.
+    const focusedRows = entry([], 'case %s', ['each', 'only']);
+    const plain = entry([], 'case 2', []);
+    expect(mutatorTestId(`${FILE}#case 2`, ' > ', new TestNameIndex([focusedRows, plain], ' > '))).toBe(
+      focusedRows.id,
+    );
+  });
+
   it('credits an empty row value to its template', () => {
     const empty = entry([], 'rejects <%s>');
     const index = new TestNameIndex([empty], ' > ');
