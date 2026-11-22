@@ -102,7 +102,9 @@ describe('changes since a git ref', () => {
       path.join(dir, '.veritas/runs', runId, 'mutation/vitest.mutation.config.mjs'),
       'utf8',
     );
-    const files = JSON.parse(/const files = (\[.*\]);/.exec(config)?.[1] ?? '[]') as string[];
+    const { files } = JSON.parse(/const options = (\{[\s\S]*?\n\});/.exec(config)?.[1] ?? '{}') as {
+      files: string[];
+    };
     const names = files.map((f) => path.basename(f));
     expect(names).toContain('other.test.ts');
     expect(names).toContain('fresh.test.ts');
