@@ -4810,6 +4810,17 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
       return inert(argument);
     });
   };
+  /** Whether the file resets or restores every mock anywhere (`vi.resetAllMocks()`, `jest.restoreAllMocks()`). */
+  let resetsAll: boolean | undefined;
+  const resetsAllMocks = (): boolean => {
+    resetsAll ??= descendants(source).some(
+      (node) =>
+        ts.isCallExpression(node) &&
+        ['resetAllMocks', 'restoreAllMocks'].includes(accessedMember(skipParens(node.expression)) ?? ''),
+    );
+
+    return resetsAll;
+  };
   /**
    * What an asymmetric matcher (`expect.any(Number)`, `expect.objectContaining({ … })`) may take: a global
    * constructor, literals, plain data and nested matchers. A function or method in it (an `asymmetricMatch`) runs
@@ -5393,8 +5404,11 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
     // A mock made here (`vi.fn(impl)`, `vi.spyOn(o, 'm').mockImplementation(impl)`) runs its implementation when
     // what it is given to calls it.
     if (ts.isCallExpression(expression)) {
-      // A spy that replaces nothing (`vi.spyOn(o, 'm')`) calls the original method when called.
+      // A spy that replaces nothing (`vi.spyOn(o, 'm')`) calls the original method when called, and so does one whose
+      // replacement is undone later in the chain (`.mockReset()`, `.mockRestore()`) or by a reset of every mock in the
+      // file (`vi.restoreAllMocks()`).
       let replaced = false;
+      let undone = resetsAllMocks();
 
       for (let call: ts.Expression = expression; ; ) {
         call = skipParens(call);
@@ -5404,8 +5418,11 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
           if (DEFERRING.has(member) && !call.arguments.every(passable)) return false;
 
+          // The chain is read from its last call: an undoing call there comes after any replacement before it.
+          if (member === 'mockReset' || member === 'mockRestore') undone = true;
+
           // A one-shot override (`mockImplementationOnce`) leaves the original for later calls.
-          if (PERMANENT_REPLACEMENTS.has(member)) replaced = true;
+          if (PERMANENT_REPLACEMENTS.has(member) && !undone) replaced = true;
 
           if (member === 'spyOn' && !replaced) {
             const spied = call.arguments[0];

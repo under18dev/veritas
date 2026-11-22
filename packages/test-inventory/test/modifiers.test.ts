@@ -247,6 +247,10 @@ describe('full names static analysis cannot read', () => {
         'const v = { a: 1 }; expect(v).toEqual(expect.objectContaining({ a: { asymmetricMatch: () => { sharedSuite(); return true; } } }));',
       expectMocked: 'expect(vi.mocked(sharedSuite)).not.toThrow();',
       expectMockedDeep: 'expect(vi.mocked(helpers.run, true)).not.toThrow();',
+      expectSpyReset:
+        "expect(vi.spyOn(helpers, 'run').mockImplementation(() => [1]).mockReset()).not.toThrow();",
+      expectSpyRestored:
+        "vi.restoreAllMocks();\nexpect(vi.spyOn(helpers, 'run').mockImplementation(() => [1])).not.toThrow();",
       expectSpyOriginal: "expect(vi.spyOn(helpers, 'run')).not.toThrow();",
       customMatcher:
         "expect.extend({ toRegister() { sharedSuite(); return { pass: true, message: () => '' }; } });\nexpect(0).toRegister();",
