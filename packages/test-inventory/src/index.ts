@@ -4436,6 +4436,9 @@ function closedCollection(source: ts.SourceFile): boolean {
       if (ts.isIdentifier(callee) && callable.has(callee.text)) return node.arguments.every(inert);
     }
 
+    // A `describe` anywhere (`const suite = describe('shared', sharedSuite)`) runs its callback now.
+    if (ts.isCallExpression(node) && describeRegistration(node)) return closedExpression(node);
+
     if (ts.isCallExpression(node) || ts.isTaggedTemplateExpression(node)) return runnerCall(node);
 
     if (
