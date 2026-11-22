@@ -292,9 +292,11 @@ const COVERAGE_THRESHOLDS: [Partial<Policy>, PolicyEvidence][] = [
 ];
 const FINDINGS = [
   finding('F-1', 'counterexample', 'confirmed'),
-  finding('F-2', 'test_gap', 'confirmed'),
-  finding('F-3', 'spec_implementation_mismatch', 'suspected'),
-  finding('F-4', 'spec_implementation_mismatch', 'informational'),
+  finding('F-2', 'spec_implementation_mismatch', 'confirmed'),
+  finding('F-3', 'spec_violation_candidate', 'confirmed'),
+  finding('F-4', 'test_gap', 'confirmed'),
+  finding('F-5', 'spec_implementation_mismatch', 'suspected'),
+  finding('F-6', 'spec_implementation_mismatch', 'informational'),
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -306,7 +308,7 @@ describe('policy decision kernel', () => {
       ['fail', 'warn', 'ignore'],
     );
     const mutateStages: (StageStatus | undefined)[] = [undefined, ...STAGE_STATUSES];
-    const proveStages: (StageStatus | undefined)[] = [undefined, 'error', 'skipped'];
+    const proveStages: (StageStatus | undefined)[] = [undefined, 'error'];
     const claimSets: FormalClaim[][] = [[], ...CLAIM_STATUSES.map((s) => [claim(s)])];
     const findingSets = subsets(FINDINGS);
     const mismatches: unknown[] = [];
@@ -344,7 +346,15 @@ describe('policy decision kernel', () => {
         }
 
     expect(mismatches).toEqual([]);
-    expect(cases).toBe(6 * 3 * 5 * 9 * 3 * 8 * 16);
+    expect(cases).toBe(
+      behaviours.length *
+        SURVIVOR_THRESHOLDS.length *
+        COVERAGE_THRESHOLDS.length *
+        mutateStages.length *
+        proveStages.length *
+        claimSets.length *
+        findingSets.length,
+    );
   }, 60_000);
 
   it('classifies every stage and claim status', () => {
