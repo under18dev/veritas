@@ -474,6 +474,37 @@ describe('full names static analysis cannot read', () => {
         "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun({ ...{ fn: sharedSuite } });\nit('p', () => {});\n",
       'test/passes-inline.test.ts':
         "import { it } from 'vitest';\nimport { run } from './run-helper.js';\nconst n = 2;\nrun({ fn: () => n });\nit('p', () => {});\n",
+      'test/passes-conditional.test.ts':
+        "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun(true ? sharedSuite : sharedSuite);\nit('p', () => {});\n",
+      'test/passes-and.test.ts':
+        "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun(true && sharedSuite);\nit('p', () => {});\n",
+      'test/passes-nullish.test.ts':
+        "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun(null ?? sharedSuite);\nit('p', () => {});\n",
+      'test/passes-comma.test.ts':
+        "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun((0, sharedSuite));\nit('p', () => {});\n",
+      'test/passes-as.test.ts':
+        "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun(sharedSuite as any);\nit('p', () => {});\n",
+      'test/passes-nonnull.test.ts':
+        "import { it } from 'vitest';\nimport { sharedSuite } from 'external-test-package';\nimport { run } from './run-helper.js';\nrun(sharedSuite!);\nit('p', () => {});\n",
+      'test/passes-inline-choice.test.ts':
+        "import { it } from 'vitest';\nimport { run } from './run-helper.js';\nconst flag = true;\nrun(flag ? () => 1 : () => 2);\nit('p', () => {});\n",
+      // createRequire makes a require the helper can load anything with.
+      'test/created-require.ts':
+        "import { createRequire } from 'node:module';\nconst load = createRequire(import.meta.url);\nexport function shared() { return load('external-test-package').sharedSuite(); }\n",
+      'test/created-require-name.ts':
+        "import * as m from 'module';\nconst r = m.createRequire(import.meta.url);\nexport function shared(name: string) { return r(name); }\n",
+      'test/created-require-runner.ts':
+        "import { createRequire as make } from 'module';\nexport function shared() { return make(import.meta.url)('vitest').it('x', () => {}); }\n",
+      'test/created-require-passed.ts':
+        "import { createRequire } from 'node:module';\nconst load = createRequire(import.meta.url);\nexport const keep = [load];\nexport function shared() { return 1; }\n",
+      'test/uses-created-require.test.ts':
+        "import { it } from 'vitest';\nimport { shared } from './created-require.js';\nshared();\nit('u', () => {});\n",
+      'test/uses-created-require-name.test.ts':
+        "import { it } from 'vitest';\nimport { shared } from './created-require-name.js';\nit('u', () => { shared; });\n",
+      'test/uses-created-require-runner.test.ts':
+        "import { it } from 'vitest';\nimport { shared } from './created-require-runner.js';\nit('u', () => { shared; });\n",
+      'test/uses-created-require-passed.test.ts':
+        "import { it } from 'vitest';\nimport { shared } from './created-require-passed.js';\nit('u', () => { shared; });\n",
     });
     const inventory = inventoryTests({
       recognition: vitest.recognition,
@@ -487,6 +518,13 @@ describe('full names static analysis cannot read', () => {
     expect(marked('test/passes-package-function.test.ts')).toBe('open_collection');
     expect(marked('test/passes-spread.test.ts')).toBe('open_collection');
     expect(marked('test/passes-inline.test.ts')).toBeUndefined();
+    for (const name of ['conditional', 'and', 'nullish', 'comma', 'as', 'nonnull'])
+      expect(marked(`test/passes-${name}.test.ts`), name).toBe('open_collection');
+    expect(marked('test/passes-inline-choice.test.ts')).toBeUndefined();
+    // Calling a function that loads a package through createRequire may reach it.
+    expect(marked('test/uses-created-require.test.ts')).toBe('open_collection');
+    for (const name of ['name', 'runner', 'passed'])
+      expect(marked(`test/uses-created-require-${name}.test.ts`), name).toBe('imported_open_module');
   });
 
   it('opens files that read properties which may run code at collection time', () => {
@@ -501,6 +539,14 @@ describe('full names static analysis cannot read', () => {
         "import { it } from 'vitest';\nimport { options } from './getter-data.js';\nit.each(options.rows)('%s', () => {});\n",
       'test/spread-import.test.ts':
         "import { it } from 'vitest';\nimport { options } from './getter-data.js';\nit.each([...options.rows])('%s', () => {});\n",
+      'test/copy-import.test.ts':
+        "import { it } from 'vitest';\nimport { options } from './getter-data.js';\nconst copied = { ...options };\nit('c', () => { copied; });\n",
+      'test/destructure-import.test.ts':
+        "import { it } from 'vitest';\nimport { options } from './getter-data.js';\nconst { rows } = options;\nit.each(rows)('%s', () => {});\n",
+      'test/destructure-array-import.test.ts':
+        "import { it } from 'vitest';\nimport { options } from './getter-data.js';\nconst [first] = options.rows;\nit('a', () => { first; });\n",
+      'test/destructure-data.test.ts':
+        "import { it } from 'vitest';\nimport { options } from './data.js';\nconst { rows } = options;\nconst [x] = [1];\nconst list = [1, 2];\nconst [y] = list;\nconst { a } = { a: 1 };\nit.each(rows)('%s', () => { x; y; a; });\n",
       'test/plain-data.test.ts':
         "import { it } from 'vitest';\nimport { options } from './data.js';\nconst local = { rows: [1, 2] } as const;\nit.each(options.rows)('%s', () => {});\nit.each([...local.rows])('n %s', () => {});\n",
     });
@@ -511,9 +557,18 @@ describe('full names static analysis cannot read', () => {
     });
     const marked = (file: string) => inventory.files.find((f) => f.path === file)?.inexactNames;
 
-    for (const file of ['getter', 'static-getter', 'imported-getter', 'spread-import'])
+    for (const file of [
+      'getter',
+      'static-getter',
+      'imported-getter',
+      'spread-import',
+      'copy-import',
+      'destructure-import',
+      'destructure-array-import',
+    ])
       expect(marked(`test/${file}.test.ts`), file).toBe('open_collection');
     expect(marked('test/plain-data.test.ts')).toBeUndefined();
+    expect(marked('test/destructure-data.test.ts')).toBeUndefined();
   });
 
   it('follows inline type-only imports, which a nearer tsconfig may keep, and erases only import type', () => {

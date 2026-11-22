@@ -4351,6 +4351,76 @@ function visitTests(
   walk(source, suitePath, inheritedModifiers, undefined, false, []);
 }
 
+/**
+ * The `require` functions a module makes with `createRequire` (from `module` or `node:module`, by name, alias or
+ * namespace): each call with a literal module name is handed to `load`; a call with any other argument, a
+ * `createRequire` whose result is not kept in a name, or any other use of such a function, to `unknown`.
+ */
+function requiresCreated(source: ts.SourceFile, load: (name: string) => void, unknown: () => void): void {
+  const named = new Set<string>();
+  const namespaces = new Set<string>();
+
+  for (const statement of source.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      (statement.moduleSpecifier.text !== 'module' && statement.moduleSpecifier.text !== 'node:module')
+    )
+      continue;
+    const clause = statement.importClause;
+
+    if (!clause || clause.isTypeOnly) continue;
+
+    if (clause.name) namespaces.add(clause.name.text);
+    const bindings = clause.namedBindings;
+
+    if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
+    else if (bindings)
+      for (const element of bindings.elements)
+        if ((element.propertyName ?? element.name).text === 'createRequire') named.add(element.name.text);
+  }
+
+  if (named.size === 0 && namespaces.size === 0) return;
+  const makesRequire = (call: ts.CallExpression): boolean => {
+    const callee = skipParens(call.expression);
+
+    return ts.isIdentifier(callee)
+      ? named.has(callee.text)
+      : (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
+          ts.isIdentifier(skipParens(callee.expression)) &&
+          namespaces.has((skipParens(callee.expression) as ts.Identifier).text) &&
+          memberName(callee) === 'createRequire';
+  };
+  const loaders = new Set<string>();
+  const loaded = (call: ts.CallExpression) => {
+    const argument = call.arguments[0];
+
+    if (argument && ts.isStringLiteralLike(argument)) load(argument.text);
+    else unknown();
+  };
+
+  for (const node of descendants(source)) {
+    if (!ts.isCallExpression(node) || !makesRequire(node)) continue;
+    const parent = node.parent;
+
+    if (ts.isVariableDeclaration(parent) && parent.initializer === node && ts.isIdentifier(parent.name))
+      loaders.add(parent.name.text);
+    // `createRequire(url)('x')`.
+    else if (ts.isCallExpression(parent) && parent.expression === node) loaded(parent);
+    else unknown();
+  }
+
+  for (const node of descendants(source)) {
+    if (!ts.isIdentifier(node) || !loaders.has(node.text)) continue;
+    const parent = node.parent;
+
+    if (ts.isVariableDeclaration(parent) && parent.name === node) continue;
+
+    if (ts.isCallExpression(parent) && parent.expression === node) loaded(parent);
+    else unknown();
+  }
+}
+
 /** Members of the runner's mock object that load the module named by their first argument. */
 const MODULE_LOADERS = new Set([
   'mock',
@@ -4838,12 +4908,31 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
       return node.declarationList.declarations.every(
         // Defaults in a destructuring pattern (`const { a = setup() } = {}`) run too.
         (declaration) =>
-          (!declaration.initializer || inert(declaration.initializer)) && inertBinding(declaration.name),
+          (!declaration.initializer || inert(declaration.initializer)) &&
+          inertBinding(declaration.name) &&
+          destructurable(declaration),
       );
 
     return (
       ts.isExpressionStatement(node) &&
       (closedExpression(node.expression) || (inFactory && inert(node.expression)))
+    );
+  };
+  /**
+   * Destructuring reads properties (an object pattern) or runs an iterator (an array pattern): only from a value that
+   * runs no code when read, and for an array pattern, a literal array or a constant of plain data.
+   */
+  const destructurable = (declaration: ts.VariableDeclaration): boolean => {
+    if (ts.isIdentifier(declaration.name)) return true;
+    const source = declaration.initializer ? skipParens(declaration.initializer) : undefined;
+
+    if (!source) return false;
+
+    if (ts.isObjectBindingPattern(declaration.name)) return readable(source);
+
+    return (
+      ts.isArrayLiteralExpression(source) ||
+      (ts.isIdentifier(source) && (dataConstants.has(source.text) || (local?.dataValue(source) ?? false)))
     );
   };
   /** Default values in a parameter or binding pattern, which run when the function is called. */
@@ -4941,6 +5030,31 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
       return dataConstants.has(expression.text) || (local?.functionValue(expression) ?? false);
 
     if (ts.isSpreadElement(expression)) return passable(expression.expression);
+
+    // Every value the expression may produce.
+    if (
+      ts.isAsExpression(expression) ||
+      ts.isSatisfiesExpression(expression) ||
+      ts.isNonNullExpression(expression) ||
+      ts.isTypeAssertionExpression(expression)
+    )
+      return passable(expression.expression);
+
+    if (ts.isConditionalExpression(expression))
+      return inert(expression.condition) && passable(expression.whenTrue) && passable(expression.whenFalse);
+
+    if (ts.isBinaryExpression(expression)) {
+      const operator = expression.operatorToken.kind;
+
+      if (
+        operator === ts.SyntaxKind.AmpersandAmpersandToken ||
+        operator === ts.SyntaxKind.BarBarToken ||
+        operator === ts.SyntaxKind.QuestionQuestionToken
+      )
+        return passable(expression.left) && passable(expression.right);
+
+      if (operator === ts.SyntaxKind.CommaToken) return inert(expression.left) && passable(expression.right);
+    }
 
     if (ts.isArrayLiteralExpression(expression))
       return expression.elements.every((element) => ts.isOmittedExpression(element) || passable(element));
@@ -5902,6 +6016,9 @@ function moduleSafety(
       }
     }
     if (escapesRunner(source)) found.unknown = true;
+    requiresCreated(source, loadedAtRunTime, () => {
+      found.unknown = true;
+    });
     importsOf.set(source, found);
 
     return found;
