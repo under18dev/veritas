@@ -176,6 +176,14 @@
         "test",
         "suite"
       ]
+    },
+    "inexactName": {
+      "type": "string",
+      "enum": [
+        "dynamic_title",
+        "dynamic_suite",
+        "registered_in_function"
+      ]
     }
   },
   "required": [

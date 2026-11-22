@@ -58,6 +58,15 @@ export const TestCase = z.object({
     ]),
   ),
   granularity: z.enum(['test', 'suite']),
+  /**
+   * Why the full name the test runner reports for this test may not be `suitePath` and `name` joined, beyond the
+   * placeholders of a table-driven title; absent when static analysis read every title on the way.
+   * `dynamic_title`: the test's own title is not a literal (`it(\`fee for ${total}\`)`); `name` is a placeholder.
+   * `dynamic_suite`: an enclosing `describe` has a title that is not a literal, and `suitePath` leaves it out.
+   * `registered_in_function`: the test is registered inside a function other than a `describe` callback (a shared
+   * suite or a loop callback), so the suites it runs in are those of the call site, which may differ from `suitePath`.
+   */
+  inexactName: z.enum(['dynamic_title', 'dynamic_suite', 'registered_in_function']).optional(),
 });
 export type TestCase = z.infer<typeof TestCase>;
 

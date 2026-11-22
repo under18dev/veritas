@@ -135,3 +135,37 @@ describe('Vitest registration modifiers', () => {
     ]);
   });
 });
+
+describe('full names static analysis cannot read', () => {
+  it('records why a test runs under a name other than its suite path and title', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/names.test.ts': `
+        import { describe, expect, it } from 'vitest';
+        import { value } from '../src/value.js';
+        it.each([[4999]])('fee for %s', (total) => { value(total); expect(true).toBe(true); });
+        for (const [t, f] of [[5000, 5000]]) it(\`fee for \${t}\`, () => { expect(value(t)).toBe(f); });
+        for (const y of [1]) describe(\`dyn \${y}\`, () => {
+          describe('inner', () => it('works', () => expect(value(y)).toBe(y)));
+        });
+        function shared() { it('shared', () => expect(value(1)).toBe(1)); }
+        describe('plain', () => { it('exact', () => expect(value(1)).toBe(1)); shared(); });
+      `,
+    });
+    const inventory = inventoryTests({
+      recognition: vitest.recognition,
+      root,
+      config: VeritasConfig.parse({}),
+    });
+
+    expect(inventory.tests.map((t) => [t.name, t.suitePath, t.inexactName])).toEqual([
+      ['fee for %s', [], undefined],
+      ['<dynamic test>', [], 'dynamic_title'],
+      ['works', ['inner'], 'dynamic_suite'],
+      ['shared', [], 'registered_in_function'],
+      ['exact', ['plain'], undefined],
+    ]);
+    // Test ids stay as they were: the suite title that is not a literal is still left out of the suite path.
+    expect(inventory.tests[2]?.id).toBe(testId('test/names.test.ts', ['inner'], 'works'));
+  });
+});

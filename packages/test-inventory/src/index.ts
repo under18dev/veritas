@@ -4222,7 +4222,15 @@ function visitTests(
   ctx: Ctx,
   output: TestCaseType[],
 ): void {
-  const walk = (node: ts.Node, currentSuite: string[], currentModifiers: TestCaseType['modifiers']) => {
+  // `inexact`: why the titles on the way to a node do not make up the full name the runner reports (see
+  // `TestCase.inexactName`). A suite title that is not a literal is still left out of `suitePath`, as before, so
+  // that test ids stay the same; the reason is recorded instead.
+  const walk = (
+    node: ts.Node,
+    currentSuite: string[],
+    currentModifiers: TestCaseType['modifiers'],
+    inexact: TestCaseType['inexactName'],
+  ) => {
     if (ts.isCallExpression(node)) {
       const describe = describeRegistration(node);
 
@@ -4232,7 +4240,15 @@ function visitTests(
 
         if (name !== undefined && callback && isFunction(callback)) {
           const childModifiers = [...new Set([...currentModifiers, ...describe.modifiers])];
-          ts.forEachChild(callback, (child) => walk(child, [...currentSuite, name], childModifiers));
+          ts.forEachChild(callback, (child) => walk(child, [...currentSuite, name], childModifiers, inexact));
+
+          return;
+        }
+
+        if (name === undefined) {
+          ts.forEachChild(node, (child) =>
+            walk(child, currentSuite, currentModifiers, inexact ?? 'dynamic_suite'),
+          );
 
           return;
         }
@@ -4248,15 +4264,17 @@ function visitTests(
             file,
             mocks,
             ctx,
+            inexact,
           ),
         );
 
         return;
       }
     }
-    ts.forEachChild(node, (child) => walk(child, currentSuite, currentModifiers));
+    const inner = ts.isFunctionLike(node) ? (inexact ?? 'registered_in_function') : inexact;
+    ts.forEachChild(node, (child) => walk(child, currentSuite, currentModifiers, inner));
   };
-  walk(source, suitePath, inheritedModifiers);
+  walk(source, suitePath, inheritedModifiers, undefined);
 }
 
 type Registration = { name?: string; callback?: ts.Expression; modifiers: TestCaseType['modifiers'] };
@@ -4421,6 +4439,7 @@ function analyzeTest(
   file: string,
   mocks: MockRecord[],
   ctx: Ctx,
+  inexact?: TestCaseType['inexactName'],
 ): TestCaseType {
   const { checker, root } = ctx;
   const source = registrationCall.getSourceFile();
@@ -4590,6 +4609,11 @@ function analyzeTest(
     nondeterminism,
     suspicions,
     granularity: info.name === undefined ? 'suite' : 'test',
+    ...(info.name === undefined
+      ? { inexactName: 'dynamic_title' as const }
+      : inexact === undefined
+        ? {}
+        : { inexactName: inexact }),
   };
 }
 
