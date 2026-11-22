@@ -5,10 +5,7 @@
     "local": false
   },
   "analysis": {
-    "include": [
-      "packages/core/src/policy-decision.ts",
-      "packages/assessment/src/decision.ts"
-    ],
+    "include": ["packages/core/src/policy-decision.ts", "packages/assessment/src/decision.ts"],
     "testInclude": [
       "packages/core/test/policy-decision.test.ts",
       "packages/assessment/test/decision.test.ts"
