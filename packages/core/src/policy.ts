@@ -1,31 +1,30 @@
 import type { VeritasConfig } from './config/schema.js';
 import { ExitCode } from './exit-codes.js';
+import {
+  exitCodeOfVerdict,
+  isInconclusiveClaim,
+  isInconclusiveStage,
+  isToolFailureStage,
+  POLICY_RULE,
+  type PolicyVerdict,
+  policyRule,
+  verdictName,
+  verdictOfRule,
+} from './policy-decision.js';
 import type { Finding } from './schema/finding.js';
 import type { FormalClaim } from './schema/formal.js';
 import type { Mutant } from './schema/mutation.js';
 import type { Property } from './schema/property.js';
 import type { StageResult } from './schema/run.js';
-import type { StageStatus, VerificationStatus } from './schema/status.js';
 import type { TestAssessment } from './schema/tests.js';
 
-/** `pass` is only possible when every stage succeeded and nothing is inconclusive. */
-export type PolicyVerdict = 'pass' | 'pass_with_warnings' | 'policy_failure' | 'tool_error' | 'inconclusive';
+export type { PolicyVerdict } from './policy-decision.js';
 
 export interface PolicyDecision {
   exitCode: ExitCode;
   verdict: PolicyVerdict;
   reasons: string[];
 }
-
-const TOOL_FAILURE: StageStatus[] = ['error', 'failed'];
-const INCONCLUSIVE_STAGE: StageStatus[] = ['partial', 'skipped', 'unsupported', 'timeout', 'cancelled'];
-const INCONCLUSIVE_CLAIM: VerificationStatus[] = [
-  'unknown',
-  'timeout',
-  'unsupported',
-  'semantic_mismatch',
-  'error',
-];
 
 /** Results the optional thresholds (`maxNewSurvivors`, `minPropertyCoverage`) are measured on. */
 export interface PolicyEvidence {
@@ -85,12 +84,24 @@ function checkThresholds(
   return { failures, undecided };
 }
 
+/** The `ExitCode` for a code returned by the decision kernel. */
+function exitCodeFrom(code: number): ExitCode {
+  const known = Object.values(ExitCode).find((c) => c === code);
+
+  if (known === undefined) throw new Error(`policy decision returned an unknown exit code ${code}`);
+
+  return known;
+}
+
 /**
  * Map findings, claims and stage results to an exit code.
  * - Only confirmed findings can fail the policy; suspected findings never do.
  * - Stage errors are tool errors.
  * - Inconclusive results follow `inconclusiveBehavior`. With `warn` or `ignore` the exit code is 0 but the
  *   verdict stays `pass_with_warnings` and the reasons list every inconclusive item; it is never reported as `pass`.
+ *
+ * The decision itself is made by `policyRule` in `policy-decision.ts` on the counts gathered here; this function
+ * only counts and writes the reasons.
  */
 export function evaluatePolicy(
   policy: VeritasConfig['policy'],
@@ -99,7 +110,6 @@ export function evaluatePolicy(
   claims: FormalClaim[] = [],
   evidence: PolicyEvidence = {},
 ): PolicyDecision {
-  const reasons: string[] = [];
   const confirmedViolations = findings.filter(
     (f) =>
       f.certainty === 'confirmed' &&
@@ -107,60 +117,61 @@ export function evaluatePolicy(
         f.kind === 'counterexample' ||
         f.kind === 'spec_violation_candidate'),
   );
-  const toolErrors = stages.filter((s) => TOOL_FAILURE.includes(s.status));
-  const inconclusive = [
-    ...stages.filter((s) => INCONCLUSIVE_STAGE.includes(s.status)).map((s) => `stage ${s.stage}=${s.status}`),
-    ...claims.filter((c) => INCONCLUSIVE_CLAIM.includes(c.status)).map((c) => `claim ${c.id}=${c.status}`),
-  ];
-
+  const toolErrors = stages.filter((s) => isToolFailureStage(s.status));
+  const inconclusiveStages = stages.filter((s) => isInconclusiveStage(s.status));
+  const inconclusiveClaims = claims.filter((c) => isInconclusiveClaim(c.status));
   const thresholds = checkThresholds(policy, stages, evidence);
-  inconclusive.push(...thresholds.undecided);
+  const open = findings.filter((f) => f.certainty !== 'informational' && !confirmedViolations.includes(f));
 
-  if (thresholds.failures.length > 0) {
+  const rule = policyRule({
+    confirmedViolations: confirmedViolations.length,
+    failOnConfirmedViolation: policy.confirmedViolation === 'fail',
+    toolErrors: toolErrors.length,
+    inconclusiveStages: inconclusiveStages.length,
+    inconclusiveClaims: inconclusiveClaims.length,
+    thresholdFailures: thresholds.failures.length,
+    thresholdUndecided: thresholds.undecided.length,
+    openFindings: open.length,
+    failOnInconclusive: policy.inconclusiveBehavior === 'fail',
+  });
+  const verdictCode = verdictOfRule(rule);
+  const verdict = verdictName(verdictCode);
+  const exitCode = exitCodeFrom(exitCodeOfVerdict(verdictCode));
+
+  const inconclusive = [
+    ...inconclusiveStages.map((s) => `stage ${s.stage}=${s.status}`),
+    ...inconclusiveClaims.map((c) => `claim ${c.id}=${c.status}`),
+    ...thresholds.undecided,
+  ];
+  const violationReason = `${confirmedViolations.length} confirmed specification violation(s)`;
+  const failOnConfirmed = confirmedViolations.length > 0 && policy.confirmedViolation === 'fail';
+
+  if (rule === POLICY_RULE.thresholdFailure) {
     return {
-      exitCode: ExitCode.PolicyFailure,
-      verdict: 'policy_failure',
-      reasons: [
-        ...(confirmedViolations.length > 0 && policy.confirmedViolation === 'fail'
-          ? [`${confirmedViolations.length} confirmed specification violation(s)`]
-          : []),
-        ...thresholds.failures,
-        ...inconclusive,
-      ],
+      exitCode,
+      verdict,
+      reasons: [...(failOnConfirmed ? [violationReason] : []), ...thresholds.failures, ...inconclusive],
     };
   }
 
-  if (confirmedViolations.length > 0 && policy.confirmedViolation === 'fail') {
-    reasons.push(`${confirmedViolations.length} confirmed specification violation(s)`);
+  if (rule === POLICY_RULE.confirmedViolation)
+    return { exitCode, verdict, reasons: [violationReason, ...inconclusive] };
 
-    return {
-      exitCode: ExitCode.PolicyFailure,
-      verdict: 'policy_failure',
-      reasons: [...reasons, ...inconclusive],
-    };
+  if (rule === POLICY_RULE.toolError) {
+    const failed = `stage failure(s): ${toolErrors.map((s) => `${s.stage}=${s.status}`).join(', ')}`;
+
+    return { exitCode, verdict, reasons: [failed, ...inconclusive] };
   }
 
-  if (toolErrors.length > 0) {
-    reasons.push(`stage failure(s): ${toolErrors.map((s) => `${s.stage}=${s.status}`).join(', ')}`);
+  if (rule === POLICY_RULE.inconclusive) return { exitCode, verdict, reasons: inconclusive };
 
-    return { exitCode: ExitCode.ToolError, verdict: 'tool_error', reasons: [...reasons, ...inconclusive] };
-  }
-
-  if (inconclusive.length > 0 && policy.inconclusiveBehavior === 'fail') {
-    return { exitCode: ExitCode.Inconclusive, verdict: 'inconclusive', reasons: inconclusive };
-  }
+  const reasons: string[] = [];
 
   if (confirmedViolations.length > 0) reasons.push('confirmed violations reported as warnings by policy');
-  const open = findings.filter((f) => f.certainty !== 'informational' && !confirmedViolations.includes(f));
 
   if (open.length > 0) reasons.push(`${open.length} finding(s) to review (not policy failures)`);
 
-  if (inconclusive.length > 0)
-    reasons.push(...inconclusive.map((r) => `inconclusive (${policy.inconclusiveBehavior}): ${r}`));
+  reasons.push(...inconclusive.map((r) => `inconclusive (${policy.inconclusiveBehavior}): ${r}`));
 
-  return {
-    exitCode: ExitCode.Success,
-    verdict: reasons.length > 0 ? 'pass_with_warnings' : 'pass',
-    reasons,
-  };
+  return { exitCode, verdict, reasons };
 }
