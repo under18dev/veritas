@@ -607,6 +607,17 @@ describe('full names static analysis cannot read', () => {
       moduleRegister:
         "import { register } from 'node:module';\nexport function shared() { register('./hooks.mjs', import.meta.url); }",
       moduleReexport: "export { Module } from 'node:module';\nexport const shared = () => 1;",
+      inspectorEvaluate:
+        "import { Session } from 'node:inspector';\nexport function shared() { const s = new Session(); s.connect(); s.post('Runtime.evaluate', { expression: \"it('hidden', () => {})\" }); }",
+      inspectorPromises:
+        "import * as inspector from 'node:inspector/promises';\nexport const shared = () => inspector;",
+      replStart: "import repl from 'repl';\nexport function shared() { repl.start(); }",
+      workerEval:
+        "import { Worker } from 'node:worker_threads';\nexport function shared() { new Worker(\"it('hidden', () => {})\", { eval: true }); }",
+      childProcess:
+        "import { execSync } from 'child_process';\nexport function shared() { execSync('vitest'); }",
+      nodeTest: "import { test } from 'node:test';\nexport function shared() { test('hidden', () => {}); }",
+      requiredInspector: "export function shared() { return require('inspector'); }",
       vmRun:
         "import { runInThisContext } from 'node:vm';\nexport function shared() { runInThisContext(\"it('hidden', () => {})\"); }",
       vmScript:
@@ -728,6 +739,10 @@ describe('full names static analysis cannot read', () => {
       // A helper loading builtins at run time, and a local module through a require made from an imported module.
       'test/builtin-loads.ts': [
         "import { builtinModules, isBuiltin } from 'node:module';",
+        "import { join } from 'node:path';",
+        "import { EventEmitter } from 'events';",
+        "import { readFile } from 'node:fs/promises';",
+        'export const tools = [join, EventEmitter, readFile];',
         "export function exists() { return (process as any).getBuiltinModule('node:fs').existsSync('x') || isBuiltin('fs') || builtinModules.length > 0; }",
         'export async function local() {',
         "  const { createRequire } = await import('node:module');",

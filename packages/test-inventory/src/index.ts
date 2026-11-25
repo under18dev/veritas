@@ -6985,6 +6985,54 @@ interface RuntimeImports {
 }
 
 const BUILTINS = new Set(builtinModules);
+/**
+ * Builtins that neither run source text nor load modules, so loading and calling them registers no test unseen.
+ * `module` is followed apart (see `requiresCreated`). Every other builtin, `vm`, `inspector`, `repl`,
+ * `worker_threads`, `child_process`, `cluster`, `wasi`, `test`, `sqlite` and `v8` among them, is not followed.
+ */
+const INERT_BUILTINS = new Set([
+  'assert',
+  'assert/strict',
+  'async_hooks',
+  'buffer',
+  'console',
+  'constants',
+  'crypto',
+  'diagnostics_channel',
+  'dns',
+  'dns/promises',
+  'events',
+  'fs',
+  'fs/promises',
+  'http',
+  'http2',
+  'https',
+  'module',
+  'net',
+  'os',
+  'path',
+  'path/posix',
+  'path/win32',
+  'perf_hooks',
+  'process',
+  'punycode',
+  'querystring',
+  'readline',
+  'readline/promises',
+  'stream',
+  'stream/consumers',
+  'stream/promises',
+  'stream/web',
+  'string_decoder',
+  'timers',
+  'timers/promises',
+  'tls',
+  'tty',
+  'url',
+  'util',
+  'util/types',
+  'zlib',
+]);
 const GLOBAL_OBJECTS = new Set(['globalThis', 'global', 'window', 'self']);
 
 /**
@@ -7022,25 +7070,19 @@ function moduleSafety(
     const found: RuntimeImports = { locals: [], external: false, unknown: false };
     const add = (name: string) => {
       const target = resolve(name, source.fileName);
-
-      // `node:vm` runs source text in this process (`runInThisContext("it('x', …)")`), which is not followed.
-      if (name === 'vm' || name === 'node:vm' || name.startsWith('vm/') || name.startsWith('node:vm/')) {
-        found.unknown = true;
-        return;
-      }
+      const bare = name.startsWith('node:') ? name.slice('node:'.length) : name;
+      const builtin =
+        name.startsWith('node:') || BUILTINS.has(name) || BUILTINS.has(name.split('/')[0] ?? '');
 
       if (target && local(target)) {
         if (!found.locals.includes(target)) found.locals.push(target);
       } else if (name.startsWith('.') || path.isAbsolute(name)) found.unknown = true;
-      else if (
-        !(
-          name.startsWith('node:') ||
-          BUILTINS.has(name) ||
-          BUILTINS.has(name.split('/')[0] ?? '') ||
-          runner.modules.has(name)
-        )
-      )
-        found.external = true;
+      // A builtin that may run source text or load modules (`node:vm`, `node:inspector`'s `Runtime.evaluate`,
+      // `node:repl`, `node:worker_threads`, …) reaches code that is not followed; only those known not to are let
+      // through (see `INERT_BUILTINS`).
+      else if (builtin) {
+        if (!INERT_BUILTINS.has(bare)) found.unknown = true;
+      } else if (!runner.modules.has(name)) found.external = true;
     };
 
     /**
