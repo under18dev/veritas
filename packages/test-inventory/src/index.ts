@@ -4324,7 +4324,9 @@ function visitTests(
         if (name !== undefined && callback && isFunction(callback)) {
           const childModifiers = [...new Set([...currentModifiers, ...describe.modifiers])];
           const childConditional = conditional || conditionalRegistration(node);
-          const childTable = describe.modifiers.includes('each') ? [...table, currentSuite.length] : table;
+          const childTable = describe.modifiers.includes('each')
+            ? [...table, tableEntry(node, currentSuite.length)]
+            : table;
           const childOptionsUnknown = optionsUnknown || registrationOptions(node).unknown;
           ts.forEachChild(callback, (child) =>
             walk(
@@ -4380,7 +4382,7 @@ function visitTests(
             ctx,
             inexact,
             conditional || conditionalRegistration(node),
-            info.modifiers.includes('each') ? [...table, currentSuite.length] : table,
+            info.modifiers.includes('each') ? [...table, tableEntry(node, currentSuite.length)] : table,
             optionsUnknown || registrationOptions(node).unknown,
             emptyTable || emptyTableRegistration(node),
           ),
@@ -4408,6 +4410,15 @@ function visitTests(
     );
   };
   walk(source, suitePath, inheritedModifiers, undefined, false, [], false, false);
+}
+
+/**
+ * A title position the runner formats for each row, as `walk` carries it: written `-(position + 1)` when the rows
+ * come from a tagged template table (`it.each\`a | b\`(title, …)`), which Jest formats differently (see
+ * `TestCase.templateTableTitles`).
+ */
+function tableEntry(node: ts.CallExpression, position: number): number {
+  return ts.isTaggedTemplateExpression(node.expression) ? -(position + 1) : position;
 }
 
 /**
@@ -6675,7 +6686,12 @@ function analyzeTest(
         ? {}
         : { inexactName: inexact }),
     ...(conditional ? { conditional: true as const } : {}),
-    ...(tableTitles.length > 0 ? { tableTitles } : {}),
+    ...(tableTitles.length > 0
+      ? { tableTitles: tableTitles.map((entry) => (entry < 0 ? -entry - 1 : entry)) }
+      : {}),
+    ...(tableTitles.some((entry) => entry < 0)
+      ? { templateTableTitles: tableTitles.filter((entry) => entry < 0).map((entry) => -entry - 1) }
+      : {}),
     ...(optionsUnknown ? { optionsUnknown: true as const } : {}),
     ...(emptyTable ? { emptyTable: true as const } : {}),
   };

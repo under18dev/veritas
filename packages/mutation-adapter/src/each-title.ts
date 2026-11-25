@@ -30,6 +30,8 @@ export type TitleKeys = 'identifier' | 'object_key';
 /** One step of a compiled title: a literal character, or text a placeholder prints. */
 type Token =
   | { readonly kind: 'char'; readonly char: string }
+  /** A character, or nothing. */
+  | { readonly kind: 'maybe'; readonly char: string }
   /** Any one character. */
   | { readonly kind: 'one' }
   /** Any text, possibly none. */
@@ -80,7 +82,17 @@ export function literalTitle(text: string): TitleTemplate {
  * A title with only escapes (`100%% sure`) compiles to the literal text the runner reports (`100% sure`). Runs in one
  * pass over the template and builds no regular expression.
  */
-export function compileTitleTemplate(template: string, keys: TitleKeys = 'object_key'): TitleTemplate {
+export function compileTitleTemplate(
+  template: string,
+  keys: TitleKeys = 'object_key',
+  /**
+   * The rows come from a tagged template table. Jest formats such a title by its `$` keys only: `%%` stays `%%`, and
+   * `%#` and `%$` stay as written. With `'object_key'` keys (Jest, or a runner not known), `%%` is then read as `%` or
+   * `%%`, and `%#` and `%$` as their row number or their own text.
+   */
+  tagged = false,
+): TitleTemplate {
+  const jestTagged = tagged && keys === 'object_key';
   const tokens: Token[] = [];
   let placeholders = 0;
   // `%#` and `%$` met so far: Jest replaces only the first of each.
@@ -101,6 +113,8 @@ export function compileTitleTemplate(template: string, keys: TitleKeys = 'object
     if (char === '%' && next !== undefined) {
       if (next === '%') {
         tokens.push({ kind: 'char', char: '%' });
+
+        if (jestTagged) tokens.push({ kind: 'maybe', char: '%' });
         i += 2;
         continue;
       }
@@ -112,7 +126,7 @@ export function compileTitleTemplate(template: string, keys: TitleKeys = 'object
           // Jest formats a title with no printf placeholder from an object row, which leaves `%$` in place, with or
           // without `$` keys (`it.each([{ name: 'a' }])('case $name %$')` reports `case a %$`, and
           // `it.each([{ x: 1 }])('case %% %$')` reports `case % %$`); whether the rows are objects is not known.
-          const literalToo = !first || (next === '$' && (interpolates || !printf));
+          const literalToo = !first || jestTagged || (next === '$' && (interpolates || !printf));
           tokens.push(...(literalToo ? [ONE, ANY] : [DIGIT, DIGITS]));
 
           if (!first) repeatedIndex = true;
@@ -301,7 +315,11 @@ export function matchesTitleTemplate(template: TitleTemplate, name: string): boo
   const close = (set: Uint8Array) => {
     // A token that may match nothing (`any`, `digits`) lets the state after it start where it starts.
     for (let k = 0; k < size; k++)
-      if (set[k] && (middle[k]?.kind === 'any' || middle[k]?.kind === 'digits')) set[k + 1] = 1;
+      if (
+        set[k] &&
+        (middle[k]?.kind === 'any' || middle[k]?.kind === 'digits' || middle[k]?.kind === 'maybe')
+      )
+        set[k + 1] = 1;
   };
   states.fill(0, 0, size + 1);
   states[0] = 1;
@@ -318,6 +336,12 @@ export function matchesTitleTemplate(template: TitleTemplate, name: string): boo
 
       switch (token.kind) {
         case 'char':
+          if (token.char === char) {
+            next[k + 1] = 1;
+            alive = true;
+          }
+          break;
+        case 'maybe':
           if (token.char === char) {
             next[k + 1] = 1;
             alive = true;

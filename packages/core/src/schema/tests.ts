@@ -80,6 +80,12 @@ export const TestCase = z.object({
    */
   tableTitles: z.array(z.number().int().nonnegative()).optional(),
   /**
+   * Of `tableTitles`, the positions whose rows come from a tagged template table (`it.each\`a | b\`(title, …)`),
+   * whose titles Jest formats by their `$` keys only, leaving `%%` and the other placeholders as written. Absent when
+   * there is none.
+   */
+  templateTableTitles: z.array(z.number().int().nonnegative()).optional(),
+  /**
    * Vitest options of the test or an enclosing suite could not be read (`it('x', opts, fn)`, `{ ...opts }`): they may
    * set modifiers, `only` included, which beats `skip`. Absent otherwise.
    */

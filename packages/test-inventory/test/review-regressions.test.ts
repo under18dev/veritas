@@ -373,3 +373,23 @@ describe('constants bound to a registration function with modifiers', () => {
     expect(byName(named, 'works').modifiers).toEqual(['concurrent']);
   });
 });
+
+describe('tagged template tables', () => {
+  it('records which formatted titles take their rows from a tagged template', () => {
+    const result = inventory({
+      'test/tagged.test.ts': [
+        "import { describe, it } from 'vitest';",
+        "describe.each([1])('suite %s', () => {",
+        `  it.each\`a\n$\{1}\`('100%% $a', () => {});`,
+        "  it.each([2])('row %s', () => {});",
+        '});',
+        '',
+      ].join('\n'),
+    });
+
+    expect(byName(result, '100%% $a').tableTitles).toEqual([0, 1]);
+    expect(byName(result, '100%% $a').templateTableTitles).toEqual([1]);
+    expect(byName(result, 'row %s').tableTitles).toEqual([0, 1]);
+    expect(byName(result, 'row %s').templateTableTitles).toBeUndefined();
+  });
+});

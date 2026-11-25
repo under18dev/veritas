@@ -131,6 +131,31 @@ describe('title templates of table-driven tests', () => {
     );
   });
 
+  it('reads Jest titles of tagged template tables, which keep %% and the row placeholders as written', () => {
+    const tagged = (template: string, name: string, keys?: TitleKeys) =>
+      matchesTitleTemplate(compileTitleTemplate(template, keys, true), name);
+    // jest-each: ``it.each`x ${1}`('100%% $x')`` reports `100%% 1`; elsewhere `%%` is `%`.
+    expect(tagged('100%% $x', '100%% 1')).toBe(true);
+    expect(tagged('100%% $x', '100% 1')).toBe(true);
+    expect(matches('100%% $x', '100%% 1')).toBe(false);
+    expect(tagged('row %# of $x', 'row %# of 1')).toBe(true);
+    expect(tagged('row %# of $x', 'row 0 of 1')).toBe(true);
+    // Vitest formats them as other tables.
+    expect(tagged('100%% $x', '100%% 1', 'identifier')).toBe(false);
+
+    const file = 'test/a.test.ts';
+    const test = {
+      id: 'T-tagged',
+      file,
+      suitePath: [],
+      name: '100%% $x',
+      modifiers: ['each'],
+      tableTitles: [0],
+      templateTableTitles: [0],
+    };
+    expect(mutatorTestId(`${file}#100%% 1`, ' ', new TestNameIndex([test], ' '), false)).toBe(test.id);
+  });
+
   it('reads a second %# or %$ as digits or its own text, since Jest replaces only the first', () => {
     expect(matches('row %# of %#', 'row 0 of %#')).toBe(true);
     expect(matches('row %# of %#', 'row 0 of 0')).toBe(true);
@@ -444,6 +469,23 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     const alone = new TestNameIndex([literal, loop], ' > ');
     alone.observe([`${FILE}#fee for 5000`, `${FILE}#fee for 4999`]);
     expect(mutatorTestId(`${FILE}#fee for 5000`, ' > ', alone)).toBe(literal.id);
+  });
+
+  it('takes a registration known not to run as adding no run of its id', () => {
+    // `const cases = [1]; it('works'); it.skip.each(cases)('works'); it('works#2')`.
+    const plain = entry([], 'works', []);
+    const skippedTable = { ...entry([], 'works', ['each', 'skip']), conditional: true as const };
+    const numbered = entry([], 'works#2', []);
+    const index = new TestNameIndex([plain, skippedTable, numbered], ' > ');
+    index.observe([`${FILE}#works`, `${FILE}#works#2`]);
+    expect(mutatorTestId(`${FILE}#works#2`, ' > ', index)).toBe(numbered.id);
+    expect(mutatorTestId(`${FILE}#works`, ' > ', index)).toBe(plain.id);
+
+    // A conditional registration that may run still may repeat the name.
+    const conditional = { ...entry([], 'works', []), conditional: true as const };
+    const open = new TestNameIndex([conditional, numbered], ' > ');
+    open.observe([`${FILE}#works`, `${FILE}#works#2`]);
+    expect(mutatorTestId(`${FILE}#works#2`, ' > ', open)).not.toBe(numbered.id);
   });
 
   it('reads every full name of a file whose unread titles are of registrations a focused test keeps from running', () => {

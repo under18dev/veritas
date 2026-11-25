@@ -164,6 +164,8 @@ export interface NamedTest {
    * written. When a table-driven test has none recorded (an older inventory), every title is read as a template.
    */
   tableTitles?: readonly number[];
+  /** Of `tableTitles`, those whose rows come from a tagged template table (see `compileTitleTemplate`). */
+  templateTableTitles?: readonly number[];
   /** Options of the test or an enclosing suite could not be read, so they may focus it. */
   optionsUnknown?: true;
   /** A table of the test or an enclosing suite is empty as written, so it registers no test. */
@@ -311,6 +313,7 @@ export class TestNameIndex implements TestNameLookup {
 
     // Registrations with one id (`it('works'); it.skip('works')`): the id is skipped only when all of them are.
     const skippedById = new Map<string, boolean>();
+    const mayNotRunById = new Map<string, boolean>();
 
     for (const test of tests) {
       const inexact = test.inexactName ?? (test.granularity === 'suite' ? 'dynamic_title' : undefined);
@@ -333,10 +336,13 @@ export class TestNameIndex implements TestNameLookup {
 
       skippedById.set(test.id, (skippedById.get(test.id) ?? true) && skipped);
 
-      if (uncertain(test) || skipped || (onlyFiles.has(test.file) && !test.modifiers?.includes('only')))
-        this.mayNotRun.add(test.id);
+      // An id may not have run only when no registration with it surely runs.
+      const mayNotRun =
+        uncertain(test) || skipped || (onlyFiles.has(test.file) && !test.modifiers?.includes('only'));
+      mayNotRunById.set(test.id, (mayNotRunById.get(test.id) ?? true) && mayNotRun);
 
-      if (uncertain(test)) this.repeatable.add(test.id);
+      // A registration known not to run adds no run of its id, whatever its condition or table.
+      if (uncertain(test) && !skipped) this.repeatable.add(test.id);
 
       // A skipped table-driven test ran no row, so no reported name is its.
       if (!test.modifiers?.includes('each') || skipped) continue;
@@ -344,8 +350,11 @@ export class TestNameIndex implements TestNameLookup {
       const titles = [...test.suitePath, test.name];
       // Only the titles the runner formats have placeholders; a `%s` in a plain suite title is text.
       const formatted = test.tableTitles ? new Set(test.tableTitles) : undefined;
+      const tagged = new Set(test.templateTableTitles ?? []);
       const segments = titles.map((title, k) =>
-        formatted === undefined || formatted.has(k) ? compileTitleTemplate(title, keys) : literalTitle(title),
+        formatted === undefined || formatted.has(k)
+          ? compileTitleTemplate(title, keys, tagged.has(k))
+          : literalTitle(title),
       );
       const set = this.templates.get(test.file) ?? new TemplateSet();
       // Kept even without placeholders: a title with escapes only (`100%% sure`) is reported changed (`100% sure`).
@@ -359,6 +368,8 @@ export class TestNameIndex implements TestNameLookup {
     }
 
     for (const [id, skipped] of skippedById) if (skipped) this.skipped.add(id);
+
+    for (const [id, mayNotRun] of mayNotRunById) if (mayNotRun) this.mayNotRun.add(id);
 
     for (const file of files)
       if (file.inexactNames !== undefined && !this.inexact.has(file.path))
