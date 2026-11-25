@@ -133,6 +133,7 @@ export const jestTestRunner: TestRunnerProvider = {
     experimental: JEST_MUTATION_EXPERIMENTAL,
     // mutator does not support Jest projects, so a leading `[label]` is part of the title.
     projectPrefix: false,
+    titleKeys: 'object_key',
     configFlag: '--jest-config',
     unsupportedReason: mutationUnsupportedReason,
     // Jest loads mutator's setup files and transformer by absolute path; nothing has to be allowed.

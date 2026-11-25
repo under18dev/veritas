@@ -176,6 +176,42 @@
         "test",
         "suite"
       ]
+    },
+    "inexactName": {
+      "type": "string",
+      "enum": [
+        "dynamic_title",
+        "dynamic_suite",
+        "registered_in_function"
+      ]
+    },
+    "conditional": {
+      "type": "boolean",
+      "const": true
+    },
+    "tableTitles": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      }
+    },
+    "templateTableTitles": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      }
+    },
+    "optionsUnknown": {
+      "type": "boolean",
+      "const": true
+    },
+    "emptyTable": {
+      "type": "boolean",
+      "const": true
     }
   },
   "required": [

@@ -58,6 +58,40 @@ export const TestCase = z.object({
     ]),
   ),
   granularity: z.enum(['test', 'suite']),
+  /**
+   * Why the full name the test runner reports for this test may not be `suitePath` and `name` joined, beyond the
+   * placeholders of a table-driven title; absent when static analysis read every title on the way.
+   * `dynamic_title`: the test's own title is not a literal (`it(\`fee for ${total}\`)`); `name` is a placeholder.
+   * `dynamic_suite`: an enclosing `describe` has a title that is not a literal, and `suitePath` leaves it out.
+   * `registered_in_function`: the test is registered inside a function other than a `describe` callback (a shared
+   * suite or a loop callback), so the suites it runs in are those of the call site, which may differ from `suitePath`.
+   */
+  inexactName: z.enum(['dynamic_title', 'dynamic_suite', 'registered_in_function']).optional(),
+  /**
+   * The test is registered on a condition, so it may not run even when its file does: under `if`, a loop, `switch`,
+   * `try`, `?:`, `&&`, `||` or `??`, or through `skipIf`/`runIf` (its own or an enclosing `describe`'s). Absent
+   * otherwise.
+   */
+  conditional: z.literal(true).optional(),
+  /**
+   * For a table-driven test, the positions in `[...suitePath, name]` of the titles the runner formats for each row:
+   * the test's own title for `.each`/`.for`, and the titles of enclosing `describe.each`/`describe.for`. The other
+   * titles are reported as written. Absent for a test with no such title.
+   */
+  tableTitles: z.array(z.number().int().nonnegative()).optional(),
+  /**
+   * Of `tableTitles`, the positions whose rows come from a tagged template table (`it.each\`a | b\`(title, …)`),
+   * whose titles Jest formats by their `$` keys only, leaving `%%` and the other placeholders as written. Absent when
+   * there is none.
+   */
+  templateTableTitles: z.array(z.number().int().nonnegative()).optional(),
+  /**
+   * Vitest options of the test or an enclosing suite could not be read (`it('x', opts, fn)`, `{ ...opts }`): they may
+   * set modifiers, `only` included, which beats `skip`. Absent otherwise.
+   */
+  optionsUnknown: z.literal(true).optional(),
+  /** A table of the test or an enclosing suite is empty as written (`it.each([])`), so no test runs. Absent otherwise. */
+  emptyTable: z.literal(true).optional(),
 });
 export type TestCase = z.infer<typeof TestCase>;
 

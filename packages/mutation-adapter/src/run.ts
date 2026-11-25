@@ -25,7 +25,13 @@ import {
   transformErrorLine,
   withoutDebug,
 } from './diagnose.js';
-import { importMutationReport, testIdsByFullName } from './import.js';
+import {
+  importMutationReport,
+  type NamedTest,
+  type NamedTestFile,
+  TestNameIndex,
+  type WithheldReason,
+} from './import.js';
 import { countMutants, emptyCounts, type MutationRunResult, type MutationRunStatus } from './schema.js';
 
 export interface RunMutationOptions {
@@ -69,10 +75,48 @@ export interface RunMutationOptions {
    */
   timeBudgetSeconds?: number;
   /**
-   * The project's inventoried tests, to resolve the test names in mutator's report to their ids exactly. Without
-   * them, names are split with the runner's full-name separator.
+   * The project's inventoried tests, to resolve the test names in mutator's report to their ids exactly, or for a
+   * table-driven test (`each` in `modifiers`) by its title template. Without them, names are split with the runner's
+   * full-name separator.
    */
-  tests?: readonly { id: string; file: string; suitePath: readonly string[]; name: string }[];
+  tests?: readonly NamedTest[];
+  /** The inventoried test files, for those that may register tests static analysis did not see. */
+  testFileInfo?: readonly NamedTestFile[];
+}
+
+const INEXACT_BECAUSE: Record<Extract<WithheldReason, { kind: 'inexact_file' }>['because'], string> = {
+  dynamic_title: 'a test title that is not a literal',
+  dynamic_suite: 'a describe title that is not a literal',
+  registered_in_function: 'a test registered inside a function',
+  open_collection:
+    'code at the top level or in a describe callback that may register tests, such as a call of a shared suite',
+  imported_registrations: 'a local module it imports registers tests',
+  imported_open_module: 'a local module it imports runs code when loaded that may register tests',
+};
+
+/** One warning for each reason names in mutator's report were credited to no test (see `TestNameIndex`). */
+function withheldWarnings(index: TestNameIndex): string[] {
+  const groups = new Map<string, string[]>();
+
+  for (const [name, reason] of index.withheld) {
+    const what =
+      reason.kind === 'templates'
+        ? 'match the titles of more than one table-driven test (.each)'
+        : reason.kind === 'exact_and_template'
+          ? 'are the title of one test and also match the title of a table-driven test (.each)'
+          : reason.kind === 'skipped_exact'
+            ? 'are the title only of a test that is skipped or a todo, which cannot have run'
+            : `fit the title of a test in a file where static analysis could not read the full name of every test (${INEXACT_BECAUSE[reason.because]}), so they may belong to a test whose name was not read`;
+    const list = groups.get(what) ?? [];
+    list.push(redact(summarize(name, 1, 200)));
+    groups.set(what, list);
+  }
+
+  return [...groups].map(([what, names]) => {
+    names.sort();
+
+    return `${names.length} test name(s) in mutator's report ${what}; their kills and coverage are credited to no test: ${listSome(names)}`;
+  });
 }
 
 const MUTANT_KEY = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
@@ -546,6 +590,15 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     return result('error', { ...common, agentReport, detail: `mutator did not write ${reportPath}` });
   }
   let mutants: Mutant[];
+  const testIds =
+    options.tests === undefined
+      ? undefined
+      : new TestNameIndex(
+          options.tests,
+          runner.fullNameSeparator,
+          options.testFileInfo,
+          runner.mutation.titleKeys,
+        );
 
   try {
     const json: unknown = JSON.parse(readFileSync(rawReportPath, 'utf8'));
@@ -555,9 +608,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       childProcessKeys,
       fullNameSeparator: runner.fullNameSeparator,
       projectPrefix: runner.mutation.projectPrefix,
-      ...(options.tests === undefined
-        ? {}
-        : { testIds: testIdsByFullName(options.tests, runner.fullNameSeparator) }),
+      ...(testIds === undefined ? {} : { testIds }),
     });
   } catch (error) {
     return result('error', {
@@ -608,6 +659,8 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   if (options.killMatrix && agent?.killMatrix === undefined) {
     warnings.push('--kill-matrix was requested but the agent report has no killMatrix');
   }
+
+  if (testIds !== undefined) warnings.push(...withheldWarnings(testIds));
   const counts = countMutants(mutants);
   // On a very long run the head of stderr can fill up before mutator's last lines; its tail keeps them.
   const budget = timeBudgetExhausted(run.stderr) ?? timeBudgetExhausted(run.stderrTail ?? '');

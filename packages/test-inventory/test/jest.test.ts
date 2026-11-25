@@ -340,3 +340,68 @@ describe('Jest tests', () => {
     expect(byName(tests, 'helper called after').suspicions).not.toContain('reachable_by_name');
   });
 });
+
+describe('Jest registration arguments', () => {
+  it('ignores arguments after the callback, which Jest takes as a timeout', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/args.test.ts': [
+        "it('options-like', () => {}, { only: true } as any);",
+        "it('timed', () => {}, 5000);",
+        'const limit = 5000;',
+        "it('named timeout', () => {}, limit);",
+        '',
+      ].join('\n'),
+    });
+
+    expect(inventory(root).tests.map((t) => [t.name, t.modifiers, t.conditional])).toEqual([
+      ['options-like', [], undefined],
+      ['timed', [], undefined],
+      ['named timeout', [], undefined],
+    ]);
+  });
+});
+
+describe('Jest modules obtained at run time', () => {
+  it('opens a file whose helper gets the runner API from jest.requireActual', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/helper.ts':
+        "export function shared() { const g: any = jest.requireActual('@jest/globals'); g.it('hidden', () => {}); }\n",
+      'test/uses.test.ts': "import { shared } from './helper';\nshared();\nit('own', () => {});\n",
+      'test/plain-helper.ts': 'export const build = () => 1;\n',
+      'test/plain.test.ts':
+        "import { build } from './plain-helper';\nconst n = build();\nit('p', () => { n; });\n",
+    });
+    const files = inventory(root).files;
+
+    expect(files.find((f) => f.path === 'test/uses.test.ts')?.inexactNames).toBe('open_collection');
+    expect(files.find((f) => f.path === 'test/plain.test.ts')?.inexactNames).toBeUndefined();
+  });
+
+  it('follows the modules a loaded helper loads for a mock', () => {
+    const root = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/registering.ts': "export function shared() { it('hidden', () => {}); }\n",
+      'test/helper.ts': "export const loaded = jest.requireActual('./registering');\n",
+      'test/uses.test.ts': "import { loaded } from './helper';\nit('own', () => { loaded; });\n",
+    });
+
+    // The module is outside the program (nothing imports it), so it cannot be read: either way the file is open.
+    expect(inventory(root).files.find((f) => f.path === 'test/uses.test.ts')?.inexactNames).toBe(
+      'imported_open_module',
+    );
+    // Imported elsewhere, it is read, and found to register tests.
+    const read = tempProject({
+      'src/value.ts': 'export const value = (input: number) => input;\n',
+      'test/registering.ts': "export function shared() { it('hidden', () => {}); }\n",
+      'test/other.ts': "import { shared } from './registering';\nexport const other = shared;\n",
+      'test/helper.ts': "export const loaded = jest.requireActual('./registering');\n",
+      'test/uses.test.ts': "import { loaded } from './helper';\nit('own', () => { loaded; });\n",
+      'test/also.test.ts': "import { other } from './other';\nit('also', () => { other; });\n",
+    });
+    expect(inventory(read).files.find((f) => f.path === 'test/uses.test.ts')?.inexactNames).toBe(
+      'imported_registrations',
+    );
+  });
+});

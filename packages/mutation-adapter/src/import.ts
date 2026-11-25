@@ -9,6 +9,15 @@ import {
   VeritasError,
 } from '@under18dev/veritas-core';
 import { z } from 'zod';
+import {
+  compileTitleTemplate,
+  joinTitles,
+  literalTitle,
+  matchesTitleTemplate,
+  TemplateSet,
+  type TitleKeys,
+  type TitleTemplate,
+} from './each-title.js';
 
 export type ReportSource = 'mutator' | 'stryker' | 'mutation-testing-elements';
 
@@ -89,24 +98,47 @@ export function mutatorTestName(name: string, projectPrefix = true): { file: str
 }
 
 /**
- * The test id test-inventory assigns to the test behind a mutator test name: looked up in `testIds` (keyed by
- * `<file>#<full name>`) when given, the name as written first and, with `projectPrefix`, then without a leading
- * `[project] ` label (so a title that starts with brackets is not cut); otherwise from the name split with
- * `separator`. A name `testIds` maps to null belongs to more than one inventoried test; it gets an id of its own that
- * matches none of them, so no kill is credited to a test that may not have run.
+ * Test ids by `<file>#<full name>`: a `Map` from `testIdsByFullName`, or anything with the same `get`. A name mapped
+ * to null belongs to more than one inventoried test. `resolve`, when present, decides instead, from the keys of every
+ * reading of one name (with and without a `[project] ` label), as a `TestNameIndex` does to match the names of
+ * table-driven tests to their templates. Null from either means the name may belong to more than one test.
+ */
+export interface TestNameLookup {
+  get(key: string): string | null | undefined;
+  resolve?(keys: readonly string[]): string | null | undefined;
+  /** Every test name of the report, given before any is resolved (see `TestNameIndex.observe`). */
+  observe?(names: Iterable<string>): void;
+}
+
+/**
+ * The test id test-inventory assigns to the test behind a mutator test name. With `testIds` (keyed by
+ * `<file>#<full name>`), the name is looked up as written and, with `projectPrefix`, without a leading `[project] `
+ * label (so a title that starts with brackets is not cut): by `testIds.resolve` when it has one, otherwise exactly,
+ * the first reading that is known winning. Otherwise the id comes from the name split with `separator`. A name that
+ * may belong to more than one inventoried test gets an id of its own that matches none of them, so no kill is
+ * credited to a test that may not have run.
  */
 export function mutatorTestId(
   name: string,
   separator = ' > ',
-  testIds?: ReadonlyMap<string, string | null>,
+  testIds?: TestNameLookup,
   projectPrefix = true,
 ): string {
   if (testIds !== undefined) {
-    for (const strip of projectPrefix ? [false, true] : [false]) {
+    const keys = (projectPrefix ? [false, true] : [false]).map((strip) => {
       const { file, full } = mutatorTestName(name, strip);
-      const known = testIds.get(`${file}#${full}`);
 
-      if (known !== undefined) return known ?? stableId('T', { file, ambiguous: full });
+      return `${file}#${full}`;
+    });
+    const known = testIds.resolve
+      ? testIds.resolve(keys)
+      : keys.map((key) => testIds.get(key)).find((id) => id !== undefined);
+
+    if (known !== undefined) {
+      if (known !== null) return known;
+      const { file, full } = mutatorTestName(name, false);
+
+      return stableId('T', { file, ambiguous: full });
     }
   }
 
@@ -114,11 +146,47 @@ export function mutatorTestId(
 }
 
 /**
+ * An inventoried test as name resolution needs it: `modifiers` tells table-driven tests (`each`) apart, and
+ * `granularity` and `inexactName` the tests whose full name static analysis could not read exactly.
+ */
+export interface NamedTest {
+  id: string;
+  file: string;
+  suitePath: readonly string[];
+  name: string;
+  modifiers?: readonly string[];
+  granularity?: 'test' | 'suite';
+  inexactName?: 'dynamic_title' | 'dynamic_suite' | 'registered_in_function';
+  /** The test is registered on a condition, so it may not have run (or, in a loop, may have run more than once). */
+  conditional?: true;
+  /**
+   * Positions in `[...suitePath, name]` of the titles the runner formats for each row; the others are reported as
+   * written. When a table-driven test has none recorded (an older inventory), every title is read as a template.
+   */
+  tableTitles?: readonly number[];
+  /** Of `tableTitles`, those whose rows come from a tagged template table (see `compileTitleTemplate`). */
+  templateTableTitles?: readonly number[];
+  /** Options of the test or an enclosing suite could not be read, so they may focus it. */
+  optionsUnknown?: true;
+  /** A table of the test or an enclosing suite is empty as written, so it registers no test. */
+  emptyTable?: true;
+}
+
+/** A test file as name resolution needs it: whether it may register tests static analysis did not see. */
+export interface NamedTestFile {
+  path: string;
+  inexactNames?: 'open_collection' | 'imported_registrations' | 'imported_open_module';
+}
+
+/** Why static analysis could not read the full name of every test a file runs. */
+export type InexactReason = NonNullable<NamedTest['inexactName'] | NamedTestFile['inexactNames']>;
+
+/**
  * The lookup `mutatorTestId` resolves names with: each test's id by `<file>#<full name>`, the full name joined with
  * `separator`, and null for a full name that more than one test has.
  */
 export function testIdsByFullName(
-  tests: readonly { id: string; file: string; suitePath: readonly string[]; name: string }[],
+  tests: readonly NamedTest[],
   separator: string,
 ): Map<string, string | null> {
   const ids = new Map<string, string | null>();
@@ -132,6 +200,343 @@ export function testIdsByFullName(
   return ids;
 }
 
+/** Why a name was credited to no test: what else it could belong to. */
+export type WithheldReason =
+  | { kind: 'templates' }
+  | { kind: 'exact_and_template' }
+  /** The only test with the name is skipped or a todo, so it cannot have run under it. */
+  | { kind: 'skipped_exact' }
+  | { kind: 'inexact_file'; because: InexactReason };
+
+/** mutator's suffix for the second and later tests of a run with one full name (`case 1#2`). */
+const DUPLICATE = /^(.*)#([2-9]|[1-9]\d+)$/s;
+
+/** `<file>#<full name>` without mutator's duplicate suffix; undefined when it has none. */
+function withoutDuplicateSuffix(key: string): string | undefined {
+  const hash = key.indexOf('#');
+  const match = hash < 0 ? null : DUPLICATE.exec(key.slice(hash + 1));
+
+  return match ? `${key.slice(0, hash)}#${match[1]}` : undefined;
+}
+
+/**
+ * Test ids by full name (as `testIdsByFullName`), plus the templates of table-driven tests: a test with the `each`
+ * modifier (its own `.each`/`.for`, or an enclosing `describe.each`) whose full name has placeholders matches the
+ * names the runner formats from it, in the same file.
+ *
+ * A kill is never credited to a test other than the one the runner named, so a name is credited to no test (null)
+ * and kept in `withheld` with the reason when it may belong to more than one:
+ * - it fits the templates of two tests;
+ * - one test has it exactly and another test may have run under it too (`exact_and_template`): the name fits that
+ *   test's template and mutator reported it more than once, the exact test may not have run (skipped, a todo,
+ *   registered on a condition, or next to a `.only` in its file), or the template fits it title by title. Vitest
+ *   joins titles with ` > `, so a template's placeholders are kept within one title for this; with any other
+ *   separator (Jest's space) titles cannot be told apart, and any fit counts;
+ * - it fits a template, or mutator reported it more than once, in a file where static analysis could not read the
+ *   full name of every test (a title or suite title that is not a literal, a test registered inside a function, or a
+ *   call that may register tests, see `NamedTestFile`), since the runner may have named such a test.
+ *
+ * mutator numbers the second and later tests that share a full name (`case 1#2`; see `observe`). A name with such a
+ * suffix is resolved through the name it shares as well, but only when mutator also reported that name and more than
+ * one run of a test could have had it: two tests fit it, a test that fits it is table-driven or registered in a loop
+ * or on a condition, or its file has tests static analysis could not name. Otherwise `#2` is part of the title.
+ */
+export class TestNameIndex implements TestNameLookup {
+  private readonly exact: Map<string, string | null>;
+  /** The templates of each file's table-driven tests, indexed by their literal prefix. */
+  private readonly templates = new Map<
+    string,
+    TemplateSet<{ id: string; segments: TitleTemplate[]; styled: boolean }>
+  >();
+  /** Files with a template read less exactly (a repeated `%#` or `%$`), where a `%c` template owns no name alone. */
+  private readonly looseFiles = new Set<string>();
+  /** Templates with `%c`, which is read as any text. */
+  private readonly styled = new Set<string>();
+  /** Tests that may run more than once under one name: table-driven, or registered in a loop or on a condition. */
+  private readonly repeatable = new Set<string>();
+  /** Every name mutator reported (see `observe`). */
+  private readonly observed = new Set<string>();
+  /** Files whose tests static analysis could not all name exactly, and why (the first reason found). */
+  private readonly inexact = new Map<string, InexactReason>();
+  /** Tests that may not have run: skipped, todo, conditional, or without `.only` in a file that has one. */
+  private readonly mayNotRun = new Set<string>();
+  /** Tests known not to run: `skip` or `todo`, their own or an enclosing suite's. */
+  private readonly skipped = new Set<string>();
+  /** Names (`<file>#<full name>`) more than one test of the run had, by mutator's numbered copies of them. */
+  private readonly duplicated = new Set<string>();
+  private readonly resolved = new Map<string, string | null | undefined>();
+  /** Names (`<file>#<full name>`, as the runner reports them) credited to no test, and why. */
+  readonly withheld = new Map<string, WithheldReason>();
+
+  constructor(
+    allTests: readonly NamedTest[],
+    private readonly separator: string,
+    files: readonly NamedTestFile[] = [],
+    /** How the runner reads `$key` in titles; by default as Jest does, which reads them more widely. */
+    keys: TitleKeys = 'object_key',
+  ) {
+    // A registration with a table empty as written registers no test: it is neither a candidate nor a test that
+    // may run.
+    const tests = allTests.filter((test) => !test.emptyTable);
+    this.exact = testIdsByFullName(tests, separator);
+    const onlyFiles = new Set(
+      tests.filter((test) => test.modifiers?.includes('only')).map((test) => test.file),
+    );
+    // Files with a focused test that surely runs: the runner runs only the focused tests of such a file. Not a file
+    // with a test registered on a condition, which includes options static analysis cannot read: that test may be
+    // focused too.
+    /**
+     * Whether a test may or may not run: registered on a condition, or both focused and skipped (`{ skip: true,
+     * only: true }`, which Vitest runs and focuses on, while an enclosing `describe.skip` still skips it).
+     */
+    const uncertain = (test: NamedTest) =>
+      test.conditional === true ||
+      ((test.modifiers?.includes('only') ?? false) &&
+        (test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false));
+    /**
+     * Whether a test may focus its file or not, which leaves the focus of the file unknown: focused but uncertain (on
+     * a condition, also skipped, registered inside a function or with a name not read), or with options not read,
+     * which may hold `only`. An unfocused test, conditional or not, cannot focus its file.
+     */
+    const focusUnknown = (test: NamedTest) =>
+      test.optionsUnknown === true ||
+      ((test.modifiers?.includes('only') ?? false) && (uncertain(test) || test.inexactName !== undefined));
+    const unknownFocusFiles = new Set(tests.filter(focusUnknown).map((test) => test.file));
+    const focusedFiles = new Set(
+      tests
+        .filter(
+          (test) =>
+            test.modifiers?.includes('only') && !focusUnknown(test) && !unknownFocusFiles.has(test.file),
+        )
+        .map((test) => test.file),
+    );
+
+    // Registrations with one id (`it('works'); it.skip('works')`): the id is skipped only when all of them are.
+    const skippedById = new Map<string, boolean>();
+    const mayNotRunById = new Map<string, boolean>();
+
+    for (const test of tests) {
+      const inexact = test.inexactName ?? (test.granularity === 'suite' ? 'dynamic_title' : undefined);
+      // `skip` and `todo` (its own, `xit`, or an enclosing `describe.skip`) are known not to run; `skipIf`,
+      // `runIf` and other conditions are not known either way.
+      const focused = test.modifiers?.includes('only') ?? false;
+      const definitelySkipped =
+        (test.modifiers?.some((modifier) => modifier === 'skip' || modifier === 'todo') ?? false) &&
+        !focused &&
+        !test.optionsUnknown;
+
+      // Skipped or a todo, and not focused, never runs, whatever its table or condition; unfocused next to a focused
+      // test that surely runs, unless it may run anyway.
+      const skipped = definitelySkipped || (focusedFiles.has(test.file) && !focused && !test.optionsUnknown);
+
+      // A registration known not to run (`it.skip(title, …)`, or unfocused next to a focused test that surely runs)
+      // names no test that ran, whatever its title.
+      if (inexact !== undefined && !skipped && !this.inexact.has(test.file))
+        this.inexact.set(test.file, inexact);
+
+      skippedById.set(test.id, (skippedById.get(test.id) ?? true) && skipped);
+
+      // An id may not have run only when no registration with it surely runs.
+      const mayNotRun =
+        uncertain(test) || skipped || (onlyFiles.has(test.file) && !test.modifiers?.includes('only'));
+      mayNotRunById.set(test.id, (mayNotRunById.get(test.id) ?? true) && mayNotRun);
+
+      // A registration known not to run adds no run of its id, whatever its condition or table.
+      if (uncertain(test) && !skipped) this.repeatable.add(test.id);
+
+      // A skipped table-driven test ran no row, so no reported name is its.
+      if (!test.modifiers?.includes('each') || skipped) continue;
+      this.repeatable.add(test.id);
+      const titles = [...test.suitePath, test.name];
+      // Only the titles the runner formats have placeholders; a `%s` in a plain suite title is text.
+      const formatted = test.tableTitles ? new Set(test.tableTitles) : undefined;
+      const tagged = new Set(test.templateTableTitles ?? []);
+      const segments = titles.map((title, k) =>
+        formatted === undefined || formatted.has(k)
+          ? compileTitleTemplate(title, keys, tagged.has(k))
+          : literalTitle(title),
+      );
+      const set = this.templates.get(test.file) ?? new TemplateSet();
+      // Kept even without placeholders: a title with escapes only (`100%% sure`) is reported changed (`100% sure`).
+      const template = joinTitles(segments, separator);
+      set.add(template, { id: test.id, segments, styled: template.styled === true });
+
+      if (template.styled) this.styled.add(test.id);
+
+      if (template.repeatedIndex) this.looseFiles.add(test.file);
+      this.templates.set(test.file, set);
+    }
+
+    for (const [id, skipped] of skippedById) if (skipped) this.skipped.add(id);
+
+    for (const [id, mayNotRun] of mayNotRunById) if (mayNotRun) this.mayNotRun.add(id);
+
+    for (const file of files)
+      if (file.inexactNames !== undefined && !this.inexact.has(file.path))
+        this.inexact.set(file.path, file.inexactNames);
+  }
+
+  /**
+   * Take note of every test name of the run (mutator's `testFiles` and the names it credits), before resolving any:
+   * a name with mutator's duplicate suffix shows that its unnumbered name belongs to more than one test of the run.
+   */
+  observe(names: Iterable<string>): void {
+    for (const reported of names) {
+      // The file part as `mutatorTestId` reads it (`test\\a.test.ts` is `test/a.test.ts`).
+      const { file, full } = mutatorTestName(reported, false);
+      const name = `${file}#${full}`;
+      this.observed.add(name);
+      const base = withoutDuplicateSuffix(name);
+
+      if (base !== undefined) this.duplicated.add(base);
+    }
+  }
+
+  get(key: string): string | null | undefined {
+    return this.exact.get(key);
+  }
+
+  resolve(keys: readonly string[]): string | null | undefined {
+    const cacheKey = keys.join('\n');
+
+    if (this.resolved.has(cacheKey)) return this.resolved.get(cacheKey);
+    const id = this.decide(keys);
+    this.resolved.set(cacheKey, id);
+
+    return id;
+  }
+
+  private exactOf(keys: readonly string[]): string | null | undefined {
+    return keys.map((key) => this.exact.get(key)).find((id) => id !== undefined);
+  }
+
+  /** The tests whose templates fit a name; with `byTitle`, only those that fit it title by title. */
+  private fitting(keys: readonly string[], into: Set<string>, byTitle = false): void {
+    for (const key of new Set(keys)) {
+      const hash = key.indexOf('#');
+      const full = key.slice(hash + 1);
+      const titles = byTitle ? full.split(this.separator) : [];
+
+      // A name that fits title by title fits the joined template too, so only those are checked further.
+      for (const { id, segments } of this.templates.get(hash < 0 ? '' : key.slice(0, hash))?.matching(full) ??
+        [])
+        if (
+          !byTitle ||
+          (titles.length === segments.length &&
+            segments.every((segment, k) => matchesTitleTemplate(segment, titles[k] ?? '')))
+        )
+          into.add(id);
+    }
+  }
+
+  /** Whether more than one run of a test may have had a name the tests `ids` fit, in `file`. */
+  private repeats(ids: ReadonlySet<string>, file: string): boolean {
+    return ids.size > 1 || [...ids].some((id) => this.repeatable.has(id)) || this.inexact.has(file);
+  }
+
+  private decide(keys: readonly string[]): string | null | undefined {
+    const name = keys[0] ?? '';
+    const hash = name.indexOf('#');
+    const file = hash < 0 ? '' : name.slice(0, hash);
+    let lookup = keys;
+    let exact = this.exactOf(keys);
+    // A skipped test with the title did not run: the name comes from another test, if any.
+    let skippedExact: string | undefined;
+
+    if (typeof exact === 'string' && this.skipped.has(exact)) {
+      skippedExact = exact;
+      exact = undefined;
+    }
+    const candidates = new Set<string>();
+    this.fitting(keys, candidates);
+    let duplicate =
+      this.duplicated.has(name) &&
+      (exact === null || this.repeats(new Set([...candidates, ...(exact ? [exact] : [])]), file));
+
+    // The name may be mutator's numbered copy of a name it also reported (`works#2`), even when a test has it as its
+    // title: then both readings may hold.
+    const bases = keys.map(withoutDuplicateSuffix);
+
+    if (bases.every((base) => base !== undefined) && this.observed.has(bases[0] ?? '')) {
+      const viaBase = new Set<string>();
+      const baseExact = this.exactOf(bases);
+      this.fitting(bases, viaBase);
+
+      if (baseExact !== undefined && baseExact !== null) viaBase.add(baseExact);
+
+      if (baseExact === null || (viaBase.size > 0 && this.repeats(viaBase, file))) {
+        if (exact !== undefined) {
+          // A title that ends in `#2`, and a second run of the shorter name: which one ran is not known.
+          if (exact === null || baseExact === null || [...viaBase].some((id) => id !== exact)) {
+            this.withheld.set(name, { kind: 'exact_and_template' });
+
+            return null;
+          }
+        } else {
+          if (baseExact === null) return null;
+
+          if (baseExact !== undefined) viaBase.delete(baseExact);
+          exact = baseExact;
+          duplicate = true;
+          lookup = bases;
+
+          for (const id of viaBase) candidates.add(id);
+        }
+      }
+    }
+
+    if (exact === null) return null;
+
+    // A skipped test did not run: a name it has exactly that a running template fits is the template's, and one no
+    // running template fits came from a test static analysis did not see.
+    if (skippedExact !== undefined && exact === undefined && candidates.size === 0) {
+      this.withheld.set(name, { kind: 'skipped_exact' });
+
+      return null;
+    }
+
+    if (exact !== undefined && this.skipped.has(exact)) {
+      if (![...candidates].some((id) => id !== exact)) {
+        this.withheld.set(name, { kind: 'skipped_exact' });
+
+        return null;
+      }
+      exact = undefined;
+    }
+    const because = this.inexact.get(file);
+    let reason: WithheldReason | undefined;
+
+    if (exact !== undefined) {
+      candidates.delete(exact);
+      let shared = candidates.size > 0 && (duplicate || this.mayNotRun.has(exact));
+
+      if (candidates.size > 0 && !shared) {
+        if (this.separator !== ' > ') shared = true;
+        else {
+          const byTitle = new Set<string>();
+          this.fitting(lookup, byTitle, true);
+          byTitle.delete(exact);
+          shared = byTitle.size > 0;
+        }
+      }
+
+      if (shared) reason = { kind: 'exact_and_template' };
+      else if (because !== undefined && duplicate) reason = { kind: 'inexact_file', because };
+      else return exact;
+    } else if (candidates.size === 0) return undefined;
+    else if (because !== undefined) reason = { kind: 'inexact_file', because };
+    else if (candidates.size > 1) reason = { kind: 'templates' };
+    else if (this.looseFiles.has(file) && [...candidates].some((id) => this.styled.has(id)))
+      // A template read less exactly may be the one that ran, while `%c` read as any text took its name.
+      reason = { kind: 'templates' };
+    else return [...candidates][0];
+
+    this.withheld.set(name, reason);
+
+    return null;
+  }
+}
+
 export interface ImportOptions {
   root: string;
   source: ReportSource;
@@ -143,9 +548,10 @@ export interface ImportOptions {
   projectPrefix?: boolean;
   /**
    * Test ids of the inventoried tests by `<file>#<full name>`, to resolve mutator test names exactly; null for a full
-   * name more than one test has (see `testIdsByFullName`).
+   * name more than one test has (see `testIdsByFullName`); a `TestNameIndex` also matches the names of table-driven
+   * tests to their templates.
    */
-  testIds?: ReadonlyMap<string, string | null>;
+  testIds?: TestNameLookup;
 }
 
 /**
@@ -170,6 +576,14 @@ export function importMutationReport(json: unknown, options: ImportOptions): Mut
 
   for (const [file, { tests }] of Object.entries(report.testFiles ?? {})) {
     for (const t of tests) testNames.set(t.id, options.source === 'mutator' ? t.id : `${file}#${t.name}`);
+  }
+  if (options.source === 'mutator' && options.testIds?.observe) {
+    const names = new Set(testNames.keys());
+
+    for (const entry of Object.values(report.files))
+      for (const m of entry.mutants)
+        for (const id of [...(m.killedBy ?? []), ...(m.coveredBy ?? [])]) names.add(id);
+    options.testIds.observe(names);
   }
   const testRef = (id: string): string => {
     if (options.source === 'mutator')

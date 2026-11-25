@@ -1,4 +1,4 @@
-import { VeritasConfig } from '@under18dev/veritas-core';
+import { stableId, VeritasConfig } from '@under18dev/veritas-core';
 import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { inventoryTests } from '../src/index.js';
@@ -255,5 +255,176 @@ describe('mock detection is scoped to the test and to real Vitest mock APIs', ()
     });
     expect(byName(result, 'inside').suspicions).toContain('unconditional_mock');
     expect(byName(result, 'outside').usesMocks).toBe(false);
+  });
+});
+
+describe('registration functions taken from a namespace import of the runner', () => {
+  it('inventories tests registered through a constant bound to a member of the namespace', () => {
+    const result = inventory({
+      'test/namespace.test.ts': [
+        "import * as v from 'vitest';",
+        'const test = v.test;',
+        'const fixture = v.test.extend({});',
+        "const named = v['it'];",
+        "test('works', () => { v.expect(1).toBe(1); });",
+        "test.skip('skipped', () => {});",
+        "test.each([1, 2])('row %s', (n) => { v.expect(n).toBeGreaterThan(0); });",
+        "fixture('with fixtures', () => {});",
+        "named('by a literal key', () => {});",
+        '',
+      ].join('\n'),
+    });
+
+    expect(byName(result, 'works').modifiers).toEqual([]);
+    expect(byName(result, 'skipped').modifiers).toEqual(['skip']);
+    expect(byName(result, 'row %s').modifiers).toContain('each');
+    expect(byName(result, 'with fixtures')).toBeDefined();
+    expect(byName(result, 'by a literal key')).toBeDefined();
+  });
+
+  it('keeps the suite path of tests in a suite destructured from the namespace', () => {
+    const file = 'test/destructured.test.ts';
+    const result = inventory({
+      [file]: [
+        "import * as v from 'vitest';",
+        'const test = v.test;',
+        'const { describe } = v;',
+        'const { it: check } = v;',
+        'const ns = v;',
+        "const { 'test': quoted } = ns;",
+        "describe('D', () => {",
+        "  test('ns const', () => {});",
+        "  check('ns destructured', () => {});",
+        "  quoted('through an alias', () => {});",
+        '});',
+        '',
+      ].join('\n'),
+    });
+
+    for (const name of ['ns const', 'ns destructured', 'through an alias']) {
+      const test = byName(result, name);
+      expect(test.suitePath, name).toEqual(['D']);
+      // The id main gives the test: from its file, suite path and title.
+      expect(test.id, name).toBe(stableId('T', { file, suitePath: ['D'], name }));
+    }
+  });
+});
+
+describe('suites whose title is not a literal', () => {
+  it('pass their modifiers on to what they register, but not each', () => {
+    const result = inventory({
+      'test/dynamic-suites.test.ts': [
+        "import { describe, it } from 'vitest';",
+        "const title = ['a', 'b'].join(' ');",
+        "describe.skip(title, () => { it('hidden', () => {}); });",
+        "describe.only(title, () => { it('focused', () => {}); });",
+        "describe.each([1])(title, () => { it('row', () => {}); });",
+        '',
+      ].join('\n'),
+    });
+
+    expect(byName(result, 'hidden').modifiers).toContain('skip');
+    expect(byName(result, 'hidden').inexactName).toBe('dynamic_suite');
+    expect(byName(result, 'focused').modifiers).toContain('only');
+    expect(byName(result, 'row').modifiers).not.toContain('each');
+  });
+});
+
+describe('constants bound to a registration function with modifiers', () => {
+  it('inventories the tests they register, with those modifiers', () => {
+    const file = 'test/modified.test.ts';
+    const result = inventory({
+      [file]: [
+        "import * as v from 'vitest';",
+        "import { describe, it, test } from 'vitest';",
+        'const concurrent = it.concurrent;',
+        'const skipped = test.skip;',
+        'const focused = v.test.only;',
+        'const failing = it.fails;',
+        'const later = describe.skip;',
+        'const table = it.each;',
+        "concurrent('works', () => {});",
+        "skipped('skipped', () => {});",
+        "focused('focused', () => {});",
+        "failing('fails', () => {});",
+        "concurrent.skip('both', () => {});",
+        "later('S', () => { it('inside', () => {}); });",
+        "table([1])('row %s', () => {});",
+        '',
+      ].join('\n'),
+    });
+
+    expect(byName(result, 'works').modifiers).toEqual(['concurrent']);
+    expect(byName(result, 'works').id).toBe(stableId('T', { file, suitePath: [], name: 'works' }));
+    expect(byName(result, 'skipped').modifiers).toEqual(['skip']);
+    expect(byName(result, 'focused').modifiers).toEqual(['only']);
+    expect(byName(result, 'fails').modifiers).toContain('expected_failure');
+    expect(byName(result, 'both').modifiers).toEqual(expect.arrayContaining(['concurrent', 'skip']));
+    expect(byName(result, 'inside').suitePath).toEqual(['S']);
+    expect(byName(result, 'inside').modifiers).toContain('skip');
+    // A factory bound to a constant is not read, as before.
+    expect(result.tests.some((test) => test.name === 'row %s')).toBe(false);
+
+    // Under the name of the runner's export, as main read it.
+    const named = inventory({
+      'test/named.test.ts':
+        "import { it } from 'vitest';\nconst test = it.concurrent;\ntest('works', () => {});\n",
+    });
+    expect(byName(named, 'works').modifiers).toEqual(['concurrent']);
+  });
+});
+
+describe('tagged template tables', () => {
+  it('records which formatted titles take their rows from a tagged template', () => {
+    const result = inventory({
+      'test/tagged.test.ts': [
+        "import { describe, it } from 'vitest';",
+        "describe.each([1])('suite %s', () => {",
+        `  it.each\`a\n$\{1}\`('100%% $a', () => {});`,
+        "  it.each([2])('row %s', () => {});",
+        '});',
+        '',
+      ].join('\n'),
+    });
+
+    expect(byName(result, '100%% $a').tableTitles).toEqual([0, 1]);
+    expect(byName(result, '100%% $a').templateTableTitles).toEqual([1]);
+    expect(byName(result, 'row %s').tableTitles).toEqual([0, 1]);
+    expect(byName(result, 'row %s').templateTableTitles).toBeUndefined();
+  });
+});
+
+describe('Vitest options of suites and tests', () => {
+  it('takes a skip or todo set only by suite options, which a test or suite clears in its own, as not known', () => {
+    // Run with Vitest 5.1.1 (and as Vitest 4.1.12 reads them): `works`, `deep` and `c` are skipped, `t` is a todo, and
+    // `chain then option` runs: a suite's mode skips all it holds, while a test's own option overrides its chain.
+    // A runner that merges a suite's options into its tests would run `works`, `deep` and `t`, so those count as tests
+    // that may or may not run; a chained `describe.skip` holds in either.
+    const result = inventory({
+      'test/options.test.ts': [
+        "import { describe, it } from 'vitest';",
+        "describe('suite', { skip: true }, () => {",
+        "  it('works', { skip: false }, () => {});",
+        "  it('kept', () => {});",
+        "  describe('inner', { skip: false }, () => { it('deep', () => {}); });",
+        '});',
+        "it.skip('chain then option', { skip: false }, () => {});",
+        "describe.skip('chained', () => { it('c', { skip: false }, () => {}); });",
+        "describe('todo', { todo: true }, () => { it('t', { todo: false }, () => {}); });",
+        '',
+      ].join('\n'),
+    });
+
+    for (const name of ['works', 'deep', 't']) {
+      expect(byName(result, name).modifiers, name).not.toContain('skip');
+      expect(byName(result, name).modifiers, name).not.toContain('todo');
+      expect(byName(result, name).conditional, name).toBe(true);
+    }
+    expect(byName(result, 'kept').modifiers).toContain('skip');
+    expect(byName(result, 'kept').conditional).toBeUndefined();
+    expect(byName(result, 'chain then option').modifiers).not.toContain('skip');
+    expect(byName(result, 'chain then option').conditional).toBeUndefined();
+    expect(byName(result, 'c').modifiers).toContain('skip');
+    expect(byName(result, 'c').conditional).toBeUndefined();
   });
 });
