@@ -31,8 +31,11 @@ describe('title templates of table-driven tests', () => {
     expect(matches('name <$name>', 'name <>')).toBe(true);
     expect(matches('%s%s!', '!')).toBe(true);
     expect(matches('%s', '')).toBe(true);
-    for (const conversion of ['%d', '%i', '%f', '%j', '%o', '%O', '%p'])
+    for (const conversion of ['%d', '%i', '%f', '%j', '%p'])
       expect(matches(`<${conversion}>`, '<>'), conversion).toBe(false);
+    // A custom inspection may print nothing for %o and %O.
+    for (const conversion of ['%o', '%O'])
+      expect(matches(`case <${conversion}>`, 'case <>'), conversion).toBe(true);
   });
 
   it('matches the row index of %# and %$, and reads %% as a literal percent', () => {

@@ -10,6 +10,7 @@
  * - `%s` and `$name` print a string as it is, so they may print nothing (`''`);
  * - `%#` and `%$` print the row index (from 0 and from 1): digits only, the first of each; Jest replaces only the
  *   first, so a later one may stay as its own text;
+ * - `%o` and `%O` may print nothing too (a value whose custom inspection returns `''`);
  * - every other conversion prints at least one character (`NaN`, `''` in quotes, `undefined`).
  * A placeholder may also stay as its own text: Jest leaves the placeholders after the row's last value in place
  * (`it.each([[1]])('case %s %c')` reports `case 1 %c`), so `%c` prints nothing or `%c`, and is read as any text.
@@ -48,8 +49,10 @@ export interface TitleTemplate {
   readonly repeatedIndex?: boolean;
 }
 
-/** printf conversions that print at least one character for any value. */
+/** printf conversions besides `%s` and `%c`. */
 const PRINTF = new Set(['d', 'i', 'f', 'j', 'o', 'O', 'p']);
+/** printf conversions that print at least one character for any value. */
+const NON_EMPTY = new Set(['d', 'i', 'f', 'j', 'p']);
 /**
  * Whether a character may be part of an interpolated key, as either runner may read it: Vitest reads
  * `$[$\p{ID_Continue}.]+`, while Jest reads any key of the row's object (`$a-b` for a column `a-b`) and its `.path`.
@@ -120,7 +123,9 @@ export function compileTitleTemplate(template: string, keys: TitleKeys = 'object
           tokens.push(ANY);
 
           if (next === 'c') styled = true;
-        } else tokens.push(ONE, ANY);
+        } else if (NON_EMPTY.has(next)) tokens.push(ONE, ANY);
+        // `%o` and `%O`: a custom inspection may print nothing.
+        else tokens.push(ANY);
         placeholders++;
         i += 2;
         continue;
