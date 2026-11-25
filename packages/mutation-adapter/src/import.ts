@@ -322,12 +322,14 @@ export class TestNameIndex implements TestNameLookup {
         !focused &&
         !test.optionsUnknown;
 
-      // A registration known not to run (`it.skip(title, …)`) names no test that ran, whatever its title.
-      if (inexact !== undefined && !definitelySkipped && !this.inexact.has(test.file))
-        this.inexact.set(test.file, inexact);
       // Skipped or a todo, and not focused, never runs, whatever its table or condition; unfocused next to a focused
       // test that surely runs, unless it may run anyway.
       const skipped = definitelySkipped || (focusedFiles.has(test.file) && !focused && !test.optionsUnknown);
+
+      // A registration known not to run (`it.skip(title, …)`, or unfocused next to a focused test that surely runs)
+      // names no test that ran, whatever its title.
+      if (inexact !== undefined && !skipped && !this.inexact.has(test.file))
+        this.inexact.set(test.file, inexact);
 
       skippedById.set(test.id, (skippedById.get(test.id) ?? true) && skipped);
 

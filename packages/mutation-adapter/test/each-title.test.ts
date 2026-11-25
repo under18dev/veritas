@@ -443,6 +443,29 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect(mutatorTestId(`${FILE}#fee for 5000`, ' > ', alone)).toBe(literal.id);
   });
 
+  it('reads every full name of a file whose unread titles are of registrations a focused test keeps from running', () => {
+    // `it(title, …); it.only.each([1])('case %s', …)`, and a child of `describe.skip(title, …)`.
+    const focused = entry([], 'case %s', ['each', 'only']);
+    const unfocused = { ...entry([], '<dynamic test>', []), inexactName: 'dynamic_title' as const };
+    const index = new TestNameIndex([focused, unfocused], ' > ');
+    expect(mutatorTestId(`${FILE}#case 1`, ' > ', index)).toBe(focused.id);
+
+    const inSkippedSuite = { ...entry([], 'hidden', ['skip']), inexactName: 'dynamic_suite' as const };
+    const plain = entry([], 'case %s', ['each']);
+    expect(mutatorTestId(`${FILE}#case 1`, ' > ', new TestNameIndex([plain, inSkippedSuite], ' > '))).toBe(
+      plain.id,
+    );
+
+    // Not when the focus may not hold: a focused test on a condition, or an unfocused one with options not read.
+    for (const tests of [
+      [{ ...focused, conditional: true as const }, unfocused],
+      [focused, { ...unfocused, optionsUnknown: true as const }],
+    ]) {
+      const open = new TestNameIndex(tests, ' > ');
+      expect(mutatorTestId(`${FILE}#case 1`, ' > ', open)).not.toBe(focused.id);
+    }
+  });
+
   it('reads every full name of a file whose only unread title is of a registration known not to run', () => {
     // `const title = 'ignored'; it.skip(title, …); it.each([1, 2])('case %s', …)`.
     const table = entry([], 'case %s', ['each']);
