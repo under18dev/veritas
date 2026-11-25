@@ -614,8 +614,6 @@ describe('full names static analysis cannot read', () => {
       replStart: "import repl from 'repl';\nexport function shared() { repl.start(); }",
       workerEval:
         "import { Worker } from 'node:worker_threads';\nexport function shared() { new Worker(\"it('hidden', () => {})\", { eval: true }); }",
-      childProcess:
-        "import { execSync } from 'child_process';\nexport function shared() { execSync('vitest'); }",
       nodeTest: "import { test } from 'node:test';\nexport function shared() { test('hidden', () => {}); }",
       requiredInspector: "export function shared() { return require('inspector'); }",
       vmRun:
@@ -742,7 +740,8 @@ describe('full names static analysis cannot read', () => {
         "import { join } from 'node:path';",
         "import { EventEmitter } from 'events';",
         "import { readFile } from 'node:fs/promises';",
-        'export const tools = [join, EventEmitter, readFile];',
+        "import { execFileSync } from 'node:child_process';",
+        'export const tools = [join, EventEmitter, readFile, execFileSync];',
         "export function exists() { return (process as any).getBuiltinModule('node:fs').existsSync('x') || isBuiltin('fs') || builtinModules.length > 0; }",
         'export async function local() {',
         "  const { createRequire } = await import('node:module');",

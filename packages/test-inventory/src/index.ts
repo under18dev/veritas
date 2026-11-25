@@ -6986,15 +6986,17 @@ interface RuntimeImports {
 
 const BUILTINS = new Set(builtinModules);
 /**
- * Builtins that neither run source text nor load modules, so loading and calling them registers no test unseen.
- * `module` is followed apart (see `requiresCreated`). Every other builtin, `vm`, `inspector`, `repl`,
- * `worker_threads`, `child_process`, `cluster`, `wasi`, `test`, `sqlite` and `v8` among them, is not followed.
+ * Builtins that neither run source text nor load modules in this process, so loading and calling them registers no
+ * test unseen. `module` is followed apart (see `requiresCreated`). `child_process` runs code only in another process,
+ * which reaches this one through files and messages, as `fs` does. Every other builtin, `vm`, `inspector`, `repl`,
+ * `worker_threads`, `cluster`, `wasi`, `test`, `sqlite` and `v8` among them, is not followed.
  */
 const INERT_BUILTINS = new Set([
   'assert',
   'assert/strict',
   'async_hooks',
   'buffer',
+  'child_process',
   'console',
   'constants',
   'crypto',
