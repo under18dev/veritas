@@ -616,6 +616,28 @@ describe('full names static analysis cannot read', () => {
         "import { Worker } from 'node:worker_threads';\nexport function shared() { new Worker(\"it('hidden', () => {})\", { eval: true }); }",
       nodeTest: "import { test } from 'node:test';\nexport function shared() { test('hidden', () => {}); }",
       requiredInspector: "export function shared() { return require('inspector'); }",
+      processBinding: "export function shared() { (process as any).binding('contextify'); }",
+      processLinkedBinding: "export function shared() { (process as any)._linkedBinding('x'); }",
+      processDlopen: "export function shared() { process.dlopen({ exports: {} } as any, './addon.node'); }",
+      processComputed: "export function shared(k = 'binding') { (process as any)[k]('contextify'); }",
+      processAlias: "export function shared() { const p: any = process; p.binding('contextify'); }",
+      processPassed: 'const keep = (value: unknown) => value;\nexport function shared() { keep(process); }',
+      processDefaultImport:
+        "import proc from 'node:process';\nexport function shared() { (proc as any).binding('contextify'); }",
+      processNamespaceImport:
+        "import * as proc from 'process';\nexport function shared() { (proc as any).binding('contextify'); }",
+      processNamedImport:
+        "import { dlopen } from 'node:process';\nexport function shared() { dlopen({ exports: {} } as any, './a.node'); }",
+      processRequired: "export function shared() { require('process').binding('contextify'); }",
+      processRequiredAlias:
+        "const proc = require('node:process');\nexport function shared() { proc.binding('contextify'); }",
+      processImported:
+        "export async function shared() { const proc: any = await import('node:process'); proc.binding('contextify'); }",
+      processBuiltin:
+        "export function shared() { (process as any).getBuiltinModule('process').binding('contextify'); }",
+      processDestructured:
+        "export function shared() { const { binding }: any = process; binding('contextify'); }",
+      processReexport: "export { default as proc } from 'node:process';\nexport const shared = () => 1;",
       vmRun:
         "import { runInThisContext } from 'node:vm';\nexport function shared() { runInThisContext(\"it('hidden', () => {})\"); }",
       vmScript:
@@ -742,6 +764,10 @@ describe('full names static analysis cannot read', () => {
         "import { readFile } from 'node:fs/promises';",
         "import { execFileSync } from 'node:child_process';",
         'export const tools = [join, EventEmitter, readFile, execFileSync];',
+        "import proc, { env } from 'node:process';",
+        'export const where = () => [process.cwd(), process.env.HOME, process.platform, proc.argv, env, typeof process];',
+        "export const later = () => process.nextTick(() => process.stdout.write('x'));",
+        'export const { platform, versions } = process;',
         "export function exists() { return (process as any).getBuiltinModule('node:fs').existsSync('x') || isBuiltin('fs') || builtinModules.length > 0; }",
         'export async function local() {',
         "  const { createRequire } = await import('node:module');",

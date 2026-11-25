@@ -4727,6 +4727,212 @@ function requireEscapes(source: ts.SourceFile, declaredLocally: (node: ts.Identi
   return false;
 }
 
+/**
+ * Members of `process` that neither run source text nor load code: its data, its streams and events, timers and
+ * exit. `getBuiltinModule` is followed apart (see `getsBuiltinModule`). Any other member (`binding('contextify')`,
+ * `_linkedBinding`, `dlopen`, `mainModule`, …) may run or load code that is not followed.
+ */
+const PROCESS_MEMBERS = new Set([
+  'abort',
+  'addListener',
+  'allowedNodeEnvironmentFlags',
+  'arch',
+  'argv',
+  'argv0',
+  'chdir',
+  'config',
+  'cpuUsage',
+  'cwd',
+  'emit',
+  'emitWarning',
+  'env',
+  'execArgv',
+  'execPath',
+  'exit',
+  'exitCode',
+  'features',
+  'getBuiltinModule',
+  'hrtime',
+  'listenerCount',
+  'listeners',
+  'memoryUsage',
+  'nextTick',
+  'off',
+  'on',
+  'once',
+  'pid',
+  'platform',
+  'ppid',
+  'prependListener',
+  'prependOnceListener',
+  'release',
+  'removeAllListeners',
+  'removeListener',
+  'resourceUsage',
+  'stderr',
+  'stdin',
+  'stdout',
+  'title',
+  'umask',
+  'uptime',
+  'version',
+  'versions',
+]);
+
+/** Whether a module name is `process` (`node:process`). */
+const isProcessModule = (name: string) => name === 'process' || name === 'node:process';
+
+/**
+ * Whether a module uses `process` (the global, or the `process` module however it is obtained: imported by default,
+ * as a namespace or by name, required, or from `getBuiltinModule` or an awaited dynamic import) other than through
+ * the members in `PROCESS_MEMBERS` or under `typeof`: another member, a computed one, or the object itself as a value
+ * (an alias, an argument, a re-export).
+ */
+function processEscapes(source: ts.SourceFile, declaredLocally: (node: ts.Identifier) => boolean): boolean {
+  const names = new Set<string>();
+  /** Whether a pattern takes only members in `PROCESS_MEMBERS`, by name. */
+  const harmlessPattern = (pattern: ts.BindingName): boolean =>
+    ts.isObjectBindingPattern(pattern) &&
+    pattern.elements.every((element) => {
+      const key = element.propertyName ?? element.name;
+
+      return (
+        !element.dotDotDotToken &&
+        (ts.isIdentifier(key) || ts.isStringLiteral(key)) &&
+        PROCESS_MEMBERS.has(key.text)
+      );
+    });
+  /** Whether a use of the process object is harmless; a name it is held in is tracked in turn. */
+  const harmlessUse = (node: ts.Expression): boolean => {
+    let current: ts.Node = node;
+
+    while (
+      ts.isParenthesizedExpression(current.parent) ||
+      ts.isAsExpression(current.parent) ||
+      ts.isNonNullExpression(current.parent) ||
+      ts.isSatisfiesExpression(current.parent)
+    )
+      current = current.parent;
+    const parent = current.parent;
+
+    if (
+      (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+      parent.expression === current
+    )
+      return PROCESS_MEMBERS.has(memberName(parent) ?? '');
+
+    if (ts.isTypeOfExpression(parent)) return true;
+
+    if (ts.isVariableDeclaration(parent) && parent.initializer === current) {
+      if (harmlessPattern(parent.name)) return true;
+
+      if (ts.isIdentifier(parent.name) && (ts.getCombinedNodeFlags(parent) & ts.NodeFlags.Const) !== 0) {
+        names.add(parent.name.text);
+
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  for (const statement of source.statements) {
+    if (ts.isImportDeclaration(statement)) {
+      const clause = statement.importClause;
+
+      if (!ts.isStringLiteral(statement.moduleSpecifier) || !isProcessModule(statement.moduleSpecifier.text))
+        continue;
+
+      if (!clause || clause.isTypeOnly) continue;
+
+      if (clause.name) names.add(clause.name.text);
+      const bindings = clause.namedBindings;
+
+      if (bindings && ts.isNamespaceImport(bindings)) names.add(bindings.name.text);
+      else if (bindings)
+        for (const element of bindings.elements)
+          if (!element.isTypeOnly && !PROCESS_MEMBERS.has((element.propertyName ?? element.name).text))
+            return true;
+    } else if (
+      ts.isImportEqualsDeclaration(statement) &&
+      ts.isExternalModuleReference(statement.moduleReference) &&
+      ts.isStringLiteralLike(statement.moduleReference.expression) &&
+      isProcessModule(statement.moduleReference.expression.text)
+    )
+      names.add(statement.name.text);
+    else if (
+      ts.isExportDeclaration(statement) &&
+      !statement.isTypeOnly &&
+      statement.moduleSpecifier &&
+      ts.isStringLiteralLike(statement.moduleSpecifier) &&
+      isProcessModule(statement.moduleSpecifier.text)
+    )
+      return true;
+  }
+
+  for (const node of descendants(source)) {
+    // The `process` module obtained at run time: `require('process')`, `getBuiltinModule('process')`,
+    // `await import('node:process')`.
+    if (ts.isCallExpression(node)) {
+      const callee = skipParens(node.expression);
+      const argument = node.arguments[0];
+
+      if (
+        argument &&
+        ts.isStringLiteralLike(argument) &&
+        isProcessModule(argument.text) &&
+        (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+          (ts.isIdentifier(callee) && callee.text === 'require') ||
+          getsBuiltinModule(callee))
+      ) {
+        let value: ts.Expression = node;
+
+        if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+          let current: ts.Node = node;
+
+          while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
+
+          if (!ts.isAwaitExpression(current.parent)) return true;
+          value = current.parent;
+        }
+
+        if (!harmlessUse(value)) return true;
+      }
+    }
+  }
+
+  for (const node of descendants(source)) {
+    if (!ts.isIdentifier(node)) continue;
+    const parent = node.parent;
+
+    // Names that are not references.
+    if (
+      (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+      (ts.isPropertyAssignment(parent) && parent.name === node) ||
+      ts.isImportSpecifier(parent) ||
+      ts.isImportClause(parent) ||
+      ts.isNamespaceImport(parent) ||
+      ts.isImportEqualsDeclaration(parent) ||
+      ts.isTypeQueryNode(parent) ||
+      ts.isQualifiedName(parent) ||
+      ts.isTypeReferenceNode(parent) ||
+      ((ts.isVariableDeclaration(parent) ||
+        ts.isParameter(parent) ||
+        ts.isFunctionDeclaration(parent) ||
+        ts.isBindingElement(parent) ||
+        ts.isMethodDeclaration(parent) ||
+        ts.isPropertyDeclaration(parent)) &&
+        parent.name === node)
+    )
+      continue;
+    const tracked = names.has(node.text) || (node.text === 'process' && !declaredLocally(node));
+
+    if (tracked && !harmlessUse(node)) return true;
+  }
+
+  return false;
+}
+
 /** Members of the runner's mock object that load the module named by their first argument. */
 const MODULE_LOADERS = new Set([
   'mock',
@@ -7197,7 +7403,12 @@ function moduleSafety(
     strictRunnerNames = true;
 
     try {
-      if (escapesRunner(source) || requireEscapes(source, declaredAnyhow) || evaluatesCode(source))
+      if (
+        escapesRunner(source) ||
+        requireEscapes(source, declaredAnyhow) ||
+        processEscapes(source, declaredAnyhow) ||
+        evaluatesCode(source)
+      )
         found.unknown = true;
     } finally {
       strictRunnerNames = previousStrict;
