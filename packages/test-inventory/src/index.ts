@@ -4343,11 +4343,19 @@ function visitTests(
         }
 
         if (name === undefined) {
+          // Its modifiers still apply to what it registers (`describe.skip(title, …)` skips its tests,
+          // `describe.only(title, …)` focuses them), but not `each`: its table title is not in the suite path.
+          const childModifiers = [
+            ...new Set([
+              ...currentModifiers,
+              ...describe.modifiers.filter((modifier) => modifier !== 'each'),
+            ]),
+          ];
           ts.forEachChild(node, (child) =>
             walk(
               child,
               currentSuite,
-              currentModifiers,
+              childModifiers,
               inexact ?? 'dynamic_suite',
               conditional || conditionalRegistration(node),
               table,
@@ -4906,6 +4914,28 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
       if (owner !== undefined && runner.expect.has(owner)) return call.arguments.every(matchersOk);
     }
+
+    // `vi.stubGlobal(name, value)` replaces a global: a later call of that global runs the value. The runner's own
+    // API (`vi.stubGlobal('beforeEach', sharedSuite)`), or a name not written as a literal, is replaced unseen; any
+    // other global runs what it is given, which is checked as an argument that may be called.
+    if (member === 'stubGlobal') {
+      const callee = skipParens(call.expression);
+      const owner =
+        ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)
+          ? runnerExport(skipParens(callee.expression))?.name
+          : undefined;
+
+      if (owner !== undefined && runner.mockObjects.has(owner)) {
+        const [key, ...values] = call.arguments;
+
+        if (!key || !ts.isStringLiteralLike(key) || runnerOwn(key.text) || GLOBAL_OBJECTS.has(key.text))
+          return false;
+
+        return values.every((value) =>
+          isFunction(value) ? closedFunction(value, 'immediate') : passable(value),
+        );
+      }
+    }
     const factory = member !== undefined && MOCK_FACTORIES.has(member);
     const defers =
       !factory &&
@@ -5036,7 +5066,10 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
     // A matcher other than the runner's own (`expect(0).toRegister()` after `expect.extend`) runs code from wherever
     // it was registered.
-    if (runner.expect.has(name) && members.some((member) => !EXPECT_MEMBERS.has(member))) return false;
+    // The member that names the export on a namespace (`v.expect(1).toBe(1)`) is not one of them.
+    const matcherMembers = resolved === NAMESPACE ? members.slice(0, -1) : members;
+
+    if (runner.expect.has(name) && matcherMembers.some((member) => !EXPECT_MEMBERS.has(member))) return false;
 
     // A call of `it`, `test` or `describe` that the inventory does not record as a registration (`it.extend(…)`, a
     // form it does not read) may register tests it does not see.
@@ -5252,7 +5285,12 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
           (ts.getCombinedModifierFlags(member) & ts.ModifierFlags.Static) !== 0
         ) &&
         !(ts.canHaveDecorators(member) && ts.getDecorators(member)?.length) &&
-        (!ts.isPropertyDeclaration(member) || !member.initializer || inert(member.initializer)) &&
+        // An instance field's initializer runs when the class is constructed, as its methods run when called: only a
+        // static one runs now.
+        (!ts.isPropertyDeclaration(member) ||
+          !member.initializer ||
+          (ts.getCombinedModifierFlags(member) & ts.ModifierFlags.Static) === 0 ||
+          inert(member.initializer)) &&
         (!member.name || !ts.isComputedPropertyName(member.name) || inert(member.name.expression)),
     );
   const closed = (node: ts.Node): boolean => {
@@ -7017,6 +7055,20 @@ function moduleSafety(
           else found.unknown = true;
         } else if (ts.isIdentifier(callee) && (callee.text === 'eval' || callee.text === 'Function'))
           found.unknown = true;
+        else if (
+          (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
+          memberName(callee) === 'stubGlobal' &&
+          (!argument ||
+            !ts.isStringLiteralLike(argument) ||
+            runner.tests.has(argument.text) ||
+            runner.suites.has(argument.text) ||
+            runner.hooks.has(argument.text) ||
+            runner.expect.has(argument.text) ||
+            runner.mockObjects.has(argument.text) ||
+            GLOBAL_OBJECTS.has(argument.text))
+        )
+          // `vi.stubGlobal('it', fn)` replaces the runner's API with what the inventory does not follow.
+          found.unknown = true;
       } else if (ts.isNewExpression(node)) {
         if (ts.isIdentifier(node.expression) && node.expression.text === 'Function') found.unknown = true;
       } else if (
@@ -7041,7 +7093,9 @@ function moduleSafety(
             name === 'Function' ||
             runner.tests.has(name) ||
             runner.suites.has(name) ||
-            runner.hooks.has(name)
+            runner.hooks.has(name) ||
+            runner.expect.has(name) ||
+            runner.mockObjects.has(name)
           )
             found.unknown = true;
         }

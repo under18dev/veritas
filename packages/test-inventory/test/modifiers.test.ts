@@ -293,6 +293,13 @@ describe('full names static analysis cannot read', () => {
       doMockFactory: "vi.doMock('../src/value.js', () => ({ value: sharedSuite() }));",
       mockFactoryImport:
         "vi.mock('../src/value.js', async () => ({ ...(await import('./shared-suite.js')) }));",
+      stubRunnerGlobal: "vi.stubGlobal('beforeEach', sharedSuite); beforeEach();",
+      stubRunnerGlobalClosed: "vi.stubGlobal('describe', () => 1); describe();",
+      stubComputedGlobal: "const name = 'it'; vi.stubGlobal(name, () => 1);",
+      stubPackageFunction: "vi.stubGlobal('register', sharedSuite); (globalThis as any).register();",
+      stubGlobalObject: "vi.stubGlobal('globalThis', { it: sharedSuite });",
+      assignRunnerGlobal: '(globalThis as any).beforeEach = sharedSuite;',
+      staticFieldInitializer: 'class Fixture { static values = sharedSuite(); }',
     };
     const closed: Record<string, string> = {
       plain:
@@ -341,6 +348,16 @@ describe('full names static analysis cannot read', () => {
       expectExtend:
         "expect.extend({ toBeTwo(received: number) { return { pass: received === 2, message: () => 'two' }; } });",
       automockPlain: "vi.mock('./pure-helper.js'); it('a', () => {});",
+      namespaceExpect: [
+        "import * as v from 'vitest';",
+        'v.expect(1).toBe(1);',
+        "v.expect.extend({ toBeTwo(n: number) { return { pass: n === 2, message: () => 'two' }; } });",
+        "v.it('n', () => {});",
+      ].join('\n'),
+      stubDataGlobal:
+        "vi.stubGlobal('innerWidth', 1024); vi.stubGlobal('matchMedia', vi.fn()); it('s', () => {});",
+      instanceFieldInitializer:
+        "class Fixture { values = new Map(); calls = double(1); } it('f', () => { expect(new Fixture().calls).toBe(2); });",
     };
     // Modules a mock loads run their code too: one that registers tests registers them under this file.
     const loadsRegistering: Record<string, string> = {

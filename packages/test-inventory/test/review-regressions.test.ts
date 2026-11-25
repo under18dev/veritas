@@ -309,3 +309,23 @@ describe('registration functions taken from a namespace import of the runner', (
     }
   });
 });
+
+describe('suites whose title is not a literal', () => {
+  it('pass their modifiers on to what they register, but not each', () => {
+    const result = inventory({
+      'test/dynamic-suites.test.ts': [
+        "import { describe, it } from 'vitest';",
+        "const title = ['a', 'b'].join(' ');",
+        "describe.skip(title, () => { it('hidden', () => {}); });",
+        "describe.only(title, () => { it('focused', () => {}); });",
+        "describe.each([1])(title, () => { it('row', () => {}); });",
+        '',
+      ].join('\n'),
+    });
+
+    expect(byName(result, 'hidden').modifiers).toContain('skip');
+    expect(byName(result, 'hidden').inexactName).toBe('dynamic_suite');
+    expect(byName(result, 'focused').modifiers).toContain('only');
+    expect(byName(result, 'row').modifiers).not.toContain('each');
+  });
+});
