@@ -395,14 +395,17 @@ describe('tagged template tables', () => {
 });
 
 describe('Vitest options of suites and tests', () => {
-  it('reads them as Vitest 5 runs them: a skipped or todo suite holds every test in it, its own options aside', () => {
-    // Run with Vitest 5.1.1: `works`, `deep` and `c` are skipped, `t` is a todo, and `chain then option` runs (a
-    // test's own option overrides its chain, while a suite's mode skips all it holds).
+  it('takes a skip or todo set only by suite options, which a test or suite clears in its own, as not known', () => {
+    // Run with Vitest 5.1.1 (and as Vitest 4.1.12 reads them): `works`, `deep` and `c` are skipped, `t` is a todo, and
+    // `chain then option` runs: a suite's mode skips all it holds, while a test's own option overrides its chain.
+    // A runner that merges a suite's options into its tests would run `works`, `deep` and `t`, so those count as tests
+    // that may or may not run; a chained `describe.skip` holds in either.
     const result = inventory({
       'test/options.test.ts': [
         "import { describe, it } from 'vitest';",
         "describe('suite', { skip: true }, () => {",
         "  it('works', { skip: false }, () => {});",
+        "  it('kept', () => {});",
         "  describe('inner', { skip: false }, () => { it('deep', () => {}); });",
         '});',
         "it.skip('chain then option', { skip: false }, () => {});",
@@ -412,10 +415,16 @@ describe('Vitest options of suites and tests', () => {
       ].join('\n'),
     });
 
-    expect(byName(result, 'works').modifiers).toContain('skip');
-    expect(byName(result, 'deep').modifiers).toContain('skip');
+    for (const name of ['works', 'deep', 't']) {
+      expect(byName(result, name).modifiers, name).not.toContain('skip');
+      expect(byName(result, name).modifiers, name).not.toContain('todo');
+      expect(byName(result, name).conditional, name).toBe(true);
+    }
+    expect(byName(result, 'kept').modifiers).toContain('skip');
+    expect(byName(result, 'kept').conditional).toBeUndefined();
     expect(byName(result, 'chain then option').modifiers).not.toContain('skip');
+    expect(byName(result, 'chain then option').conditional).toBeUndefined();
     expect(byName(result, 'c').modifiers).toContain('skip');
-    expect(byName(result, 't').modifiers).toContain('todo');
+    expect(byName(result, 'c').conditional).toBeUndefined();
   });
 });

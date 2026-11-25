@@ -4313,17 +4313,44 @@ function visitTests(
     optionsUnknown: boolean,
     // A table of the test or an enclosing suite is empty as written (`it.each([])`): no test is registered.
     emptyTable: boolean,
+    // Of `currentModifiers`, `skip` and `todo` set only by an enclosing suite's options (`describe('s', { skip: true },
+    // …)`), not by a chain (`describe.skip`).
+    fromOptions: TestCaseType['modifiers'] = [],
   ) => {
+    /**
+     * The modifiers of a registration under the inherited ones, whether it registers on a condition, and the
+     * modifiers set only by options from there on. A `skip` or `todo` that only enclosing suites' options set, cleared
+     * by the registration's own options (`it('x', { skip: false }, …)`), is not known to hold: Vitest 5 still skips
+     * the test with its suite, but a runner that merges the suite's options into the test's would run it. Then the
+     * registration counts as one that may or may not run.
+     */
+    const inherit = (registration: Registration, chained: TestCaseType['modifiers']) => {
+      const { cleared } = registrationOptions(node as ts.CallExpression);
+      const overridden = fromOptions.filter((modifier) => cleared.includes(modifier));
+      const modifiers = [...new Set([...currentModifiers, ...registration.modifiers])].filter(
+        (modifier) => !overridden.includes(modifier) || registration.modifiers.includes(modifier),
+      );
+      const ownOptions = registration.modifiers.filter(
+        (modifier) => (modifier === 'skip' || modifier === 'todo') && !chained.includes(modifier),
+      );
+      const nextFromOptions = [
+        ...new Set([...fromOptions.filter((modifier) => !overridden.includes(modifier)), ...ownOptions]),
+      ].filter((modifier) => !chained.includes(modifier));
+
+      return { modifiers, uncertain: overridden.length > 0, fromOptions: nextFromOptions };
+    };
+
     if (ts.isCallExpression(node)) {
       const describe = describeRegistration(node);
 
       if (describe) {
         const name = literalString(node.arguments[0]);
         const callback = callbackArgument(node);
+        const inherited = inherit(describe, plainDescribeRegistration(node)?.modifiers ?? []);
 
         if (name !== undefined && callback && isFunction(callback)) {
-          const childModifiers = [...new Set([...currentModifiers, ...describe.modifiers])];
-          const childConditional = conditional || conditionalRegistration(node);
+          const childModifiers = inherited.modifiers;
+          const childConditional = conditional || inherited.uncertain || conditionalRegistration(node);
           const childTable = describe.modifiers.includes('each')
             ? [...table, tableEntry(node, currentSuite.length)]
             : table;
@@ -4338,6 +4365,7 @@ function visitTests(
               childTable,
               childOptionsUnknown,
               emptyTable || emptyTableRegistration(node),
+              inherited.fromOptions,
             ),
           );
 
@@ -4347,22 +4375,20 @@ function visitTests(
         if (name === undefined) {
           // Its modifiers still apply to what it registers (`describe.skip(title, …)` skips its tests,
           // `describe.only(title, …)` focuses them), but not `each`: its table title is not in the suite path.
-          const childModifiers = [
-            ...new Set([
-              ...currentModifiers,
-              ...describe.modifiers.filter((modifier) => modifier !== 'each'),
-            ]),
-          ];
+          const childModifiers = inherited.modifiers.filter(
+            (modifier) => modifier !== 'each' || currentModifiers.includes('each'),
+          );
           ts.forEachChild(node, (child) =>
             walk(
               child,
               currentSuite,
               childModifiers,
               inexact ?? 'dynamic_suite',
-              conditional || conditionalRegistration(node),
+              conditional || inherited.uncertain || conditionalRegistration(node),
               table,
               optionsUnknown || registrationOptions(node).unknown,
               emptyTable || emptyTableRegistration(node),
+              inherited.fromOptions,
             ),
           );
 
@@ -4372,16 +4398,17 @@ function visitTests(
       const info = testRegistration(node);
 
       if (info) {
+        const inherited = inherit(info, plainTestRegistration(node)?.modifiers ?? []);
         output.push(
           analyzeTest(
             node,
-            { ...info, modifiers: [...new Set([...currentModifiers, ...info.modifiers])] },
+            { ...info, modifiers: inherited.modifiers },
             currentSuite,
             file,
             mocks,
             ctx,
             inexact,
-            conditional || conditionalRegistration(node),
+            conditional || inherited.uncertain || conditionalRegistration(node),
             info.modifiers.includes('each') ? [...table, tableEntry(node, currentSuite.length)] : table,
             optionsUnknown || registrationOptions(node).unknown,
             emptyTable || emptyTableRegistration(node),
@@ -4406,7 +4433,17 @@ function visitTests(
           ts.SyntaxKind.QuestionQuestionToken,
         ].includes(node.operatorToken.kind));
     ts.forEachChild(node, (child) =>
-      walk(child, currentSuite, currentModifiers, inner, innerConditional, table, optionsUnknown, emptyTable),
+      walk(
+        child,
+        currentSuite,
+        currentModifiers,
+        inner,
+        innerConditional,
+        table,
+        optionsUnknown,
+        emptyTable,
+        fromOptions,
+      ),
     );
   };
   walk(source, suitePath, inheritedModifiers, undefined, false, [], false, false);
