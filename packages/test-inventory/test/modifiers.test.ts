@@ -293,6 +293,14 @@ describe('full names static analysis cannot read', () => {
       doMockFactory: "vi.doMock('../src/value.js', () => ({ value: sharedSuite() }));",
       mockFactoryImport:
         "vi.mock('../src/value.js', async () => ({ ...(await import('./shared-suite.js')) }));",
+      spyOnExpect:
+        "vi.spyOn(expect, 'assertions').mockImplementation(sharedSuite as any); expect.assertions(1);",
+      spyOnRunnerMember: "vi.spyOn(it, 'each');",
+      spyOnMockObject: "vi.spyOn(vi, 'fn');",
+      spyOnGlobalObject: "vi.spyOn(globalThis as any, 'it');",
+      spyOnAlias: "const e = expect; vi.spyOn(e, 'assertions');",
+      spyOnNamespace: "import * as ns from 'vitest'; vi.spyOn(ns.expect, 'assertions');",
+      spyOnComputed: "vi.spyOn(helpers.run(), 'x');",
       stubRunnerGlobal: "vi.stubGlobal('beforeEach', sharedSuite); beforeEach();",
       stubRunnerGlobalClosed: "vi.stubGlobal('describe', () => 1); describe();",
       stubComputedGlobal: "const name = 'it'; vi.stubGlobal(name, () => 1);",
@@ -345,6 +353,8 @@ describe('full names static analysis cannot read', () => {
       expectSpyReplaced:
         "const n = 1; expect(vi.spyOn(console, 'log').mockImplementation(() => n)).toBeDefined();",
       spyOn: "vi.spyOn(console, 'log'); it('s', () => {});",
+      spyOnLocalData:
+        "const plain = { m: () => 1 }; vi.spyOn(plain, 'm'); vi.spyOn({ n: 1 }, 'n'); it('s', () => {});",
       expectExtend:
         "expect.extend({ toBeTwo(received: number) { return { pass: received === 2, message: () => 'two' }; } });",
       automockPlain: "vi.mock('./pure-helper.js'); it('a', () => {});",
@@ -616,6 +626,8 @@ describe('full names static analysis cannot read', () => {
         "import { Worker } from 'node:worker_threads';\nexport function shared() { new Worker(\"it('hidden', () => {})\", { eval: true }); }",
       nodeTest: "import { test } from 'node:test';\nexport function shared() { test('hidden', () => {}); }",
       requiredInspector: "export function shared() { return require('inspector'); }",
+      spyOnRunner:
+        "import { expect, vi } from 'vitest';\nexport function shared() { vi.spyOn(expect, 'assertions').mockImplementation(() => 1 as any); }",
       processBinding: "export function shared() { (process as any).binding('contextify'); }",
       processLinkedBinding: "export function shared() { (process as any)._linkedBinding('x'); }",
       processDlopen: "export function shared() { process.dlopen({ exports: {} } as any, './addon.node'); }",

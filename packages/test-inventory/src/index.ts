@@ -4933,6 +4933,42 @@ function processEscapes(source: ts.SourceFile, declaredLocally: (node: ts.Identi
   return false;
 }
 
+/**
+ * Whether a `spyOn(target, name)` call may replace the runner's own API: its target is, or is reached from, a runner
+ * export, its namespace, a global object (`globalThis`, which holds the runner's globals), or anything not written as
+ * a name or plain data (a call's result, a computed value). A spy on other objects (`console`, local data) replaces
+ * only what the inventory does not read as the runner's.
+ */
+function spiesOnRunner(call: ts.CallExpression): boolean {
+  const target = call.arguments[0];
+
+  if (target === undefined || ts.isSpreadElement(target)) return true;
+  let root = skipParens(target);
+
+  while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root))
+    root = skipParens(root.expression);
+
+  if (ts.isObjectLiteralExpression(root) || ts.isArrayLiteralExpression(root)) return false;
+
+  if (!ts.isIdentifier(root)) return true;
+
+  if (GLOBAL_OBJECTS.has(root.text)) return true;
+  const name = runnerName(root);
+
+  if (name === NAMESPACE) return true;
+  const export_ = name.split('.')[0] ?? name;
+
+  return (
+    runner.tests.has(export_) ||
+    runner.suites.has(export_) ||
+    runner.hooks.has(export_) ||
+    runner.expect.has(export_) ||
+    runner.typeLevel.has(export_) ||
+    runner.assertObjects.has(export_) ||
+    runner.mockObjects.has(export_)
+  );
+}
+
 /** Members of the runner's mock object that load the module named by their first argument. */
 const MODULE_LOADERS = new Set([
   'mock',
@@ -5131,6 +5167,10 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
       if (owner !== undefined && runner.expect.has(owner)) return call.arguments.every(matchersOk);
     }
+
+    // `vi.spyOn(expect, 'assertions').mockImplementation(fn)` replaces the runner's own API, whose later calls are
+    // read as the runner's.
+    if (member === 'spyOn' && spiesOnRunner(call)) return false;
 
     // `vi.stubGlobal(name, value)` replaces a global: a later call of that global runs the value. The runner's own
     // API (`vi.stubGlobal('beforeEach', sharedSuite)`), or a name not written as a literal, is replaced unseen; any
@@ -7352,6 +7392,12 @@ function moduleSafety(
           if (named && ts.isStringLiteralLike(named)) loadedAtRunTime(named.text);
           else found.unknown = true;
         } else if (ts.isIdentifier(callee) && (callee.text === 'eval' || callee.text === 'Function'))
+          found.unknown = true;
+        else if (
+          (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
+          memberName(callee) === 'spyOn' &&
+          spiesOnRunner(node)
+        )
           found.unknown = true;
         else if (
           (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
