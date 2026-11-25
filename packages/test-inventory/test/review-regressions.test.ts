@@ -329,3 +329,47 @@ describe('suites whose title is not a literal', () => {
     expect(byName(result, 'row').modifiers).not.toContain('each');
   });
 });
+
+describe('constants bound to a registration function with modifiers', () => {
+  it('inventories the tests they register, with those modifiers', () => {
+    const file = 'test/modified.test.ts';
+    const result = inventory({
+      [file]: [
+        "import * as v from 'vitest';",
+        "import { describe, it, test } from 'vitest';",
+        'const concurrent = it.concurrent;',
+        'const skipped = test.skip;',
+        'const focused = v.test.only;',
+        'const failing = it.fails;',
+        'const later = describe.skip;',
+        'const table = it.each;',
+        "concurrent('works', () => {});",
+        "skipped('skipped', () => {});",
+        "focused('focused', () => {});",
+        "failing('fails', () => {});",
+        "concurrent.skip('both', () => {});",
+        "later('S', () => { it('inside', () => {}); });",
+        "table([1])('row %s', () => {});",
+        '',
+      ].join('\n'),
+    });
+
+    expect(byName(result, 'works').modifiers).toEqual(['concurrent']);
+    expect(byName(result, 'works').id).toBe(stableId('T', { file, suitePath: [], name: 'works' }));
+    expect(byName(result, 'skipped').modifiers).toEqual(['skip']);
+    expect(byName(result, 'focused').modifiers).toEqual(['only']);
+    expect(byName(result, 'fails').modifiers).toContain('expected_failure');
+    expect(byName(result, 'both').modifiers).toEqual(expect.arrayContaining(['concurrent', 'skip']));
+    expect(byName(result, 'inside').suitePath).toEqual(['S']);
+    expect(byName(result, 'inside').modifiers).toContain('skip');
+    // A factory bound to a constant is not read, as before.
+    expect(result.tests.some((test) => test.name === 'row %s')).toBe(false);
+
+    // Under the name of the runner's export, as main read it.
+    const named = inventory({
+      'test/named.test.ts':
+        "import { it } from 'vitest';\nconst test = it.concurrent;\ntest('works', () => {});\n",
+    });
+    expect(byName(named, 'works').modifiers).toEqual(['concurrent']);
+  });
+});

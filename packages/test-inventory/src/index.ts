@@ -6387,24 +6387,49 @@ function resolveDeclaration(declaration: ts.Declaration): string {
     (skipParens(value.expression) as ts.PropertyAccessExpression).name.text === 'extend'
   )
     value = skipParens((skipParens(value.expression) as ts.PropertyAccessExpression).expression);
-  let resolved: string;
+  // The members read on the way to the name the value starts from, from that name outwards.
+  const members: string[] = [];
+  let base: ts.Expression = value;
+
+  while (ts.isPropertyAccessExpression(base) || ts.isElementAccessExpression(base)) {
+    const member = memberName(base);
+
+    if (member === undefined) return NOT_RUNNER;
+    members.unshift(member);
+    base = skipParens(base.expression);
+  }
+
+  if (!ts.isIdentifier(base)) return NOT_RUNNER;
+  let resolved = runnerName(base);
 
   // A member of the runner's namespace (`const test = v.test`, `v.test.extend(…)`) is that export.
-  if (ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) {
-    const object = skipParens(value.expression);
-    const member = memberName(value);
+  if (resolved === NAMESPACE && members.length > 0) resolved = members.shift() as string;
 
-    if (!ts.isIdentifier(object) || member === undefined || runnerName(object) !== NAMESPACE)
+  // A test or suite registration function with modifiers (`const test = it.concurrent`, `describe.skip`) stands for
+  // it with them, written `it.concurrent` (see `runnerExport`); a factory (`it.each`, `it.skipIf`) or any other
+  // member does not.
+  if (members.length > 0) {
+    const root = resolved.split('.')[0] ?? '';
+
+    if (
+      !(runner.tests.has(root) || runner.suites.has(root)) ||
+      members.some(
+        (member) =>
+          (!runner.modifiers.has(member) && !runner.expectedFailure.has(member)) ||
+          runner.registrationFactories.has(member) ||
+          runner.tableFactories.has(member),
+      )
+    )
       return NOT_RUNNER;
-    resolved = member;
-  } else if (ts.isIdentifier(value)) resolved = runnerName(value);
-  else return NOT_RUNNER;
+    resolved = [resolved, ...members].join('.');
+  }
 
   // A plain alias (`const it = vit`) stands for whatever its value is; an `.extend` chain only for a test or suite
   // registration function.
   if (value === skipParens(declaration.initializer)) return resolved;
+  const root = resolved.split('.')[0] ?? '';
 
-  return runner.tests.has(resolved) || runner.suites.has(resolved) ? resolved : NOT_RUNNER;
+  return runner.tests.has(root) || runner.suites.has(root) ? resolved : NOT_RUNNER;
 }
 
 /** What `runnerName` returns for a name the file binds to something other than the runner's API. */
@@ -6429,6 +6454,13 @@ function runnerExport(expression: ts.Expression): { name: string; chain: string[
 
   if (!ts.isIdentifier(current)) return undefined;
   const name = runnerName(current);
+
+  // An alias of a registration function with modifiers (`const test = it.concurrent`): its members come first.
+  if (name !== NAMESPACE && name.includes('.')) {
+    const [root, ...members] = name.split('.');
+
+    return { name: root ?? name, chain: [...chain, ...members.reverse()] };
+  }
 
   if (name !== NAMESPACE) return { name, chain };
   const member = chain.pop();
