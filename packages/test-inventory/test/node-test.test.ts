@@ -1208,14 +1208,14 @@ describe('Node.js test runner tests', () => {
     expect(byName(vitestTests, 'vitest implementation').suspicions).toEqual([]);
   });
 
-  it('mocks the original of a mock.fn wrapper only where the wrapper is called', () => {
-    const SERVICE = `${VALUE}export const service = { fetch: (id: number) => id };\n`;
+  it('mocks the original of a mock.fn wrapper once the wrapper is used, not when it is only configured', () => {
+    const SERVICE = `${VALUE}export const service = { fetch: (id: number) => id };\nexport const run = (f: (n: number) => number) => f(1);\n`;
     const root = tempProject({
       'src/value.ts': SERVICE,
       'test/wrapper.test.ts': `
         import { mock, test } from 'node:test';
         import assert from 'node:assert/strict';
-        import { service, value } from '../src/value.ts';
+        import { run, service, value } from '../src/value.ts';
         test('configured later', () => {
           const fn = mock.fn(value);
           fn.mock.mockImplementation(() => 999);
@@ -1239,6 +1239,27 @@ describe('Node.js test runner tests', () => {
           fn.mock.mockImplementation(() => 10);
           assert.equal(value(1), 2);
         });
+        test('wrapper in an object', () => {
+          const o = { h: mock.fn(value, () => 10) };
+          assert.equal(o.h(1), 10);
+        });
+        test('wrapper through call and apply', () => {
+          const fn = mock.fn(value, () => 10);
+          assert.equal(fn.call(null, 1) + fn.apply(null, [1]), 20);
+        });
+        test('wrapper handed to project code', () => {
+          const fn = mock.fn(value, () => 10);
+          assert.equal(run(fn), 10);
+        });
+        test('wrapper made in the argument', () => {
+          assert.equal(run(mock.fn(value, () => 10)), 10);
+        });
+        test('wrapper assigned to a property', () => {
+          const svc: { handler?: (n: number) => number } = {};
+          const fn = mock.fn(value, () => 10);
+          svc.handler = fn;
+          assert.equal(svc.handler(1), 10);
+        });
         test('direct call of a method mock.method replaced', () => {
           mock.method(service, 'fetch', () => 10);
           assert.equal(service.fetch(1), 10);
@@ -1251,6 +1272,11 @@ describe('Node.js test runner tests', () => {
       'configured later',
       'configured once',
       'direct call of a method mock.method replaced',
+      'wrapper in an object',
+      'wrapper through call and apply',
+      'wrapper handed to project code',
+      'wrapper made in the argument',
+      'wrapper assigned to a property',
     ])
       expect(byName(tests, name).suspicions, name).toContain('unconditional_mock');
 

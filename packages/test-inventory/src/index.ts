@@ -7400,11 +7400,8 @@ function analyzeTest(
   const mockedTarget = applicableMocks.some((mock) =>
     mock.through === undefined
       ? mock.targets.some((target) => calledSymbols.includes(target))
-      : // A wrapper (`mock.fn(original)`) mocks its original only where the test calls the wrapper.
-        wrapperCalled(mock.through, nodes, checker) &&
-        (analysis?.calls ?? []).some(
-          (call) => call.node === mock.through && mock.targets.includes(call.target.symbol),
-        ),
+      : // A wrapper (`mock.fn(original)`) mocks its original once it is used, never for a wrapper only configured.
+        wrapperUsed(mock.through, checker) && mock.targets.some((target) => calledSymbols.includes(target)),
   );
   const usesSnapshots = nodes.some(
     (node) =>
@@ -7584,30 +7581,46 @@ function passedProjectFunctions(node: Invocation, ctx: Ctx, projectReceives: boo
 }
 
 /**
- * Whether the function a call makes (Node's `mock.fn(original)`) is called in `nodes`: directly
- * (`mock.fn(value)(1)`), or through the constant it is stored in (`const fn = mock.fn(value); fn(1)`).
+ * Whether the function a call makes (Node's `mock.fn(original)`) is in effect: used in any way other than reading or
+ * configuring its `.mock` (called, passed on, stored in an object, assigned, returned, through `call`/`apply`/`bind`),
+ * directly or through the constant it is stored in. Only a wrapper made and configured but never used leaves direct
+ * calls of the original alone.
  */
-function wrapperCalled(made: ts.CallExpression, nodes: readonly ts.Node[], checker: ts.TypeChecker): boolean {
+function wrapperUsed(made: ts.CallExpression, checker: ts.TypeChecker): boolean {
+  const configuresOnly = (node: ts.Node): boolean => {
+    let current = node;
+
+    while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
+    const parent = current.parent;
+
+    if (ts.isExpressionStatement(parent)) return true;
+
+    return (
+      (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+      parent.expression === current &&
+      runner.mockController !== undefined &&
+      memberName(parent) === runner.mockController
+    );
+  };
   let current: ts.Node = made;
 
   while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
-
-  if (ts.isCallExpression(current.parent) && current.parent.expression === current) return true;
   const holder = current.parent;
 
-  if (!ts.isVariableDeclaration(holder) || !ts.isIdentifier(holder.name) || holder.initializer !== current)
-    return false;
-  const symbol = checker.getSymbolAtLocation(holder.name);
+  if (ts.isVariableDeclaration(holder) && holder.initializer === current) {
+    if (!ts.isIdentifier(holder.name)) return true;
+    const symbol = checker.getSymbolAtLocation(holder.name);
 
-  return (
-    symbol !== undefined &&
-    nodes.some(
+    return descendants(made.getSourceFile()).some(
       (node) =>
-        ts.isCallExpression(node) &&
-        ts.isIdentifier(skipParens(node.expression)) &&
-        checker.getSymbolAtLocation(skipParens(node.expression)) === symbol,
-    )
-  );
+        ts.isIdentifier(node) &&
+        node !== holder.name &&
+        checker.getSymbolAtLocation(node) === symbol &&
+        !configuresOnly(node),
+    );
+  }
+
+  return !configuresOnly(made);
 }
 
 /**
