@@ -1850,9 +1850,7 @@ export function unreadTestFiles(inventory: TestInventory): string[] {
       if (file.loadsCode !== true && file.inexactNames === undefined && !file.unseenReach) return [];
 
       // Left out only when it is shown to register nothing: neither it nor a local module it loads runs any code when
-      // it loads (no call, `new` or tagged template but a few inert builtins, no package loaded for its side effects or
-      // re-exported whole; `loadsCode`), and no module it imports registers tests. A file that runs no code registers no
-      // test, whatever it imports. Anything short of that keeps it listed.
+      // it loads (every statement of each is known to run none; `loadsCode`), and no module it imports registers tests. Anything short of that keeps it listed.
       if (file.loadsCode === false && file.inexactNames !== 'imported_registrations') return [];
 
       // A call into a package (`suite()` from `some-lib`) may register tests through it.

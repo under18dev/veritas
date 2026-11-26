@@ -4,6 +4,7 @@ import path from 'node:path';
 import { VeritasConfig } from '@under18dev/veritas-core';
 import { inventoryTests } from '@under18dev/veritas-test-inventory';
 import { nodeTestRunner } from '@under18dev/veritas-test-runner-node';
+import { vitestTestRunner } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import { listUnreadTestFiles, unreadTestFiles } from '../src/run.js';
 
@@ -84,7 +85,7 @@ describe('unreadTestFiles', () => {
     expect(unreadTestFiles(inventory)).toEqual([expect.stringMatching(/^test\/dynamic\.test\.mjs \(/)]);
   });
 
-  it('leaves out a zero-test file only when neither it nor what it loads runs code when loading', () => {
+  it('leaves out a zero-test file only when neither it nor what it loads is shown to run no code', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'veritas-unread-'));
     const files: Record<string, string> = {
       // The review's repro: the package call hidden in a local function.
@@ -97,17 +98,38 @@ describe('unreadTestFiles', () => {
       'test/side-effect.test.mjs': "import 'shared-tests/register';\n",
       'test/side-effect-require.test.cjs': "require('shared-tests/register');\n",
       'test/star.test.mjs': "export * from 'shared-tests';\n",
-      // Bindings of a package used only inside functions run nothing when the file loads.
-      'test/lodash.test.mjs':
-        "import { pick } from 'lodash';\nimport zod from 'zod';\nexport function select(o) { return pick(o, zod.keys); }\n",
-      'test/lodash-require.test.cjs':
-        "const { omit } = require('lodash');\nmodule.exports = { drop: (o) => omit(o, 'x') };\n",
+      // Code that runs without a call (each was listed before the rule only looked at calls).
+      'test/await.test.mjs': "import { ready } from 'shared-tests';\nawait ready;\n",
+      'test/for-of.test.mjs': 'const cases = [1, 2];\nfor (const c of cases) void c;\n',
+      'test/spread.test.mjs': 'const cases = [1, 2];\nexport const all = [...cases];\n',
+      'test/getter.test.mjs': 'const cfg = { get v() { return 1; } };\nexport const v = cfg.v;\n',
+      'test/setter.test.mjs': 'const cfg = { set on(value) {} };\ncfg.on = true;\n',
+      'test/decorator.test.ts':
+        'function register(target: unknown) { return target; }\n@register\nexport class Suite {}\n',
+      // A test file of the runner's own pattern whose package registers tests when it loads, through a binding alone.
+      'test/named.test.mjs': "import { suite } from 'shared-tests';\nexport { suite };\n",
+      'test/default.test.mjs': "import suite from 'shared-tests';\nexport { suite };\n",
+      'test/reexport.test.mjs': "export { suite } from 'shared-tests';\n",
+      'test/module-exports.test.cjs': "module.exports = require('shared-tests');\n",
+      'test/named-lodash.test.mjs':
+        "import { pick } from 'lodash';\nexport const select = (o) => pick(o, 'a');\n",
       // Shown to register nothing.
       'test/barrel.test.mjs': "export { test } from 'node:test';\nexport * from './helpers/pure.mjs';\n",
+      'test/types.test.ts':
+        "import type { Thing } from 'shared-tests';\nexport type Alias = Thing;\nexport interface Shape { a: number }\n",
+      'test/constants.test.mjs':
+        "export const LIMIT = 10;\nexport const NAMES = ['a', 'b'];\nexport const CONFIG = { retries: 2, tags: ['x'] };\n",
+      'test/setup.test.ts':
+        "import { before, afterEach, mock } from 'node:test';\nbefore(() => {});\nafterEach(() => mock.restoreAll());\nmock.timers.enable();\n",
       'test/helpers/pure.mjs':
         "import path from 'node:path';\nexport const dir = path.join('a', 'b');\nexport const key = Symbol('k');\nexport const frozen = Object.freeze({ a: 1 });\nexport function later() { return later2(); }\nfunction later2() {}\n",
       'test/defines.test.mjs':
-        "import { suite } from './helpers/pure.mjs';\nexport function later() { suite(); }\n",
+        "import { later } from './helpers/pure.mjs';\nexport function run() { later(); }\n",
+      // A helper matched only by the directory glob: a package imported by name and used inside functions.
+      'test/helpers/lodash.mjs':
+        "import { pick } from 'lodash';\nexport function select(o) { return pick(o, 'a'); }\n",
+      'test/helpers/lodash-require.cjs':
+        "const { omit } = require('lodash');\nmodule.exports.drop = function drop(o) { return omit(o, 'x'); };\n",
     };
 
     for (const [relative, content] of Object.entries(files)) {
@@ -118,20 +140,60 @@ describe('unreadTestFiles', () => {
       recognition: nodeTestRunner.recognitionFor(root),
       root,
       config: VeritasConfig.parse({
-        analysis: { testFramework: 'node_test', testInclude: ['test/*.test.{mjs,cjs}'] },
+        analysis: {
+          testFramework: 'node_test',
+          testInclude: ['test/*.test.{mjs,cjs,ts}', 'test/helpers/lodash*.{mjs,cjs}'],
+        },
       }),
     });
+    const listed = unreadTestFiles(inventory).map((line) => line.slice(0, line.indexOf(' (')));
 
-    expect(unreadTestFiles(inventory).sort()).toEqual([
-      'test/iife.test.mjs (it runs code while its tests are collected that may register tests)',
-      // Static analysis took this one for closed: only the new rule lists it.
-      'test/local-call.test.mjs (it runs code when it loads and may register tests)',
-      'test/register.test.mjs (it runs code while its tests are collected that may register tests)',
-      'test/side-effect-require.test.cjs (it runs code while its tests are collected that may register tests)',
-      'test/side-effect.test.mjs (it runs code while its tests are collected that may register tests)',
-      'test/star.test.mjs (it runs code when it loads and may register tests)',
-      'test/through-helper.test.mjs (it runs code while its tests are collected that may register tests)',
+    expect(listed.sort()).toEqual([
+      'test/await.test.mjs',
+      'test/decorator.test.ts',
+      'test/default.test.mjs',
+      'test/for-of.test.mjs',
+      'test/getter.test.mjs',
+      'test/iife.test.mjs',
+      'test/local-call.test.mjs',
+      'test/module-exports.test.cjs',
+      'test/named-lodash.test.mjs',
+      'test/named.test.mjs',
+      'test/reexport.test.mjs',
+      'test/register.test.mjs',
+      'test/setter.test.mjs',
+      'test/side-effect-require.test.cjs',
+      'test/side-effect.test.mjs',
+      'test/spread.test.mjs',
+      'test/star.test.mjs',
+      'test/through-helper.test.mjs',
     ]);
+  });
+
+  it("takes the runner's hooks and mock configuration for code that registers no test", () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'veritas-unread-'));
+    mkdirSync(path.join(root, 'test'));
+    writeFileSync(
+      path.join(root, 'test/setup.test.ts'),
+      "import { beforeAll, afterEach, vi } from 'vitest';\nvi.mock('../src/api', () => ({ get: vi.fn() }));\nbeforeAll(() => {});\nafterEach(() => vi.restoreAllMocks());\n",
+    );
+    writeFileSync(
+      path.join(root, 'test/hoisted.test.ts'),
+      "import { vi } from 'vitest';\nconst h = vi.hoisted(() => ({ n: 1 }));\nexport { h };\n",
+    );
+    writeFileSync(
+      path.join(root, 'test/users.test.ts'),
+      'const users = makeUsers(3);\nfunction makeUsers(n: number) { return n; }\nexport { users };\n',
+    );
+    const inventory = inventoryTests({
+      recognition: vitestTestRunner.recognitionFor(root),
+      root,
+      config: VeritasConfig.parse({ analysis: { testInclude: ['test/*.test.ts'] } }),
+    });
+    const listed = unreadTestFiles(inventory).map((line) => line.slice(0, line.indexOf(' (')));
+
+    // `vi.hoisted` runs its function right away; `makeUsers(3)` is a call like any other.
+    expect(listed.sort()).toEqual(['test/hoisted.test.ts', 'test/users.test.ts']);
   });
 
   it('gives a generic reason for a file that only runs code when it loads', () => {
