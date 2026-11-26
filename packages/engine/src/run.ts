@@ -1825,10 +1825,10 @@ export function mutationStageStatus(
 /**
  * Test files the inventory recorded no test for although it could not read all they run: what they register while
  * the runner collects them is open (a call, a loop), comes from another module, or reaches code static analysis does
- * not follow (a dynamic import, a `require` it cannot read, a file that does not parse). Each with why. A file that
- * never uses the project's runner, itself or through a local module it loads (a helper that re-exports the runner or
- * does not touch it), is not one, unless it calls into a package at its top level (`suite()` from `some-lib`); a file that
- * uses another runner's API (`bun:test`, `Deno.test`) always is. Each says why.
+ * not follow (a dynamic import, a `require` it cannot read, a file that does not parse), or runs any code when it
+ * loads. A file is left out only when it is shown to register nothing: neither it nor a local module it loads runs
+ * code when it loads (`loadsCode`), it does not use the runner, and no module it imports registers tests. A file that
+ * uses another runner's API (`bun:test`, `Deno.test`) always is listed. Each says why.
  */
 export function unreadTestFiles(inventory: TestInventory): string[] {
   const withTests = new Set(inventory.tests.map((test) => test.file));
@@ -1847,25 +1847,34 @@ export function unreadTestFiles(inventory: TestInventory): string[] {
           `${file.path} (it uses ${file.foreignRunner}, the API of a test runner the project's test runner does not run)`,
         ];
 
-      // A call into a package at the top level (`suite()` from `some-lib`) may register tests through it.
+      if (file.loadsCode !== true && file.inexactNames === undefined && !file.unseenReach) return [];
+
+      // Left out only when it is shown to register nothing: neither it nor a local module it loads runs any code when
+      // it loads (no call, `new` or tagged template but a few inert builtins, no package loaded; `loadsCode`), it does
+      // not use the runner, and no module it imports registers tests. Anything short of that keeps it listed.
+      if (
+        file.loadsCode === false &&
+        file.usesRunner === false &&
+        file.inexactNames !== 'imported_registrations'
+      )
+        return [];
+
+      // A call into a package (`suite()` from `some-lib`) may register tests through it.
       if (file.packageCall !== undefined)
         return [
           file.packageCallVia === undefined
-            ? `${file.path} (it calls into package ${file.packageCall} at the top level and may register tests through it)`
+            ? `${file.path} (it calls into package ${file.packageCall} when it loads and may register tests through it)`
             : `${file.path} (it loads ${file.packageCallVia}, which calls into package ${file.packageCall} when it loads and may register tests through it)`,
         ];
 
-      if (file.inexactNames === undefined && !file.unseenReach) return [];
-
-      // Left out only when it is shown not to touch the runner: a helper the glob matched that only re-exports it or
-      // does not use it and reaches no code static analysis does not follow (`usesRunner` is false only then: no
-      // computed `require`, `createRequire`, `eval`, dynamic `import()` of a package or a name, child process; a local
-      // module imported on demand is followed), and imports no module that registers tests. Anything short of that
-      // keeps it listed.
-      if (file.usesRunner === false && file.inexactNames !== 'imported_registrations') return [];
-
       return [
-        `${file.path} (${file.inexactNames !== undefined ? why[file.inexactNames] : 'it reaches code static analysis does not follow'})`,
+        `${file.path} (${
+          file.inexactNames !== undefined
+            ? why[file.inexactNames]
+            : file.unseenReach
+              ? 'it reaches code static analysis does not follow'
+              : 'it runs code when it loads and may register tests'
+        })`,
       ];
     });
 }
