@@ -39,8 +39,11 @@ function commandName(word: string): string {
   return (word.split(/[\\/]/).pop() ?? word).replace(/\.(?:[cm]?js|cmd|ps1)$/, '');
 }
 
-/** Whether one command segment (no `&&`, `;` or `|` in it) runs one of `wanted`. */
-function segmentRuns(words: string[], wanted: ReadonlySet<string>): boolean {
+/**
+ * The command one command segment (no `&&`, `;` or `|` in it) runs, after environment assignments, launchers such as
+ * `npx` or `cross-env` and package managers' `exec` or `run`: its name and the words after it; null without one.
+ */
+function segmentCommand(words: string[]): { name: string; args: string[] } | null {
   let i = 0;
   const skipOptions = () => {
     while (i < words.length && (words[i] as string).startsWith('-')) i++;
@@ -50,7 +53,7 @@ function segmentRuns(words: string[], wanted: ReadonlySet<string>): boolean {
     while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++;
     const word = words[i];
 
-    if (word === undefined) return false;
+    if (word === undefined) return null;
     const name = commandName(word);
     i++;
 
@@ -65,15 +68,57 @@ function segmentRuns(words: string[], wanted: ReadonlySet<string>): boolean {
       continue;
     }
 
-    if (name === 'node') {
-      skipOptions();
-      const file = words[i];
+    return { name, args: words.slice(i) };
+  }
+}
 
-      return file !== undefined && wanted.has(commandName(file));
+/** Whether one command segment runs one of `wanted`, also as the file `node` runs. */
+function segmentRuns(words: string[], wanted: ReadonlySet<string>): boolean {
+  const command = segmentCommand(words);
+
+  if (command === null) return false;
+
+  if (command.name === 'node') {
+    const file = command.args.find((arg) => !arg.startsWith('-'));
+
+    return file !== undefined && wanted.has(commandName(file));
+  }
+
+  return wanted.has(command.name);
+}
+
+/** The words of each command segment of a script (split at `&&`, `||`, `;`, `|`), with quoted text emptied. */
+function scriptSegments(script: string): string[][] {
+  // Quoted text is an argument of its segment, never the command.
+  const unquoted = script.replace(/"[^"]*"|'[^']*'/g, '""');
+
+  return unquoted.split(/&&|\|\||[;|&]/).map((segment) => segment.trim().split(/\s+/).filter(Boolean));
+}
+
+/**
+ * Whether a package.json script runs `node` with `flag` among its own options (`node --test`, `node --import tsx
+ * --test test/`), through launchers as `scriptRuns` reads them. An option after the script file is the script's.
+ */
+export function scriptRunsNodeWith(script: unknown, flag: string): boolean {
+  if (typeof script !== 'string') return false;
+
+  return scriptSegments(script).some((words) => {
+    const command = segmentCommand(words);
+
+    if (command?.name !== 'node') return false;
+
+    for (const [i, arg] of command.args.entries()) {
+      if (arg === flag) return true;
+
+      if (arg.startsWith('-')) continue;
+      const previous = command.args[i - 1];
+
+      // A word after an option written without `=` may be its value (`--import tsx`); any other is the script file.
+      if (previous === undefined || !previous.startsWith('--') || previous.includes('=')) return false;
     }
 
-    return wanted.has(name);
-  }
+    return false;
+  });
 }
 
 /**
@@ -85,12 +130,8 @@ function segmentRuns(words: string[], wanted: ReadonlySet<string>): boolean {
 export function scriptRuns(script: unknown, commands: readonly string[]): boolean {
   if (typeof script !== 'string' || commands.length === 0) return false;
   const wanted = new Set(commands);
-  // Quoted text is an argument of its segment, never the command.
-  const unquoted = script.replace(/"[^"]*"|'[^']*'/g, '""');
 
-  return unquoted
-    .split(/&&|\|\||[;|&]/)
-    .some((segment) => segmentRuns(segment.trim().split(/\s+/).filter(Boolean), wanted));
+  return scriptSegments(script).some((words) => segmentRuns(words, wanted));
 }
 
 /** Detect a runner from the usual signals: dependencies, `node_modules`, config files, package.json and scripts. */
@@ -157,14 +198,20 @@ interface Entry {
   installation: TestRunnerInstallation;
 }
 
-const shows = ({ installation }: Entry) =>
-  installation.evidence.length > 0 || installation.installedVersion !== null;
+/**
+ * Installed in a way that tells something about the project: a runner built into Node.js (`node --test`) is always
+ * there, so only evidence that the project uses it counts.
+ */
+const installed = ({ provider, installation }: Entry) =>
+  installation.installedVersion !== null && (!provider.detection.builtIn || installation.evidence.length > 0);
 
-function describe({ installation }: Entry): string {
+const shows = (entry: Entry) => entry.installation.evidence.length > 0 || installed(entry);
+
+function describe(entry: Entry): string {
+  const { installation } = entry;
+
   if (installation.evidence.length === 0)
-    return installation.installedVersion
-      ? 'installed, with nothing in package.json or config files'
-      : 'nothing';
+    return installed(entry) ? 'installed, with nothing in package.json or config files' : 'nothing';
 
   return `${installation.evidence.join(', ')}${installation.installedVersion ? '' : ', but not installed'}`;
 }
@@ -175,7 +222,8 @@ function describe({ installation }: Entry): string {
  * key points at. Among the runners of the first group that has any, the one the `test` script runs wins, then the
  * only one with evidence (config file, package.json key or dependency); if that does not decide, the first in
  * `providers` is chosen and the choice is marked ambiguous. So a runner that is neither declared nor installed is
- * never chosen over one that is installed. With nothing found at all the first provider is returned, so that its
+ * never chosen over one that is installed. A runner built into Node.js counts as installed only with evidence that the
+ * project uses it. With nothing found at all the first provider is returned, so that its
  * NOT_FOUND error says what is missing.
  */
 export function chooseTestRunner(
@@ -190,7 +238,7 @@ export function chooseTestRunner(
     installation: installations[index] as TestRunnerInstallation,
   }));
   const groups: [string, Entry[]][] = [
-    ['installed', all.filter(({ installation }) => installation.installedVersion !== null)],
+    ['installed', all.filter(installed)],
     ['declared in package.json', all.filter(({ installation }) => installation.declared)],
     ['configured', all.filter(({ installation }) => installation.evidence.length > 0)],
   ];

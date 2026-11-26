@@ -42,6 +42,16 @@ export type PackageJson = Record<string, unknown>;
 export interface TestRunnerDetection {
   /** The npm package of the runner, looked up in package.json (declared) and in `node_modules` (installed). */
   readonly packageName: string;
+  /**
+   * The runner comes with Node.js itself (`node --test`): it is always installed, at the version of the Node.js that
+   * runs Veritas, so it is chosen for a project only on evidence that the project uses it, never for being installed.
+   */
+  readonly builtIn?: boolean;
+  /**
+   * Test file patterns the runner runs by default besides `*.test.*` and `*.spec.*` (Node's `*-test.*` files
+   * and the files under a `test` directory), proposed by `init` when a file matching one of them uses the runner.
+   */
+  readonly extraTestGlobs?: readonly string[];
   /** How the project at `root` has the runner; `packageJson` is its parsed package.json, or null without one. */
   detect(root: string, packageJson: PackageJson | null): TestRunnerInstallation;
 }
@@ -125,6 +135,11 @@ export interface TestRunnerRecognition {
    * Without it, arguments after the name other than the callback are ignored (Jest's timeout).
    */
   readonly testOptions?: boolean;
+  /**
+   * The export a default import of one of `modules` stands for (`import test from 'node:test'` is `test`); without
+   * it a default import is not part of the API.
+   */
+  readonly defaultExport?: string;
   /** Hook functions, by when they run. */
   readonly hooks: {
     readonly beforeEach: readonly string[];
@@ -149,6 +164,12 @@ export interface TestRunnerRecognition {
     readonly objects: readonly string[];
     /** Methods, on any object, that check how many assertions ran (`expect.assertions(1)`). */
     readonly counts: readonly string[];
+    /**
+     * Assertion modules (`node:assert`, `node:assert/strict`) of which every value export asserts: a call of a name
+     * a file imports or requires from one of them (`assert(x)`, `equal(a, b)`, `assert.strict.equal(a, b)`), under
+     * any local name, is an assertion.
+     */
+    readonly modules?: readonly string[];
   };
   readonly mocks: {
     /** Objects holding the mock API (`vi`), imported from `modules` or provided as an ambient global. */
@@ -193,7 +214,10 @@ export interface TestRunnerExecution {
 
 /** What mutation testing with `@mizchi/mutator` needs from the runner. */
 export interface TestRunnerMutation {
-  /** The runner mutator drives the tests with (its `--runner`), or null when mutator cannot drive this runner. */
+  /**
+   * The runner mutator drives the tests with (its `--runner`), or null when mutator cannot drive this runner at all
+   * (`unsupportedReason` then says why).
+   */
   readonly mutatorRunner: string | null;
   /** Runner major versions before this fail in mutator's integration before any mutant is tried; null if none do. */
   readonly minMajor: number | null;
@@ -244,6 +268,11 @@ export interface TestRunnerTemplates {
   imports(names: readonly TemplateApi[]): string[];
   /** A statement asserting that `actual` is strictly equal to `expected` (both are expressions). */
   expectToBe(actual: string, expected: string): string;
+  /**
+   * Generated tests import project modules by their source file name (`../src/pricing.ts`), as Node.js needs to run
+   * TypeScript by stripping its types; otherwise by the `.js` form TypeScript projects compile to.
+   */
+  readonly sourceImports?: boolean;
 }
 
 /** The provider for a configured test framework among the available ones. */

@@ -53,7 +53,7 @@ describe('configSections', () => {
     });
     expect(find('analysis.include').minItems).toBe(1);
     expect(find('analysis.testFramework')).toMatchObject({ type: 'enum', default: 'vitest' });
-    expect(find('analysis.testFramework').options).toEqual(['vitest', 'jest']);
+    expect(find('analysis.testFramework').options).toEqual(['vitest', 'jest', 'node_test']);
     expect(find('project.tsconfig')).toMatchObject({ type: 'string', nullable: true, default: null });
     expect(find('pbt.seed').default).toBeUndefined();
     // Descriptions say what the code does with the value.

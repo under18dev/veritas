@@ -12,6 +12,7 @@
         "typescript",
         "vitest",
         "jest",
+        "node_test",
         "mutator",
         "fast_check",
         "z3",

@@ -109,7 +109,11 @@ function ambiguousRunners(root: string): NonNullable<WizardEnvironment['ambiguou
     const found = [
       ...(installation?.evidence ?? []),
       ...(installation?.installedVersion
-        ? [`${runner.detection.packageName} ${installation.installedVersion} installed`]
+        ? [
+            runner.detection.builtIn
+              ? `built into Node.js ${installation.installedVersion}`
+              : `${runner.detection.packageName} ${installation.installedVersion} installed`,
+          ]
         : []),
     ];
 

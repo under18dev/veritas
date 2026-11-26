@@ -376,12 +376,13 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
 
   const runner = options.testRunner;
   const { minMajor, declaredMajor, mutatorRunner, configFlag, experimental } = runner.mutation;
-
-  if (mutatorRunner === null)
-    return result('unsupported', { detail: `@mizchi/mutator cannot run ${runner.displayName} tests` });
+  // A runner mutator cannot drive at all says why in `unsupportedReason`, as one that cannot run this project does.
   const unsupported = runner.mutation.unsupportedReason(options.root);
 
-  if (unsupported !== null) return result('unsupported', { detail: unsupported });
+  if (unsupported !== null || mutatorRunner === null)
+    return result('unsupported', {
+      detail: unsupported ?? `@mizchi/mutator cannot run ${runner.displayName} tests`,
+    });
 
   if (experimental !== null)
     warnings.push(`mutation testing with ${runner.displayName} is experimental: ${experimental}`);
