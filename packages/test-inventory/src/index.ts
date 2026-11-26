@@ -1710,12 +1710,21 @@ function runsFunction(fn: ts.Node, assertion: ts.CallExpression, executed: Set<t
 
   if (ts.isCallExpression(parent) && parent.expression === current) return true;
 
+  if (parent === assertion && assertion.arguments.includes(current as ts.Expression))
+    return runsCallback(assertion);
+
+  // `assert.throws.apply(null, [() => parse(-1), /bad/])`: the elements of the argument list `.apply` passes.
+  if (
+    ts.isArrayLiteralExpression(parent) &&
+    skipParens(assertion.arguments[1] ?? assertion) === parent &&
+    nodeAssertCall(assertion)?.via === 'apply'
+  )
+    return runsCallback(assertion);
+
   if (
     (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
     parent.arguments?.includes(current as ts.Expression)
   ) {
-    if (parent === assertion) return runsCallback(assertion);
-
     // `expect(x).toEqual(() => …)`: a matcher argument is compared, not run; a predicate matcher runs it
     // (`expect(x).to.satisfy((v) => …)`, jest-extended's `toSatisfy`).
     if (ts.isCallExpression(parent) && isAssertionChainCall(parent))
@@ -1755,6 +1764,10 @@ function runsCallback(assertion: ts.CallExpression): boolean {
     )
   )
     return true;
+  // A node:assert call as resolved, through `.call`, `.apply` and brackets (`assert['throws'].call(null, fn)`).
+  const resolved = nodeAssertCall(assertion);
+
+  if (resolved !== undefined) return RUNNING_ASSERTIONS.has(resolved.name);
   const callee = skipParens(assertion.expression);
 
   return (

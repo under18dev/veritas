@@ -1140,6 +1140,37 @@ describe('Node.js test runner tests', () => {
       expect(byName(tests, name).suspicions, name).toContain('unconditional_mock');
   });
 
+  it('runs the function given to throws and the like through .call, .apply and brackets', () => {
+    const root = tempProject({
+      'src/value.ts': `${VALUE}export const parse = (n: number) => { if (n < 0) throw new Error('bad'); return n; };\nexport const load = async (n: number) => n;\n`,
+      'test/running.test.ts': `
+        import { test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { load, parse } from '../src/value.ts';
+        test('throws.call', () => { assert.throws.call(null, () => parse(-1), /bad/); });
+        test('throws.apply', () => { assert.throws.apply(null, [() => parse(-1), /bad/]); });
+        test('doesNotThrow.call', () => { assert.doesNotThrow.call(null, () => parse(1)); });
+        test('rejects.call', async () => { await assert.rejects.call(null, () => load(-1), /bad/); });
+        test('bracket throws.call', () => { assert['throws'].call(null, () => parse(-1), /bad/); });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of [
+      'throws.call',
+      'throws.apply',
+      'doesNotThrow.call',
+      'rejects.call',
+      'bracket throws.call',
+    ]) {
+      expect(byName(tests, name).assertionCount, name).toBe(1);
+      expect(
+        byName(tests, name).targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(true);
+    }
+  });
+
   it('does not read node:test files with the Vitest API', () => {
     const root = tempProject({
       'src/value.ts': VALUE,
