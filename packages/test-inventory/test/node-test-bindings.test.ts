@@ -127,7 +127,8 @@ describe('node:test bindings', () => {
       'test/dynamic.test.mjs': true,
       'test/evaluated.test.mjs': true,
       'test/global.test.mjs': true,
-      'test/local.test.mjs': true,
+      // A local module imported on demand is followed: this one uses nothing.
+      'test/local.test.mjs': false,
       'test/plain-builtin.test.mjs': false,
       'test/required.test.cjs': true,
       'test/then.test.mjs': true,
@@ -437,6 +438,102 @@ describe('node:test bindings', () => {
       expect(byName(tests, name).assertionCount, name).toBe(0);
       expect(byName(tests, name).suspicions, name).toContain('no_assertion');
     }
+  });
+
+  it('trusts createRequire only from node:module, and gives no credit to one from anywhere else', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/helpers/fakemod.mjs': 'export const createRequire = () => () => ({ equal() {} });\n',
+      'test/fake-import.test.mjs': `
+        import { test } from 'node:test';
+        import { createRequire } from './helpers/fakemod.mjs';
+        import { value } from '../src/value.ts';
+        test('imported fake', () => {
+          createRequire(import.meta.url)('node:assert').equal(value(1), 3);
+        });
+      `,
+      'test/fake-local.test.mjs': `
+        import { test } from 'node:test';
+        import { value } from '../src/value.ts';
+        test('local fake', () => {
+          const createRequire = () => () => ({ equal() {} });
+          const r = createRequire(import.meta.url);
+          r('node:assert').equal(value(1), 3);
+          createRequire(import.meta.url)('node:assert').equal(value(1), 3);
+        });
+      `,
+      'test/real.test.mjs': `
+        import { test } from 'node:test';
+        import { createRequire as make } from 'node:module';
+        import * as mod from 'module';
+        import defaultModule from 'node:module';
+        import { value } from '../src/value.ts';
+        test('alias', () => { make(import.meta.url)('node:assert').equal(value(1), 2); });
+        test('namespace', () => {
+          const r = mod.createRequire(import.meta.url);
+          r('node:assert').equal(value(1), 2);
+        });
+        test('default member', () => { defaultModule.createRequire(import.meta.url)('node:assert').equal(value(1), 2); });
+      `,
+      'test/required.test.cjs': `
+        const { test } = require('node:test');
+        const { value } = require('../src/value.ts');
+        test('required module', () => {
+          require('node:module').createRequire(__filename)('node:assert').equal(value(1), 2);
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of ['imported fake', 'local fake']) {
+      expect(byName(tests, name).assertionCount, name).toBe(0);
+      expect(byName(tests, name).suspicions, name).toContain('no_assertion');
+      expect(
+        byName(tests, name).targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(false);
+    }
+
+    for (const name of ['alias', 'namespace', 'default member', 'required module']) {
+      expect(byName(tests, name).assertionCount, name).toBe(1);
+      expect(
+        byName(tests, name).targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(true);
+    }
+  });
+
+  it('follows a literal relative dynamic import as a static one when deciding whether a file uses the runner', () => {
+    const root = tempProject({
+      'test/plain.mjs': 'export const one = 1;\n',
+      'test/registers.mjs': "import { test } from 'node:test';\ntest('x', () => {});\n",
+      'test/through.mjs': "export * from './registers.mjs';\n",
+      'test/support.mjs': "export { test } from 'node:test';\n",
+      'test/loads-plain.test.mjs': "await import('./plain.mjs');\n",
+      'test/loads-registering.test.mjs': "await import('./registers.mjs');\n",
+      'test/loads-through.test.mjs': "await import('./through.mjs');\n",
+      'test/loads-support.test.mjs':
+        "const { test } = await import('./support.mjs');\ntest('x', () => {});\n",
+      'test/loads-missing.test.mjs': "await import('./missing.mjs');\n",
+      'test/loads-package.test.mjs': "await import('some-lib');\n",
+    });
+    const result = inventoryTests({
+      recognition: node.recognitionFor(root),
+      root,
+      config: VeritasConfig.parse({
+        analysis: { testFramework: 'node_test', testInclude: ['test/loads-*.test.mjs'] },
+      }),
+    });
+    const uses = Object.fromEntries(result.files.map((file) => [file.path, file.usesRunner]));
+
+    expect(uses).toEqual({
+      'test/loads-missing.test.mjs': true,
+      'test/loads-package.test.mjs': true,
+      'test/loads-plain.test.mjs': false,
+      'test/loads-registering.test.mjs': true,
+      'test/loads-support.test.mjs': true,
+      'test/loads-through.test.mjs': true,
+    });
   });
 
   it('reads the arguments of .apply through a constant array, and keeps all of them otherwise', () => {

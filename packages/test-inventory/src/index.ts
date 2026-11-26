@@ -50,8 +50,11 @@ export const TestInventory = z.object({
        * The file uses the project's test runner, itself or through a local module it loads (a shared suite it
        * calls): it imports or requires one of the runner's modules (not only re-exports it, not only its types), or
        * calls a name of the runner's API (its globals, or a name a local module hands out). False for a helper that
-       * only re-exports the runner (`export { test } from 'node:test'`) or never touches it. Absent in inventories
-       * written before it was recorded, which is read as true.
+       * only re-exports the runner (`export { test } from 'node:test'`) or never touches it, and only when that is
+       * shown: a file that loads code at run time (a dynamic `import()` of a package or a name, `require` of a name,
+       * `createRequire`, `eval`) or reaches code static analysis does not follow may use it, while a local module
+       * imported on demand (`await import('./suite.mjs')`) is followed. Absent in inventories written before it was
+       * recorded, which is read as true.
        */
       usesRunner: z.boolean().optional(),
       /**
@@ -215,10 +218,60 @@ function usesRunner(source: ts.SourceFile): boolean {
   const cached = usesRunnerCache.get(source);
 
   if (cached && cached.runner === runner) return cached.value;
+  // A module loading itself back (`a` imports `b` on demand, `b` imports `a`): its own code decides it.
+  usesRunnerCache.set(source, { runner, value: false });
   const value = readsRunner(source);
   usesRunnerCache.set(source, { runner, value });
 
   return value;
+}
+
+/**
+ * Whether a module uses the runner, itself or through the local modules it imports statically (as `usesRunner` is
+ * extended by the inventory's local dependencies); a relative import that does not resolve may load anything.
+ */
+function usesRunnerThrough(source: ts.SourceFile, seen = new Set<ts.SourceFile>()): boolean {
+  if (seen.has(source)) return false;
+  seen.add(source);
+
+  if (usesRunner(source)) return true;
+
+  return source.statements.some((statement) => {
+    // Loaded at run time, a module that hands out the runner's API (`export { test } from 'node:test'`) may be used
+    // for it in ways the loading file's names do not show (`const { test } = await import('./support.mjs')`).
+    if (
+      ts.isExportDeclaration(statement) &&
+      !statement.isTypeOnly &&
+      statement.moduleSpecifier &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      runner.modules.has(statement.moduleSpecifier.text)
+    )
+      return true;
+    const specifier =
+      (ts.isImportDeclaration(statement) && !statement.importClause?.isTypeOnly) ||
+      (ts.isExportDeclaration(statement) && !statement.isTypeOnly)
+        ? statement.moduleSpecifier
+        : undefined;
+
+    if (specifier === undefined || !ts.isStringLiteral(specifier) || !/^\.\.?\//.test(specifier.text))
+      return false;
+    const declaration = runnerChecker?.getSymbolAtLocation(specifier)?.valueDeclaration;
+
+    return !declaration || !ts.isSourceFile(declaration) || usesRunnerThrough(declaration, seen);
+  });
+}
+
+/**
+ * The local module a literal relative dynamic import loads (`await import('./suite.mjs')`), resolved as the
+ * importing file's static imports are; undefined when it does not resolve to a source file of the program.
+ */
+function dynamicallyImportedSource(node: ts.CallExpression): ts.SourceFile | undefined {
+  const argument = node.arguments[0] && skipParens(node.arguments[0]);
+
+  if (argument === undefined || !ts.isStringLiteralLike(argument)) return undefined;
+  const declaration = runnerChecker?.getSymbolAtLocation(argument)?.valueDeclaration;
+
+  return declaration && ts.isSourceFile(declaration) ? declaration : undefined;
 }
 
 const usesRunnerCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; value: boolean }>();
@@ -318,8 +371,16 @@ function loadsUnreadCode(node: ts.CallExpression | ts.NewExpression): boolean {
     !runner.modules.has(name) &&
     (name.startsWith('node:') || builtinModules.includes(name.split('/')[0] ?? ''));
 
-  if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
+  if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+    // `await import('./suite.mjs')` is followed as a static import is: it loads the runner when that module does.
+    if (literal !== undefined && (literal.startsWith('./') || literal.startsWith('../'))) {
+      const loaded = dynamicallyImportedSource(node);
+
+      return loaded === undefined || usesRunnerThrough(loaded);
+    }
+
     return literal === undefined || !plainBuiltin(literal);
+  }
 
   // `createRequire(import.meta.url)('node:test')`: the function a call returns, called.
   if (ts.isCallExpression(callee)) return loadsUnreadCode(callee);
@@ -684,7 +745,8 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
           const loadedSource = sourceFiles.get(path.resolve(root, dependency));
 
           return !loadedSource || usesRunner(loadedSource);
-        }),
+        }) ||
+        reached.some((reachedFile) => reachedFile !== undefined && reachesUnfollowed(reachedFile, checker)),
       ...(source ? foreignRunner(source) : {}),
       ...(source ? packageCall(source) : {}),
     };
@@ -9566,6 +9628,52 @@ function hasUnseenReach(source: ts.SourceFile, checker: ts.TypeChecker): boolean
   });
 }
 
+/**
+ * `hasUnseenReach` for deciding whether a file may use the runner: a literal relative dynamic import that resolves
+ * (`await import('./suite.mjs')`) is followed as a static import is, into what that module reaches in turn. Anything
+ * else static analysis does not follow (a dynamic import of a package or of a name, a child process) counts.
+ */
+function reachesUnfollowed(
+  source: ts.SourceFile,
+  checker: ts.TypeChecker,
+  seen = new Set<ts.SourceFile>(),
+): boolean {
+  if (seen.has(source)) return false;
+  seen.add(source);
+
+  return descendants(source).some((node) => {
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const argument = node.arguments[0] && skipParens(node.arguments[0]);
+      const loaded =
+        argument && ts.isStringLiteralLike(argument) && /^\.\.?\//.test(argument.text)
+          ? dynamicallyImportedSource(node)
+          : undefined;
+
+      if (loaded !== undefined) return reachesUnfollowed(loaded, checker, seen);
+
+      // A Node.js builtin other than the runner (`await import('node:path')`) loads no test code.
+      if (
+        argument &&
+        ts.isStringLiteralLike(argument) &&
+        !runner.modules.has(argument.text) &&
+        (argument.text.startsWith('node:') || builtinModules.includes(argument.text.split('/')[0] ?? ''))
+      )
+        return false;
+    }
+
+    if (ts.isCallExpression(node) || ts.isNewExpression(node)) return isOpaqueCall(node, checker);
+    const specifier =
+      ts.isImportDeclaration(node) || ts.isExportDeclaration(node) ? node.moduleSpecifier : undefined;
+
+    return (
+      specifier !== undefined &&
+      ts.isStringLiteral(specifier) &&
+      specifier.text.startsWith('.') &&
+      !checker.getSymbolAtLocation(specifier)
+    );
+  });
+}
+
 /** The relative module specifier a callee is imported from, when TypeScript cannot resolve that module. */
 function unresolvedImportOf(callee: ts.Expression, ctx: Ctx): string | undefined {
   let current = skipParens(callee);
@@ -11859,13 +11967,7 @@ function createdRequire(declaration: ts.Declaration): boolean {
     return false;
   const value = skipParens(declaration.initializer);
 
-  if (!ts.isCallExpression(value)) return false;
-  const callee = skipParens(value.expression);
-
-  return (
-    (ts.isIdentifier(callee) && callee.text === 'createRequire') ||
-    (ts.isPropertyAccessExpression(callee) && callee.name.text === 'createRequire')
-  );
+  return ts.isCallExpression(value) && nodeCreateRequire(value.expression);
 }
 
 /** Whether a callee is a `require` function: a name `isCommonJsRequire` accepts, or `createRequire(…)` called inline. */
@@ -11874,12 +11976,99 @@ function requireFunction(callee: ts.Expression): boolean {
 
   if (ts.isIdentifier(value)) return isCommonJsRequire(value);
 
-  if (!ts.isCallExpression(value)) return false;
-  const inner = skipParens(value.expression);
+  return ts.isCallExpression(value) && nodeCreateRequire(value.expression);
+}
+
+/** The modules `createRequire` comes from. */
+const MODULE_MODULES = new Set(['node:module', 'module']);
+/** Expressions `nodeCreateRequire` is deciding, so that names defined in terms of each other end. */
+const decidingCreateRequire = new Set<ts.Node>();
+
+/**
+ * Whether an expression is Node's own `createRequire`, with no local shadow: a name imported from `node:module` or
+ * `module` (`import { createRequire as make } from 'node:module'`), a member of that module's namespace or default
+ * import (`mod.createRequire`), or of the module required (`require('node:module').createRequire`, also through a
+ * `const` holding it or destructured from it). A `createRequire` from anywhere else may load nothing real.
+ */
+function nodeCreateRequire(expression: ts.Expression): boolean {
+  const value = skipParens(expression);
+
+  if (decidingCreateRequire.has(value)) return false;
+  decidingCreateRequire.add(value);
+
+  try {
+    if (ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) {
+      if (memberName(value) !== 'createRequire') return false;
+      const holder = skipParens(value.expression);
+
+      if (MODULE_MODULES.has(requiredModule(holder) ?? '')) return true;
+
+      return ts.isIdentifier(holder) && boundToModule(holder, true);
+    }
+
+    return ts.isIdentifier(value) && boundToModule(value, false);
+  } finally {
+    decidingCreateRequire.delete(value);
+  }
+}
+
+/**
+ * Whether a name is bound to `node:module` itself (`whole`: a namespace or default import, `const mod =
+ * require('node:module')`) or to its `createRequire` (an import specifier, `const { createRequire } =
+ * require('node:module')`, `const make = require('node:module').createRequire`).
+ */
+function boundToModule(identifier: ts.Identifier, whole: boolean): boolean {
+  const declarations = runnerChecker?.getSymbolAtLocation(identifier)?.declarations ?? [];
 
   return (
-    (ts.isIdentifier(inner) && inner.text === 'createRequire') ||
-    (ts.isPropertyAccessExpression(inner) && inner.name.text === 'createRequire')
+    declarations.length > 0 &&
+    declarations.every((declaration) => {
+      let node: ts.Node = declaration;
+
+      if (ts.isImportSpecifier(node) || ts.isImportClause(node) || ts.isNamespaceImport(node)) {
+        const named = ts.isImportSpecifier(node);
+        const exported = ts.isImportSpecifier(node) ? (node.propertyName ?? node.name).text : undefined;
+
+        while (!ts.isImportDeclaration(node) && node.parent) node = node.parent;
+
+        return (
+          ts.isImportDeclaration(node) &&
+          !node.importClause?.isTypeOnly &&
+          ts.isStringLiteral(node.moduleSpecifier) &&
+          MODULE_MODULES.has(node.moduleSpecifier.text) &&
+          (whole ? !named : exported === 'createRequire')
+        );
+      }
+
+      if (ts.isBindingElement(node)) {
+        const key = node.propertyName ?? node.name;
+        const holder = node.parent.parent;
+
+        return (
+          !whole &&
+          ts.isIdentifier(key) &&
+          key.text === 'createRequire' &&
+          ts.isObjectBindingPattern(node.parent) &&
+          ts.isVariableDeclaration(holder) &&
+          (ts.getCombinedNodeFlags(holder) & ts.NodeFlags.Const) !== 0 &&
+          holder.initializer !== undefined &&
+          MODULE_MODULES.has(requiredModule(holder.initializer) ?? '') &&
+          readMembers(holder.initializer).length === 0
+        );
+      }
+
+      if (
+        !ts.isVariableDeclaration(node) ||
+        (ts.getCombinedNodeFlags(node) & ts.NodeFlags.Const) === 0 ||
+        !node.initializer
+      )
+        return false;
+      const initializer = skipParens(node.initializer);
+
+      return whole
+        ? MODULE_MODULES.has(requiredModule(initializer) ?? '') && readMembers(initializer).length === 0
+        : nodeCreateRequire(initializer);
+    })
   );
 }
 
