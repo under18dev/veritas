@@ -39,6 +39,8 @@ export const nodeTestRunner: TestRunnerProvider = {
   },
   recognition: {
     modules: ['node:test'],
+    // What `node:test` resolves to with the types of Node.js installed.
+    declarationFiles: ['@types/node/test.d.ts'],
     globals: false,
     // `import test from 'node:test'` is the `test` function.
     defaultExport: 'test',
@@ -51,6 +53,8 @@ export const nodeTestRunner: TestRunnerProvider = {
     tableFactories: [],
     // `test(name, { skip, todo, only }, fn)`; a string value (the reason) sets the option too.
     testOptions: true,
+    // Node forces `.skip`, `.todo` and `.only`: `{ skip: false }` does not undo `test.skip`.
+    chainedModifiersWin: true,
     hooks: {
       beforeEach: ['beforeEach'],
       beforeAll: ['before'],

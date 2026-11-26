@@ -1,3 +1,6 @@
+import { mkdirSync, realpathSync, symlinkSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { VeritasConfig } from '@under18dev/veritas-core';
 import { nodeTestRunner as node } from '@under18dev/veritas-test-runner-node';
 import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
@@ -152,6 +155,96 @@ describe('Node.js test runner tests', () => {
       unseenReach: false,
     });
     expect(result.files.find((file) => file.path === 'test/required.test.cjs')?.inexactNames).toBeUndefined();
+  });
+
+  it('keeps a chained skip, todo or only whatever the options object says, as Node does', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/forced.test.ts': `
+        import { test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { value } from '../src/value.ts';
+        test.skip('chained skip', { skip: false }, () => assert.equal(value(1), 2));
+        test.todo('chained todo', { todo: false }, () => assert.equal(value(1), 2));
+        test.only('chained only', { only: false }, () => assert.equal(value(1), 2));
+        test('options only', { skip: false }, () => assert.equal(value(1), 2));
+      `,
+    });
+    const { tests } = inventory(root);
+
+    expect(byName(tests, 'chained skip').modifiers).toEqual(['skip']);
+    expect(byName(tests, 'chained todo').modifiers).toEqual(['todo']);
+    expect(byName(tests, 'chained only').modifiers).toEqual(['only']);
+    expect(byName(tests, 'options only').modifiers).toEqual([]);
+  });
+
+  it('reads the API through a local barrel that re-exports node:test, with the types of Node.js loaded', () => {
+    const typesNode = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../../node_modules/@types/node',
+    );
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: {
+          module: 'nodenext',
+          moduleResolution: 'nodenext',
+          allowImportingTsExtensions: true,
+          noEmit: true,
+          types: ['node'],
+        },
+      }),
+      'test/support.ts': "export { describe, it, test } from 'node:test';\n",
+      'test/barrel.test.ts': `
+        import assert from 'node:assert/strict';
+        import { describe, it } from './support.ts';
+        import { value } from '../src/value.ts';
+        describe('through the barrel', () => {
+          it('adds one', () => assert.equal(value(1), 2));
+        });
+      `,
+    });
+    mkdirSync(path.join(root, 'node_modules/@types'), { recursive: true });
+    symlinkSync(realpathSync(typesNode), path.join(root, 'node_modules/@types/node'), 'junction');
+    const result = inventory(root);
+
+    // The types of Node.js are loaded: node:test resolves to their declaration file.
+    expect(result.diagnostics.map((d) => d.message).join('\n')).not.toMatch(
+      /Cannot find (module|name) 'node:test'/,
+    );
+    expect(byName(result.tests, 'adds one')).toMatchObject({
+      suitePath: ['through the barrel'],
+      assertionCount: 1,
+      suspicions: [],
+    });
+  });
+
+  it('never takes the message of a node:assert call for what it checks', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/messages.test.ts': `
+        import { test } from 'node:test';
+        import assert, { strictEqual as eq } from 'node:assert/strict';
+        import { value } from '../src/value.ts';
+        test('constant with a message', () => eq(1, 1, String(value(1))));
+        test('ok with a message', () => assert.ok(true, String(value(1))));
+        test('throws with a message', () => assert.throws(() => {}, String(value(1))));
+        test('real with a message', () => eq(value(1), 2, 'adds one'));
+        test('throws with a validator', () => assert.throws(() => value(1), /bad/, 'message'));
+        test('context message', (t) => t.assert.equal(2, 2, String(value(1))));
+      `,
+    });
+    const { tests } = inventory(root);
+    const asserted = (name: string) => byName(tests, name).targetCalls.some((call) => call.asserted);
+
+    for (const name of ['constant with a message', 'ok with a message', 'context message']) {
+      expect(asserted(name), name).toBe(false);
+      expect(byName(tests, name).suspicions, name).toContain('tautological_assertion');
+    }
+    expect(asserted('throws with a message')).toBe(false);
+    expect(asserted('real with a message')).toBe(true);
+    expect(byName(tests, 'real with a message').suspicions).toEqual([]);
+    expect(asserted('throws with a validator')).toBe(true);
   });
 
   it('does not take a function of another module named like an assertion for one', () => {

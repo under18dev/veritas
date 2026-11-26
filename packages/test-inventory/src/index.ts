@@ -55,6 +55,8 @@ export type TestInventory = z.infer<typeof TestInventory>;
 /** The test runner's API names (`TestRunnerRecognition`), as sets for lookups. */
 interface RunnerApi {
   modules: Set<string>;
+  /** Declaration files of the runner's API below `node_modules` (POSIX), besides the runners' own packages. */
+  declarationFiles: string[];
   tests: Set<string>;
   suites: Set<string>;
   modifiers: Set<string>;
@@ -63,6 +65,8 @@ interface RunnerApi {
   registrationFactories: Set<string>;
   tableFactories: Set<string>;
   testOptions: boolean;
+  /** A chained modifier holds whatever the options object says (Node). */
+  chainedModifiersWin: boolean;
   /** The export a default import of the runner's module stands for (`import test from 'node:test'`), if any. */
   defaultExport: string | undefined;
   beforeEach: Set<string>;
@@ -90,6 +94,7 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
 
   return {
     modules: new Set(recognition.modules),
+    declarationFiles: [...(recognition.declarationFiles ?? [])],
     tests: new Set(recognition.tests),
     suites: new Set(recognition.suites),
     modifiers: new Set(recognition.modifiers),
@@ -98,6 +103,7 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
     registrationFactories: new Set(recognition.registrationFactories),
     tableFactories: new Set(recognition.tableFactories),
     testOptions: recognition.testOptions === true,
+    chainedModifiersWin: recognition.chainedModifiersWin === true,
     defaultExport: recognition.defaultExport,
     beforeEach: new Set(hooks.beforeEach),
     setup: new Set([...hooks.beforeEach, ...hooks.beforeAll]),
@@ -6366,11 +6372,14 @@ function withOptions(node: ts.CallExpression, found: Registration | undefined): 
   if (modifiers.length === 0 && cleared.length === 0) return found;
 
   // Vitest spreads the options over the chained modifiers of this registration (an enclosing suite's are merged
-  // later and still apply).
+  // later and still apply); Node keeps a chained modifier whatever the options say.
   return {
     ...found,
     modifiers: [
-      ...new Set([...found.modifiers.filter((modifier) => !cleared.includes(modifier)), ...modifiers]),
+      ...new Set([
+        ...found.modifiers.filter((modifier) => runner.chainedModifiersWin || !cleared.includes(modifier)),
+        ...modifiers,
+      ]),
     ],
   };
 }
@@ -6658,6 +6667,14 @@ const resolvingBindings = new Set<ts.Identifier>();
 /** Declaration files of the runner's packages. */
 const RUNNER_PACKAGE = /[\\/]node_modules[\\/](?:vitest|@vitest[\\/]|@jest[\\/]|@types[\\/]jest|jest)/;
 
+/** Whether a declaration file declares the runner's API: in a runner's package, or one the provider names. */
+function runnerDeclarationFile(fileName: string): boolean {
+  if (RUNNER_PACKAGE.test(fileName)) return true;
+  const posix = fileName.split('\\').join('/');
+
+  return runner.declarationFiles.some((file) => posix.endsWith(`/node_modules/${file}`));
+}
+
 /**
  * The runner export a name bound in a file stands for, or `NOT_RUNNER`: an import from a local module is followed
  * to what it is there, a constant to its value (`base.extend(…)` and other `.extend` chains of a registration
@@ -6689,7 +6706,7 @@ function resolveBinding(name: ts.Identifier): string {
       const file = declaration.getSourceFile();
 
       if (file.isDeclarationFile || file.fileName.split(/[\\/]/).includes('node_modules'))
-        return RUNNER_PACKAGE.test(file.fileName) ? (target?.name ?? NOT_RUNNER) : NOT_RUNNER;
+        return runnerDeclarationFile(file.fileName) ? (target?.name ?? NOT_RUNNER) : NOT_RUNNER;
 
       return resolveDeclaration(declaration);
     }
@@ -9765,7 +9782,11 @@ function isAssertionCountCall(node: ts.CallExpression): boolean {
 function comparedValues(assertion: ts.CallExpression): ts.Expression[] {
   const values = [...assertion.arguments];
 
-  if (!isExpectCall(assertion)) return values;
+  if (!isExpectCall(assertion)) {
+    const name = nodeAssertName(assertion);
+
+    return name === undefined ? values : nodeAssertCompared(name, values);
+  }
   let current: ts.Node = assertion;
 
   while (ts.isPropertyAccessExpression(current.parent) && current.parent.expression === current)
@@ -9775,6 +9796,85 @@ function comparedValues(assertion: ts.CallExpression): ts.Expression[] {
     values.push(...current.parent.arguments);
 
   return values;
+}
+
+/** node:assert functions that compare their first two arguments and take a message third. */
+const NODE_ASSERT_PAIRS = new Set([
+  'equal',
+  'strictEqual',
+  'deepEqual',
+  'deepStrictEqual',
+  'notEqual',
+  'notStrictEqual',
+  'notDeepEqual',
+  'notDeepStrictEqual',
+  'match',
+  'doesNotMatch',
+  'partialDeepStrictEqual',
+]);
+/** node:assert functions that check their first argument and take a message second. */
+const NODE_ASSERT_SINGLE = new Set(['ok', 'ifError']);
+/** node:assert functions that run (or await) their first argument, with an error validator or a message after it. */
+const NODE_ASSERT_RUNNING = new Set(['throws', 'rejects', 'doesNotThrow', 'doesNotReject']);
+
+/**
+ * The node:assert function an assertion calls (`equal` for `assert.equal`, `eq` imported as `strictEqual`, `ok` for
+ * the module itself or its `strict`), also through the test context (`t.assert.equal`); undefined for any other call.
+ */
+function nodeAssertName(call: ts.CallExpression): string | undefined {
+  // Only for a runner whose assertions are node:assert; chai's `assert` (Vitest) keeps all its arguments.
+  if (runner.assertModules.size === 0) return undefined;
+  const callee = skipParens(call.expression);
+
+  if (ts.isIdentifier(callee)) {
+    const binding = assertModuleBinding(callee);
+
+    if (binding === undefined) return undefined;
+
+    return binding.exported === 'default' || binding.exported === '*' || binding.exported === 'strict'
+      ? 'ok'
+      : binding.exported;
+  }
+
+  if (!ts.isPropertyAccessExpression(callee)) return undefined;
+  const name = callee.name.text === 'strict' ? 'ok' : callee.name.text;
+  const root = rootIdentifierNode(callee);
+
+  if (root !== undefined && assertModuleBinding(root) !== undefined) return name;
+  const holder = skipParens(callee.expression);
+
+  return runnerChecker !== undefined &&
+    ts.isPropertyAccessExpression(holder) &&
+    holder.name.text === 'assert' &&
+    ts.isIdentifier(holder.expression) &&
+    isTestContext(holder.expression, runnerChecker)
+    ? name
+    : undefined;
+}
+
+/**
+ * The arguments of a node:assert call that hold what it checks, without its message (`equal(actual, expected,
+ * message)`): a message is shown when the check fails, and asserts nothing. After the function of `throws` and the
+ * like, only an error validator (an object, a function or class written inline, a regular expression) is checked; a
+ * string or any other value may be the message. Unknown functions keep all their arguments.
+ */
+function nodeAssertCompared(name: string, values: ts.Expression[]): ts.Expression[] {
+  if (NODE_ASSERT_PAIRS.has(name)) return values.slice(0, 2);
+
+  if (NODE_ASSERT_SINGLE.has(name)) return values.slice(0, 1);
+
+  if (name === 'fail') return [];
+
+  if (!NODE_ASSERT_RUNNING.has(name)) return values;
+  const validator = values[1] && skipParens(values[1]);
+  const isValidator =
+    validator !== undefined &&
+    (ts.isObjectLiteralExpression(validator) ||
+      ts.isRegularExpressionLiteral(validator) ||
+      isFunction(validator) ||
+      ts.isClassExpression(validator));
+
+  return isValidator ? values.slice(0, 2) : values.slice(0, 1);
 }
 
 /** Literals, and `const` bindings initialised with constants, recursively. */

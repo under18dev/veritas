@@ -117,6 +117,12 @@ export interface TestRunnerRecognition {
    * candidate. Runners that also provide the API as globals (Jest) need no import; the names below count either way.
    */
   readonly modules: readonly string[];
+  /**
+   * Declaration files, by their path below `node_modules` (`@types/node/test.d.ts`), that declare the runner's API
+   * when it is not a package of its own: a name a local module re-exports from them (`export { test } from
+   * 'node:test'`) is the runner's.
+   */
+  readonly declarationFiles?: readonly string[];
   /** The runner provides its test API as globals by default (Jest does; Vitest only with its `globals` option). */
   readonly globals: boolean;
   /** Functions registering one test (`it`, `test`), including those of `shorthands`. */
@@ -141,6 +147,11 @@ export interface TestRunnerRecognition {
    * Without it, arguments after the name other than the callback are ignored (Jest's timeout).
    */
   readonly testOptions?: boolean;
+  /**
+   * A modifier chained on a registration holds whatever its options object says (Node's `test.skip(name, { skip:
+   * false }, fn)` is skipped); without it the options override the chain, as Vitest spreads them over it.
+   */
+  readonly chainedModifiersWin?: boolean;
   /**
    * The export a default import of one of `modules` stands for (`import test from 'node:test'` is `test`); without
    * it a default import is not part of the API.
