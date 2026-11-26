@@ -101,6 +101,27 @@ const INEXACT_BECAUSE: Record<Extract<WithheldReason, { kind: 'inexact_file' }>[
   imported_open_module: 'a local module it imports runs code when loaded that may register tests',
 };
 
+/** The line mutator 0.4.5 prints to stderr whenever it adopts verdicts from its resume database. */
+const RESUMED_LINE = /^resumed (\d+)\/(\d+) mutants from checkpoint/m;
+
+/**
+ * Why the verdicts of a mutator run in an isolated copy cannot be trusted because of its resume database, or null.
+ * The copy's `.mutator` is removed before mutator starts, but mutator opens the database only after its dry run,
+ * which runs the tests: a test can write verdicts there that mutator then adopts without running anything. It says
+ * so on stderr; when stderr was cut short, that line may be lost, so the run cannot be checked either.
+ */
+export function checkpointRestore(run: { stderr: string; stderrTail?: string }): string | null {
+  const resumed = RESUMED_LINE.exec(run.stderr) ?? RESUMED_LINE.exec(run.stderrTail ?? '');
+
+  if (resumed && Number(resumed[1]) > 0)
+    return `mutator adopted ${resumed[1]} of ${resumed[2]} verdicts from a resume database in the isolated copy, which was removed before the run: something written during the run (such as a test) planted them, so the run's results are not trustworthy`;
+
+  if (run.stderrTail !== undefined)
+    return "mutator's output was too long to check whether it adopted verdicts from a resume database planted during the run, so the run's results are not trusted";
+
+  return null;
+}
+
 /** One warning for each reason names in mutator's report were credited to no test (see `TestNameIndex`). */
 function withheldWarnings(index: TestNameIndex): string[] {
   const groups = new Map<string, string[]>();
@@ -550,6 +571,12 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
 
   if (run.spawnError)
     return result('error', { ...common, detail: `could not start mutator: ${run.spawnError}` });
+
+  if (options.isolatedCopy) {
+    const restored = checkpointRestore(run);
+
+    if (restored !== null) return result('error', { ...common, detail: restored });
+  }
 
   if (run.timedOut) {
     return result('timeout', {

@@ -1,10 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { stableId, VeritasConfig } from '@under18dev/veritas-core';
 import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import {
   buildMutatorArgs,
+  checkpointRestore,
   detectMutator,
   MutationRunResult,
   PINNED_MUTATOR_VERSION,
@@ -282,6 +284,39 @@ describe('runMutation failures', () => {
     expect(r.rawReportPath).toBe(path.join(reportDir, 'mutation.json'));
     expect(r.detail).toMatch(/could not parse/);
     expect(r.mutants).toEqual([]);
+  });
+
+  it('in an isolated copy, is an error when mutator adopted verdicts planted during the run', async () => {
+    // mutator opens its resume database after the dry run, which runs the tests: a test can plant verdicts there.
+    const { root, bin } = stubCli(
+      "console.error('dry run finished in 0.1s'); console.error('resumed 3/5 mutants from checkpoint, 2 left to run'); console.log('{}');",
+    );
+    const r = await runMutation({
+      testRunner: vitest,
+      root,
+      config: config(),
+      reportDir: path.join(root, 'out'),
+      mutatorBin: bin,
+      isolatedCopy: true,
+    });
+    expect(r.status).toBe('error');
+    expect(r.detail).toMatch(/adopted 3 of 5 verdicts from a resume database in the isolated copy/);
+  });
+
+  it('recognises the resume line exactly as the installed mutator prints it', () => {
+    // Pinned to mutator's own source, so an upgrade that rewords the line fails here instead of passing silently.
+    const runJs = path.join(
+      path.dirname(createRequire(import.meta.url).resolve('@mizchi/mutator')),
+      'run.js',
+    );
+    const printed = `log(\`resumed \${resumed}/\${jobs.length} mutants from checkpoint, \${remaining.length} left to run\`)`;
+    expect(readFileSync(runJs, 'utf8')).toContain(printed);
+    expect(checkpointRestore({ stderr: 'x\nresumed 2/9 mutants from checkpoint, 7 left to run\n' })).toMatch(
+      /adopted 2 of 9/,
+    );
+    expect(checkpointRestore({ stderr: '12 mutants, 12 to run\n' })).toBeNull();
+    // A line printed by a test is no different, and a cut output cannot be checked.
+    expect(checkpointRestore({ stderr: 'a'.repeat(10), stderrTail: 'done' })).toMatch(/too long to check/);
   });
 
   it('in an isolated copy, starts without mutator state or an old report left in the root', async () => {
