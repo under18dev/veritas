@@ -1171,6 +1171,106 @@ describe('Node.js test runner tests', () => {
     }
   });
 
+  it('reads mock.fn(original, implementation) as a configured mock of the original, and mock.fn(original) as running it', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/fn.test.ts': `
+        import { mock, test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { value } from '../src/value.ts';
+        const replacement = () => 999;
+        const notAFunction = 5;
+        test('replaced', () => { const fn = mock.fn(value, () => 999); assert.equal(fn(1), 999); });
+        test('replaced by reference', () => { const fn = mock.fn(value, replacement); assert.equal(fn(1), 999); });
+        test('wrapped', () => { const fn = mock.fn(value); assert.equal(fn(1), 2); });
+        test('not an implementation', () => { const fn = mock.fn(value, notAFunction as never); assert.equal(fn(1), 2); });
+      `,
+      'test/vitest.test.ts': `
+        import { expect, it, vi } from 'vitest';
+        import { value } from '../src/value.ts';
+        it('vitest implementation', () => { const fn = vi.fn(value); expect(fn(1)).toBe(2); });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of ['replaced', 'replaced by reference'])
+      expect(byName(tests, name).suspicions, name).toContain('unconditional_mock');
+
+    for (const name of ['wrapped', 'not an implementation']) {
+      expect(byName(tests, name).suspicions, name).toEqual([]);
+      expect(
+        byName(tests, name).targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(true);
+    }
+    const vitestTests = inventory(root, vitest.recognition).tests;
+
+    expect(byName(vitestTests, 'vitest implementation').suspicions).toEqual([]);
+  });
+
+  it('recognises the context of a test function passed by name', () => {
+    const SERVICE = `${VALUE}export const service = { fetch: (id: number) => id };\n`;
+    const root = tempProject({
+      'src/value.ts': SERVICE,
+      'test/context.test.ts': `
+        import { before, test } from 'node:test';
+        import { service, value } from '../src/value.ts';
+        function check(t) { t.assert.equal(1, 1, String(value(1))); }
+        function mocks(t) {
+          t.mock.method(service, 'fetch', () => 999);
+          t.assert.equal(service.fetch(1), 999);
+        }
+        function setup(t) { void t; }
+        before(setup);
+        test('message by reference', check);
+        test('mock by reference', mocks);
+      `,
+    });
+    const { tests } = inventory(root);
+
+    expect(byName(tests, 'message by reference').suspicions).toContain('tautological_assertion');
+    expect(byName(tests, 'message by reference').targetCalls.some((call) => call.asserted)).toBe(false);
+    expect(byName(tests, 'mock by reference').suspicions).toContain('unconditional_mock');
+  });
+
+  it('reads the default export by its own name too', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/default.test.ts': `
+        import { default as check } from 'node:test';
+        import * as nt from 'node:test';
+        import assert from 'node:assert/strict';
+        import { value } from '../src/value.ts';
+        check('named default', () => assert.equal(value(1), 2));
+        nt.default('namespace default', () => assert.equal(value(1), 2));
+        nt.default.skip('namespace default skipped', () => assert.equal(value(1), 2));
+        nt.default.describe('namespace default suite', () => {
+          nt.default.it('inside', () => assert.equal(value(1), 2));
+        });
+      `,
+      'test/default.test.cjs': `
+        const viaRequire = require('node:test').default;
+        const bracket = require('node:test')['default'];
+        const { default: destructured } = require('node:test');
+        const assert = require('node:assert/strict');
+        viaRequire('required default', () => assert.equal(1, 1));
+        bracket('bracket default', () => assert.equal(1, 1));
+        destructured('destructured default', () => assert.equal(1, 1));
+      `,
+    });
+    const { tests } = inventory(root);
+
+    expect(tests.map((test) => [test.name, test.suitePath, test.modifiers])).toEqual([
+      ['required default', [], []],
+      ['bracket default', [], []],
+      ['destructured default', [], []],
+      ['named default', [], []],
+      ['namespace default', [], []],
+      ['namespace default skipped', [], ['skip']],
+      ['inside', ['namespace default suite'], []],
+    ]);
+  });
+
   it('does not read node:test files with the Vitest API', () => {
     const root = tempProject({
       'src/value.ts': VALUE,

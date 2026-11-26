@@ -6891,7 +6891,7 @@ function runnerName(identifier: ts.Identifier): string {
       if (ts.isNamespaceImport(bindings)) aliases.set(bindings.name.text, NAMESPACE);
       else
         for (const element of bindings.elements)
-          if (element.propertyName) aliases.set(element.name.text, element.propertyName.text);
+          if (element.propertyName) aliases.set(element.name.text, exportName(element.propertyName.text));
     }
 
     // The same bindings through a top-level CommonJS `require` (`const { test, describe: d } = require('node:test')`,
@@ -6911,7 +6911,7 @@ function runnerName(identifier: ts.Identifier): string {
           for (const element of declaration.name.elements)
             aliases.set(
               (element.name as ts.Identifier).text,
-              ((element.propertyName ?? element.name) as ts.Identifier).text,
+              exportName(((element.propertyName ?? element.name) as ts.Identifier).text),
             );
       }
     }
@@ -7076,7 +7076,7 @@ function resolveBindingElement(element: ts.BindingElement): string {
       skipParens((holder as ts.VariableDeclaration).initializer as ts.Expression),
     )
   )
-    return key.text;
+    return exportName(key.text);
 
   if (ts.isBindingElement(holder)) source = resolveBindingElement(holder);
   else if (
@@ -7115,7 +7115,7 @@ function resolveDeclaration(declaration: ts.Declaration): string {
   if (ts.isImportSpecifier(declaration))
     return ts.isStringLiteral(declaration.parent.parent.parent.moduleSpecifier) &&
       runner.modules.has(declaration.parent.parent.parent.moduleSpecifier.text)
-      ? (declaration.propertyName ?? declaration.name).text
+      ? exportName((declaration.propertyName ?? declaration.name).text)
       : resolveBinding(declaration.name);
 
   if (
@@ -7187,7 +7187,17 @@ function requiredRunnerMember(initializer: ts.Expression): string {
 
   if (members.length === 0) return runner.defaultExport ?? NAMESPACE;
 
-  return members.length === 1 && members[0] !== COMPUTED_MEMBER ? (members[0] as string) : NOT_RUNNER;
+  return members.length === 1 && members[0] !== COMPUTED_MEMBER
+    ? exportName(members[0] as string)
+    : NOT_RUNNER;
+}
+
+/**
+ * An export of the runner's module by the name it is read under: `default` (`import { default as check }`,
+ * `nt.default`, `require('node:test').default`) is the export the default stands for (Node's `test`).
+ */
+function exportName(name: string): string {
+  return name === 'default' && runner.defaultExport !== undefined ? runner.defaultExport : name;
 }
 
 /** What `runnerName` returns for a name the file binds to something other than the runner's API. */
@@ -7223,7 +7233,7 @@ function runnerExport(expression: ts.Expression): { name: string; chain: string[
   if (name !== NAMESPACE) return defaultExportMember({ name, chain });
   const member = chain.pop();
 
-  return member === undefined ? undefined : defaultExportMember({ name: member, chain });
+  return member === undefined ? undefined : defaultExportMember({ name: exportName(member), chain });
 }
 
 /**
@@ -7565,6 +7575,20 @@ function passedProjectFunctions(node: Invocation, ctx: Ctx, projectReceives: boo
     }
 
   return found;
+}
+
+/**
+ * Whether a call makes a mock of its first argument that runs a replacement instead (Node's `mock.fn(original,
+ * implementation)`); `vi.fn(impl)` and `jest.fn(impl)` take only the implementation.
+ */
+function replacedByMock(node: Invocation, checker: ts.TypeChecker): boolean {
+  return (
+    runner.mockController !== undefined &&
+    ts.isCallExpression(node) &&
+    node.arguments.length >= 2 &&
+    mockCall(node, checker) === 'create' &&
+    suppliesImplementation(node.arguments[1] as ts.Expression, checker)
+  );
 }
 
 /**
@@ -9254,7 +9278,12 @@ function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth
   if (!declaration || !ts.isParameter(declaration) || depth > 20) return false;
   const fn = declaration.parent;
 
-  if (!isFunction(fn) || fn.parameters[0] !== declaration) return false;
+  if (!isFunctionLike(fn) || fn.parameters[0] !== declaration) return false;
+
+  // A function passed by name as a test, suite or hook callback (`test('x', check)`), wherever else it is used.
+  if (referencedCallbacks(fn.getSourceFile(), checker).has(fn)) return true;
+
+  if (!isFunction(fn)) return false;
   const call = fn.parent;
 
   if (!ts.isCallExpression(call) || !call.arguments.includes(fn)) return false;
@@ -9273,6 +9302,38 @@ function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth
     describeRegistration(call) !== undefined ||
     runner.hooks.has(runnerExport(callee)?.name ?? '')
   );
+}
+
+const referencedCallbackCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; callbacks: Set<ts.Node> }>();
+
+/**
+ * The local functions a file passes by name as the callback of a test, suite or hook registration (`test('x',
+ * check)`, `before(setup)`): their first parameter is the context the runner hands them.
+ */
+function referencedCallbacks(source: ts.SourceFile, checker: ts.TypeChecker): Set<ts.Node> {
+  const cached = referencedCallbackCache.get(source);
+
+  if (cached && cached.runner === runner) return cached.callbacks;
+  const callbacks = new Set<ts.Node>();
+
+  for (const node of descendants(source)) {
+    if (!ts.isCallExpression(node)) continue;
+    const registration = testRegistration(node) ?? describeRegistration(node);
+    const callback = registration
+      ? registration.callback
+      : runner.hooks.has(runnerExport(skipParens(node.expression))?.name ?? '')
+        ? node.arguments.at(-1)
+        : undefined;
+    const value = callback && skipParens(callback);
+
+    if (value === undefined || isFunction(value)) continue;
+    const fn = testFunction(value, checker);
+
+    if (fn) callbacks.add(fn);
+  }
+  referencedCallbackCache.set(source, { runner, callbacks });
+
+  return callbacks;
 }
 
 /**
@@ -9353,6 +9414,12 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
 
     return id ? [id] : [];
   };
+  const replacedTarget = (call: ts.CallExpression): string[] => {
+    const argument = call.arguments[0];
+    const id = argument && projectSymbolId(checker.getSymbolAtLocation(argument), checker, projectSet, root);
+
+    return id ? [id] : [];
+  };
   const spyVariable = (identifier: ts.Identifier): string[] | undefined => {
     const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
 
@@ -9376,7 +9443,10 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
           : // A spy given its implementation when made (Node's `mock.method(object, 'name', () => 1)`) is configured.
             role === 'spy' && implementation !== undefined && suppliesImplementation(implementation, checker)
             ? spyTargets(node)
-            : [];
+            : // Node's `mock.fn(original, implementation)` stands for the original, configured.
+              replacedByMock(node, checker)
+              ? replacedTarget(node)
+              : [];
       records.push({ node, fileWide: role === 'module_hoisted', targets });
       continue;
     }
