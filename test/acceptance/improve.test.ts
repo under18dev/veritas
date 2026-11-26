@@ -1,5 +1,20 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -100,7 +115,7 @@ describe('improve on agent-loop', () => {
   beforeAll(() => {
     dir = analyzed('agent-loop');
     statusBefore = gitStatus(dir);
-    const result = runCli(['improve', '--dry-run', '--max-iterations', '5', '--json'], dir);
+    const result = runCli(['improve', '--dry-run', '--max-iterations', '10', '--json'], dir);
     expect(result.status, result.stderr).toBe(0);
     plan = json<PlanJson>(result);
   }, LONG);
@@ -183,11 +198,106 @@ describe('improve on agent-loop', () => {
       expect(attempt.outcome).toBe('no_safe_improvement');
       expect(attempt.rolledBack).toBe(true);
       expect(attempt.reasons.join('\n')).toMatch(/do not all pass/);
+      // The rewrite of the added file is reported as well.
+      expect(attempt.reasons.join('\n')).toContain(
+        `changed the isolated copy beyond the plan's files (${plan.plan?.proposedTestCases[0]?.file})`,
+      );
       expect(attempt.before?.mutantsKilled).toBeGreaterThan(0);
       expect(existsSync(attempt.workspace)).toBe(false);
       expect(projectHash(dir)).toBe(hash);
       expect(gitStatus(dir)).toBe(statusBefore);
       expect(spawnSync('git', ['diff', '--quiet'], { cwd: dir }).status).toBe(0);
+    },
+    LONG,
+  );
+
+  /** Apply the plan with `hook` acting in the copy as an added test could, and check the repository is unchanged. */
+  async function applyTampered(hook: (workspace: string) => void) {
+    const hash = projectHash(dir);
+    const status = gitStatus(dir);
+    const attempt = await applyImprovement({
+      root: dir,
+      planId: plan.planId,
+      approvalToken: plan.approvalToken as string,
+      env: {},
+      afterPatchInWorkspace: hook,
+    });
+    expect(attempt.rolledBack).toBe(true);
+    expect(existsSync(attempt.workspace)).toBe(false);
+    expect(projectHash(dir)).toBe(hash);
+    expect(gitStatus(dir)).toBe(status);
+
+    return attempt;
+  }
+
+  it(
+    'discards the patch when the patched run rewrites a copied source file',
+    async () => {
+      const attempt = await applyTampered((workspace) => {
+        appendFileSync(path.join(workspace, 'src/age.ts'), '// rewritten\n');
+      });
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain("changed the isolated copy beyond the plan's files (src/age.ts)");
+    },
+    LONG,
+  );
+
+  it(
+    'discards the patch when the patched run rewrites an existing test',
+    async () => {
+      const attempt = await applyTampered((workspace) => {
+        appendFileSync(path.join(workspace, 'test/age.test.ts'), '// rewritten\n');
+      });
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain("beyond the plan's files (test/age.test.ts)");
+    },
+    LONG,
+  );
+
+  it(
+    'discards the patch when the added test file is rewritten, even with its content and time restored',
+    async () => {
+      const added = plan.plan?.proposedTestCases[0]?.file as string;
+      const attempt = await applyTampered((workspace) => {
+        const file = path.join(workspace, added);
+        const content = readFileSync(file);
+        const { atime, mtime } = statSync(file);
+        writeFileSync(file, '');
+        writeFileSync(file, content);
+        utimesSync(file, atime, mtime);
+      });
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain(`beyond the plan's files (${added})`);
+    },
+    LONG,
+  );
+
+  it(
+    'reports an error and writes nothing when the patched run writes into a linked dependency',
+    async () => {
+      // A package installed outside the project, linked into its node_modules like a pnpm store entry.
+      const pkg = path.join(realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-dep-'))), 'tamper-target');
+      mkdirSync(pkg);
+      writeFileSync(path.join(pkg, 'index.js'), 'export const value = 1;\n');
+      const link = path.join(dir, 'node_modules/tamper-target');
+      symlinkSync(pkg, link, process.platform === 'win32' ? 'junction' : 'dir');
+
+      try {
+        const attempt = await applyTampered((workspace) => {
+          writeFileSync(
+            path.join(workspace, 'node_modules/tamper-target/index.js'),
+            'export const value = 2;\n',
+          );
+        });
+        expect(attempt.outcome).toBe('error');
+        expect(attempt.reasons[0]).toMatch(/changed 1 path\(s\) of the installed dependencies/);
+        expect(attempt.reasons[0]).toContain(path.join(pkg, 'index.js'));
+        expect(attempt.reasons[0]).toMatch(/cannot undo this: reinstall the dependencies/);
+        expect(attempt.reasons).toContain('nothing was written to the repository');
+      } finally {
+        unlinkSync(link);
+        rmSync(path.dirname(pkg), { recursive: true, force: true });
+      }
     },
     LONG,
   );
