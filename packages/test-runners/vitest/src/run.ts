@@ -86,13 +86,24 @@ export async function runVitest(cwd: string, options: TestRunOptions): Promise<T
       detail: `vitest wrote no JSON report (exit ${result.exitCode}): ${short(result.stderr || result.stdout)}`,
     };
   }
+
+  return parseVitestReport(cwd, report);
+}
+
+/**
+ * Read Vitest's JSON report: every test as `<file relative to cwd>::<full name>` (POSIX separators). A file that
+ * failed with no test result (it did not load) is `<file>::(file)`, failed. Tests that share a full name (the same
+ * title registered twice) share a key: a failure of any of them is kept, never turned into a pass by another.
+ */
+export function parseVitestReport(cwd: string, report: unknown): Extract<TestRunResult, { status: 'ok' }> {
+  const parsed = (report ?? {}) as JsonReport;
   const tests = new Map<string, TestRunStatus>();
   const failures: string[] = [];
   // Compare real long paths: on Windows the temp directory may be an 8.3 short name (RUNNER~1) while Vitest
   // reports the long form, which would make every relative path wrong.
   const base = longPath(cwd);
 
-  for (const file of report.testResults ?? []) {
+  for (const file of parsed.testResults ?? []) {
     const rel = path
       .relative(base, longPath(file.name ?? ''))
       .split(path.sep)
@@ -108,7 +119,8 @@ export async function runVitest(cwd: string, options: TestRunOptions): Promise<T
       const key = `${rel}::${a.fullName ?? a.title ?? '?'}`;
       const status: TestRunStatus =
         a.status === 'passed' ? 'passed' : a.status === 'failed' ? 'failed' : 'skipped';
-      tests.set(key, status);
+      // Tests sharing a full name share a key: a failure of one is never turned into a pass by another.
+      if (tests.get(key) !== 'failed') tests.set(key, status);
 
       if (status === 'failed') failures.push(`${key}: ${short(a.failureMessages?.[0] ?? 'failed')}`);
     }

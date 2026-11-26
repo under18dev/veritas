@@ -148,8 +148,42 @@ let runner: RunnerApi = runnerApi({
   mocks: { objects: [], calls: {}, configureMethod: '(?!)' },
 });
 
+/**
+ * The id of the test registered in `file` under `suitePath` and `name`. Registrations that share all three (the same
+ * literal title twice, two `<dynamic test>`s, two anonymous callbacks) are told apart by `disambiguateTestIds`.
+ */
 export function testId(file: string, suitePath: string[], name: string): string {
   return stableId('T', { file: file.split('\\').join('/'), suitePath, name });
+}
+
+/**
+ * Give every registration an id of its own. The first registration (in source order) of a file, suite path and name
+ * keeps `testId`, so the id of a test that shares them with no other is unchanged; each later one gets the ordinal of
+ * its place among them as a suffix (`T-…#2`, `T-…#3`). The runner still reports them all under one full name, so
+ * whatever is matched by that name (run results, mutator kills) cannot tell them apart and is credited to none of
+ * them (see `TestNameIndex`).
+ */
+export function disambiguateTestIds(tests: TestCaseType[]): void {
+  const groups = new Map<string, TestCaseType[]>();
+
+  for (const test of tests) {
+    const group = groups.get(test.id);
+
+    if (group) group.push(test);
+    else groups.set(test.id, [test]);
+  }
+
+  for (const [id, group] of groups) {
+    if (group.length < 2) continue;
+    // In source order: by line, then by the order the inventory met them (`sort` is stable).
+    const ordered = [...group].sort(
+      (a, b) => (a.location.range?.start ?? 0) - (b.location.range?.start ?? 0),
+    );
+
+    ordered.forEach((test, index) => {
+      if (index > 0) test.id = `${id}#${index + 1}`;
+    });
+  }
 }
 
 /**
@@ -245,6 +279,7 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
     const mocks = collectMocks(source, ctx);
     visitTests(source, [], [], file, mocks, ctx, tests);
   }
+  disambiguateTestIds(tests);
 
   const edges: TestPropertyEdgeType[] = [];
 

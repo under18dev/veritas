@@ -8,7 +8,7 @@ export {
   projectViteUrl,
   writeMutationVitestConfig,
 } from './mutation-config.js';
-export { runVitest } from './run.js';
+export { parseVitestReport, runVitest } from './run.js';
 
 /**
  * Vitest versions mutation testing works with. @mizchi/mutator declares Vitest 5; Vitest 4 projects run, while on
