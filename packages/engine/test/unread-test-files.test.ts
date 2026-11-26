@@ -49,7 +49,7 @@ describe('unreadTestFiles', () => {
       // `export { test } from 'node:test'`, or a helper with no runner call at all.
       file('test/support.ts', { inexactNames: 'open_collection', usesRunner: false }),
       // Reaching code static analysis does not follow, it is not shown not to use the runner.
-      file('test/fixtures.ts', { unseenReach: true, usesRunner: false }),
+      file('test/fixtures.ts', { unseenReach: true, usesRunner: true }),
       file('test/shared.test.ts', { inexactNames: 'imported_registrations', usesRunner: false }),
       // It calls the runner in a way static analysis cannot read (`test[key](...)`).
       file('test/computed.test.ts', { inexactNames: 'open_collection', usesRunner: true }),
