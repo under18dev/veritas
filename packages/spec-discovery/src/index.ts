@@ -5,6 +5,8 @@ import path from 'node:path';
 import {
   createRedactor,
   EvidenceSource,
+  GIT_ENV,
+  gitArgs,
   redact,
   resolveInsideRoot,
   runCommand,
@@ -404,8 +406,9 @@ async function collectLocal(
 ): Promise<SourceInput[]> {
   const files = walk(root);
   const inputs: SourceInput[] = [];
-  const rev = await runCommand('git', ['rev-parse', 'HEAD'], {
+  const rev = await runCommand('git', gitArgs(['rev-parse', 'HEAD']), {
     cwd: gitRoot,
+    env: { ...GIT_ENV },
     timeoutMs: 5000,
     maxOutputBytes: 10000,
   });
@@ -475,8 +478,9 @@ async function collectLocal(
   }
 
   if (revision) {
-    const log = await runCommand('git', ['log', '-z', '-50', '--format=%H%n%s%n%b'], {
+    const log = await runCommand('git', gitArgs(['log', '-z', '-50', '--format=%H%n%s%n%b']), {
       cwd: gitRoot,
+      env: { ...GIT_ENV },
       timeoutMs: 5000,
       maxOutputBytes: 1_000_000,
     });

@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { gitOutput } from '../artifacts/store.js';
+import { gitOutput } from '../git.js';
 import type { TestRunnerInstallation, TestRunnerProvider } from '../test-runner.js';
 
 export type PackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun' | 'unknown';

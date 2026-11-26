@@ -2,6 +2,8 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import {
   type Approval,
+  GIT_ENV,
+  gitArgs,
   listRuns,
   loadConfig,
   type Property,
@@ -119,7 +121,11 @@ export function showProperty(
 }
 
 async function gitUser(root: string): Promise<string> {
-  const r = await runCommand('git', ['config', 'user.name'], { cwd: root, timeoutMs: 5000 });
+  const r = await runCommand('git', gitArgs(['config', 'user.name']), {
+    cwd: root,
+    timeoutMs: 5000,
+    env: { ...GIT_ENV },
+  });
 
   return r.exitCode === 0 ? r.stdout.trim() : '';
 }

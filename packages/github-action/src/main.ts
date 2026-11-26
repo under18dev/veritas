@@ -2,7 +2,15 @@
 import { appendFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { exitCodeFor, loadConfig, redact, resolveInsideRoot, runCommand } from '@under18dev/veritas-core';
+import {
+  exitCodeFor,
+  GIT_ENV,
+  gitArgs,
+  loadConfig,
+  redact,
+  resolveInsideRoot,
+  runCommand,
+} from '@under18dev/veritas-core';
 import {
   bundledTools,
   detectProject,
@@ -19,10 +27,16 @@ const input = (name: string, fallback: string): string =>
 
 export async function changedFiles(root: string, since: string | null): Promise<string[] | null> {
   if (!since) return null;
-  const result = await runCommand('git', ['diff', '--name-only', `${since}...HEAD`], {
-    cwd: root,
-    timeoutMs: 10_000,
-  });
+  // Commit to commit: no working tree file is read, so no content filter runs.
+  const result = await runCommand(
+    'git',
+    gitArgs(['diff', '--name-only', '--no-ext-diff', '--no-textconv', `${since}...HEAD`]),
+    {
+      cwd: root,
+      timeoutMs: 10_000,
+      env: { ...GIT_ENV },
+    },
+  );
 
   if (result.exitCode !== 0 || result.spawnError || result.timedOut) return null;
 
