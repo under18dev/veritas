@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { constants, copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import {
   gitCommit,
@@ -7,9 +7,11 @@ import {
   type ImprovementOutcome,
   loadConfig,
   type MeasurementSnapshot,
+  onExitCleanup,
   PatchAttempt,
   type Property,
   redact,
+  resolveInsideRoot,
   type StageName,
   sha256,
   stableId,
@@ -21,9 +23,10 @@ import {
 import { readArtifact, recordedRunOptions, runVeritas, testRunnerFor } from '@under18dev/veritas-engine';
 import { type MutationRunResult, runMutation } from '@under18dev/veritas-mutation-adapter';
 import { applyApprovals, loadApprovals } from '@under18dev/veritas-property-engine';
+import { type DependencySnapshot, diffDependencies, snapshotDependencies } from './dependencies.js';
 import { expectedFromSpec } from './oracle.js';
 import { renderTestFile } from './render.js';
-import { ImprovementApproval, type PlanDocument } from './schema.js';
+import { ImprovementApproval, type PatchFile, type PlanDocument } from './schema.js';
 import { approvalTokenFor, assertPlanId, attemptCount, readPlan, writePlanArtifact } from './store.js';
 import { validatePatch } from './validate.js';
 import {
@@ -32,8 +35,11 @@ import {
   projectHash,
   removeWorkspace,
   snapshotTree,
+  statTree,
+  statWorkspaceModules,
   treeHash,
   undoWrites,
+  unexpectedChanges,
   type WriteRecord,
   writeNewFiles,
 } from './workspace.js';
@@ -48,10 +54,18 @@ export interface ApplyOptions {
   env?: NodeJS.ProcessEnv;
   /**
    * Test hook, not exposed by the CLI: runs after the patch is written into the isolated workspace and before
-   * the patched tests run. It can only affect the workspace; the real repository only ever receives the
-   * approved plan content.
+   * the patched tests run, where code run by an added test would run. The real repository only ever receives the
+   * approved plan content; what it changes in the workspace or in the shared dependencies is detected like a change
+   * made by such a test.
    */
   afterPatchInWorkspace?: (workspace: string) => void | Promise<void>;
+  /** Test hook like `afterPatchInWorkspace`, run after the baseline runs, as code run by an existing test would. */
+  afterBaselineInWorkspace?: (workspace: string) => void | Promise<void>;
+  /**
+   * Test hook like `afterPatchInWorkspace`, run after the patched mutation run and the re-evaluation, as code run by
+   * an added test during those runs would.
+   */
+  afterPatchedRunsInWorkspace?: (workspace: string) => void | Promise<void>;
   /** Who approves (recorded); defaults to VERITAS_ACTOR, then the git user name. */
   actor?: string;
   /** Entry point recorded with the approval (default `api`). */
@@ -168,10 +182,18 @@ async function reassess(
   runId: string,
   options: { allowCodeConfig?: boolean; signal?: AbortSignal },
 ): Promise<{ runId: string; statuses: Record<string, string>; failed: string[] }> {
-  mkdirSync(path.join(workspace, '.veritas'), { recursive: true });
+  // Paths in the copy are checked to stay inside it: code run there may have replaced `.veritas` with a link.
+  mkdirSync(resolveInsideRoot(workspace, '.veritas'), { recursive: true });
   for (const file of ['config.json', 'approvals.json']) {
     const from = path.join(root, '.veritas', file);
-    if (existsSync(from)) copyFileSync(from, path.join(workspace, '.veritas', file));
+    const to = resolveInsideRoot(workspace, path.join('.veritas', file));
+    // The repository's file, or none: never one the runs in the copy may have left there. Whatever is at the
+    // destination is removed first (a link itself, not its target) and the file is copied exclusively. A destination
+    // or `.veritas` that resolves outside the copy (a link leading out) is never touched: resolveInsideRoot throws,
+    // and the attempt ends as an error.
+    rmSync(to, { force: true });
+    if (existsSync(from))
+      copyFileSync(from, resolveInsideRoot(workspace, path.join('.veritas', file)), constants.COPYFILE_EXCL);
   }
   const original = readArtifact(root, runId, 'run').data;
   // Mutant relations (equivalence, distinguishability, detection) need the mutate stage as well.
@@ -198,6 +220,7 @@ async function reassess(
     allowCodeConfig: options.allowCodeConfig ?? false,
     // The workspace has no .git: read the revision from the repository so ids and approvals match.
     gitRoot: root,
+    isolatedCopy: true,
     signal: options.signal,
   });
   const failed = summary.run.stages
@@ -311,10 +334,31 @@ function recordedClaimStatuses(root: string, runId: string): Record<string, stri
   return out;
 }
 
+/** How many changed paths a reason lists before it only counts the rest. */
+const LISTED_PATHS = 20;
+
+function listPaths(paths: string[]): string {
+  return paths.length > LISTED_PATHS
+    ? `${paths.slice(0, LISTED_PATHS).join(', ')} and ${paths.length - LISTED_PATHS} more`
+    : paths.join(', ');
+}
+
+function tamperReason(paths: string[]): string {
+  return `the patched runs changed the isolated copy beyond the plan's files (${listPaths(paths)}), so their results are not trustworthy; the patch was discarded and the repository is unchanged`;
+}
+
+function dependencyChangeReason(paths: string[]): string {
+  return `code run in the isolated copy changed ${paths.length} path(s) of the installed dependencies it shares with the project: ${listPaths(paths)}. Veritas cannot undo this: reinstall the dependencies (remove node_modules and install again from the lockfile) before running the tests or Veritas again`;
+}
+
 /**
  * Apply an approved plan: measure it in an isolated copy (baseline tests + mutation, patched tests + mutation)
  * and copy the new test files into the repository only when both mutation runs are complete, the killed-mutant count
  * increases, an added test kills a mutant the baseline left alive, and no previously passing test fails. Any failure leaves the repository unchanged.
+ *
+ * The runs must leave the copy as it was made, apart from the plan's files with exactly the plan's content, and must
+ * not change the installed dependencies the copy links to. These checks catch an added test that tampers with its
+ * own measurement or writes through the links; they are a safety net, not a security boundary.
  */
 export async function applyImprovement(options: ApplyOptions): Promise<PatchAttempt> {
   const { root, planId } = options;
@@ -431,6 +475,26 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
 
     return attempt;
   };
+  // Installed dependencies as they were before anything ran in the workspace, until they are compared again.
+  let dependencies: DependencySnapshot | null = null;
+  // Links the dependency check does not follow, said in every attempt rather than implied to be checked.
+  let unchecked: string[] = [];
+  /** Reasons the dependencies are not as they were (empty when they are); a failed comparison is one too. */
+  const dependencyProblems = (): string[] => {
+    if (dependencies === null) return [];
+    const before = dependencies;
+    dependencies = null;
+
+    try {
+      const changed = diffDependencies(before, snapshotDependencies(root));
+
+      return changed.length > 0 ? [dependencyChangeReason(changed)] : [];
+    } catch (error) {
+      return [
+        `could not compare the installed dependencies with their state before the runs: ${(error as Error).message}; check them, and reinstall them if in doubt`,
+      ];
+    }
+  };
   const end = (
     outcome: ImprovementOutcome,
     reasons: string[],
@@ -440,16 +504,28 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
       after?: MeasurementSnapshot | null;
       rolledBack: boolean;
     },
-  ): PatchAttempt =>
-    persist({
+  ): PatchAttempt => {
+    // Whatever the measurement concluded, code that wrote into the real dependencies is reported first.
+    const problems = dependencyProblems();
+
+    return persist({
       ...base,
       workspace: fields.workspace ?? '',
       before: fields.before ?? null,
       after: fields.after ?? null,
       rolledBack: fields.rolledBack,
-      outcome,
-      reasons: reasons.map((r) => redact(r)),
+      outcome: problems.length > 0 ? 'error' : outcome,
+      reasons: [
+        ...problems,
+        ...reasons,
+        ...(unchecked.length > 0
+          ? [
+              `not checked for writes: ${unchecked.length} link(s) in linked packages that lead outside their repository to something that is not a package (${listPaths(unchecked)})`,
+            ]
+          : []),
+      ].map((r) => redact(r)),
     });
+  };
 
   const maxIterations = Math.min(doc.budget.maxIterations, MAX_ITERATIONS);
 
@@ -471,8 +547,32 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
   const remaining = () => Math.max(1, deadline - Date.now());
   const workspace = createWorkspace(root);
   let written: WriteRecord | null = null;
+  // Ctrl-C or SIGTERM end the process without running `finally`: remove the copy then too.
+  const unregisterCleanup = onExitCleanup(() => removeWorkspace(workspace));
+  // Code under test could send SIGUSR1 to this process to open its inspector; a listener keeps it closed. Child
+  // processes get --disable-sigusr1 (see `closedInspectorFlags`).
+  const ignoreSigusr1 = () => {};
+  if (process.platform !== 'win32') process.on('SIGUSR1', ignoreSigusr1);
 
   try {
+    // The copy as made, to tell what the runs in it changed; and the dependencies it links to, which it shares
+    // with the project.
+    const original = snapshotTree(workspace);
+    // Metadata of the copy's files and of the package links in its own node_modules, which the runner and mutator
+    // are resolved from.
+    const statCopy = () => new Map([...statTree(workspace), ...statWorkspaceModules(workspace)]);
+    const originalStat = statCopy();
+    // Files changed since the copy was made, other than `files` with exactly their content, or touched at all since
+    // `stat` was taken (a file rewritten and restored keeps its content, not its change time).
+    const copyChanges = (stat: Map<string, string>, files: PatchFile[]): string[] =>
+      [
+        ...new Set([
+          ...unexpectedChanges(original, snapshotTree(workspace), files),
+          ...diffSnapshots(stat, statCopy()),
+        ]),
+      ].sort();
+    dependencies = snapshotDependencies(root);
+    unchecked = dependencies.unchecked;
     const measureTests = async (label: string): Promise<TestRunResult> => {
       let run: TestRunResult = { status: 'error', detail: 'not run' };
 
@@ -497,6 +597,8 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
           mutation: { ...config.mutation, timeoutMs: Math.min(config.mutation.timeoutMs, remaining()) },
         },
         reportDir: path.join(workspace, '.veritas', 'improve', `mutation-${label}`),
+        // Mutator is found inside the copy only, and starts without the state a test may have left in `.mutator`.
+        isolatedCopy: true,
         ...(options.signal ? { signal: options.signal } : {}),
       });
 
@@ -518,6 +620,18 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         { workspace, rolledBack: false },
       );
     }
+    await options.afterBaselineInWorkspace?.(workspace);
+    const changedByBaseline = copyChanges(originalStat, []);
+
+    if (changedByBaseline.length > 0) {
+      return end(
+        'no_safe_improvement',
+        [
+          `the baseline runs changed files of the isolated copy (${listPaths(changedByBaseline)}), so the measurement is not trustworthy; nothing was applied`,
+        ],
+        { workspace, rolledBack: false },
+      );
+    }
     const baselineGap = incompleteMutationRun(mutationBefore);
 
     if (baselineGap !== null) {
@@ -533,6 +647,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
 
     // Patched.
     writeNewFiles(workspace, doc.files);
+    const patchedStat = statCopy();
     await options.afterPatchInWorkspace?.(workspace);
     const testsAfter = await measureTests('after');
 
@@ -549,15 +664,22 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
     );
     const newTests = [...testsAfter.tests].filter(([key]) => newFiles.has(key.split('::')[0] as string));
     const failingNew = newTests.filter(([, status]) => status !== 'passed');
+    const tampered = copyChanges(patchedStat, doc.files);
+    const testsFail = broken.length > 0 || failingNew.length > 0 || newTests.length === 0;
 
-    if (broken.length > 0 || failingNew.length > 0 || newTests.length === 0) {
+    if (tampered.length > 0 || testsFail) {
       return end(
         'no_safe_improvement',
         [
-          'the patched tests do not all pass in the isolated copy; the patch was discarded and the repository is unchanged',
-          ...(newTests.length === 0 ? ['no added test was executed'] : []),
-          ...broken.map(([key]) => `previously passing test no longer passes: ${key}`),
-          ...testsAfter.failures.slice(0, 10),
+          ...(tampered.length > 0 ? [tamperReason(tampered)] : []),
+          ...(testsFail
+            ? [
+                'the patched tests do not all pass in the isolated copy; the patch was discarded and the repository is unchanged',
+                ...(newTests.length === 0 ? ['no added test was executed'] : []),
+                ...broken.map(([key]) => `previously passing test no longer passes: ${key}`),
+                ...testsAfter.failures.slice(0, 10),
+              ]
+            : []),
         ],
         {
           workspace,
@@ -600,6 +722,18 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         ],
         { workspace, before, rolledBack: true },
       );
+    }
+    // The patched mutation run and the re-evaluation ran the added tests again: check the copy once more before
+    // trusting what they measured.
+    await options.afterPatchedRunsInWorkspace?.(workspace);
+    const tamperedLater = copyChanges(patchedStat, doc.files);
+
+    if (tamperedLater.length > 0) {
+      return end('no_safe_improvement', [tamperReason(tamperedLater)], {
+        workspace,
+        before,
+        rolledBack: true,
+      });
     }
     const killedBefore = new Set(
       mutationBefore.mutants.filter((m) => m.status === 'killed').map((m) => m.id),
@@ -652,6 +786,16 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         rolledBack: true,
       });
     }
+    const changedDependencies = dependencyProblems();
+
+    if (changedDependencies.length > 0) {
+      return end('error', [...changedDependencies, 'nothing was written to the repository'], {
+        workspace,
+        before,
+        after,
+        rolledBack: true,
+      });
+    }
     const repoBefore = snapshotTree(root);
 
     if (treeHash(repoBefore) !== doc.projectHash) {
@@ -680,18 +824,16 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
       );
     }
     const repoAfter = snapshotTree(root);
-    const changed = diffSnapshots(repoBefore, repoAfter);
-    const expected = new Map(doc.files.map((f) => [f.path, sha256(f.content)]));
-    const unexpected = changed.filter((p) => !expected.has(p) || repoAfter.get(p) !== expected.get(p));
+    const unexpected = unexpectedChanges(repoBefore, repoAfter, doc.files);
 
-    if (unexpected.length > 0 || changed.length !== expected.size) {
+    if (unexpected.length > 0) {
       const leftovers = undoWrites(record);
       written = null;
 
       return end(
         'error',
         [
-          `unexpected repository changes after writing: ${unexpected.join(', ') || 'missing files'}; the written files were removed`,
+          `unexpected repository changes after writing: ${unexpected.join(', ')}; the written files were removed`,
           ...(leftovers.length ? [`could not remove: ${leftovers.join(', ')}`] : []),
         ],
         { workspace, before, after, rolledBack: true },
@@ -722,5 +864,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
     );
   } finally {
     removeWorkspace(workspace);
+    unregisterCleanup();
+    process.removeListener('SIGUSR1', ignoreSigusr1);
   }
 }

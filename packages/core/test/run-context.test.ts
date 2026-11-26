@@ -198,6 +198,7 @@ describe('memory limits', () => {
         timeoutMs: 20_000,
         ...(memoryMb ? { memoryMb } : {}),
       });
+    // --disable-sigusr1 is never put there: an older Node.js the tests start would refuse to run.
     expect((await run(512)).stdout).toBe('--max-old-space-size=512');
     expect((await run()).stdout).toBe('none');
     expect(await withRunContext({ memoryMb: 768 }, () => run().then((r) => r.stdout))).toBe(
@@ -207,6 +208,31 @@ describe('memory limits', () => {
     expect(
       outOfMemory('FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory'),
     ).toBe(true);
+  });
+
+  it('keeps the inspector of project test runs closed to SIGUSR1 where Node.js allows it', async () => {
+    if (process.platform === 'win32' || !process.allowedNodeEnvironmentFlags.has('--disable-sigusr1')) return;
+    const run = await runProjectTests(
+      process.execPath,
+      [
+        '-e',
+        "process.kill(process.pid, 'SIGUSR1'); setTimeout(() => process.stdout.write(String(require('node:inspector').url())), 300)",
+      ],
+      { cwd: tmp(), timeoutMs: 20_000 },
+    );
+    expect(run.stdout).toBe('undefined');
+    // A worker the runner forks (as Vitest's forks pool and Jest do) inherits the flag through execArgv.
+    const root = tmp();
+    writeFileSync(
+      path.join(root, 'worker.cjs'),
+      "process.kill(process.pid, 'SIGUSR1'); setTimeout(() => process.stdout.write(String(require('node:inspector').url())), 300)",
+    );
+    const forked = await runProjectTests(
+      process.execPath,
+      ['-e', "require('node:child_process').fork('worker.cjs')"],
+      { cwd: root, timeoutMs: 20_000 },
+    );
+    expect(forked.stdout).toBe('undefined');
   });
 
   it('reports a sandboxed call that runs out of memory as an error, never a result', async () => {

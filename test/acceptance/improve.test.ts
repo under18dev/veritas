@@ -1,5 +1,21 @@
-import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -8,7 +24,7 @@ import {
   projectHash,
   readPlan,
 } from '../../packages/improvement/dist/index.js';
-import { copyFixture, json, runCli } from './helpers.js';
+import { CLI, copyFixture, json, runCli } from './helpers.js';
 
 const LONG = 300_000;
 
@@ -100,7 +116,7 @@ describe('improve on agent-loop', () => {
   beforeAll(() => {
     dir = analyzed('agent-loop');
     statusBefore = gitStatus(dir);
-    const result = runCli(['improve', '--dry-run', '--max-iterations', '5', '--json'], dir);
+    const result = runCli(['improve', '--dry-run', '--max-iterations', '20', '--json'], dir);
     expect(result.status, result.stderr).toBe(0);
     plan = json<PlanJson>(result);
   }, LONG);
@@ -183,12 +199,216 @@ describe('improve on agent-loop', () => {
       expect(attempt.outcome).toBe('no_safe_improvement');
       expect(attempt.rolledBack).toBe(true);
       expect(attempt.reasons.join('\n')).toMatch(/do not all pass/);
+      // The rewrite of the added file is reported as well.
+      expect(attempt.reasons.join('\n')).toContain(
+        `changed the isolated copy beyond the plan's files (${plan.plan?.proposedTestCases[0]?.file})`,
+      );
       expect(attempt.before?.mutantsKilled).toBeGreaterThan(0);
       expect(existsSync(attempt.workspace)).toBe(false);
       expect(projectHash(dir)).toBe(hash);
       expect(gitStatus(dir)).toBe(statusBefore);
       expect(spawnSync('git', ['diff', '--quiet'], { cwd: dir }).status).toBe(0);
     },
+    LONG,
+  );
+
+  type Hook = (workspace: string) => void | Promise<void>;
+
+  /**
+   * Apply the plan with a hook acting in the copy as a test could (after the patch unless `when` says otherwise), and
+   * check the repository is unchanged.
+   */
+  async function applyTampered(hook: Hook, when: 'baseline' | 'patch' | 'patched-runs' = 'patch') {
+    const hash = projectHash(dir);
+    const status = gitStatus(dir);
+    const attempt = await applyImprovement({
+      root: dir,
+      planId: plan.planId,
+      approvalToken: plan.approvalToken as string,
+      env: {},
+      ...(when === 'baseline' ? { afterBaselineInWorkspace: hook } : {}),
+      ...(when === 'patch' ? { afterPatchInWorkspace: hook } : {}),
+      ...(when === 'patched-runs' ? { afterPatchedRunsInWorkspace: hook } : {}),
+    });
+    expect(attempt.rolledBack).toBe(when !== 'baseline');
+    expect(existsSync(attempt.workspace)).toBe(false);
+    expect(projectHash(dir)).toBe(hash);
+    expect(gitStatus(dir)).toBe(status);
+
+    return attempt;
+  }
+
+  it(
+    'discards the patch when the patched run rewrites a copied source file',
+    async () => {
+      let inspector: string | undefined = 'not checked';
+      const attempt = await applyTampered(async (workspace) => {
+        appendFileSync(path.join(workspace, 'src/age.ts'), '// rewritten\n');
+        // Code under test may signal the Veritas process to open its inspector; during an apply it stays closed.
+        if (process.platform !== 'win32') {
+          process.kill(process.pid, 'SIGUSR1');
+          await new Promise((r) => setTimeout(r, 300));
+          inspector = (await import('node:inspector')).url();
+        }
+      });
+      if (process.platform !== 'win32') expect(inspector).toBeUndefined();
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain("changed the isolated copy beyond the plan's files (src/age.ts)");
+    },
+    LONG,
+  );
+
+  it(
+    'discards the patch when the patched run rewrites an existing test',
+    async () => {
+      const attempt = await applyTampered((workspace) => {
+        appendFileSync(path.join(workspace, 'test/age.test.ts'), '// rewritten\n');
+      });
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain("beyond the plan's files (test/age.test.ts)");
+    },
+    LONG,
+  );
+
+  it(
+    'discards the patch when the added test file is rewritten, even with its content and time restored',
+    async () => {
+      const added = plan.plan?.proposedTestCases[0]?.file as string;
+      const attempt = await applyTampered((workspace) => {
+        const file = path.join(workspace, added);
+        const content = readFileSync(file);
+        const { atime, mtime } = statSync(file);
+        writeFileSync(file, '');
+        writeFileSync(file, content);
+        utimesSync(file, atime, mtime);
+      });
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain(`beyond the plan's files (${added})`);
+    },
+    LONG,
+  );
+
+  it(
+    'discards the measurement when the baseline runs change the copy',
+    async () => {
+      const attempt = await applyTampered((workspace) => {
+        appendFileSync(path.join(workspace, 'src/age.ts'), '// rewritten\n');
+      }, 'baseline');
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain(
+        'the baseline runs changed files of the isolated copy (src/age.ts)',
+      );
+    },
+    LONG,
+  );
+
+  it(
+    'discards the patch when the copy changes during the patched mutation run or the re-evaluation',
+    async () => {
+      const attempt = await applyTampered((workspace) => {
+        appendFileSync(path.join(workspace, 'test/age.test.ts'), '// rewritten\n');
+      }, 'patched-runs');
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain("beyond the plan's files (test/age.test.ts)");
+    },
+    LONG,
+  );
+
+  it(
+    "discards the patch when a package link of the copy's node_modules is replaced",
+    async () => {
+      // Re-created to the same place, so the runs still work; a fake package in its place would forge them.
+      const attempt = await applyTampered((workspace) => {
+        const link = path.join(workspace, 'node_modules/vitest');
+        const target = realpathSync(link);
+        unlinkSync(link);
+        symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+      });
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain("beyond the plan's files (node_modules/vitest)");
+    },
+    LONG,
+  );
+
+  it(
+    'starts each mutation run in the copy without mutator state a test left there',
+    async () => {
+      const hash = projectHash(dir);
+      let plantedSurvived: boolean | null = null;
+      const attempt = await applyImprovement({
+        root: dir,
+        planId: plan.planId,
+        approvalToken: plan.approvalToken as string,
+        env: {},
+        // Forged resume state: mutator adopts stored verdicts from it without running the tests.
+        afterPatchInWorkspace: (workspace) => {
+          mkdirSync(path.join(workspace, '.mutator/scopes'), { recursive: true });
+          writeFileSync(path.join(workspace, '.mutator/scopes/snapshot.json.resume.sqlite'), 'forged');
+          writeFileSync(path.join(workspace, '.mutator/planted'), '');
+        },
+        afterPatchedRunsInWorkspace: (workspace) => {
+          plantedSurvived = existsSync(path.join(workspace, '.mutator/planted'));
+          // Stop here, so the plan stays applicable for the next test.
+          appendFileSync(path.join(workspace, 'src/age.ts'), '// stop\n');
+        },
+      });
+      // The patched mutation run and the re-evaluation completed, from a removed .mutator.
+      expect(plantedSurvived).toBe(false);
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain("beyond the plan's files (src/age.ts)");
+      expect(projectHash(dir)).toBe(hash);
+    },
+    LONG,
+  );
+
+  /** Run `fn` with a package installed outside the project and linked into it like a pnpm store entry. */
+  async function withLinkedDependency(fn: (pkg: string) => Promise<void>) {
+    const pkg = path.join(realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-dep-'))), 'tamper-target');
+    mkdirSync(pkg);
+    writeFileSync(path.join(pkg, 'index.js'), 'export const value = 1;\n');
+    const link = path.join(dir, 'node_modules/tamper-target');
+    symlinkSync(pkg, link, process.platform === 'win32' ? 'junction' : 'dir');
+
+    try {
+      await fn(pkg);
+    } finally {
+      unlinkSync(link);
+      rmSync(path.dirname(pkg), { recursive: true, force: true });
+    }
+  }
+
+  const writeDependency = (workspace: string) =>
+    writeFileSync(path.join(workspace, 'node_modules/tamper-target/index.js'), 'export const value = 2;\n');
+
+  it(
+    'reports an error and writes nothing when the patched run writes into a linked dependency',
+    () =>
+      withLinkedDependency(async (pkg) => {
+        const attempt = await applyTampered(writeDependency);
+        expect(attempt.outcome).toBe('error');
+        expect(attempt.reasons[0]).toMatch(/changed 1 path\(s\) of the installed dependencies/);
+        expect(attempt.reasons[0]).toContain(path.join(pkg, 'index.js'));
+        expect(attempt.reasons[0]).toMatch(/cannot undo this: reinstall the dependencies/);
+        expect(attempt.reasons).toContain('nothing was written to the repository');
+      }),
+    LONG,
+  );
+
+  it(
+    'reports a dependency write first when the attempt stops early for another reason',
+    () =>
+      withLinkedDependency(async (pkg) => {
+        const added = plan.plan?.proposedTestCases[0]?.file as string;
+        const attempt = await applyTampered((workspace) => {
+          writeDependency(workspace);
+          // The added test now fails, which ends the attempt before the patched mutation run.
+          const file = path.join(workspace, added);
+          writeFileSync(file, readFileSync(file, 'utf8').replace('toBe(true)', 'toBe(false)'));
+        });
+        expect(attempt.outcome).toBe('error');
+        expect(attempt.reasons[0]).toContain(path.join(pkg, 'index.js'));
+        expect(attempt.reasons.join('\n')).toMatch(/do not all pass/);
+      }),
     LONG,
   );
 
@@ -331,4 +551,64 @@ describe('improve without an accepted specification', () => {
     ) as { status: string };
     expect(optIn.status).toBe('planned');
   }, 600_000);
+});
+
+// On Windows, ending a process from outside (child.kill, taskkill) terminates it without running any handler, so
+// nothing can remove the copy then; the next apply's sweep of stale copies does (see the improve guide).
+describe.skipIf(process.platform === 'win32')('improve ended by a signal', () => {
+  it(
+    'removes the copy when an apply is ended by SIGTERM, and changes nothing in the project',
+    async () => {
+      // A project and plan of its own: whatever the ended apply leaves cannot affect other tests.
+      const dir = analyzed('agent-loop');
+      const planned = runCli(['improve', '--dry-run', '--json'], dir);
+      expect(planned.status, planned.stderr).toBe(0);
+      const plan = json<PlanJson>(planned);
+      const hash = projectHash(dir);
+      // A cache directory of its own, under the real one so its parents are safe.
+      const parent = path.join(homedir(), '.cache');
+      mkdirSync(parent, { recursive: true });
+      const cache = mkdtempSync(path.join(parent, 'veritas-acceptance-'));
+      const base = path.join(cache, 'veritas/improve');
+      const copies = () =>
+        existsSync(base) ? readdirSync(base).filter((n) => /^veritas-improve-\w{6}$/.test(n)) : [];
+      const child = spawn(
+        process.execPath,
+        [
+          CLI,
+          'improve',
+          '--apply',
+          '--plan',
+          plan.planId,
+          '--approve',
+          plan.approvalToken as string,
+          '--json',
+        ],
+        {
+          cwd: dir,
+          env: { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CACHE_HOME: cache },
+          stdio: 'ignore',
+        },
+      );
+      const exited = once(child, 'exit');
+
+      try {
+        const deadline = Date.now() + 60_000;
+        while (copies().length === 0 && child.exitCode === null && Date.now() < deadline)
+          await new Promise((r) => setTimeout(r, 50));
+        expect(copies()).toHaveLength(1);
+        child.kill('SIGTERM');
+        await exited;
+        expect(readdirSync(base)).toEqual([]);
+        expect(projectHash(dir)).toBe(hash);
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGKILL');
+          await exited;
+        }
+        rmSync(cache, { recursive: true, force: true });
+      }
+    },
+    LONG,
+  );
 });

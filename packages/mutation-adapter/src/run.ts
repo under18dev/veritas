@@ -54,6 +54,13 @@ export interface RunMutationOptions {
   /** Do not fall back to the adapter's own mutator when the project has none (default false). */
   projectMutatorOnly?: boolean;
   /**
+   * The root is an isolated copy whose content may have been written by the code under test (`improve`). Then the
+   * project's mutator is looked up inside the root only, not in its parents (a shared temporary directory), and
+   * mutator's working directory `.mutator` is removed before each run: mutator adopts verdicts stored there (its
+   * resume database) without running the tests, so a test could plant kills.
+   */
+  isolatedCopy?: boolean;
+  /**
    * Test files (POSIX, relative to the root) that can kill these mutants. When given, mutator runs only
    * them, through a generated test runner config; an empty list means no test reaches the code in scope.
    */
@@ -93,6 +100,53 @@ const INEXACT_BECAUSE: Record<Extract<WithheldReason, { kind: 'inexact_file' }>[
   imported_registrations: 'a local module it imports registers tests',
   imported_open_module: 'a local module it imports runs code when loaded that may register tests',
 };
+
+/**
+ * What mutator 0.4.5 prints to stderr whenever it adopts verdicts from its resume database. Not anchored to a line
+ * start: code under test shares the stream and may leave a line unfinished just before it.
+ */
+const RESUMED = /resumed (\d+)\/(\d+) mutants from checkpoint/g;
+/** Characters kept from the end of one piece of output, so the message split between two pieces is still seen. */
+const RESUMED_CARRY = 200;
+
+export interface ResumeScan {
+  /** The largest number of verdicts mutator said it adopted, and of how many; null when it said nothing. */
+  adopted: { count: number; of: number } | null;
+}
+
+/**
+ * Watch mutator's output as it streams (see `RunCommandOptions.onOutput`) for verdicts adopted from its resume
+ * database. Reading the stream, not the captured stderr, means no amount of output can push the message out of view.
+ */
+export function resumeScanner(): { feed(text: string): void; result(): ResumeScan } {
+  let carry = '';
+  let adopted: ResumeScan['adopted'] = null;
+
+  return {
+    feed(text) {
+      const window = carry + text;
+
+      for (const m of window.matchAll(RESUMED)) {
+        const count = Number(m[1]);
+
+        if (adopted === null || count > adopted.count) adopted = { count, of: Number(m[2]) };
+      }
+      carry = window.slice(-RESUMED_CARRY);
+    },
+    result: () => ({ adopted }),
+  };
+}
+
+/**
+ * Why the verdicts of a mutator run in an isolated copy cannot be trusted because of its resume database, or null.
+ * The copy's `.mutator` is removed before mutator starts, but mutator opens the database only after its dry run,
+ * which runs the tests: a test can write verdicts there that mutator then adopts without running anything.
+ */
+export function checkpointRestore(scan: ResumeScan): string | null {
+  if (scan.adopted === null || scan.adopted.count === 0) return null;
+
+  return `mutator adopted ${scan.adopted.count} of ${scan.adopted.of} verdicts from a resume database in the isolated copy, which was removed before the run: something written during the run (such as a test) planted them, so the run's results are not trustworthy`;
+}
 
 /** One warning for each reason names in mutator's report were credited to no test (see `TestNameIndex`). */
 function withheldWarnings(index: TestNameIndex): string[] {
@@ -362,6 +416,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   const detection = await detectMutator(options.root, {
     ...(options.mutatorBin === undefined ? {} : { binPath: options.mutatorBin }),
     fallbackToAdapter: !options.projectMutatorOnly,
+    ...(options.isolatedCopy ? { stopAt: options.root } : {}),
   });
   const backend = { name: 'mizchi' as const, version: detection.version };
 
@@ -439,8 +494,15 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       // The caller's own exclusions stay, and the files diagnosed here are added to them.
       ...(exclude.length > 0 ? { exclude: [...new Set([...(options.exclude ?? []), ...exclude])] } : {}),
     });
-  const spawn = (argv: string[], timeoutMs = options.config.mutation.timeoutMs) =>
-    runProjectTests(process.execPath, [binPath, ...argv], {
+  const reportPath = path.join(reportDir, 'mutation.json');
+  const spawn = (argv: string[], timeoutMs = options.config.mutation.timeoutMs) => {
+    // A report left in place (by an earlier run, or planted) must not be read as this run's.
+    rmSync(reportPath, { force: true });
+
+    if (options.isolatedCopy) rmSync(path.join(options.root, '.mutator'), { recursive: true, force: true });
+    const scanner = resumeScanner();
+
+    return runProjectTests(process.execPath, [binPath, ...argv], {
       cwd: options.root,
       timeoutMs,
       memoryMb: options.config.limits.memoryMb,
@@ -449,9 +511,12 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       // A mutation run takes minutes; its progress lines show that it is working.
       logOutput: true,
       label: 'mutator',
+      onOutput: (stream, text) => {
+        if (stream === 'stderr') scanner.feed(text);
+      },
       ...(options.signal === undefined ? {} : { signal: options.signal }),
-    });
-  const reportPath = path.join(reportDir, 'mutation.json');
+    }).then((run) => ({ ...run, resumed: scanner.result() }));
+  };
   const ran = (run: Awaited<ReturnType<typeof spawn>>, argv: string[], durationMs: number) => ({
     backend,
     command: [process.execPath, binPath, ...argv],
@@ -536,6 +601,12 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
 
   if (run.spawnError)
     return result('error', { ...common, detail: `could not start mutator: ${run.spawnError}` });
+
+  if (options.isolatedCopy) {
+    const restored = checkpointRestore(run.resumed);
+
+    if (restored !== null) return result('error', { ...common, detail: restored });
+  }
 
   if (run.timedOut) {
     return result('timeout', {

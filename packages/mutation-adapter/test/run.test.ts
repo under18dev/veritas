@@ -1,13 +1,16 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { stableId, VeritasConfig } from '@under18dev/veritas-core';
 import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import {
   buildMutatorArgs,
+  checkpointRestore,
   detectMutator,
   MutationRunResult,
   PINNED_MUTATOR_VERSION,
+  resumeScanner,
   runMutation,
   shellQuote,
   timeBudgetSeconds,
@@ -144,6 +147,24 @@ describe('detectMutator', () => {
     expect(d.detail).toContain('not installed');
   });
 
+  it('looks for the project mutator no higher than stopAt, so a package planted above a copy is not used', async () => {
+    const parent = tempDir('shared-tmp');
+    const root = path.join(parent, 'veritas-improve-copy');
+    mkdirSync(root);
+    // What a test (or another user of a shared temporary directory) could put next to the copy.
+    const planted = path.join(parent, 'node_modules/@mizchi/mutator');
+    mkdirSync(planted, { recursive: true });
+    writeFileSync(
+      path.join(planted, 'package.json'),
+      '{"name":"@mizchi/mutator","version":"0.4.5","bin":"cli.js"}',
+    );
+    writeFileSync(path.join(planted, 'cli.js'), "console.log('--root --reporter --report-dir');\n");
+    expect((await detectMutator(root)).binPath).toBe(path.join(planted, 'cli.js'));
+    const confined = await detectMutator(root, { stopAt: root });
+    expect(confined.origin).toBe('adapter');
+    expect(confined.binPath).not.toContain(parent);
+  });
+
   it('reports unavailable when the CLI lacks the required flags', async () => {
     const dir = tempDir('oldmutator');
     const bin = path.join(dir, 'cli.js');
@@ -264,6 +285,69 @@ describe('runMutation failures', () => {
     expect(r.rawReportPath).toBe(path.join(reportDir, 'mutation.json'));
     expect(r.detail).toMatch(/could not parse/);
     expect(r.mutants).toEqual([]);
+  });
+
+  it('in an isolated copy, is an error when mutator adopted verdicts planted during the run', async () => {
+    // mutator opens its resume database after the dry run, which runs the tests: a test can plant verdicts there.
+    const { root, bin } = stubCli(
+      // More output than is kept (10 MB) before the line, which must not hide it.
+      "process.stderr.write('y'.repeat(11 * 1024 * 1024)); console.error('resumed 3/5 mutants from checkpoint, 2 left to run'); console.log('{}');",
+    );
+    const r = await runMutation({
+      testRunner: vitest,
+      root,
+      config: config(),
+      reportDir: path.join(root, 'out'),
+      mutatorBin: bin,
+      isolatedCopy: true,
+    });
+    expect(r.status).toBe('error');
+    expect(r.detail).toMatch(/adopted 3 of 5 verdicts from a resume database in the isolated copy/);
+  });
+
+  it('recognises the resume line exactly as the installed mutator prints it', () => {
+    // Pinned to mutator's own source, so an upgrade that rewords the line fails here instead of passing silently.
+    const runJs = path.join(
+      path.dirname(createRequire(import.meta.url).resolve('@mizchi/mutator')),
+      'run.js',
+    );
+    const printed = `log(\`resumed \${resumed}/\${jobs.length} mutants from checkpoint, \${remaining.length} left to run\`)`;
+    expect(readFileSync(runJs, 'utf8')).toContain(printed);
+    const scan = (...pieces: string[]) => {
+      const scanner = resumeScanner();
+      for (const piece of pieces) scanner.feed(piece);
+      return checkpointRestore(scanner.result());
+    };
+    expect(scan('x\nresumed 2/9 mutants from checkpoint, 7 left to run\n')).toMatch(/adopted 2 of 9/);
+    expect(scan('12 mutants, 12 to run\n')).toBeNull();
+    // Split between two pieces of output, after an unfinished line and a flood of output from a test.
+    expect(
+      scan('x'.repeat(20_000_000), 'no newline here, resumed 4/4 mutants from ch', 'eckpoint, 0 left'),
+    ).toMatch(/adopted 4 of 4/);
+  });
+
+  it('in an isolated copy, starts without mutator state or an old report left in the root', async () => {
+    const { root, bin } = stubCli(
+      "fs.writeFileSync(require('node:path').join(dir, '..', 'state-seen.txt'), String(fs.existsSync('.mutator'))); console.log('{}');",
+    );
+    const reportDir = path.join(root, 'out');
+    // Forged resume state and a forged report, as a test running in the copy could leave them.
+    mkdirSync(path.join(root, '.mutator/scopes'), { recursive: true });
+    writeFileSync(path.join(root, '.mutator/scopes/snapshot.json.resume.sqlite'), 'forged');
+    mkdirSync(reportDir, { recursive: true });
+    writeFileSync(path.join(reportDir, 'mutation.json'), '{"forged":true}');
+    const r = await runMutation({
+      testRunner: vitest,
+      root,
+      config: config(),
+      reportDir,
+      mutatorBin: bin,
+      isolatedCopy: true,
+    });
+    expect(readFileSync(path.join(root, 'state-seen.txt'), 'utf8')).toBe('false');
+    expect(existsSync(path.join(root, '.mutator'))).toBe(false);
+    expect(r).toMatchObject({ status: 'error', rawReportPath: null });
+    expect(r.detail).toMatch(/did not write/);
   });
 
   it('runs mutator with the heap limit of limits.memoryMb', async () => {

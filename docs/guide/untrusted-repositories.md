@@ -6,17 +6,19 @@ Running Veritas on a repository carries the same risk as running that repository
 
 Project code is trusted code ([ADR 0011](/adr/0011-trusted-project-code)). These steps execute it:
 
-| Step                               | What runs                                        |
-| ---------------------------------- | ------------------------------------------------ |
-| `run --profile standard`, `mutate` | The project's own Vitest suite, once per mutant  |
-| `run --profile deep`               | Also project functions, for property-based tests |
-| `prove`                            | Project functions, to replay counterexamples     |
-| `improve --apply`                  | The project's tests, in an isolated copy         |
-| Running files from `test generate` | The project's code, through Vitest               |
+| Step                               | What runs                                                      |
+| ---------------------------------- | -------------------------------------------------------------- |
+| `run --profile standard`, `mutate` | The project's own Vitest suite, once per mutant                |
+| `run --profile deep`               | Also project functions, for property-based tests               |
+| `prove`                            | Project functions, to replay counterexamples                   |
+| `improve --apply`                  | The project's tests and the planned tests, in an isolated copy |
+| Running files from `test generate` | The project's code, through Vitest                             |
 
 `run --profile quick`, `discover`, `analyze`, `spec`, `report` and `explain` do not execute project code, unless you pass `--allow-code-config`, which loads and runs `veritas.config.ts`, `veritas.config.mjs` or `veritas.config.js`.
 
 Property-based tests and counterexample replay run in a separate Node.js process under the Node.js permission model: it can read the project only, cannot write files or start child processes, workers or generated code, and on Node.js 25 or later has no network access. Mutation testing and `improve` run the project's own test runner with an allowlisted environment and an empty temporary home directory, but without file-read or network isolation.
+
+`improve --apply` also checks that the runs leave the copy as it was, apart from the planned test files, and do not change the installed dependencies the copy links to ([Checks on the copy](/guide/improving-tests#checks-on-the-copy)). It finds such writes afterwards and discards the attempt; it cannot undo a change to the dependencies, and it does not see writes elsewhere by absolute path or writes after its last check. Once you approve a plan, its tests run with your user's privileges and can forge what their own test runner reports.
 
 These restrictions protect against accidents. They are not a security boundary against hostile code: the Node.js permission model is documented as such, and native addons, inherited file descriptors and runtime bugs are known ways around it.
 

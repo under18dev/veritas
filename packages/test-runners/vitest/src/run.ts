@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import {
   redact,
+  resolveInsideRoot,
   runProjectTests,
   type TestRunOptions,
   type TestRunResult,
@@ -43,9 +44,22 @@ export async function runVitest(cwd: string, options: TestRunOptions): Promise<T
 
   if (unsafe !== undefined)
     return { status: 'error', detail: `invalid test file: ${JSON.stringify(unsafe)}` };
-  const outDir = path.join(cwd, '.veritas', 'improve');
-  mkdirSync(outDir, { recursive: true });
-  const outFile = path.join(outDir, `vitest-${options.label}.json`);
+  const outName = path.join('.veritas', 'improve', `vitest-${options.label}.json`);
+  let outFile: string;
+
+  // Inside the project for real: in an isolated copy, code under test may have replaced `.veritas` with a link.
+  try {
+    outFile = resolveInsideRoot(cwd, outName);
+    mkdirSync(path.dirname(outFile), { recursive: true });
+    resolveInsideRoot(cwd, outName);
+  } catch (error) {
+    return {
+      status: 'error',
+      detail: `cannot write the vitest report inside the project: ${(error as Error).message}`,
+    };
+  }
+  // A report left by an earlier run with the same label must not be read as this run's.
+  rmSync(outFile, { force: true });
   const result = await runProjectTests(
     process.execPath,
     [bin, 'run', '--reporter=json', `--outputFile=${outFile}`, ...(options.files ?? [])],

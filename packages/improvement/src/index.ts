@@ -1,4 +1,5 @@
 export * from './apply.js';
+export * from './dependencies.js';
 export * from './oracle.js';
 export * from './plan.js';
 export * from './render.js';

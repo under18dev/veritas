@@ -132,6 +132,12 @@ export interface RunOptions {
    * isolated workspace of `improve`). Read only. Source and property ids then match those of the repository.
    */
   gitRoot?: string;
+  /**
+   * `root` is an isolated copy whose content may have been written by the code under test (`improve`): the result
+   * cache is not used, and mutation runs look up mutator inside `root` only and start without mutator's stored state
+   * (see `RunMutationOptions.isolatedCopy`).
+   */
+  isolatedCopy?: boolean;
   signal?: AbortSignal;
   /** Plain progress messages (info level and above). */
   log?: (message: string) => void;
@@ -361,7 +367,9 @@ async function runInContext(
     sourceHash,
     ...(options.gitRoot ? { gitCommit: gitCommit(options.gitRoot) } : {}),
   });
-  const { cache, message: cacheMessage } = openCache(root, config);
+  const { cache, message: cacheMessage } = options.isolatedCopy
+    ? { cache: null, message: null }
+    : openCache(root, config);
 
   if (cacheMessage) log(cacheMessage);
   const signal = options.signal ?? new AbortController().signal;
@@ -498,6 +506,7 @@ async function runInContext(
       cached ??
       (await runMutation({
         root,
+        ...(options.isolatedCopy ? { isolatedCopy: true } : {}),
         config: { ...config, mutation: { ...config.mutation, timeoutMs: Math.floor(remainingMs) } },
         testRunner,
         reportDir: store.pathFor('mutation-confirm'),
@@ -809,6 +818,7 @@ async function runInContext(
         cached ??
         (await runMutation({
           root,
+          ...(options.isolatedCopy ? { isolatedCopy: true } : {}),
           config,
           testRunner,
           ...(reserve
