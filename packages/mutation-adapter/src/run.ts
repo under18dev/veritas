@@ -54,6 +54,11 @@ export interface RunMutationOptions {
   /** Do not fall back to the adapter's own mutator when the project has none (default false). */
   projectMutatorOnly?: boolean;
   /**
+   * The root is an isolated copy whose content may have been written by the code under test (`improve`). Then the
+   * project's mutator is looked up inside the root only, not in its parents (a shared temporary directory).
+   */
+  isolatedCopy?: boolean;
+  /**
    * Test files (POSIX, relative to the root) that can kill these mutants. When given, mutator runs only
    * them, through a generated test runner config; an empty list means no test reaches the code in scope.
    */
@@ -362,6 +367,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
   const detection = await detectMutator(options.root, {
     ...(options.mutatorBin === undefined ? {} : { binPath: options.mutatorBin }),
     fallbackToAdapter: !options.projectMutatorOnly,
+    ...(options.isolatedCopy ? { stopAt: options.root } : {}),
   });
   const backend = { name: 'mizchi' as const, version: detection.version };
 
@@ -439,8 +445,9 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       // The caller's own exclusions stay, and the files diagnosed here are added to them.
       ...(exclude.length > 0 ? { exclude: [...new Set([...(options.exclude ?? []), ...exclude])] } : {}),
     });
-  const spawn = (argv: string[], timeoutMs = options.config.mutation.timeoutMs) =>
-    runProjectTests(process.execPath, [binPath, ...argv], {
+  const reportPath = path.join(reportDir, 'mutation.json');
+  const spawn = (argv: string[], timeoutMs = options.config.mutation.timeoutMs) => {
+    return runProjectTests(process.execPath, [binPath, ...argv], {
       cwd: options.root,
       timeoutMs,
       memoryMb: options.config.limits.memoryMb,
@@ -451,7 +458,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       label: 'mutator',
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
-  const reportPath = path.join(reportDir, 'mutation.json');
+  };
   const ran = (run: Awaited<ReturnType<typeof spawn>>, argv: string[], durationMs: number) => ({
     backend,
     command: [process.execPath, binPath, ...argv],

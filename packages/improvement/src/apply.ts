@@ -210,6 +210,7 @@ async function reassess(
     allowCodeConfig: options.allowCodeConfig ?? false,
     // The workspace has no .git: read the revision from the repository so ids and approvals match.
     gitRoot: root,
+    isolatedCopy: true,
     signal: options.signal,
   });
   const failed = summary.run.stages
@@ -569,6 +570,8 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
           mutation: { ...config.mutation, timeoutMs: Math.min(config.mutation.timeoutMs, remaining()) },
         },
         reportDir: path.join(workspace, '.veritas', 'improve', `mutation-${label}`),
+        // Mutator is found inside the copy only, not in the shared temporary directory above it.
+        isolatedCopy: true,
         ...(options.signal ? { signal: options.signal } : {}),
       });
 

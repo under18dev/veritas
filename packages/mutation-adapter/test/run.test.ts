@@ -144,6 +144,24 @@ describe('detectMutator', () => {
     expect(d.detail).toContain('not installed');
   });
 
+  it('looks for the project mutator no higher than stopAt, so a package planted above a copy is not used', async () => {
+    const parent = tempDir('shared-tmp');
+    const root = path.join(parent, 'veritas-improve-copy');
+    mkdirSync(root);
+    // What a test (or another user of a shared temporary directory) could put next to the copy.
+    const planted = path.join(parent, 'node_modules/@mizchi/mutator');
+    mkdirSync(planted, { recursive: true });
+    writeFileSync(
+      path.join(planted, 'package.json'),
+      '{"name":"@mizchi/mutator","version":"0.4.5","bin":"cli.js"}',
+    );
+    writeFileSync(path.join(planted, 'cli.js'), "console.log('--root --reporter --report-dir');\n");
+    expect((await detectMutator(root)).binPath).toBe(path.join(planted, 'cli.js'));
+    const confined = await detectMutator(root, { stopAt: root });
+    expect(confined.origin).toBe('adapter');
+    expect(confined.binPath).not.toContain(parent);
+  });
+
   it('reports unavailable when the CLI lacks the required flags', async () => {
     const dir = tempDir('oldmutator');
     const bin = path.join(dir, 'cli.js');

@@ -132,6 +132,11 @@ export interface RunOptions {
    * isolated workspace of `improve`). Read only. Source and property ids then match those of the repository.
    */
   gitRoot?: string;
+  /**
+   * `root` is an isolated copy whose content may have been written by the code under test (`improve`): mutation runs
+   * look up mutator inside `root` only (see `RunMutationOptions.isolatedCopy`).
+   */
+  isolatedCopy?: boolean;
   signal?: AbortSignal;
   /** Plain progress messages (info level and above). */
   log?: (message: string) => void;
@@ -498,6 +503,7 @@ async function runInContext(
       cached ??
       (await runMutation({
         root,
+        ...(options.isolatedCopy ? { isolatedCopy: true } : {}),
         config: { ...config, mutation: { ...config.mutation, timeoutMs: Math.floor(remainingMs) } },
         testRunner,
         reportDir: store.pathFor('mutation-confirm'),
@@ -809,6 +815,7 @@ async function runInContext(
         cached ??
         (await runMutation({
           root,
+          ...(options.isolatedCopy ? { isolatedCopy: true } : {}),
           config,
           testRunner,
           ...(reserve

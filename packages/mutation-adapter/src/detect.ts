@@ -32,6 +32,11 @@ export interface DetectOptions {
   binPath?: string;
   /** Fall back to the mutator this adapter depends on when the project has none (default true). */
   fallbackToAdapter?: boolean;
+  /**
+   * Look no higher than this directory for the project's mutator (default: up to the file system root, as Node's
+   * resolver does). Set for a copy in a shared temporary directory, whose parents anyone can write to.
+   */
+  stopAt?: string;
   timeoutMs?: number;
 }
 
@@ -41,9 +46,10 @@ interface Located {
   origin: MutatorOrigin;
 }
 
-/** Walk up from `start` looking for `node_modules/@mizchi/mutator`, as Node's resolver would. */
-function findPackageDir(start: string): string | null {
+/** Walk up from `start` (to `stopAt` at most) looking for `node_modules/@mizchi/mutator`, as Node's resolver would. */
+function findPackageDir(start: string, stopAt?: string): string | null {
   let dir = path.resolve(start);
+  const last = stopAt === undefined ? null : path.resolve(stopAt);
 
   for (;;) {
     const candidate = path.join(dir, 'node_modules', '@mizchi', 'mutator', 'package.json');
@@ -51,7 +57,7 @@ function findPackageDir(start: string): string | null {
     if (existsSync(candidate)) return path.dirname(candidate);
     const parent = path.dirname(dir);
 
-    if (parent === dir) return null;
+    if (parent === dir || dir === last) return null;
     dir = parent;
   }
 }
@@ -107,7 +113,7 @@ export function locateMutator(root: string, options: DetectOptions = {}): Locate
 
     return { binPath: path.resolve(options.binPath), version: fromPkg?.version ?? null, origin: 'explicit' };
   }
-  const projectDir = findPackageDir(root);
+  const projectDir = findPackageDir(root, options.stopAt);
   const project = projectDir ? fromPackageDir(projectDir, 'project') : null;
 
   if (project) return project;
