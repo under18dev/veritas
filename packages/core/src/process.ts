@@ -407,15 +407,15 @@ export function onExitCleanup(cleanup: () => void): () => void {
 }
 
 /**
- * Node.js options for every process that runs project code: `--disable-sigusr1` where this Node.js supports it in
- * `NODE_OPTIONS` (22.14 and later). Otherwise code under test could send SIGUSR1 to its parent (the runner, mutator)
- * and open the inspector there, to run code outside the test it is in.
+ * Node.js flags that keep the inspector of a process closed to SIGUSR1: `--disable-sigusr1` where the running Node.js
+ * has it (22.14 and later), else none. Otherwise code under test could send SIGUSR1 to its parent (the runner,
+ * mutator) and open the inspector there, to run code outside the test it is in. Passed on the command line of the
+ * processes Veritas starts with its own Node.js, never in NODE_OPTIONS: that reaches every `node` the tests start,
+ * and an older Node.js (or Electron) refuses to start with an option it does not know there. Workers the runner forks
+ * inherit it through `process.execArgv`.
  */
-export function projectNodeOptions(memoryMb?: number): string[] {
-  return [
-    ...nodeMemoryFlags(memoryMb),
-    ...(process.allowedNodeEnvironmentFlags.has('--disable-sigusr1') ? ['--disable-sigusr1'] : []),
-  ];
+export function closedInspectorFlags(): string[] {
+  return process.allowedNodeEnvironmentFlags.has('--disable-sigusr1') ? ['--disable-sigusr1'] : [];
 }
 
 /** Kill a child and everything it started: its descendants (found by parent pid, including ones that started their
@@ -549,12 +549,13 @@ export async function runProjectTests(
 ): Promise<CommandResult> {
   const home = mkdtempSync(path.join(tmpdir(), 'veritas-home-'));
   // NODE_OPTIONS is not in the environment allowlist, so the user's own value never reaches the tests; the
-  // memory limit (limits.memoryMb) and `--disable-sigusr1` are the only options set, and every Node.js process the
-  // runner starts inherits them.
-  const memory = projectNodeOptions(options.memoryMb);
+  // memory limit (limits.memoryMb) is the only option set, and every Node.js process the runner starts inherits it.
+  const memory = nodeMemoryFlags(options.memoryMb);
+  // Started with this very Node.js, the runner gets the flags it is known to accept (see `closedInspectorFlags`).
+  const flags = command === process.execPath ? closedInspectorFlags() : [];
 
   try {
-    return await runCommand(command, args, {
+    return await runCommand(command, [...flags, ...args], {
       ...options,
       env: {
         ...(options.env ?? {}),
