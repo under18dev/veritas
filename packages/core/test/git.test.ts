@@ -1,9 +1,26 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { gitConfiguresFilters, gitExecutable, gitOutput, gitPathEntries, gitRun } from '../src/index.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  gitConfiguresFilters,
+  gitExecutable,
+  gitOutput,
+  gitPathEntries,
+  gitRun,
+  type LogEvent,
+  withRunContext,
+} from '../src/index.js';
 
 function git(cwd: string, ...args: string[]): void {
   const run = spawnSync('git', args, { cwd, stdio: 'ignore' });
@@ -149,4 +166,54 @@ describe('gitExecutable', () => {
       ),
     ).toEqual(['C:\\Program Files\\Git\\cmd', '\\\\server\\share\\git']);
   });
+
+  it.skipIf(process.platform === 'win32')('compares excluded roots by real path', () => {
+    const real = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-git-real-')));
+    const links = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-git-links-')));
+    mkdirSync(path.join(real, 'bin'));
+    symlinkSync(real, path.join(links, 'proj'), 'dir');
+    // The PATH entry goes through a link to the excluded root, and the other way round.
+    expect(gitPathEntries(path.join(links, 'proj/bin'), process.platform, [real])).toEqual([]);
+    expect(gitPathEntries(path.join(real, 'bin'), process.platform, [path.join(links, 'proj')])).toEqual([]);
+  });
 });
+
+function fakeGit(dir: string): void {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, 'git'), '#!/bin/sh\necho fake-git\n');
+  chmodSync(path.join(dir, 'git'), 0o755);
+}
+
+describe.skipIf(process.platform === 'win32')(
+  'git next to a dotfiles repository in the home directory',
+  () => {
+    it("takes git from the user's own tools even when the home directory is a git repository", () => {
+      const home = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-git-home-')));
+      git(home, 'init', '-q');
+      fakeGit(path.join(home, '.local/bin'));
+      const project = path.join(home, 'project');
+      mkdirSync(project);
+      vi.stubEnv('HOME', home);
+      vi.stubEnv('PATH', path.join(home, '.local/bin'));
+      try {
+        // The project has no .git of its own: the home repository does not count, so ~/.local/bin is not excluded.
+        expect(gitRun(project, ['--version']).stdout).toBe('fake-git\n');
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('warns, naming the directory and why, when the only git on PATH is one it does not take', async () => {
+      const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-git-warn-')));
+      const bin = path.join(dir, 'node_modules/.bin');
+      fakeGit(bin);
+      const events: LogEvent[] = [];
+      const found = await withRunContext({ sinks: [(e) => events.push(e)] }, async () =>
+        gitExecutable({ env: { PATH: bin } }),
+      );
+      expect(found).toBeNull();
+      const warning = events.find((e) => e.level === 'warn');
+      expect(warning?.message).toContain(`git in ${bin} was not used: a node_modules directory`);
+    });
+  },
+);
