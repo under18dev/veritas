@@ -121,6 +121,9 @@ describe('node:test bindings', () => {
       'test/deno.test.ts': "Deno.test('deno', () => {});\n",
       'test/std.test.ts': "import { it } from 'jsr:@std/testing/bdd';\nit('std', () => {});\n",
       'test/plain.test.ts': "import { test } from 'node:test';\ntest('plain', () => {});\n",
+      'test/shared-suite.ts':
+        "import { test } from 'node:test';\nexport function registerAll() { test('elsewhere', () => {}); }\n",
+      'test/registered.test.ts': "import { registerAll } from './shared-suite.ts';\nregisterAll();\n",
     });
     const result = inventoryTests({
       recognition: node.recognitionFor(root),
@@ -134,6 +137,8 @@ describe('node:test bindings', () => {
     for (const path of ['test/support.ts', 'test/fixtures.ts', 'test/types.ts'])
       expect(fileOf(path), path).toMatchObject({ usesRunner: false });
     expect(fileOf('test/uses-support.test.ts')).toMatchObject({ usesRunner: true });
+    // Through a local module it loads: a shared suite that registers its tests.
+    expect(fileOf('test/registered.test.ts')).toMatchObject({ usesRunner: true });
     expect(fileOf('test/plain.test.ts')).toMatchObject({ usesRunner: true });
     expect(fileOf('test/plain.test.ts')?.foreignRunner).toBeUndefined();
     expect(fileOf('test/bun.test.ts')).toMatchObject({ usesRunner: false, foreignRunner: 'bun:test' });

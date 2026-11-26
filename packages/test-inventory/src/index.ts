@@ -47,10 +47,11 @@ export const TestInventory = z.object({
        */
       inexactNames: z.enum(['open_collection', 'imported_registrations', 'imported_open_module']).optional(),
       /**
-       * The file uses the project's test runner: it imports or requires one of the runner's modules (not only
-       * re-exports it, not only its types), or calls a name of the runner's API (its globals, or a name a local
-       * module hands out). False for a helper that only re-exports the runner (`export { test } from 'node:test'`)
-       * or never touches it. Absent in inventories written before it was recorded, which is read as true.
+       * The file uses the project's test runner, itself or through a local module it loads (a shared suite it
+       * calls): it imports or requires one of the runner's modules (not only re-exports it, not only its types), or
+       * calls a name of the runner's API (its globals, or a name a local module hands out). False for a helper that
+       * only re-exports the runner (`export { test } from 'node:test'`) or never touches it. Absent in inventories
+       * written before it was recorded, which is read as true.
        */
       usesRunner: z.boolean().optional(),
       /**
@@ -205,6 +206,18 @@ export function disambiguateTestIds(tests: TestCaseType[]): void {
  * (`export { test } from 'node:test'`) and a type import use nothing.
  */
 function usesRunner(source: ts.SourceFile): boolean {
+  const cached = usesRunnerCache.get(source);
+
+  if (cached && cached.runner === runner) return cached.value;
+  const value = readsRunner(source);
+  usesRunnerCache.set(source, { runner, value });
+
+  return value;
+}
+
+const usesRunnerCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; value: boolean }>();
+
+function readsRunner(source: ts.SourceFile): boolean {
   const apiNames = new Set([
     ...runner.tests,
     ...runner.suites,
@@ -481,8 +494,15 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
       unseenReach:
         !source || reached.some((reachedFile) => reachedFile && hasUnseenReach(reachedFile, checker)),
       ...inexactFile(source),
-      // An unparsed file may use anything.
-      usesRunner: !source || usesRunner(source),
+      // An unparsed file may use anything, and so may one that loads a local module the program did not parse.
+      usesRunner:
+        !source ||
+        usesRunner(source) ||
+        loaded.some((dependency) => {
+          const loadedSource = sourceFiles.get(path.resolve(root, dependency));
+
+          return !loadedSource || usesRunner(loadedSource);
+        }),
       ...(source ? foreignRunner(source) : {}),
     };
   });

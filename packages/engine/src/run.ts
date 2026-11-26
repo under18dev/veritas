@@ -1826,8 +1826,8 @@ export function mutationStageStatus(
  * Test files the inventory recorded no test for although it could not read all they run: what they register while
  * the runner collects them is open (a call, a loop), comes from another module, or reaches code static analysis does
  * not follow (a dynamic import, a `require` it cannot read, a file that does not parse). Each with why. A file that
- * never uses the project's runner (a helper that re-exports it or does not touch it) is not one, unless a module it
- * imports registers tests; a file that uses another runner's API (`bun:test`, `Deno.test`) always is, saying so.
+ * never uses the project's runner, itself or through a local module it loads (a helper that re-exports the runner or
+ * does not touch it), is not one; a file that uses another runner's API (`bun:test`, `Deno.test`) always is, saying so.
  */
 export function unreadTestFiles(inventory: TestInventory): string[] {
   const withTests = new Set(inventory.tests.map((test) => test.file));
