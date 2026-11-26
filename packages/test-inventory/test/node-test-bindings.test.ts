@@ -192,6 +192,56 @@ describe('node:test bindings', () => {
     });
   });
 
+  it('records a package a local module the test file loads calls into, naming that module', () => {
+    const root = tempProject({
+      'test/helper.mjs': "import { suite } from 'shared-tests';\nsuite();\n",
+      'test/middle.mjs': "import './helper.mjs';\nexport const ready = true;\n",
+      'test/cycle-a.mjs': "import './cycle-b.mjs';\nexport const a = 1;\n",
+      'test/cycle-b.mjs': "import './cycle-a.mjs';\nimport { suite } from 'shared-tests';\nsuite();\n",
+      'test/quiet-a.mjs': "import './quiet-b.mjs';\nexport const a = 1;\n",
+      'test/quiet-b.mjs': "import './quiet-a.mjs';\nexport const b = 2;\n",
+      'test/defines.mjs': "import { suite } from 'shared-tests';\nexport function later() { suite(); }\n",
+      'test/direct.test.mjs': "import './helper.mjs';\n",
+      'test/required.test.cjs': "require('./helper.mjs');\n",
+      'test/dynamic.test.mjs': "await import('./helper.mjs');\n",
+      'test/chain.test.mjs': "import './middle.mjs';\n",
+      'test/cycle.test.mjs': "import './cycle-a.mjs';\n",
+      'test/quiet-cycle.test.mjs': "import './quiet-a.mjs';\n",
+      'test/defines.test.mjs': "import { later } from './defines.mjs';\nexport { later };\n",
+      'test/missing.test.mjs': "import './missing.mjs';\n",
+    });
+    const result = inventoryTests({
+      recognition: node.recognitionFor(root),
+      root,
+      config: VeritasConfig.parse({
+        analysis: { testFramework: 'node_test', testInclude: ['test/*.test.{mjs,cjs}'] },
+      }),
+    });
+    const fileOf = (path: string) => result.files.find((file) => file.path === path);
+
+    for (const path of [
+      'test/direct.test.mjs',
+      'test/required.test.cjs',
+      'test/dynamic.test.mjs',
+      'test/chain.test.mjs',
+    ])
+      expect(fileOf(path), path).toMatchObject({
+        packageCall: 'shared-tests',
+        packageCallVia: 'test/helper.mjs',
+      });
+    expect(fileOf('test/cycle.test.mjs')).toMatchObject({
+      packageCall: 'shared-tests',
+      packageCallVia: 'test/cycle-b.mjs',
+    });
+
+    for (const path of ['test/quiet-cycle.test.mjs', 'test/defines.test.mjs']) {
+      expect(fileOf(path)?.packageCall, path).toBeUndefined();
+      expect(fileOf(path)?.usesRunner, path).toBe(false);
+    }
+    // A local module that does not resolve may make any call.
+    expect(fileOf('test/missing.test.mjs')).toMatchObject({ usesRunner: true });
+  });
+
   it('records no test for a member read by a computed key, and leaves the file open', () => {
     const root = tempProject({
       'test/computed.test.cjs': `
@@ -312,6 +362,63 @@ describe('node:test bindings', () => {
     expect(byName(tests, 'plain object').suspicions).not.toContain('opaque_call');
     expect(byName(tests, 'by reference').suspicions).not.toContain('no_assertion');
     expect(byName(tests, 'by reference').suspicions).not.toContain('opaque_call');
+  });
+
+  it('leaves a test inconclusive whose callback forwards its context to a helper also reached with a plain object', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      // The review's repro.
+      'test/nested.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/value.ts';
+        function helper(t) { t.assert.equal(value(1), 2); }
+        function outer(t) { helper(t); }
+        test('helper', helper);
+        test('outer', outer);
+        test('plain object', () => {
+          outer({ assert: { equal() {} } });
+        });
+      `,
+      // Three levels deep, with the plain object handed in at the top.
+      'test/deep.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/value.ts';
+        function first(t) { t.assert.equal(value(1), 2); }
+        function second(t) { first(t); }
+        function third(t) { second(t); }
+        test('third', third);
+        test('deep plain object', () => {
+          third({ assert: { equal() {} } });
+        });
+      `,
+    });
+
+    for (const order of [false, true]) {
+      // Whatever order the files are read in.
+      const files = ['test/nested.test.ts', 'test/deep.test.ts'];
+      const { tests } = inventoryTests({
+        recognition: node.recognitionFor(root),
+        root,
+        config: VeritasConfig.parse({
+          analysis: { testFramework: 'node_test', testInclude: ['**/*.test.ts'] },
+        }),
+        files: order ? files.reverse() : files,
+      });
+
+      for (const name of ['outer', 'third']) {
+        expect(byName(tests, name).suspicions, name).not.toContain('no_assertion');
+        expect(byName(tests, name).suspicions, name).toContain('opaque_call');
+      }
+      expect(byName(tests, 'helper').suspicions).not.toContain('no_assertion');
+      expect(byName(tests, 'helper').targetCalls.some((call) => call.asserted)).toBe(true);
+
+      // A plain object never gets credit for an assertion.
+      for (const name of ['plain object', 'deep plain object'])
+        expect(
+          byName(tests, name).targetCalls.some((call) => call.asserted),
+          name,
+        ).toBe(false);
+    }
   });
 
   it('takes require for the module loader only when the file does not declare its own', () => {

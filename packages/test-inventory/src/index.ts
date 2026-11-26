@@ -68,6 +68,8 @@ export const TestInventory = z.object({
        * none.
        */
       packageCall: z.string().optional(),
+      /** The local module (POSIX, from the root) that makes `packageCall`, when the file reaches it through its imports. */
+      packageCallVia: z.string().optional(),
     }),
   ),
   diagnostics: z.array(z.object({ file: z.string(), message: z.string() })),
@@ -543,6 +545,77 @@ function immediatelyInvoked(fn: ts.Node): boolean {
  * file is the safe side.
  */
 function packageCall(source: ts.SourceFile): { packageCall?: string } {
+  const cached = packageCallCache.get(source);
+
+  if (cached && cached.runner === runner) return cached.value;
+  const value = readPackageCall(source);
+  packageCallCache.set(source, { runner, value });
+
+  return value;
+}
+
+const packageCallCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; value: { packageCall?: string } }>();
+
+/** The relative module specifiers a file loads: static imports and re-exports, `require`, literal dynamic imports. */
+function localSpecifiers(source: ts.SourceFile): ts.StringLiteralLike[] {
+  const specifiers: ts.StringLiteralLike[] = [];
+  const relative = (node: ts.Node | undefined): node is ts.StringLiteralLike =>
+    node !== undefined && ts.isStringLiteralLike(node) && /^\.\.?(?:\/|$)/.test(node.text);
+
+  for (const node of descendants(source)) {
+    let specifier: ts.Node | undefined;
+
+    if (ts.isImportDeclaration(node) && !node.importClause?.isTypeOnly) specifier = node.moduleSpecifier;
+    else if (ts.isExportDeclaration(node) && !node.isTypeOnly) specifier = node.moduleSpecifier;
+    else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference))
+      specifier = node.moduleReference.expression;
+    else if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword || requiredModule(node) !== undefined)
+    )
+      specifier = node.arguments[0] && skipParens(node.arguments[0]);
+
+    if (relative(specifier)) specifiers.push(specifier);
+  }
+
+  return specifiers;
+}
+
+/**
+ * The package call of a file or of a local module it loads, directly or through others (cycles end), with the module
+ * that makes it when that is not the file itself; `unresolved` when a local module it loads does not resolve, which
+ * may make any call.
+ */
+function reachedPackageCall(
+  source: ts.SourceFile,
+  root: string,
+): { packageCall?: string; packageCallVia?: string; unresolved?: true } {
+  const seen = new Set<ts.SourceFile>([source]);
+  const queue = [source];
+
+  for (let current = queue.shift(); current; current = queue.shift()) {
+    const own = packageCall(current).packageCall;
+
+    if (own !== undefined)
+      return current === source
+        ? { packageCall: own }
+        : { packageCall: own, packageCallVia: toPosixRelative(root, current.fileName) };
+
+    for (const specifier of localSpecifiers(current)) {
+      const declaration = runnerChecker?.getSymbolAtLocation(specifier)?.valueDeclaration;
+
+      if (!declaration || !ts.isSourceFile(declaration)) return { unresolved: true };
+
+      if (seen.has(declaration) || declaration.isDeclarationFile) continue;
+      seen.add(declaration);
+      queue.push(declaration);
+    }
+  }
+
+  return {};
+}
+
+function readPackageCall(source: ts.SourceFile): { packageCall?: string } {
   let found: string | undefined;
   const visit = (node: ts.Node): void => {
     if (found !== undefined) return;
@@ -755,6 +828,8 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
     // Every file the test loads, which is what decides whether something it reaches is unseen.
     const loaded = source ? localDependencies(source, checker, root) : [];
     const reached = [source, ...loaded.map((dependency) => sourceFiles.get(path.resolve(root, dependency)))];
+    // A package called by the file or by a local module it loads, which may register tests under the file.
+    const reachedCall = source ? reachedPackageCall(source, root) : {};
 
     return {
       path: toPosixRelative(root, file),
@@ -768,6 +843,7 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
       // An unparsed file may use anything, and so may one that loads a local module the program did not parse.
       usesRunner:
         !source ||
+        reachedCall.unresolved === true ||
         usesRunner(source) ||
         loaded.some((dependency) => {
           const loadedSource = sourceFiles.get(path.resolve(root, dependency));
@@ -776,7 +852,14 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
         }) ||
         reached.some((reachedFile) => reachedFile !== undefined && reachesUnfollowed(reachedFile, checker)),
       ...(source ? foreignRunner(source) : {}),
-      ...(source ? packageCall(source) : {}),
+      ...(reachedCall.packageCall === undefined
+        ? {}
+        : {
+            packageCall: reachedCall.packageCall,
+            ...(reachedCall.packageCallVia === undefined
+              ? {}
+              : { packageCallVia: reachedCall.packageCallVia }),
+          }),
     };
   });
 
@@ -9989,21 +10072,138 @@ interface ContextCalls {
 }
 
 /**
- * Whether a call hands a test context first to a local function that is a test, suite or hook callback and that some
- * other use calls with something that is not a context (see `contextCalls`).
+ * Whether a call may hand a test context first to a local function whose first parameter is a context on some paths
+ * and not on others (see `mixedContextFunctions`): its first argument is a parameter of a function or a test's
+ * context, so the call may come from a test with a real context, where the function's assertions are not counted.
+ * Decided from the file's structure alone, never from which test is being read, so it does not depend on the order
+ * tests are analysed in.
  */
 function handsContextToMixedCallback(node: Invocation, body: ts.Node, checker: ts.TypeChecker): boolean {
   const fn = body.parent;
 
   if (!ts.isCallExpression(node) || !fn || !isFunctionLike(fn)) return false;
 
-  if (!referencedCallbacks(fn.getSourceFile(), checker).has(fn)) return false;
+  if (!mixedContextFunctions(fn.getSourceFile(), checker).has(fn)) return false;
   const first = node.arguments[0] && skipParens(node.arguments[0]);
+  const declaration =
+    first && ts.isIdentifier(first) ? checker.getSymbolAtLocation(first)?.valueDeclaration : undefined;
 
-  if (first === undefined || !ts.isIdentifier(first) || !isTestContext(first, checker)) return false;
-  const calls = contextCalls(fn as ts.SignatureDeclaration, checker, 0);
+  return declaration !== undefined && ts.isParameter(declaration);
+}
 
-  return calls.some && !calls.all;
+const mixedContextCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; functions: Set<ts.Node> }>();
+
+/**
+ * The local functions of a file whose first parameter receives a test context on some paths and something else on
+ * others, computed once per file as a fixpoint over how functions forward their first parameter. A function receives
+ * a real context when it is passed by name as a test, suite or hook callback, or called with the context of an inline
+ * test or hook callback; something else when called with any other value, or used in a way static analysis does not
+ * follow (`rows.map(check)`, `check.call(…)`). A call `g(t)` with `t` the first parameter of a local function `f`
+ * hands `g` whatever `f` receives.
+ */
+function mixedContextFunctions(source: ts.SourceFile, checker: ts.TypeChecker): Set<ts.Node> {
+  const cached = mixedContextCache.get(source);
+
+  if (cached && cached.runner === runner) return cached.functions;
+  const previous = contextCallback;
+  // Structural: which test is being read does not count.
+  contextCallback = undefined;
+
+  try {
+    const functions = new Map<ts.Symbol, ts.SignatureDeclaration>();
+
+    for (const node of descendants(source)) {
+      const name = ts.isFunctionDeclaration(node)
+        ? node.name
+        : (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
+            ts.isVariableDeclaration(node.parent) &&
+            ts.isIdentifier(node.parent.name)
+          ? node.parent.name
+          : undefined;
+      const symbol = name && checker.getSymbolAtLocation(name);
+
+      if (symbol && (node as ts.SignatureDeclaration).parameters.length > 0)
+        functions.set(symbol, node as ts.SignatureDeclaration);
+    }
+    const named = new Set<ts.Node>(functions.values());
+    const real = new Set<ts.Node>();
+    const fake = new Set<ts.Node>();
+    /** `from` hands its first parameter to `to`. */
+    const forwards: [ts.Node, ts.Node][] = [];
+    const callbacks = referencedCallbacks(source, checker);
+
+    for (const fn of callbacks) real.add(fn);
+
+    for (const node of descendants(source)) {
+      if (!ts.isIdentifier(node)) continue;
+      const symbol = checker.getSymbolAtLocation(node);
+      const fn = symbol && functions.get(symbol);
+
+      if (!fn) continue;
+      const declared = ts.isFunctionDeclaration(fn) ? fn.name : (fn.parent as ts.VariableDeclaration).name;
+
+      if (node === declared) continue;
+      let use: ts.Node = node;
+
+      while (ts.isParenthesizedExpression(use.parent)) use = use.parent;
+      const parent = use.parent;
+
+      if (ts.isCallExpression(parent) && parent.expression === use) {
+        const first = parent.arguments[0] && skipParens(parent.arguments[0]);
+        const declaration =
+          first && ts.isIdentifier(first) ? checker.getSymbolAtLocation(first)?.valueDeclaration : undefined;
+        const owner = declaration && ts.isParameter(declaration) ? declaration.parent : undefined;
+
+        if (
+          owner &&
+          isFunctionLike(owner) &&
+          owner.parameters[0] === declaration &&
+          (callbacks.has(owner) || named.has(owner))
+        )
+          forwards.push([owner, fn]);
+        else if (first && ts.isIdentifier(first) && isTestContext(first, checker)) real.add(fn);
+        else fake.add(fn);
+      } else if (
+        ts.isCallExpression(parent) &&
+        parent.arguments.some((argument) => skipParens(argument) === node)
+      ) {
+        // Passed by name as a callback was counted above; passed to anything else, it may receive anything.
+        if (!callbacks.has(fn)) fake.add(fn);
+        else {
+          const registration = testRegistration(parent) ?? describeRegistration(parent);
+          const callback = registration
+            ? registration.callback
+            : runner.hooks.has(runnerExport(skipParens(parent.expression))?.name ?? '')
+              ? parent.arguments.at(-1)
+              : undefined;
+
+          if (callback === undefined || skipParens(callback) !== node) fake.add(fn);
+        }
+      } else fake.add(fn);
+    }
+
+    for (let changed = true; changed; ) {
+      changed = false;
+
+      for (const [from, to] of forwards) {
+        if (real.has(from) && !real.has(to)) {
+          real.add(to);
+          changed = true;
+        }
+
+        if (fake.has(from) && !fake.has(to)) {
+          fake.add(to);
+          changed = true;
+        }
+      }
+    }
+    const functionsMixed = new Set([...real].filter((fn) => fake.has(fn)));
+    mixedContextCache.set(source, { runner, functions: functionsMixed });
+
+    return functionsMixed;
+  } finally {
+    contextCallback = previous;
+  }
 }
 
 function calledOnlyWithContexts(
