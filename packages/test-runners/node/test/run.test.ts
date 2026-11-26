@@ -137,6 +137,29 @@ test('other file', async (t) => { await check(t); });
       'test/broken.test.mjs::(file)': 'failed',
     });
     expect(run.status === 'ok' && run.failures[0]).toMatch(/^test\/broken\.test\.mjs:/);
+    // What the file threw, not Node's generic "test failed" alone.
+    expect(run.status === 'ok' && run.failures[0]).toMatch(/ERR_MODULE_NOT_FOUND|Cannot find module/);
+  });
+
+  it("carries a file's own exception into its failure, and keeps a failing test's message as it is", async () => {
+    const root = project({
+      'test/throws.test.mjs': "import { test } from 'node:test';\nthrow new TypeError('boom at load');\n",
+      'test/fails.test.mjs':
+        "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('fails', () => assert.equal(1, 2, 'one is not two'));\n",
+    });
+    const run = await runNodeTest(root, { timeoutMs: 60_000, label: 'throws' });
+
+    expect(run.status === 'ok' && Object.fromEntries(run.tests)).toEqual({
+      'test/fails.test.mjs::fails': 'failed',
+      'test/throws.test.mjs::(file)': 'failed',
+    });
+    const failures = run.status === 'ok' ? run.failures : [];
+    expect(failures.find((f) => f.startsWith('test/throws.test.mjs::(file)'))).toContain(
+      'TypeError: boom at load',
+    );
+    const own = failures.find((f) => f.startsWith('test/fails.test.mjs::fails')) ?? '';
+    expect(own).toContain('one is not two');
+    expect(own).not.toContain('boom at load');
   });
 
   it('never reads a file that ended before any test reported as passing', async () => {
