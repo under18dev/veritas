@@ -120,7 +120,7 @@ export function snapshotDependencies(
     if (covered.some((c) => inside(real, c))) return;
 
     // Outside node_modules a link may lead anywhere (`logs -> /var/log`): only follow it to dependency code.
-    if (!link.split(path.sep).includes(NODE_MODULES) && !dependencyTarget(link, real)) {
+    if (!link.split(path.sep).includes(NODE_MODULES) && !dependencyTarget(link, real, realRoot)) {
       // Into the project: its files are copied, not shared, and the repository is compared before writing.
       if (!inside(real, realRoot)) out.uncheckedLinks.add(`${link} -> ${real}`);
       return;
@@ -215,10 +215,13 @@ function repositoryRoot(start: string): string | null {
 }
 
 /** Whether git ignores `target` in `repository`; null when git cannot tell (not a repository, git missing). */
-function gitIgnores(repository: string, target: string): boolean | null {
+function gitIgnores(repository: string, target: string, project: string): boolean | null {
   // Through core's git options: `check-ignore` reads the index, which would start a file system monitor the
   // repository configures (core.fsmonitor), and this repository is not even the project's.
-  const run = gitRun(repository, ['check-ignore', '-q', '--', target], { timeoutMs: 10_000 });
+  const run = gitRun(repository, ['check-ignore', '-q', '--', target], {
+    timeoutMs: 10_000,
+    excluded: [project],
+  });
 
   return run.status === 0 ? true : run.status === 1 ? false : null;
 }
@@ -231,13 +234,13 @@ function gitIgnores(repository: string, target: string): boolean | null {
  * not code the package ships) or when it holds the linking package itself (the repository root: walking it would walk
  * the whole repository). Outside a git repository, or when git cannot tell, it is not followed either.
  */
-function dependencyTarget(link: string, real: string): boolean {
+function dependencyTarget(link: string, real: string, project: string): boolean {
   if (real.split(path.sep).includes(NODE_MODULES) || existsSync(path.join(real, 'package.json'))) return true;
   const repository = repositoryRoot(path.dirname(link));
 
   if (repository === null || !inside(real, repository) || inside(path.dirname(link), real)) return false;
 
-  return gitIgnores(repository, real) === false;
+  return gitIgnores(repository, real, project) === false;
 }
 
 /**

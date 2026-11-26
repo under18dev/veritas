@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { gitConfiguresFilters, gitExecutable, gitOutput, gitRun } from '../src/index.js';
+import { gitConfiguresFilters, gitExecutable, gitOutput, gitPathEntries, gitRun } from '../src/index.js';
 
 function git(cwd: string, ...args: string[]): void {
   const run = spawnSync('git', args, { cwd, stdio: 'ignore' });
@@ -83,13 +83,21 @@ describe.skipIf(process.platform === 'win32')('git calls', () => {
     spawnSync('git', ['diff', '--name-only', 'HEAD', '--'], { cwd: parent, stdio: 'ignore' });
     expect(existsSync(marker)).toBe(true);
     rmSync(marker);
+    // .gitmodules asks for the submodule to be looked into, which overrides diff.ignoreSubmodules from -c.
+    git(parent, 'config', '-f', '.gitmodules', 'submodule.m.ignore', 'none');
+    spawnSync('git', ['-c', 'diff.ignoreSubmodules=all', 'diff', '--name-only', 'HEAD', '--'], {
+      cwd: parent,
+      stdio: 'ignore',
+    });
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
 
     expect(gitConfiguresFilters(parent)).toBe(false);
     expect(
       gitOutput(parent, ['diff', '--name-only', '--no-ext-diff', '--no-textconv', 'HEAD', '--'], {
         worktreeContent: true,
       }),
-    ).toBe('');
+    ).toBe('.gitmodules\n'); // the changed .gitmodules, never the dirty submodule
     expect(existsSync(marker)).toBe(false);
   });
 });
@@ -106,5 +114,39 @@ describe('gitExecutable', () => {
     );
     // Relative and empty entries (the working directory) are never searched.
     expect(gitExecutable({ env: { PATH: `.${sep}${sep}relative/bin` } })).toBeNull();
+    // Nor one inside the repository git would run in.
+    expect(gitExecutable({ env: { PATH: dir }, excluded: [path.dirname(dir)] })).toBeNull();
+  });
+
+  it('skips node_modules directories, the repository and, on Windows, root-relative entries', () => {
+    expect(
+      gitPathEntries(
+        [
+          '',
+          '.',
+          'rel/bin',
+          '/proj/node_modules/.bin',
+          '/opt/node_modules/tool/bin',
+          '/proj/tools',
+          '/usr/bin',
+        ].join(':'),
+        'linux',
+        ['/proj'],
+      ),
+    ).toEqual(['/usr/bin']);
+    expect(
+      gitPathEntries(
+        [
+          '\\bin',
+          'D:rel',
+          'C:\\Program Files\\Git\\cmd',
+          '\\\\server\\share\\git',
+          'C:\\proj\\node_modules\\.bin',
+          'C:\\proj\\tools',
+        ].join(';'),
+        'win32',
+        ['C:\\proj'],
+      ),
+    ).toEqual(['C:\\Program Files\\Git\\cmd', '\\\\server\\share\\git']);
   });
 });

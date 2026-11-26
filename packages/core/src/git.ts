@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { type CommandResult, DEFAULT_ENV_ALLOWLIST, type RunCommandOptions, runCommand } from './process.js';
 
@@ -14,9 +14,11 @@ import { type CommandResult, DEFAULT_ENV_ALLOWLIST, type RunCommandOptions, runC
  * - `log.showSignature=false`: `log` would otherwise run `gpg.program` to verify commit signatures.
  * - `--no-pager`: `core.pager` and `pager.<cmd>` are never started (output is not a terminal either).
  * - `--no-optional-locks`: no index refresh is written while reading.
- * - `diff.ignoreSubmodules=all`, `submodule.recurse=false`: a diff would otherwise start a git in each submodule to
- *   see whether it is dirty, with the submodule's own configuration (filters and monitor included).
- * - git itself is found on the absolute entries of PATH only (see `gitExecutable`).
+ * - `--ignore-submodules=all` on every diff against the working tree (added by `gitOutput`): a diff would otherwise
+ *   start a git in each submodule to see whether it is dirty, with the submodule's own configuration (filters and
+ *   monitor included). `diff.ignoreSubmodules=all` and `submodule.recurse=false` are set too, as defaults, but a
+ *   submodule's `ignore` in `.gitmodules` overrides the first.
+ * - git itself is taken only from PATH entries that cannot be the repository's (see `gitPathEntries`).
  * - `GIT_TERMINAL_PROMPT=0` and the allowlisted environment: no prompt, and no `GIT_*` override from the caller.
  * - Diffs are run with `--no-ext-diff --no-textconv` by their callers (`diff.external`, `diff.<driver>.command` and
  *   `.textconv`). A diff against the working tree could still run a configured clean filter
@@ -34,8 +36,8 @@ export const SAFE_GIT_OPTIONS: readonly string[] = [
   'core.fsmonitor=false',
   '-c',
   'log.showSignature=false',
-  // A diff that checks whether a submodule is dirty runs a git in the submodule, with the submodule's own
-  // configuration (its filters, its monitor): submodules are never looked into.
+  // Defaults only: a submodule's `ignore` setting in .gitmodules overrides them, so diffs that read the working tree
+  // also pass --ignore-submodules=all (see `gitOutput`), which nothing overrides.
   '-c',
   'diff.ignoreSubmodules=all',
   '-c',
@@ -76,23 +78,62 @@ function executable(file: string, platform: NodeJS.Platform): boolean {
   }
 }
 
+function within(p: string, dir: string, platform: NodeJS.Platform): boolean {
+  const lib = platform === 'win32' ? path.win32 : path.posix;
+  const rel = lib.relative(dir, p);
+
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${lib.sep}`) && !lib.isAbsolute(rel));
+}
+
+/** The nearest directory at or above `start` with a `.git` entry (no git is run to find it), or null. */
+function enclosingRepository(start: string): string | null {
+  for (let dir = path.resolve(start); ; dir = path.dirname(dir)) {
+    if (existsSync(path.join(dir, '.git'))) return dir;
+
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
 /**
- * The absolute path of git, from the absolute entries of PATH only, or null when there is none. Git runs with the
- * repository as its working directory; a relative or empty PATH entry (and, on Windows, the working directory itself,
- * which is searched before PATH) would let a `git` or `git.exe` inside the repository run instead.
+ * The PATH entries git may be taken from, in order. Skipped:
+ * - entries that are not absolute (an empty entry or `.` is the working directory, which is the repository): on
+ *   Windows, only a drive-letter path (`C:\...`) or a UNC path counts, not a root-relative `\bin`;
+ * - entries with a `node_modules` segment: npm scripts, `npx` and `pnpm exec` put `node_modules/.bin` directories
+ *   first, and any dependency can install a `git` there;
+ * - entries inside one of `excluded` (the repository git runs in, the analysed project): files there are the
+ *   repository's, not tools of the user.
+ */
+export function gitPathEntries(
+  pathValue: string,
+  platform: NodeJS.Platform,
+  excluded: readonly string[] = [],
+): string[] {
+  const lib = platform === 'win32' ? path.win32 : path.posix;
+  const absolute =
+    platform === 'win32'
+      ? (dir: string) => /^[A-Za-z]:[\\/]/.test(dir) || /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(dir)
+      : (dir: string) => lib.isAbsolute(dir);
+
+  return pathValue
+    .split(platform === 'win32' ? ';' : ':')
+    .filter((dir) => dir !== '' && absolute(dir))
+    .filter((dir) => !lib.normalize(dir).split(/[\\/]/).includes('node_modules'))
+    .filter((dir) => !excluded.some((root) => within(lib.resolve(dir), lib.resolve(root), platform)));
+}
+
+/**
+ * The absolute path of git from the PATH entries `gitPathEntries` keeps, or null when there is none. Git is spawned by
+ * that path, so a `git` or `git.exe` in the repository (which Windows searches before PATH) never runs.
  */
 export function gitExecutable(
-  options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform } = {},
+  options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; excluded?: readonly string[] } = {},
 ): string | null {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
-  const separator = platform === 'win32' ? ';' : ':';
-  const isAbsolute = platform === 'win32' ? path.win32.isAbsolute : path.posix.isAbsolute;
   const join = platform === 'win32' ? path.win32.join : path.posix.join;
   const name = platform === 'win32' ? 'git.exe' : 'git';
 
-  for (const dir of (env.PATH ?? env.Path ?? '').split(separator)) {
-    if (!dir || !isAbsolute(dir)) continue;
+  for (const dir of gitPathEntries(env.PATH ?? env.Path ?? '', platform, options.excluded)) {
     const file = join(dir, name);
 
     if (executable(file, platform)) return file;
@@ -101,13 +142,20 @@ export function gitExecutable(
   return null;
 }
 
+/** What git must not be taken from when it runs in `cwd`: `cwd`, the repository holding it, and `extra` roots. */
+function excludedFor(cwd: string, extra: readonly string[] = []): string[] {
+  const repository = enclosingRepository(cwd);
+
+  return [cwd, ...(repository ? [repository] : []), ...extra];
+}
+
 /** Run git synchronously with the safe options; the exit status (null when it could not run or timed out) and output. */
 export function gitRun(
   cwd: string,
   args: string[],
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; excluded?: readonly string[] } = {},
 ): { status: number | null; stdout: string } {
-  const git = gitExecutable();
+  const git = gitExecutable({ excluded: excludedFor(cwd, options.excluded) });
 
   if (git === null) return { status: null, stdout: '' };
   const run = spawnSync(git, gitArgs(args), {
@@ -128,7 +176,7 @@ export async function runGit(
   args: string[],
   options: Omit<RunCommandOptions, 'cwd'>,
 ): Promise<CommandResult> {
-  const git = gitExecutable();
+  const git = gitExecutable({ excluded: excludedFor(cwd) });
 
   if (git === null) {
     return {
@@ -169,7 +217,8 @@ export function gitConfiguresFilters(root: string): boolean {
 
 /**
  * Output of a git command, or null when git fails. With `worktreeContent` (a diff against the working tree), null
- * also when the repository configures a content filter, which git would run on the files it compares.
+ * also when the repository configures a content filter, which git would run on the files it compares, and the diff
+ * never looks into submodules.
  */
 export function gitOutput(
   root: string,
@@ -177,7 +226,11 @@ export function gitOutput(
   options: { worktreeContent?: boolean } = {},
 ): string | null {
   if (options.worktreeContent && gitConfiguresFilters(root)) return null;
-  const run = gitRun(root, args);
+  // Right after the subcommand, where nothing (not even .gitmodules) overrides it.
+  const run = gitRun(
+    root,
+    options.worktreeContent ? [args[0] ?? '', '--ignore-submodules=all', ...args.slice(1)] : args,
+  );
 
   return run.status === 0 ? run.stdout : null;
 }
