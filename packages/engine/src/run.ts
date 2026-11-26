@@ -398,15 +398,20 @@ async function runInContext(
       const diff =
         !options.scope?.length && options.since
           ? lines(
-              gitOutput(root, [
-                'diff',
-                '--name-only',
-                '--relative',
-                '--no-color',
-                '--no-ext-diff',
-                options.since,
-                '--',
-              ]),
+              gitOutput(
+                root,
+                [
+                  'diff',
+                  '--name-only',
+                  '--relative',
+                  '--no-color',
+                  '--no-ext-diff',
+                  '--no-textconv',
+                  options.since,
+                  '--',
+                ],
+                { worktreeContent: true },
+              ),
             )
           : undefined;
       changedSince = diff
@@ -574,15 +579,20 @@ async function runInContext(
       // With --since, candidates in functions changed since that ref carry the change as evidence.
       const diff =
         options.since && code0.files.length
-          ? gitOutput(root, [
-              'diff',
-              '-U0',
-              '--no-color',
-              '--no-ext-diff',
-              options.since,
-              '--',
-              ...code0.files.map((f) => f.path),
-            ])
+          ? gitOutput(
+              root,
+              [
+                'diff',
+                '-U0',
+                '--no-color',
+                '--no-ext-diff',
+                '--no-textconv',
+                options.since,
+                '--',
+                ...code0.files.map((f) => f.path),
+              ],
+              { worktreeContent: true },
+            )
           : null;
       // analysis.inferSpecsFromCode: false keeps code-inferred candidates out of the property registry.
       const fromCode = config.analysis.inferSpecsFromCode ? inferred : [];

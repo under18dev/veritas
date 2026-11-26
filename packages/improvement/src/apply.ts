@@ -7,7 +7,6 @@ import {
   type ImprovementOutcome,
   loadConfig,
   type MeasurementSnapshot,
-  onExitCleanup,
   PatchAttempt,
   type Property,
   redact,
@@ -347,8 +346,24 @@ function tamperReason(paths: string[]): string {
   return `the patched runs changed the isolated copy beyond the plan's files (${listPaths(paths)}), so their results are not trustworthy; the patch was discarded and the repository is unchanged`;
 }
 
-function dependencyChangeReason(paths: string[]): string {
-  return `code run in the isolated copy changed ${paths.length} path(s) of the installed dependencies it shares with the project: ${listPaths(paths)}. Veritas cannot undo this: reinstall the dependencies (remove node_modules and install again from the lockfile) before running the tests or Veritas again`;
+/**
+ * Why the dependencies are not as they were, with what to do about it: installed packages (in a node_modules
+ * directory) are restored by reinstalling; files of a package linked from elsewhere (a workspace package) are the
+ * user's own, restored from version control.
+ */
+export function dependencyChangeReason(paths: string[]): string {
+  const installed = paths.filter((p) => p.split(path.sep).includes('node_modules'));
+  const linked = paths.filter((p) => !p.split(path.sep).includes('node_modules'));
+  const fixes = [
+    ...(installed.length > 0
+      ? ['reinstall the dependencies (remove node_modules and install again from the lockfile)']
+      : []),
+    ...(linked.length > 0
+      ? [`restore the files of the linked packages (${listPaths(linked)}), for example from version control`]
+      : []),
+  ];
+
+  return `code run in the isolated copy changed ${paths.length} path(s) of the dependencies it shares with the project: ${listPaths(paths)}. Veritas cannot undo this: ${fixes.join(', and ')} before running the tests or Veritas again`;
 }
 
 /**
@@ -520,7 +535,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         ...reasons,
         ...(unchecked.length > 0
           ? [
-              `not checked for writes: ${unchecked.length} link(s) in linked packages that lead outside their repository to something that is not a package (${listPaths(unchecked)})`,
+              `not checked for writes: ${unchecked.length} link(s) in linked packages that Veritas does not follow (to something that is not a package outside the package's git repository, ignored by git, or holding the package itself) (${listPaths(unchecked)})`,
             ]
           : []),
       ].map((r) => redact(r)),
@@ -547,8 +562,6 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
   const remaining = () => Math.max(1, deadline - Date.now());
   const workspace = createWorkspace(root);
   let written: WriteRecord | null = null;
-  // Ctrl-C or SIGTERM end the process without running `finally`: remove the copy then too.
-  const unregisterCleanup = onExitCleanup(() => removeWorkspace(workspace));
   // Code under test could send SIGUSR1 to this process to open its inspector; a listener keeps it closed. Child
   // processes get --disable-sigusr1 (see `closedInspectorFlags`).
   const ignoreSigusr1 = () => {};
@@ -864,7 +877,6 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
     );
   } finally {
     removeWorkspace(workspace);
-    unregisterCleanup();
     process.removeListener('SIGUSR1', ignoreSigusr1);
   }
 }

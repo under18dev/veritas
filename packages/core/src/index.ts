@@ -3,6 +3,7 @@ export * from './config/fields.js';
 export * from './config/load.js';
 export * from './config/schema.js';
 export * from './exit-codes.js';
+export * from './git.js';
 export * from './hash.js';
 export * from './ids.js';
 export * from './paths.js';

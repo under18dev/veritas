@@ -63,6 +63,11 @@ describe('changed files', () => {
   it('returns null without a base', async () => expect(await changedFiles(process.cwd(), null)).toBeNull());
   it('does not skip when git diff fails', async () =>
     expect(await changedFiles('/tmp', 'not-a-real-sha')).toBeNull());
+  it('refuses a base that reads as an option', async () => {
+    // In this repository a valid ref works; one starting with `-` is refused before git runs.
+    expect(await changedFiles(process.cwd(), 'HEAD')).not.toBeNull();
+    expect(await changedFiles(process.cwd(), '--output=/tmp/veritas-injected')).toBeNull();
+  });
 });
 
 describe('workflow safety', () => {

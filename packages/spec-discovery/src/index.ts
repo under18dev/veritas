@@ -7,7 +7,7 @@ import {
   EvidenceSource,
   redact,
   resolveInsideRoot,
-  runCommand,
+  runGit,
   type SourceRange,
   sha256,
   stableId,
@@ -404,8 +404,7 @@ async function collectLocal(
 ): Promise<SourceInput[]> {
   const files = walk(root);
   const inputs: SourceInput[] = [];
-  const rev = await runCommand('git', ['rev-parse', 'HEAD'], {
-    cwd: gitRoot,
+  const rev = await runGit(gitRoot, ['rev-parse', 'HEAD'], {
     timeoutMs: 5000,
     maxOutputBytes: 10000,
   });
@@ -475,8 +474,7 @@ async function collectLocal(
   }
 
   if (revision) {
-    const log = await runCommand('git', ['log', '-z', '-50', '--format=%H%n%s%n%b'], {
-      cwd: gitRoot,
+    const log = await runGit(gitRoot, ['log', '-z', '-50', '--format=%H%n%s%n%b'], {
       timeoutMs: 5000,
       maxOutputBytes: 1_000_000,
     });

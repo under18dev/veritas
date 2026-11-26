@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   chmodSync,
@@ -14,9 +13,9 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { VeritasError } from '../exit-codes.js';
+import { gitOutput } from '../git.js';
 import { canonicalJson, hashValue, sha256 } from '../hash.js';
 import { resolveInsideRoot } from '../paths.js';
-import { DEFAULT_ENV_ALLOWLIST } from '../process.js';
 import { redact, redactDeep } from '../redact.js';
 import { logEvent } from '../run-context.js';
 import { ArtifactMeta, SCHEMA_VERSION } from '../schema/common.js';
@@ -459,26 +458,6 @@ function cacheSecret(env: NodeJS.ProcessEnv): Buffer | null {
     const secret = readFileSync(file);
 
     return secret.length === 32 ? secret : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Output of a git command run with the allowlisted environment, or null when git fails. */
-export function gitOutput(root: string, args: string[]): string | null {
-  try {
-    const env = Object.fromEntries(
-      DEFAULT_ENV_ALLOWLIST.flatMap((name) =>
-        process.env[name] === undefined ? [] : [[name, process.env[name]]],
-      ),
-    );
-
-    return execFileSync('git', args, {
-      cwd: root,
-      env,
-      stdio: ['ignore', 'pipe', 'ignore'],
-      maxBuffer: 64 * 1024 * 1024,
-    }).toString();
   } catch {
     return null;
   }

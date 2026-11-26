@@ -18,7 +18,7 @@ import {
 } from 'node:fs';
 import { homedir, hostname, userInfo } from 'node:os';
 import path from 'node:path';
-import { hashValue, resolveInsideRoot, sha256, VeritasError } from '@under18dev/veritas-core';
+import { hashValue, onExitCleanup, resolveInsideRoot, sha256, VeritasError } from '@under18dev/veritas-core';
 import type { PatchFile } from './schema.js';
 
 /** Directories that are tool state or dependencies, not project content. */
@@ -404,7 +404,23 @@ export function removeStaleWorkspaces(base: string, now = Date.now()): string[] 
 export function createWorkspace(root: string): string {
   const base = privateBase(root);
   removeStaleWorkspaces(base);
-  const dir = realpathSync(mkdtempSync(path.join(base, 'veritas-improve-')));
+  // Registered before the copy exists: a SIGINT or SIGTERM with no handler installed ends the process at once, even in
+  // the middle of the synchronous copy below, and nothing could remove the copy then. With the handler installed, the
+  // signal waits for the copy to finish and the cleanup removes it.
+  let made: string | null = null;
+  const unregister = onExitCleanup(() => {
+    if (made !== null) removeWorkspace(made);
+  });
+  let dir: string;
+
+  try {
+    dir = realpathSync(mkdtempSync(path.join(base, 'veritas-improve-')));
+  } catch (error) {
+    unregister();
+    throw error;
+  }
+  made = dir;
+  exitCleanups.set(dir, unregister);
 
   try {
     const owner = {
@@ -463,9 +479,18 @@ function linksLeaving(dir: string): string[] {
   return out;
 }
 
+/** Unregisters the exit cleanup of each copy this process made, once the copy is removed. */
+const exitCleanups = new Map<string, () => void>();
+
+/**
+ * Remove a copy and its owner record. Retried a few times: processes started in the copy may still be writing their
+ * last files when they are ended.
+ */
 export function removeWorkspace(dir: string): void {
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   rmSync(dir + OWNER_SUFFIX, { force: true });
+  exitCleanups.get(dir)?.();
+  exitCleanups.delete(dir);
 }
 
 export interface WriteRecord {
