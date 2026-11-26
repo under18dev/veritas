@@ -7,7 +7,6 @@ import {
   type ImprovementOutcome,
   loadConfig,
   type MeasurementSnapshot,
-  onExitCleanup,
   PatchAttempt,
   type Property,
   redact,
@@ -563,8 +562,6 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
   const remaining = () => Math.max(1, deadline - Date.now());
   const workspace = createWorkspace(root);
   let written: WriteRecord | null = null;
-  // Ctrl-C or SIGTERM end the process without running `finally`: remove the copy then too.
-  const unregisterCleanup = onExitCleanup(() => removeWorkspace(workspace));
   // Code under test could send SIGUSR1 to this process to open its inspector; a listener keeps it closed. Child
   // processes get --disable-sigusr1 (see `closedInspectorFlags`).
   const ignoreSigusr1 = () => {};
@@ -880,7 +877,6 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
     );
   } finally {
     removeWorkspace(workspace);
-    unregisterCleanup();
     process.removeListener('SIGUSR1', ignoreSigusr1);
   }
 }

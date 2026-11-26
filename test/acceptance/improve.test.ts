@@ -17,6 +17,7 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   applyImprovement,
@@ -24,7 +25,7 @@ import {
   projectHash,
   readPlan,
 } from '../../packages/improvement/dist/index.js';
-import { CLI, copyFixture, json, runCli } from './helpers.js';
+import { CLI, copyFixture, json, REPO_ROOT, runCli } from './helpers.js';
 
 const LONG = 300_000;
 
@@ -557,6 +558,53 @@ describe('improve without an accepted specification', () => {
 // On Windows, ending a process from outside (child.kill, taskkill) terminates it without running any handler, so
 // nothing can remove the copy then; the next apply's sweep of stale copies does (see the improve guide).
 describe.skipIf(process.platform === 'win32')('improve ended by a signal', () => {
+  it(
+    'removes a copy when the process is ended while the copy is being made',
+    async () => {
+      // A project large enough that copying it takes a while, and a process that only makes a copy and waits.
+      const project = mkdtempSync(path.join(tmpdir(), 'veritas-sigterm-project-'));
+      for (let i = 0; i < 2000; i++) {
+        mkdirSync(path.join(project, `d${i % 40}`), { recursive: true });
+        writeFileSync(path.join(project, `d${i % 40}`, `f${i}.ts`), 'x'.repeat(1000));
+      }
+      const script = path.join(project, '..', `${path.basename(project)}-child.mjs`);
+      writeFileSync(
+        script,
+        `const { createWorkspace } = await import(${JSON.stringify(pathToFileURL(path.join(REPO_ROOT, 'packages/improvement/dist/index.js')).href)});\ncreateWorkspace(process.argv[2]);\nsetInterval(() => {}, 1000);\n`,
+      );
+      const parent = path.join(homedir(), '.cache');
+      mkdirSync(parent, { recursive: true });
+      const cache = mkdtempSync(path.join(parent, 'veritas-acceptance-'));
+      const base = path.join(cache, 'veritas/improve');
+
+      try {
+        // Ended as soon as the copy directory exists, that is during the copy, several times.
+        for (let round = 0; round < 5; round++) {
+          const child = spawn(process.execPath, [script, project], {
+            env: { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CACHE_HOME: cache },
+            stdio: 'ignore',
+          });
+          const exited = once(child, 'exit');
+          const deadline = Date.now() + 30_000;
+          while (
+            !(existsSync(base) && readdirSync(base).some((n) => /^veritas-improve-\w{6}$/.test(n))) &&
+            child.exitCode === null &&
+            Date.now() < deadline
+          )
+            await new Promise((r) => setTimeout(r, 1));
+          child.kill('SIGTERM');
+          await exited;
+          expect(readdirSync(base)).toEqual([]);
+        }
+      } finally {
+        rmSync(cache, { recursive: true, force: true });
+        rmSync(project, { recursive: true, force: true });
+        rmSync(script, { force: true });
+      }
+    },
+    LONG,
+  );
+
   it(
     'removes the copy when an apply is ended by SIGTERM, and changes nothing in the project',
     async () => {
