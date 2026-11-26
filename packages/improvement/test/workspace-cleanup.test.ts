@@ -66,21 +66,26 @@ describe('exit cleanup of the isolated copy', () => {
     expect(existsSync(ws)).toBe(false);
   });
 
-  it('is unregistered also when removing the copy fails, and the failure is not hidden', () => {
+  it('stays registered when removing the copy fails, to try again at exit, and the failure is not hidden', () => {
     const ws = createWorkspace(project({ 'src/a.ts': 'x' }));
     state.failBelow = cache;
 
     expect(() => removeWorkspace(ws)).toThrow(/EBUSY/);
+    expect(state).toMatchObject({ registered: 1, unregistered: 0 });
+    // A later removal that succeeds (the one at exit) unregisters it.
+    state.failBelow = null;
+    removeWorkspace(ws);
     expect(state).toMatchObject({ registered: 1, unregistered: 1 });
+    expect(existsSync(ws)).toBe(false);
   });
 
-  it('is unregistered when making the copy fails and so does removing it, which keeps the first error', () => {
+  it('stays registered when making the copy fails and so does removing it, which keeps the first error', () => {
     const outside = mkdtempSync(path.join(tmpdir(), 'veritas-outside-'));
     const root = project({ 'src/a.ts': 'x' });
     symlinkSync(outside, path.join(root, 'test'), process.platform === 'win32' ? 'junction' : 'dir');
     state.failBelow = cache;
 
     expect(() => createWorkspace(root)).toThrow(/links outside the project/);
-    expect(state).toMatchObject({ registered: 1, unregistered: 1 });
+    expect(state).toMatchObject({ registered: 1, unregistered: 0 });
   });
 });

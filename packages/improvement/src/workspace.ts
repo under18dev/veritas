@@ -459,7 +459,7 @@ export function createWorkspace(root: string): string {
     try {
       removeWorkspace(dir);
     } catch {
-      // What could not be removed is left to `removeStaleWorkspaces`; the error that ended the copy is the one shown.
+      // The exit cleanup stays registered and tries again at exit; the error that ended the copy is the one shown.
     }
     throw error;
   }
@@ -491,15 +491,13 @@ const exitCleanups = new Map<string, () => void>();
  * last files when they are ended.
  */
 export function removeWorkspace(dir: string): void {
-  try {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    rmSync(dir + OWNER_SUFFIX, { force: true });
-  } finally {
-    // Also when removing fails (on Windows a file still open in a process the run started is EBUSY or EPERM): the
-    // copy's owner record names this process, so `removeStaleWorkspaces` removes what is left once it has ended.
-    exitCleanups.get(dir)?.();
-    exitCleanups.delete(dir);
-  }
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  rmSync(dir + OWNER_SUFFIX, { force: true });
+  // Only once the copy is gone. When removing fails (on Windows a file a process the run started still has open is
+  // EBUSY or EPERM), the exit cleanup stays registered and tries again when the process exits: the copy holds project
+  // files, `.env` included, which should not wait for the next run's sweep of stale copies.
+  exitCleanups.get(dir)?.();
+  exitCleanups.delete(dir);
 }
 
 export interface WriteRecord {

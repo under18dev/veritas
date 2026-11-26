@@ -888,7 +888,8 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
       { workspace, rolledBack: true },
     );
   } finally {
-    // The listener goes even when the copy cannot be removed (Windows keeps a file a process still has open).
+    // The listener goes even when the copy cannot be removed (Windows keeps a file a process still has open); the
+    // copy then stays registered for removal at exit.
     try {
       removeWorkspace(workspace);
     } finally {
