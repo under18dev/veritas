@@ -361,50 +361,6 @@ describe('improve on agent-loop', () => {
     LONG,
   );
 
-  it(
-    'removes the copy when an apply is ended by SIGTERM',
-    async () => {
-      // A cache directory of its own, under the real one so its parents are safe.
-      const parent = path.join(homedir(), '.cache');
-      mkdirSync(parent, { recursive: true });
-      const cache = mkdtempSync(path.join(parent, 'veritas-acceptance-'));
-      const base = path.join(cache, 'veritas/improve');
-      const copies = () =>
-        existsSync(base) ? readdirSync(base).filter((n) => /^veritas-improve-\w{6}$/.test(n)) : [];
-
-      try {
-        const child = spawn(
-          process.execPath,
-          [
-            CLI,
-            'improve',
-            '--apply',
-            '--plan',
-            plan.planId,
-            '--approve',
-            plan.approvalToken as string,
-            '--json',
-          ],
-          {
-            cwd: dir,
-            env: { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CACHE_HOME: cache },
-            stdio: 'ignore',
-          },
-        );
-        const exited = once(child, 'exit');
-        const deadline = Date.now() + 60_000;
-        while (copies().length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
-        expect(copies()).toHaveLength(1);
-        child.kill('SIGTERM');
-        await exited;
-        expect(readdirSync(base)).toEqual([]);
-      } finally {
-        rmSync(cache, { recursive: true, force: true });
-      }
-    },
-    LONG,
-  );
-
   /** Run `fn` with a package installed outside the project and linked into it like a pnpm store entry. */
   async function withLinkedDependency(fn: (pkg: string) => Promise<void>) {
     const pkg = path.join(realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-dep-'))), 'tamper-target');
@@ -595,4 +551,64 @@ describe('improve without an accepted specification', () => {
     ) as { status: string };
     expect(optIn.status).toBe('planned');
   }, 600_000);
+});
+
+// On Windows, ending a process from outside (child.kill, taskkill) terminates it without running any handler, so
+// nothing can remove the copy then; the next apply's sweep of stale copies does (see the improve guide).
+describe.skipIf(process.platform === 'win32')('improve ended by a signal', () => {
+  it(
+    'removes the copy when an apply is ended by SIGTERM, and changes nothing in the project',
+    async () => {
+      // A project and plan of its own: whatever the ended apply leaves cannot affect other tests.
+      const dir = analyzed('agent-loop');
+      const planned = runCli(['improve', '--dry-run', '--json'], dir);
+      expect(planned.status, planned.stderr).toBe(0);
+      const plan = json<PlanJson>(planned);
+      const hash = projectHash(dir);
+      // A cache directory of its own, under the real one so its parents are safe.
+      const parent = path.join(homedir(), '.cache');
+      mkdirSync(parent, { recursive: true });
+      const cache = mkdtempSync(path.join(parent, 'veritas-acceptance-'));
+      const base = path.join(cache, 'veritas/improve');
+      const copies = () =>
+        existsSync(base) ? readdirSync(base).filter((n) => /^veritas-improve-\w{6}$/.test(n)) : [];
+      const child = spawn(
+        process.execPath,
+        [
+          CLI,
+          'improve',
+          '--apply',
+          '--plan',
+          plan.planId,
+          '--approve',
+          plan.approvalToken as string,
+          '--json',
+        ],
+        {
+          cwd: dir,
+          env: { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CACHE_HOME: cache },
+          stdio: 'ignore',
+        },
+      );
+      const exited = once(child, 'exit');
+
+      try {
+        const deadline = Date.now() + 60_000;
+        while (copies().length === 0 && child.exitCode === null && Date.now() < deadline)
+          await new Promise((r) => setTimeout(r, 50));
+        expect(copies()).toHaveLength(1);
+        child.kill('SIGTERM');
+        await exited;
+        expect(readdirSync(base)).toEqual([]);
+        expect(projectHash(dir)).toBe(hash);
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGKILL');
+          await exited;
+        }
+        rmSync(cache, { recursive: true, force: true });
+      }
+    },
+    LONG,
+  );
 });
