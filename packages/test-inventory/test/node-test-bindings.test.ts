@@ -421,6 +421,47 @@ describe('node:test bindings', () => {
     }
   });
 
+  it('reads the context of a callback that forwards it to itself', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      // The review's repro: a recursive callback passed by name.
+      'test/recursive.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/value.ts';
+        function check(t, n) {
+          if (n) check(t, n - 1);
+          t.assert.equal(value(1), 2);
+        }
+        test('recursive', check);
+        test('calls it with its context', (t) => check(t, 2));
+      `,
+      // Mutual recursion, also reached with a plain object.
+      'test/mutual.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/value.ts';
+        function even(t, n) { if (n) odd(t, n - 1); t.assert.equal(value(1), 2); }
+        function odd(t, n) { if (n) even(t, n - 1); }
+        test('mutual', even);
+        test('mutual through a call', (t) => odd(t, 3));
+        test('mutual plain object', () => odd({ assert: { equal() {} } }, 3));
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of ['recursive', 'calls it with its context']) {
+      expect(byName(tests, name).suspicions, name).not.toContain('no_assertion');
+      expect(
+        byName(tests, name).targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(true);
+    }
+    // Reached both ways: never no_assertion where a real context reaches it.
+    expect(byName(tests, 'mutual').suspicions).not.toContain('no_assertion');
+    expect(byName(tests, 'mutual through a call').suspicions).not.toContain('no_assertion');
+    expect(byName(tests, 'mutual through a call').suspicions).toContain('opaque_call');
+    expect(byName(tests, 'mutual plain object').targetCalls.some((call) => call.asserted)).toBe(false);
+  });
+
   it('takes require for the module loader only when the file does not declare its own', () => {
     const root = tempProject({
       'src/value.ts': VALUE,

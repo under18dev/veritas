@@ -70,6 +70,14 @@ export const TestInventory = z.object({
       packageCall: z.string().optional(),
       /** The local module (POSIX, from the root) that makes `packageCall`, when the file reaches it through its imports. */
       packageCallVia: z.string().optional(),
+      /**
+       * The file runs code while it loads that may register tests, itself or through a local module it loads: a call,
+       * `new` or tagged template its module scope evaluates (other than a few inert builtins such as `Symbol()` and
+       * path helpers), a package it loads, or a local module that does not resolve. A test file with no recorded test
+       * is left out of the unread files only when this is false and it does not use the runner. Absent in inventories
+       * written before it was recorded.
+       */
+      loadsCode: z.boolean().optional(),
     }),
   ),
   diagnostics: z.array(z.object({ file: z.string(), message: z.string() })),
@@ -483,10 +491,27 @@ function packageName(specifier: string): string {
 
 /** The package a name is bound to by an import or a `require` of a bare specifier, if any. */
 function boundPackage(identifier: ts.Identifier): string | undefined {
-  const symbol = runnerChecker?.getSymbolAtLocation(identifier);
+  for (const specifier of boundSpecifiers(identifier)) {
+    if (specifier.startsWith('.') || specifier.startsWith('/') || builtinSpecifier(specifier)) continue;
 
-  for (const declaration of symbol?.declarations ?? []) {
-    let specifier: string | undefined;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(specifier)) continue;
+
+    return packageName(specifier);
+  }
+
+  return undefined;
+}
+
+/** Whether a module specifier names a Node.js builtin (`node:path`, `path`, `fs/promises`). */
+function builtinSpecifier(specifier: string): boolean {
+  return specifier.startsWith('node:') || builtinModules.includes(specifier.split('/')[0] ?? '');
+}
+
+/** The module specifiers of the imports or `require`s that bind a name (`import { join } from 'node:path'`). */
+function boundSpecifiers(identifier: ts.Identifier): string[] {
+  const specifiers: string[] = [];
+
+  for (const declaration of runnerChecker?.getSymbolAtLocation(identifier)?.declarations ?? []) {
     let node: ts.Node = declaration;
 
     if (ts.isImportSpecifier(node) || ts.isImportClause(node) || ts.isNamespaceImport(node)) {
@@ -497,23 +522,159 @@ function boundPackage(identifier: ts.Identifier): string | undefined {
         !node.importClause?.isTypeOnly &&
         ts.isStringLiteral(node.moduleSpecifier)
       )
-        specifier = node.moduleSpecifier.text;
+        specifiers.push(node.moduleSpecifier.text);
     } else {
       while (ts.isBindingElement(node)) node = node.parent.parent;
+      const loaded =
+        ts.isVariableDeclaration(node) && node.initializer ? requiredModule(node.initializer) : undefined;
 
-      if (ts.isVariableDeclaration(node) && node.initializer) specifier = requiredModule(node.initializer);
+      if (loaded !== undefined) specifiers.push(loaded);
     }
-
-    if (specifier === undefined || specifier.startsWith('.') || specifier.startsWith('/')) continue;
-
-    if (specifier.startsWith('node:') || builtinModules.includes(specifier.split('/')[0] ?? '')) continue;
-
-    if (/^[a-z][a-z0-9+.-]*:/i.test(specifier)) continue;
-
-    return packageName(specifier);
   }
 
-  return undefined;
+  return specifiers;
+}
+
+/** Path and URL helpers of Node.js, which compute values and load nothing. */
+const INERT_MODULES = new Set(['path', 'node:path', 'path/posix', 'node:path/posix', 'url', 'node:url']);
+
+/**
+ * Whether a package or module a file loads by its specifier may run code that registers tests: any bare package,
+ * other than the runner's own modules and packages that only assert or mock. Relative modules are followed instead,
+ * and Node.js builtins register nothing (the runner's `node:test` is the runner's API, read as such).
+ */
+function loadsPackageCode(specifier: string): boolean {
+  if (/^\.\.?(?:\/|$)/.test(specifier) || builtinSpecifier(specifier) || runner.modules.has(specifier))
+    return false;
+  const name = packageName(specifier);
+
+  return !(
+    runner.modules.has(name) ||
+    ASSERTION_OR_MOCK_PACKAGES.has(name) ||
+    ASSERTION_OR_MOCK_SCOPES.some((scope) => name.startsWith(scope))
+  );
+}
+
+/**
+ * Whether a call a module makes while it loads is known to do nothing that could register tests: `Symbol(…)`,
+ * `Object.freeze(…)`, `new URL(…)`, a function of Node's path or URL helpers, Node's `createRequire(…)`, and a
+ * `require` or dynamic `import()` of a literal local module (followed on its own) or Node.js builtin. Its arguments are
+ * read too.
+ */
+function inertCall(node: ts.CallExpression | ts.NewExpression | ts.TaggedTemplateExpression): boolean {
+  if (ts.isTaggedTemplateExpression(node)) return false;
+  const callee = skipParens(node.expression);
+  const first = node.arguments?.[0] && skipParens(node.arguments[0]);
+  const literal = first !== undefined && ts.isStringLiteralLike(first) ? first.text : undefined;
+  const global = (identifier: ts.Expression, name: string) =>
+    ts.isIdentifier(identifier) &&
+    identifier.text === name &&
+    (runnerChecker?.getSymbolAtLocation(identifier)?.declarations ?? []).every((declaration) =>
+      ambientDeclaration(declaration),
+    );
+
+  if (
+    ts.isCallExpression(node) &&
+    (node.expression.kind === ts.SyntaxKind.ImportKeyword || requireFunction(callee))
+  )
+    return literal !== undefined && !loadsPackageCode(literal);
+
+  if (ts.isNewExpression(node)) return global(callee, 'URL');
+
+  if (global(callee, 'Symbol')) return true;
+
+  if (ts.isPropertyAccessExpression(callee) && global(skipParens(callee.expression), 'Object'))
+    return callee.name.text === 'freeze';
+
+  if (nodeCreateRequire(callee)) return true;
+  let root: ts.Expression = callee;
+
+  while (ts.isPropertyAccessExpression(root)) root = skipParens(root.expression);
+
+  return ts.isIdentifier(root) && boundSpecifiers(root).some((specifier) => INERT_MODULES.has(specifier));
+}
+
+const moduleRunsCodeCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; value: boolean }>();
+
+/**
+ * Whether a module runs code while it loads that may register tests: any call, `new` or tagged template its module
+ * scope evaluates (in control flow, arguments, class static blocks and field initialisers, functions called where they
+ * are written, local functions it calls), other than `inertCall`s, or a value import, re-export or `require` of a
+ * package (`loadsPackageCode`). The bodies of functions only defined are not read: their call sites count.
+ */
+function moduleRunsCode(source: ts.SourceFile): boolean {
+  const cached = moduleRunsCodeCache.get(source);
+
+  if (cached && cached.runner === runner) return cached.value;
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+
+    if (
+      (ts.isFunctionDeclaration(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isArrowFunction(node) ||
+        ts.isMethodDeclaration(node) ||
+        ts.isGetAccessorDeclaration(node) ||
+        ts.isSetAccessorDeclaration(node) ||
+        ts.isConstructorDeclaration(node)) &&
+      !immediatelyInvoked(node)
+    )
+      return;
+    const specifier =
+      (ts.isImportDeclaration(node) && !node.importClause?.isTypeOnly) ||
+      (ts.isExportDeclaration(node) && !node.isTypeOnly)
+        ? node.moduleSpecifier
+        : ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)
+          ? node.moduleReference.expression
+          : undefined;
+
+    if (specifier !== undefined && ts.isStringLiteralLike(specifier) && loadsPackageCode(specifier.text)) {
+      found = true;
+
+      return;
+    }
+
+    if (
+      (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node)) &&
+      !inertCall(node)
+    ) {
+      found = true;
+
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(source, visit);
+  moduleRunsCodeCache.set(source, { runner, value: found });
+
+  return found;
+}
+
+/**
+ * Whether a file, or a local module it loads (statically, by `require` or by a literal relative dynamic import, at any
+ * depth, cycles ending), runs code while it loads that may register tests (`moduleRunsCode`), or loads a local module
+ * that does not resolve.
+ */
+function loadsCode(source: ts.SourceFile): boolean {
+  const seen = new Set<ts.SourceFile>([source]);
+  const queue = [source];
+
+  for (let current = queue.shift(); current; current = queue.shift()) {
+    if (moduleRunsCode(current)) return true;
+
+    for (const specifier of localSpecifiers(current)) {
+      const declaration = runnerChecker?.getSymbolAtLocation(specifier)?.valueDeclaration;
+
+      if (!declaration || !ts.isSourceFile(declaration)) return true;
+
+      if (seen.has(declaration) || declaration.isDeclarationFile) continue;
+      seen.add(declaration);
+      queue.push(declaration);
+    }
+  }
+
+  return false;
 }
 
 /** Whether a function is called where it is written (`(() => suite())()`, `(function () { … }).call(this)`). */
@@ -830,6 +991,8 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
     const reached = [source, ...loaded.map((dependency) => sourceFiles.get(path.resolve(root, dependency)))];
     // A package called by the file or by a local module it loads, which may register tests under the file.
     const reachedCall = source ? reachedPackageCall(source, root) : {};
+    // An unparsed file may run anything.
+    const runsCode = !source || loadsCode(source);
 
     return {
       path: toPosixRelative(root, file),
@@ -841,6 +1004,7 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
         !source || reached.some((reachedFile) => reachedFile && hasUnseenReach(reachedFile, checker)),
       ...inexactFile(source),
       // An unparsed file may use anything, and so may one that loads a local module the program did not parse.
+      loadsCode: runsCode,
       usesRunner:
         !source ||
         reachedCall.unresolved === true ||
@@ -10025,11 +10189,15 @@ function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth
 
   if (!isFunctionLike(fn) || fn.parameters[0] !== declaration) return false;
 
-  // A function passed by name as a test, suite or hook callback (`test('x', check)`): read as that callback, its first
-  // parameter is the context the runner hands it. Followed from a call of it (`check(t)` in another test), only when
-  // every call hands it a test context: `check({ assert: { equal() {} } })` makes its assertions a plain object's.
-  if (referencedCallbacks(fn.getSourceFile(), checker).has(fn))
-    return contextCallback === fn || calledOnlyWithContexts(fn, checker, depth);
+  // A function passed by name as a test, suite or hook callback (`test('x', check)`), read as that callback: its first
+  // parameter is the context the runner hands it.
+  if (contextCallback === fn && referencedCallbacks(fn.getSourceFile(), checker).has(fn)) return true;
+  // A local function followed from its calls: a context only when every path to it hands it one (see `contextReach`);
+  // one also reached with a plain object (`check({ assert: { equal() {} } })`) is not, and the calls that may hand it a
+  // real context are opaque instead (`handsContextToMixedCallback`).
+  const reach = contextReach(fn.getSourceFile(), checker);
+
+  if (reach.real.has(fn) || reach.fake.has(fn)) return reach.real.has(fn) && !reach.fake.has(fn);
 
   if (!isFunction(fn)) return false;
   const call = fn.parent;
@@ -10055,35 +10223,19 @@ function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth
 /** The function passed by name (`test('x', check)`) that `analyzeTest` is reading as the test's callback, if any. */
 let contextCallback: ts.Node | undefined;
 
-const calledWithContextsCache = new WeakMap<ts.Node, { runner: RunnerApi; value: ContextCalls }>();
-/** Functions `contextCalls` is deciding, so that a function calling itself ends. */
-const decidingCallers = new Set<ts.Node>();
-
 /**
- * How the uses of a local function other than as a test, suite or hook callback hand it a test context: `all` when
- * every one calls it with a test context first (`check(t)` with `t` a test's context), so that its first parameter is
- * a context wherever it is followed from; `some` when at least one does. A call with anything else
- * (`check({ assert })`, `check()`), or a use static analysis does not follow (`check.call(…)`, `rows.map(check)`),
- * makes it not `all`.
- */
-interface ContextCalls {
-  all: boolean;
-  some: boolean;
-}
-
-/**
- * Whether a call may hand a test context first to a local function whose first parameter is a context on some paths
- * and not on others (see `mixedContextFunctions`): its first argument is a parameter of a function or a test's
- * context, so the call may come from a test with a real context, where the function's assertions are not counted.
- * Decided from the file's structure alone, never from which test is being read, so it does not depend on the order
- * tests are analysed in.
+ * Whether a call may hand a test context first to a local function whose first parameter receives a context on some
+ * paths and something else on others (in both sets of `contextReach`): its first argument is a parameter, so the call
+ * may come from a test with a real context, where the function's assertions are not counted. Decided from the file's
+ * structure alone, never from which test is being read, so it does not depend on the order tests are analysed in.
  */
 function handsContextToMixedCallback(node: Invocation, body: ts.Node, checker: ts.TypeChecker): boolean {
   const fn = body.parent;
 
   if (!ts.isCallExpression(node) || !fn || !isFunctionLike(fn)) return false;
+  const reach = contextReach(fn.getSourceFile(), checker);
 
-  if (!mixedContextFunctions(fn.getSourceFile(), checker).has(fn)) return false;
+  if (!reach.real.has(fn) || !reach.fake.has(fn)) return false;
   const first = node.arguments[0] && skipParens(node.arguments[0]);
   const declaration =
     first && ts.isIdentifier(first) ? checker.getSymbolAtLocation(first)?.valueDeclaration : undefined;
@@ -10091,23 +10243,31 @@ function handsContextToMixedCallback(node: Invocation, body: ts.Node, checker: t
   return declaration !== undefined && ts.isParameter(declaration);
 }
 
-const mixedContextCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; functions: Set<ts.Node> }>();
+interface ContextReach {
+  /** Local functions whose first parameter can receive a real test context. */
+  real: Set<ts.Node>;
+  /** Local functions whose first parameter can receive something else. */
+  fake: Set<ts.Node>;
+}
+
+const contextReachCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; reach: ContextReach }>();
+/** Files whose `contextReach` is being computed: reads of it meanwhile see nothing. */
+const computingReach = new Set<ts.SourceFile>();
 
 /**
- * The local functions of a file whose first parameter receives a test context on some paths and something else on
- * others, computed once per file as a fixpoint over how functions forward their first parameter. A function receives
- * a real context when it is passed by name as a test, suite or hook callback, or called with the context of an inline
- * test or hook callback; something else when called with any other value, or used in a way static analysis does not
- * follow (`rows.map(check)`, `check.call(…)`). A call `g(t)` with `t` the first parameter of a local function `f`
- * hands `g` whatever `f` receives.
+ * What the first parameter of each local function of a file can receive, computed once per file as a fixpoint over
+ * how functions forward their first parameter (`outer(t) { helper(t) }`, also to themselves). A function receives a
+ * real context when it is passed by name as a test, suite or hook callback, or called with the context of an inline
+ * test, hook or subtest callback; something else when called with any other value, or used in a way static analysis
+ * does not follow (`rows.map(check)`, `check.call(…)`). Deterministic and independent of the order tests are read in.
  */
-function mixedContextFunctions(source: ts.SourceFile, checker: ts.TypeChecker): Set<ts.Node> {
-  const cached = mixedContextCache.get(source);
+function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextReach {
+  const cached = contextReachCache.get(source);
 
-  if (cached && cached.runner === runner) return cached.functions;
-  const previous = contextCallback;
-  // Structural: which test is being read does not count.
-  contextCallback = undefined;
+  if (cached && cached.runner === runner) return cached.reach;
+
+  if (computingReach.has(source)) return { real: new Set(), fake: new Set() };
+  computingReach.add(source);
 
   try {
     const functions = new Map<ts.Symbol, ts.SignatureDeclaration>();
@@ -10126,13 +10286,40 @@ function mixedContextFunctions(source: ts.SourceFile, checker: ts.TypeChecker): 
         functions.set(symbol, node as ts.SignatureDeclaration);
     }
     const named = new Set<ts.Node>(functions.values());
-    const real = new Set<ts.Node>();
+    const callbacks = referencedCallbacks(source, checker);
+    const real = new Set<ts.Node>(callbacks);
     const fake = new Set<ts.Node>();
     /** `from` hands its first parameter to `to`. */
     const forwards: [ts.Node, ts.Node][] = [];
-    const callbacks = referencedCallbacks(source, checker);
+    /** Where a value handed first to a function comes from: a local function's first parameter, a real context, or neither. */
+    const origin = (argument: ts.Expression | undefined, depth = 0): ts.Node | 'real' | 'fake' => {
+      const value = argument && skipParens(argument);
+      const declaration =
+        value && ts.isIdentifier(value) ? checker.getSymbolAtLocation(value)?.valueDeclaration : undefined;
 
-    for (const fn of callbacks) real.add(fn);
+      if (!declaration || !ts.isParameter(declaration) || depth > 20) return 'fake';
+      const owner = declaration.parent;
+
+      if (!isFunctionLike(owner) || owner.parameters[0] !== declaration) return 'fake';
+
+      if (callbacks.has(owner) || named.has(owner)) return owner;
+
+      if (!isFunction(owner)) return 'fake';
+      const call = owner.parent;
+
+      if (!ts.isCallExpression(call) || !call.arguments.includes(owner)) return 'fake';
+      const callee = skipParens(call.expression);
+
+      // `t.test('child', (child) => …)`: the child's context comes from wherever `t` does.
+      if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'test')
+        return origin(callee.expression, depth + 1);
+
+      return testRegistration(call) !== undefined ||
+        describeRegistration(call) !== undefined ||
+        runner.hooks.has(runnerExport(callee)?.name ?? '')
+        ? 'real'
+        : 'fake';
+    };
 
     for (const node of descendants(source)) {
       if (!ts.isIdentifier(node)) continue;
@@ -10149,36 +10336,24 @@ function mixedContextFunctions(source: ts.SourceFile, checker: ts.TypeChecker): 
       const parent = use.parent;
 
       if (ts.isCallExpression(parent) && parent.expression === use) {
-        const first = parent.arguments[0] && skipParens(parent.arguments[0]);
-        const declaration =
-          first && ts.isIdentifier(first) ? checker.getSymbolAtLocation(first)?.valueDeclaration : undefined;
-        const owner = declaration && ts.isParameter(declaration) ? declaration.parent : undefined;
+        const from = origin(parent.arguments[0]);
 
-        if (
-          owner &&
-          isFunctionLike(owner) &&
-          owner.parameters[0] === declaration &&
-          (callbacks.has(owner) || named.has(owner))
-        )
-          forwards.push([owner, fn]);
-        else if (first && ts.isIdentifier(first) && isTestContext(first, checker)) real.add(fn);
-        else fake.add(fn);
+        if (from === 'real') real.add(fn);
+        else if (from === 'fake') fake.add(fn);
+        else forwards.push([from, fn]);
       } else if (
         ts.isCallExpression(parent) &&
         parent.arguments.some((argument) => skipParens(argument) === node)
       ) {
-        // Passed by name as a callback was counted above; passed to anything else, it may receive anything.
-        if (!callbacks.has(fn)) fake.add(fn);
-        else {
-          const registration = testRegistration(parent) ?? describeRegistration(parent);
-          const callback = registration
-            ? registration.callback
-            : runner.hooks.has(runnerExport(skipParens(parent.expression))?.name ?? '')
-              ? parent.arguments.at(-1)
-              : undefined;
+        // Passed by name as a callback was seeded above; passed to anything else, it may receive anything.
+        const registration = testRegistration(parent) ?? describeRegistration(parent);
+        const callback = registration
+          ? registration.callback
+          : runner.hooks.has(runnerExport(skipParens(parent.expression))?.name ?? '')
+            ? parent.arguments.at(-1)
+            : undefined;
 
-          if (callback === undefined || skipParens(callback) !== node) fake.add(fn);
-        }
+        if (!callbacks.has(fn) || callback === undefined || skipParens(callback) !== node) fake.add(fn);
       } else fake.add(fn);
     }
 
@@ -10197,75 +10372,13 @@ function mixedContextFunctions(source: ts.SourceFile, checker: ts.TypeChecker): 
         }
       }
     }
-    const functionsMixed = new Set([...real].filter((fn) => fake.has(fn)));
-    mixedContextCache.set(source, { runner, functions: functionsMixed });
+    const reach = { real, fake };
+    contextReachCache.set(source, { runner, reach });
 
-    return functionsMixed;
+    return reach;
   } finally {
-    contextCallback = previous;
+    computingReach.delete(source);
   }
-}
-
-function calledOnlyWithContexts(
-  fn: ts.SignatureDeclaration,
-  checker: ts.TypeChecker,
-  depth: number,
-): boolean {
-  return contextCalls(fn, checker, depth).all;
-}
-
-function contextCalls(fn: ts.SignatureDeclaration, checker: ts.TypeChecker, depth: number): ContextCalls {
-  const cached = calledWithContextsCache.get(fn);
-
-  if (cached && cached.runner === runner) return cached.value;
-
-  if (decidingCallers.has(fn)) return { all: false, some: false };
-  const declared = ts.isFunctionDeclaration(fn)
-    ? fn.name
-    : ts.isVariableDeclaration(fn.parent) && ts.isIdentifier(fn.parent.name)
-      ? fn.parent.name
-      : undefined;
-
-  if (declared === undefined) return { all: false, some: false };
-  const symbol = checker.getSymbolAtLocation(declared);
-  decidingCallers.add(fn);
-  const value: ContextCalls = { all: symbol !== undefined, some: false };
-
-  try {
-    for (const node of symbol === undefined ? [] : descendants(fn.getSourceFile())) {
-      if (!ts.isIdentifier(node) || node === declared || node.text !== declared.text) continue;
-
-      if (checker.getSymbolAtLocation(node) !== symbol) continue;
-      let use: ts.Node = node;
-
-      while (ts.isParenthesizedExpression(use.parent)) use = use.parent;
-      const parent = use.parent;
-
-      if (ts.isCallExpression(parent) && skipParens(parent.expression) === node) {
-        const first = parent.arguments[0] && skipParens(parent.arguments[0]);
-        const context =
-          first !== undefined && ts.isIdentifier(first) && isTestContext(first, checker, depth + 1);
-        value.all &&= context;
-        value.some ||= context;
-      } else if (
-        ts.isCallExpression(parent) &&
-        parent.arguments.some((argument) => skipParens(argument) === node)
-      ) {
-        const registration = testRegistration(parent) ?? describeRegistration(parent);
-        const callback = registration
-          ? registration.callback
-          : runner.hooks.has(runnerExport(skipParens(parent.expression))?.name ?? '')
-            ? parent.arguments.at(-1)
-            : undefined;
-        value.all &&= callback !== undefined && skipParens(callback) === node;
-      } else value.all = false;
-    }
-  } finally {
-    decidingCallers.delete(fn);
-  }
-  calledWithContextsCache.set(fn, { runner, value });
-
-  return value;
 }
 
 const referencedCallbackCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; callbacks: Set<ts.Node> }>();
