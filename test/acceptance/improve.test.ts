@@ -321,6 +321,37 @@ describe('improve on agent-loop', () => {
     LONG,
   );
 
+  it(
+    'starts each mutation run in the copy without mutator state a test left there',
+    async () => {
+      const hash = projectHash(dir);
+      let plantedSurvived: boolean | null = null;
+      const attempt = await applyImprovement({
+        root: dir,
+        planId: plan.planId,
+        approvalToken: plan.approvalToken as string,
+        env: {},
+        // Forged resume state: mutator adopts stored verdicts from it without running the tests.
+        afterPatchInWorkspace: (workspace) => {
+          mkdirSync(path.join(workspace, '.mutator/scopes'), { recursive: true });
+          writeFileSync(path.join(workspace, '.mutator/scopes/snapshot.json.resume.sqlite'), 'forged');
+          writeFileSync(path.join(workspace, '.mutator/planted'), '');
+        },
+        afterPatchedRunsInWorkspace: (workspace) => {
+          plantedSurvived = existsSync(path.join(workspace, '.mutator/planted'));
+          // Stop here, so the plan stays applicable for the next test.
+          appendFileSync(path.join(workspace, 'src/age.ts'), '// stop\n');
+        },
+      });
+      // The patched mutation run and the re-evaluation completed, from a removed .mutator.
+      expect(plantedSurvived).toBe(false);
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain("beyond the plan's files (src/age.ts)");
+      expect(projectHash(dir)).toBe(hash);
+    },
+    LONG,
+  );
+
   /** Run `fn` with a package installed outside the project and linked into it like a pnpm store entry. */
   async function withLinkedDependency(fn: (pkg: string) => Promise<void>) {
     const pkg = path.join(realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-dep-'))), 'tamper-target');

@@ -133,8 +133,9 @@ export interface RunOptions {
    */
   gitRoot?: string;
   /**
-   * `root` is an isolated copy whose content may have been written by the code under test (`improve`): mutation runs
-   * look up mutator inside `root` only (see `RunMutationOptions.isolatedCopy`).
+   * `root` is an isolated copy whose content may have been written by the code under test (`improve`): the result
+   * cache is not used, and mutation runs look up mutator inside `root` only and start without mutator's stored state
+   * (see `RunMutationOptions.isolatedCopy`).
    */
   isolatedCopy?: boolean;
   signal?: AbortSignal;
@@ -366,7 +367,9 @@ async function runInContext(
     sourceHash,
     ...(options.gitRoot ? { gitCommit: gitCommit(options.gitRoot) } : {}),
   });
-  const { cache, message: cacheMessage } = openCache(root, config);
+  const { cache, message: cacheMessage } = options.isolatedCopy
+    ? { cache: null, message: null }
+    : openCache(root, config);
 
   if (cacheMessage) log(cacheMessage);
   const signal = options.signal ?? new AbortController().signal;

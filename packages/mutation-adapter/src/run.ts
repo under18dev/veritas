@@ -55,7 +55,9 @@ export interface RunMutationOptions {
   projectMutatorOnly?: boolean;
   /**
    * The root is an isolated copy whose content may have been written by the code under test (`improve`). Then the
-   * project's mutator is looked up inside the root only, not in its parents (a shared temporary directory).
+   * project's mutator is looked up inside the root only, not in its parents (a shared temporary directory), and
+   * mutator's working directory `.mutator` is removed before each run: mutator adopts verdicts stored there (its
+   * resume database) without running the tests, so a test could plant kills.
    */
   isolatedCopy?: boolean;
   /**
@@ -447,6 +449,8 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     });
   const reportPath = path.join(reportDir, 'mutation.json');
   const spawn = (argv: string[], timeoutMs = options.config.mutation.timeoutMs) => {
+    if (options.isolatedCopy) rmSync(path.join(options.root, '.mutator'), { recursive: true, force: true });
+
     return runProjectTests(process.execPath, [binPath, ...argv], {
       cwd: options.root,
       timeoutMs,

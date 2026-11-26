@@ -284,6 +284,26 @@ describe('runMutation failures', () => {
     expect(r.mutants).toEqual([]);
   });
 
+  it('in an isolated copy, starts without mutator state left in the root', async () => {
+    const { root, bin } = stubCli(
+      "fs.writeFileSync(require('node:path').join(dir, '..', 'state-seen.txt'), String(fs.existsSync('.mutator'))); console.log('{}');",
+    );
+    const reportDir = path.join(root, 'out');
+    // Forged resume state and as a test running in the copy could leave them.
+    mkdirSync(path.join(root, '.mutator/scopes'), { recursive: true });
+    writeFileSync(path.join(root, '.mutator/scopes/snapshot.json.resume.sqlite'), 'forged');
+    await runMutation({
+      testRunner: vitest,
+      root,
+      config: config(),
+      reportDir,
+      mutatorBin: bin,
+      isolatedCopy: true,
+    });
+    expect(readFileSync(path.join(root, 'state-seen.txt'), 'utf8')).toBe('false');
+    expect(existsSync(path.join(root, '.mutator'))).toBe(false);
+  });
+
   it('runs mutator with the heap limit of limits.memoryMb', async () => {
     const { root, bin } = stubCli(
       "fs.writeFileSync(dir + '/node-options.txt', process.env.NODE_OPTIONS ?? ''); console.log('{}');",

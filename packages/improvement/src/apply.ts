@@ -570,7 +570,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
           mutation: { ...config.mutation, timeoutMs: Math.min(config.mutation.timeoutMs, remaining()) },
         },
         reportDir: path.join(workspace, '.veritas', 'improve', `mutation-${label}`),
-        // Mutator is found inside the copy only, not in the shared temporary directory above it.
+        // Mutator is found inside the copy only, and starts without the state a test may have left in `.mutator`.
         isolatedCopy: true,
         ...(options.signal ? { signal: options.signal } : {}),
       });
