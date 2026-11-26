@@ -151,6 +151,30 @@ describe('snapshotDependencies', () => {
     ]);
   });
 
+  it('follows links inside a linked package outside node_modules, such as a source directory linked from elsewhere', () => {
+    const root = project({ 'src/a.ts': 'x' });
+    const repo = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-linked-src-')));
+    // node_modules/shared -> <repo>/shared, and <repo>/shared/src -> <repo>/source.
+    write(path.join(repo, 'source/index.js'), 'export const shared = 1;');
+    write(path.join(repo, 'shared/package.json'), '{"name":"shared"}');
+    symlinkSync(path.join(repo, 'source'), path.join(repo, 'shared/src'), DIR);
+    // A cycle back to the package must not make the walk loop.
+    symlinkSync(path.join(repo, 'shared'), path.join(repo, 'source/back'), DIR);
+    mkdirSync(path.join(root, 'node_modules'));
+    symlinkSync(path.join(repo, 'shared'), path.join(root, 'node_modules/shared'), DIR);
+    const ws = createWorkspace(root);
+
+    try {
+      const before = snapshotDependencies(root);
+      writeFileSync(path.join(ws, 'node_modules/shared/src/index.js'), 'export const shared = 2;');
+      expect(diffDependencies(before, snapshotDependencies(root))).toEqual([
+        path.join(repo, 'source/index.js'),
+      ]);
+    } finally {
+      removeWorkspace(ws);
+    }
+  });
+
   it('is empty for a project without node_modules', () => {
     expect(snapshotDependencies(project({ 'src/a.ts': 'x' })).size).toBe(0);
   });

@@ -51,8 +51,9 @@ function describe(abs: string): string {
 
 /**
  * Snapshot every dependency tree reachable from `<root>/node_modules`: that directory (or the store it lives in),
- * and, transitively, the real location of every link found inside a `node_modules` directory. Links are recorded,
- * never followed while walking. A hidden entry at the top of a `node_modules` directory (other than `.bin`) is walked
+ * and, transitively, the real location of every link found in a tree already reached (inside a `node_modules`
+ * directory or not: a workspace package may link part of its code from elsewhere). Links are recorded, never followed
+ * while walking; their targets are walked once each, by real path, so link cycles end. A hidden entry at the top of a `node_modules` directory (other than `.bin`) is walked
  * only when a link leads into it, as into a `.pnpm` or `.bun` store; the others are tool caches (`.vite`, `.cache`)
  * that the workspace does not link (it gets a `node_modules` directory of its own) and that tools running in the real
  * project may update at any time.
@@ -131,7 +132,7 @@ export function snapshotDependencies(root: string): DependencySnapshot {
       out.set(abs, entry);
 
       if (entry.startsWith('dir|')) walk(abs);
-      else if (entry.startsWith('link|') && (underModules || name === NODE_MODULES)) links.push(abs);
+      else if (entry.startsWith('link|')) links.push(abs);
     }
   };
 
