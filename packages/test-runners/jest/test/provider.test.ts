@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -31,6 +31,19 @@ const detect = (root: string) => jestTestRunner.detection.detect(root, readPacka
 const providers = [vitestTestRunner, jestTestRunner];
 
 describe('jestTestRunner detection', () => {
+  it('refuses to write its report through a .veritas that links outside the project', async () => {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-jest-link-')));
+    const outside = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-jest-outside-')));
+    mkdirSync(path.join(dir, 'node_modules/jest/bin'), { recursive: true });
+    writeFileSync(path.join(dir, 'node_modules/jest/bin/jest.js'), '');
+    // As code run in an isolated copy could leave it.
+    symlinkSync(outside, path.join(dir, '.veritas'), process.platform === 'win32' ? 'junction' : 'dir');
+    const run = await jestTestRunner.execution.run(dir, { timeoutMs: 30_000, label: 't' });
+    expect(run).toMatchObject({ status: 'error' });
+    expect(run.status === 'error' && run.detail).toMatch(/inside the project/);
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
   it('finds Jest through its config file', () => {
     for (const file of [
       'jest.config.js',

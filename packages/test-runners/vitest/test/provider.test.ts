@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { selectTestRunner, VeritasConfig } from '@under18dev/veritas-core';
@@ -39,6 +39,19 @@ describe('vitestTestRunner', () => {
     const run = await vitestTestRunner.execution.run(dir, { timeoutMs: 30_000, label: 't' });
     expect(run).toMatchObject({ status: 'error' });
     expect(run.status === 'error' && run.detail).toMatch(/wrote no JSON report/);
+  });
+
+  it('refuses to write its report through a .veritas that links outside the project', async () => {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-vitest-link-')));
+    const outside = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-vitest-outside-')));
+    mkdirSync(path.join(dir, 'node_modules/vitest'), { recursive: true });
+    writeFileSync(path.join(dir, 'node_modules/vitest/vitest.mjs'), '');
+    // As code run in an isolated copy could leave it.
+    symlinkSync(outside, path.join(dir, '.veritas'), process.platform === 'win32' ? 'junction' : 'dir');
+    const run = await vitestTestRunner.execution.run(dir, { timeoutMs: 30_000, label: 't' });
+    expect(run).toMatchObject({ status: 'error' });
+    expect(run.status === 'error' && run.detail).toMatch(/inside the project/);
+    expect(readdirSync(outside)).toEqual([]);
   });
 
   it('refuses test file filters that read as options or leave the directory', async () => {

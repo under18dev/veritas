@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { constants, copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import {
   gitCommit,
@@ -10,6 +10,7 @@ import {
   PatchAttempt,
   type Property,
   redact,
+  resolveInsideRoot,
   type StageName,
   sha256,
   stableId,
@@ -180,13 +181,16 @@ async function reassess(
   runId: string,
   options: { allowCodeConfig?: boolean; signal?: AbortSignal },
 ): Promise<{ runId: string; statuses: Record<string, string>; failed: string[] }> {
-  mkdirSync(path.join(workspace, '.veritas'), { recursive: true });
+  // Paths in the copy are checked to stay inside it: code run there may have replaced `.veritas` with a link.
+  mkdirSync(resolveInsideRoot(workspace, '.veritas'), { recursive: true });
   for (const file of ['config.json', 'approvals.json']) {
     const from = path.join(root, '.veritas', file);
-    const to = path.join(workspace, '.veritas', file);
-    // The repository's file, or none: never one the runs in the copy may have left there.
-    if (existsSync(from)) copyFileSync(from, to);
-    else rmSync(to, { force: true });
+    const to = resolveInsideRoot(workspace, path.join('.veritas', file));
+    // The repository's file, or none: never one the runs in the copy may have left there. A link left there is
+    // removed, not followed, and the copy is created anew.
+    rmSync(to, { force: true });
+    if (existsSync(from))
+      copyFileSync(from, resolveInsideRoot(workspace, path.join('.veritas', file)), constants.COPYFILE_EXCL);
   }
   const original = readArtifact(root, runId, 'run').data;
   // Mutant relations (equivalence, distinguishability, detection) need the mutate stage as well.
