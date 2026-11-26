@@ -110,6 +110,30 @@ describe('runNodeTest', () => {
     expect(run.status === 'ok' && run.failures[0]).toMatch(/^test\/broken\.test\.mjs:/);
   });
 
+  it('never reads a file that ended before any test reported as passing', async () => {
+    const root = project({
+      'src/exits.mjs': 'process.exit(0);\nexport const f = () => 1;\n',
+      'test/import-exits.test.mjs': `import { it } from 'node:test';
+import assert from 'node:assert/strict';
+import { f } from '../src/exits.mjs';
+it('f is 2', () => assert.strictEqual(f(), 2));
+`,
+      'test/test-exits.test.mjs': `import { test } from 'node:test';
+test('exits', () => { process.exit(0); });
+test('never', () => {});
+`,
+      'test/fine.test.mjs': "import { test } from 'node:test';\ntest('fine', () => {});\n",
+    });
+    const run = await runNodeTest(root, { timeoutMs: 60_000, label: 'exits' });
+
+    expect(run.status === 'ok' && Object.fromEntries(run.tests)).toEqual({
+      'test/import-exits.test.mjs::(file)': 'skipped',
+      'test/test-exits.test.mjs::(file)': 'skipped',
+      'test/fine.test.mjs::fine': 'passed',
+    });
+    expect(run.status === 'ok' && run.passed).toBe(1);
+  });
+
   it('records a failed hook of a suite under the suite', async () => {
     const root = project({
       'test/hook.test.mjs': `import { describe, before, it } from 'node:test';
@@ -180,6 +204,16 @@ describe('parseNodeTestReport', () => {
 
     expect(run.tests.get('(run)::(report)')).toBe('failed');
     expect(run.failed).toBe(1);
+  });
+
+  it('records a file reported as a whole without failing as skipped, never passed', () => {
+    const run = parseNodeTestReport(root, {
+      tests: [{ ...entry, name: 'test/a.test.mjs', status: 'passed' }],
+      success: true,
+    });
+
+    expect(Object.fromEntries(run.tests)).toEqual({ 'test/a.test.mjs::(file)': 'skipped' });
+    expect(run.passed).toBe(0);
   });
 
   it('keeps a failure when a test of the same name passes later', () => {

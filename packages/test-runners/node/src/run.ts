@@ -63,7 +63,7 @@ function short(text: string, max = 300): string {
  * parent test. Skipped and todo tests count as skipped. A suite that passed is not a test and is left out; one that
  * failed by itself (its callback or a hook threw), not only through a failed test in it, is recorded as failed under
  * its own name. A file that failed outside any test (it did not load, or its process exited with an error) is
- * `<file>::(file)`, failed. A run reported as not successful without naming a failure is `(run)::(report)`, failed.
+ * `<file>::(file)`, failed; one reported as a whole without failing ran no test and is `<file>::(file)`, skipped. A run reported as not successful without naming a failure is `(run)::(report)`, failed.
  */
 export function parseNodeTestReport(cwd: string, report: unknown): Extract<TestRunResult, { status: 'ok' }> {
   const tests = new Map<string, TestRunStatus>();
@@ -83,7 +83,13 @@ export function parseNodeTestReport(cwd: string, report: unknown): Extract<TestR
     const key = fileLevel
       ? `${rel}::(file)`
       : `${rel}::${[...entry.ancestors, entry.name].join(NODE_TEST_SEPARATOR)}`;
-    const status: TestRunStatus = failed ? 'failed' : entry.status === 'passed' ? 'passed' : 'skipped';
+    // A file reported as a whole without failing ran no test Node.js could report: it registered none, or its
+    // process ended before any test did (`process.exit(0)` on import or in a test). That is unknown, never a pass.
+    const status: TestRunStatus = failed
+      ? 'failed'
+      : entry.status === 'passed' && !fileLevel
+        ? 'passed'
+        : 'skipped';
 
     // A test whose subtest failed fails too; it keeps the first failure, a later entry with its name (a test
     // registered twice) cannot turn it into a pass.
@@ -179,6 +185,13 @@ export async function runNodeTest(cwd: string, options: TestRunOptions): Promise
       detail: `node --test wrote no report (exit ${result.exitCode}): ${short(result.stderr || result.stdout)}`,
     };
   }
+  // The reporter writes its report when the run's events end; without the summary of the whole run, the run
+  // ended early (the runner was killed or crashed) and nothing in the report can be trusted as complete.
+  if (typeof (report as Partial<NodeTestReport> | null)?.success !== 'boolean')
+    return {
+      status: 'error',
+      detail: `node --test ended without the summary of its run (exit ${result.exitCode ?? `signal ${result.signal}`}): ${short(result.stderr || result.stdout)}`,
+    };
   const parsed = parseNodeTestReport(cwd, report);
 
   // A nonzero exit is a failed run even when the report names no failure: it is never read as all passing.
