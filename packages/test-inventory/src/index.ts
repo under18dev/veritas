@@ -810,8 +810,13 @@ function analyzeBody(
   // body itself, which is not among its descendants.
   if (ts.isCallExpression(body) && (isExpectCall(body) || isAssertCall(body) || contextAssertion(body)))
     assertions.push(body);
+  // Subtests that are skipped or todo (`t.test('x', { skip: true }, fn)`) never run: nothing in them counts.
+  const skipped = skippedSubtestBodies(body, checker);
+  const notRun = (node: ts.Node) => skipped.some((fn) => contains(fn, node));
 
   for (const node of descendants(body)) {
+    if (notRun(node)) continue;
+
     if (ts.isTryStatement(node) && node.catchClause?.variableDeclaration)
       bind(
         bindingIdentifiers(node.catchClause.variableDeclaration.name),
@@ -1215,7 +1220,7 @@ function analyzeBody(
   // through the checker, so a shadowing local of the same name is not mistaken for it, and an imported helper
   // (through any re-exports) is looked up in the file that declares it.
   for (const node of descendants(body)) {
-    if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) continue;
+    if (notRun(node) || !ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) continue;
     let symbol = checker.getSymbolAtLocation(node.expression);
     if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
     const positions = (symbol?.declarations ?? [])
@@ -6463,6 +6468,41 @@ function functionName(value: ts.Expression): string | undefined {
 }
 
 /**
+ * The callbacks of the subtests a test body registers through its context that do not run: skipped or todo by
+ * their options (`t.test('x', { skip: true }, fn)`, with the runner's reading of option values) or chained
+ * (`t.test.skip`, `t.test.todo`), and those whose options cannot be read, which may be skipped.
+ */
+function skippedSubtestBodies(body: ts.Node, checker: ts.TypeChecker): ts.Node[] {
+  if (!runner.testOptions) return [];
+  const out: ts.Node[] = [];
+
+  for (const node of descendants(body)) {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) continue;
+    const outer = node.expression;
+    const chained =
+      (outer.name.text === 'skip' || outer.name.text === 'todo') &&
+      ts.isPropertyAccessExpression(outer.expression);
+    const callee: ts.Expression = chained ? outer.expression : outer;
+
+    if (
+      !ts.isPropertyAccessExpression(callee) ||
+      callee.name.text !== 'test' ||
+      !ts.isIdentifier(callee.expression) ||
+      !isTestContext(callee.expression, checker)
+    )
+      continue;
+    const options = registrationOptions(node);
+    const notRun =
+      chained || options.unknown || options.modifiers.includes('skip') || options.modifiers.includes('todo');
+    const fn = node.arguments.findLast((argument) => isFunction(skipParens(argument)));
+
+    if (notRun && fn) out.push(skipParens(fn));
+  }
+
+  return out;
+}
+
+/**
  * The function a registration runs as its test: written inline, or a function of the same file passed by name (a
  * declaration, or a constant holding a function or arrow).
  */
@@ -10207,15 +10247,32 @@ function nodeAssertCompared(name: string, values: ts.Expression[]): ts.Expressio
   if (name === 'fail') return [];
 
   if (!NODE_ASSERT_RUNNING.has(name)) return values;
-  const validator = values[1] && skipParens(values[1]);
-  const isValidator =
-    validator !== undefined &&
-    (ts.isObjectLiteralExpression(validator) ||
-      ts.isRegularExpressionLiteral(validator) ||
-      isFunction(validator) ||
-      ts.isClassExpression(validator));
+  const second = values[1];
 
-  return isValidator ? values.slice(0, 2) : values.slice(0, 1);
+  // Only a message is left out; a validator (or anything that may be one) is checked.
+  return second !== undefined && isAssertMessage(second) ? values.slice(0, 1) : values.slice(0, 2);
+}
+
+/**
+ * Whether the argument after the function of `throws` and the like is a message rather than an error validator: a
+ * string or template literal, or a constant holding one. Anything else (an object, a regular expression, a class,
+ * a function, a call, a value that cannot be read) may be a validator and is not taken for a message.
+ */
+function isAssertMessage(argument: ts.Expression, depth = 0): boolean {
+  const value = skipParens(argument);
+
+  if (ts.isStringLiteralLike(value) || ts.isTemplateExpression(value)) return true;
+
+  if (!ts.isIdentifier(value) || runnerChecker === undefined || depth > 10) return false;
+  const declaration = runnerChecker.getSymbolAtLocation(value)?.valueDeclaration;
+
+  return (
+    declaration !== undefined &&
+    ts.isVariableDeclaration(declaration) &&
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 &&
+    declaration.initializer !== undefined &&
+    isAssertMessage(declaration.initializer, depth + 1)
+  );
 }
 
 /** Literals, and `const` bindings initialised with constants, recursively. */

@@ -478,7 +478,7 @@ describe('Node.js test runner tests', () => {
         import { value } from '../src/value.ts';
         test('constant with a message', () => eq(1, 1, String(value(1))));
         test('ok with a message', () => assert.ok(true, String(value(1))));
-        test('throws with a message', () => assert.throws(() => {}, String(value(1))));
+        test('throws with a message', () => assert.throws(() => {}, \`failed for \${value(1)}\`));
         test('real with a message', () => eq(value(1), 2, 'adds one'));
         test('throws with a validator', () => assert.throws(() => value(1), /bad/, 'message'));
         test('context message', (t) => t.assert.equal(2, 2, String(value(1))));
@@ -927,6 +927,83 @@ describe('Node.js test runner tests', () => {
       assertionCount: 1,
       suspicions: [],
     });
+  });
+
+  it('keeps validators held in variables, and leaves out only messages', () => {
+    const root = tempProject({
+      'src/value.ts': `${VALUE}export const messageFor = (n: number) => 'bad ' + n;\n`,
+      'test/validators.test.ts': `
+        import { test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { messageFor } from '../src/value.ts';
+        class MyError extends Error {}
+        function validate(error: unknown) { return error instanceof MyError; }
+        const objectValidator = { message: messageFor(1) };
+        const pattern = new RegExp(messageFor(2));
+        const message = 'it should throw';
+        const messageTemplate = \`it should throw \${messageFor(3)}\`;
+        const fail = () => { throw new Error('x'); };
+        test('object in a constant', () => assert.throws(fail, objectValidator));
+        test('built in a constant', () => assert.throws(fail, pattern));
+        test('class', () => assert.throws(fail, MyError));
+        test('function', () => assert.throws(fail, validate));
+        test('message in a constant', () => assert.throws(fail, message));
+        test('template message in a constant', () => assert.throws(fail, messageTemplate));
+        test('call result', () => assert.throws(fail, messageFor(4) as never));
+      `,
+    });
+    const { tests } = inventory(root);
+    const asserted = (name: string) => byName(tests, name).targetCalls.some((call) => call.asserted);
+
+    for (const name of ['object in a constant', 'built in a constant', 'call result'])
+      expect(asserted(name), name).toBe(true);
+
+    for (const name of ['class', 'function', 'message in a constant', 'template message in a constant'])
+      expect(byName(tests, name).assertionCount, name).toBe(1);
+    // A message built from project code is not what the assertion checks.
+    expect(asserted('template message in a constant')).toBe(false);
+  });
+
+  it('leaves the bodies of skipped or todo subtests out of the test that registers them', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/skipped.test.ts': `
+        import { describe, it, test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { value } from '../src/value.ts';
+        test('skipped by option', async (t) => {
+          const actual = value(1);
+          await t.test('child', { skip: true }, (child) => { child.assert.equal(actual, 2); });
+        });
+        test('todo with an empty reason', async (t) => {
+          await t.test('child', { todo: '' }, () => { assert.equal(value(1), 2); });
+        });
+        test('unknown options', async (t) => {
+          const options = { skip: Math.random() > 1 };
+          await t.test('child', options, () => { assert.equal(value(1), 2); });
+        });
+        test('running subtest', async (t) => {
+          await t.test('child', { skip: false }, () => { assert.equal(value(1), 2); });
+        });
+        describe('suite', () => {
+          it.skip('skipped it', () => { assert.equal(value(1), 2); });
+          it('active it', () => { value(1); });
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of ['skipped by option', 'todo with an empty reason', 'unknown options']) {
+      expect(byName(tests, name).assertionCount, name).toBe(0);
+      expect(
+        byName(tests, name).targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(false);
+    }
+    expect(byName(tests, 'running subtest')).toMatchObject({ assertionCount: 1, suspicions: [] });
+    // A skipped test lends its assertions to no other.
+    expect(byName(tests, 'active it')).toMatchObject({ assertionCount: 0 });
+    expect(byName(tests, 'active it').suspicions).toContain('no_assertion');
   });
 
   it('does not read node:test files with the Vitest API', () => {
