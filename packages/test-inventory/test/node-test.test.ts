@@ -1391,10 +1391,8 @@ describe('Node.js test runner tests', () => {
     });
     const { tests } = inventory(root);
 
+    // CommonJS has no default export: `require('node:test').default` is undefined, so those calls register nothing.
     expect(tests.map((test) => [test.name, test.suitePath, test.modifiers])).toEqual([
-      ['required default', [], []],
-      ['bracket default', [], []],
-      ['destructured default', [], []],
       ['named default', [], []],
       ['namespace default', [], []],
       ['namespace default skipped', [], ['skip']],
