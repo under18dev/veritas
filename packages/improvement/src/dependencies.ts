@@ -225,7 +225,7 @@ function gitIgnores(repository: string, target: string): boolean | null {
 
 /**
  * Whether a link found outside node_modules leads to dependency code worth walking: into a node_modules directory, to
- * a package (a directory with a package.json), or to tracked source elsewhere in the git repository the link is in (a
+ * a package (a directory with a package.json), or to source git does not ignore elsewhere in the git repository the link is in (a
  * workspace package linking its sources from a sibling directory, `shared/src -> ../source`). A target in the same
  * repository is not followed when git ignores it (`logs -> ../logs`, build caches: they change on their own and are
  * not code the package ships) or when it holds the linking package itself (the repository root: walking it would walk
