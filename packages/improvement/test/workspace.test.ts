@@ -1,5 +1,7 @@
+import { spawnSync } from 'node:child_process';
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -7,25 +9,28 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   symlinkSync,
   unlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createWorkspace,
   diffSnapshots,
   projectHash,
+  removeStaleWorkspaces,
   removeWorkspace,
   snapshotTree,
   statTree,
   statWorkspaceModules,
   undoWrites,
   unexpectedChanges,
+  workspaceBase,
   writeNewFiles,
 } from '../src/index.js';
 import { project } from './helpers.js';
@@ -61,14 +66,13 @@ describe('workspace and repository writes', () => {
     const root = project({ 'src/a.ts': 'x' });
     symlinkSync(outside, path.join(root, 'test'), process.platform === 'win32' ? 'junction' : 'dir');
     // A cache directory of its own, so workspaces of tests running in parallel do not count.
-    const temp = mkdtempSync(path.join(tmpdir(), 'veritas-temp-'));
-    for (const name of ['XDG_CACHE_HOME', 'LOCALAPPDATA']) vi.stubEnv(name, temp);
+    const temp = useCacheDir();
     try {
       expect(() => createWorkspace(root)).toThrow(/links outside the project/);
-      // The partial copy is removed.
+      // The partial copy and its owner record are removed.
       expect(readdirSync(path.join(temp, 'veritas/improve'))).toEqual([]);
     } finally {
-      vi.unstubAllEnvs();
+      releaseCacheDir(temp);
     }
   });
 
@@ -188,8 +192,7 @@ describe('workspace and repository writes', () => {
   });
 
   it("makes copies in the user's cache directory, private to the user, not in the shared temporary directory", () => {
-    const cache = mkdtempSync(path.join(tmpdir(), 'veritas-cache-'));
-    for (const name of ['XDG_CACHE_HOME', 'LOCALAPPDATA']) vi.stubEnv(name, cache);
+    const cache = useCacheDir();
     try {
       const ws = createWorkspace(project({ 'src/a.ts': 'x' }));
       try {
@@ -203,7 +206,94 @@ describe('workspace and repository writes', () => {
       }
       expect(readdirSync(path.join(cache, 'veritas/improve'))).toEqual([]);
     } finally {
-      vi.unstubAllEnvs();
+      releaseCacheDir(cache);
     }
   });
+
+  it('refuses a cache directory inside the project, or below a directory others can write to', () => {
+    const root = project({ 'src/a.ts': 'x' });
+    vi.stubEnv('XDG_CACHE_HOME', path.join(root, '.cache'));
+    vi.stubEnv('LOCALAPPDATA', path.join(root, '.cache'));
+    try {
+      expect(() => createWorkspace(root)).toThrow(/inside the project/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    if (process.platform === 'win32') return;
+    const cache = useCacheDir();
+    try {
+      // Like a shared temporary directory: writable by others, sticky or not.
+      const shared = path.join(cache, 'shared');
+      mkdirSync(shared);
+      chmodSync(shared, 0o1777);
+      vi.stubEnv('XDG_CACHE_HOME', path.join(shared, 'cache'));
+      expect(() => createWorkspace(root)).toThrow(/can be written by other users/);
+    } finally {
+      releaseCacheDir(cache);
+    }
+  });
+
+  it('removes a partial copy when copying fails', () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return;
+    const root = project({ 'src/a.ts': 'x', 'secret/.env': 'TOKEN=1' });
+    chmodSync(path.join(root, 'secret/.env'), 0o000);
+    const cache = useCacheDir();
+    try {
+      expect(() => createWorkspace(root)).toThrow(/EACCES/);
+      expect(readdirSync(path.join(cache, 'veritas/improve'))).toEqual([]);
+    } finally {
+      chmodSync(path.join(root, 'secret/.env'), 0o600);
+      releaseCacheDir(cache);
+    }
+  });
+
+  it('removes copies left by an apply that is gone, never one that is running', () => {
+    const base = mkdtempSync(path.join(tmpdir(), 'veritas-stale-'));
+    const now = Date.now();
+    const copy = (name: string, owner: object | null, ageMs = 0) => {
+      const dir = path.join(base, `veritas-improve-${name}`);
+      mkdirSync(dir);
+      if (owner) writeFileSync(`${dir}.owner`, JSON.stringify(owner));
+      const time = new Date(now - ageMs);
+      utimesSync(dir, time, time);
+      return dir;
+    };
+    const dead = spawnSync(process.execPath, ['-e', '']).pid as number;
+    const day = 24 * 60 * 60 * 1000;
+    const gone = copy('dead00', { pid: dead, host: hostname() });
+    const running = copy('alive0', { pid: process.pid, host: hostname() }, 30 * day);
+    const foreignFresh = copy('frgn01', { pid: 1, host: 'other-host' }, day);
+    const foreignOld = copy('frgn02', { pid: 1, host: 'other-host' }, 8 * day);
+    const unownedFresh = copy('noown1', null, 60_000);
+    const unownedOld = copy('noown2', null, 2 * day);
+    writeFileSync(path.join(base, 'veritas-improve-orphan.owner'), '{}');
+    writeFileSync(path.join(base, 'unrelated'), '');
+    expect(removeStaleWorkspaces(base, now).sort()).toEqual([gone, foreignOld, unownedOld].sort());
+    expect(readdirSync(base).sort()).toEqual(
+      [
+        path.basename(running),
+        `${path.basename(running)}.owner`,
+        path.basename(foreignFresh),
+        `${path.basename(foreignFresh)}.owner`,
+        path.basename(unownedFresh),
+        'unrelated',
+      ].sort(),
+    );
+  });
 });
+
+/** Point the cache directory to a new private one under the real cache directory, whose parents are safe. */
+function useCacheDir(): string {
+  const parent = path.dirname(path.dirname(workspaceBase()));
+  mkdirSync(parent, { recursive: true });
+  const cache = mkdtempSync(path.join(parent, 'veritas-test-'));
+  for (const name of ['XDG_CACHE_HOME', 'LOCALAPPDATA']) vi.stubEnv(name, cache);
+
+  return cache;
+}
+
+function releaseCacheDir(cache: string): void {
+  vi.unstubAllEnvs();
+  rmSync(cache, { recursive: true, force: true });
+}

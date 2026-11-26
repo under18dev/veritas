@@ -16,7 +16,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import path from 'node:path';
 import { hashValue, resolveInsideRoot, sha256, VeritasError } from '@under18dev/veritas-core';
 import type { PatchFile } from './schema.js';
@@ -166,27 +166,128 @@ export function workspaceBase(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(base, 'veritas', 'improve');
 }
 
-/** Create `workspaceBase()` private to the user (0700), refusing one that is a link or owned by someone else. */
-function privateBase(): string {
+function unsafeBase(base: string, why: string): VeritasError {
+  return new VeritasError(
+    'user',
+    'IMPROVE_UNSAFE_WORKSPACE_DIR',
+    `isolated copies cannot be made in ${base}: ${why}`,
+    'point XDG_CACHE_HOME (LOCALAPPDATA on Windows) to a directory of your own outside the project',
+  );
+}
+
+/**
+ * Create `workspaceBase()` private to the user (0700) and return its real path. Refused when it lies in the project
+ * (the copy would copy itself), and on POSIX when it is a link or not the user's, or when a directory above it is not
+ * owned by the user or root or can be written by others (as a shared temporary directory can, sticky or not): others
+ * could then put a `node_modules` where code in the copy looks for modules.
+ */
+function privateBase(root: string): string {
   const base = workspaceBase();
   mkdirSync(base, { recursive: true, mode: 0o700 });
+  const realBase = realpathSync(base);
+  const realRoot = realpathSync(root);
+  const rel = path.relative(realRoot, realBase);
 
-  if (process.platform !== 'win32') {
-    const s = lstatSync(base);
+  if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)))
+    throw unsafeBase(realBase, 'it is inside the project');
 
-    if (!s.isDirectory() || s.uid !== process.getuid?.()) {
-      throw new VeritasError(
-        'user',
-        'IMPROVE_UNSAFE_WORKSPACE_DIR',
-        `${base} is not a directory owned by the current user, so isolated copies cannot be made there`,
-        'remove it, or point XDG_CACHE_HOME to a directory you own',
-      );
-    }
+  if (process.platform === 'win32') return realBase;
+  const uid = process.getuid?.();
+  const s = lstatSync(base);
 
-    if ((s.mode & 0o077) !== 0) chmodSync(base, 0o700);
+  if (!s.isDirectory() || s.uid !== uid)
+    throw unsafeBase(base, 'it is not a directory owned by the current user');
+
+  if ((s.mode & 0o077) !== 0) chmodSync(base, 0o700);
+
+  for (let dir = path.dirname(realBase); ; dir = path.dirname(dir)) {
+    const a = lstatSync(dir);
+
+    if ((a.uid !== uid && a.uid !== 0) || (a.mode & 0o022) !== 0)
+      throw unsafeBase(realBase, `${dir} above it can be written by other users`);
+
+    if (path.dirname(dir) === dir) break;
   }
 
-  return realpathSync(base);
+  return realBase;
+}
+
+const COPY_NAME = /^veritas-improve-[A-Za-z0-9]{6}$/;
+const OWNER_SUFFIX = '.owner';
+/** A copy without an owner record (made before records existed) is removed after this long. */
+const UNOWNED_STALE_MS = 24 * 60 * 60 * 1000;
+/** A copy made on another host sharing this cache directory is removed after this long. */
+const FOREIGN_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
+ * Remove copies left behind by an apply that ended without cleaning up (killed, or a crash). Each copy has an owner
+ * record next to it (`<copy>.owner`: process id and host). A copy is removed only when its process on this host is
+ * gone; a copy of another host (a cache directory shared over the network) or without a record only once it is old.
+ * A running apply's copy is never removed: its process is alive (a reused process id keeps a copy, never the reverse).
+ */
+export function removeStaleWorkspaces(base: string, now = Date.now()): string[] {
+  const removed: string[] = [];
+  let entries: string[];
+
+  try {
+    entries = readdirSync(base);
+  } catch {
+    return removed;
+  }
+
+  for (const name of entries) {
+    const dir = path.join(base, name);
+
+    if (name.endsWith(OWNER_SUFFIX)) {
+      // A record whose copy is gone.
+      if (
+        COPY_NAME.test(name.slice(0, -OWNER_SUFFIX.length)) &&
+        !existsSync(dir.slice(0, -OWNER_SUFFIX.length))
+      )
+        rmSync(dir, { force: true });
+      continue;
+    }
+
+    if (!COPY_NAME.test(name)) continue;
+    let stale: boolean;
+
+    try {
+      const age = now - lstatSync(dir).mtimeMs;
+      let owner: { pid?: unknown; host?: unknown } | null = null;
+
+      try {
+        owner = JSON.parse(readFileSync(dir + OWNER_SUFFIX, 'utf8'));
+      } catch {
+        owner = null;
+      }
+
+      stale =
+        owner === null || typeof owner.pid !== 'number'
+          ? age > UNOWNED_STALE_MS
+          : owner.host === hostname()
+            ? !processAlive(owner.pid)
+            : age > FOREIGN_STALE_MS;
+    } catch {
+      continue;
+    }
+
+    if (stale) {
+      removeWorkspace(dir);
+      removed.push(dir);
+    }
+  }
+
+  return removed;
 }
 
 /**
@@ -194,32 +295,43 @@ function privateBase(): string {
  * `node_modules` so the project's own test runner and mutator are used without reinstalling.
  */
 export function createWorkspace(root: string): string {
-  const dir = realpathSync(mkdtempSync(path.join(privateBase(), 'veritas-improve-')));
-  const realRoot = realpathSync(root);
-  cpSync(realRoot, dir, {
-    recursive: true,
-    verbatimSymlinks: true,
-    filter: (src) => {
-      const rel = path.relative(realRoot, src);
+  const base = privateBase(root);
+  removeStaleWorkspaces(base);
+  const dir = realpathSync(mkdtempSync(path.join(base, 'veritas-improve-')));
 
-      return rel === '' || !rel.split(path.sep).some((s) => IGNORED_DIRS.has(s));
-    },
-  });
-  const escaping = linksLeaving(dir);
-  if (escaping.length > 0) {
+  try {
+    writeFileSync(dir + OWNER_SUFFIX, JSON.stringify({ pid: process.pid, host: hostname() }), {
+      mode: 0o600,
+    });
+    const realRoot = realpathSync(root);
+    cpSync(realRoot, dir, {
+      recursive: true,
+      verbatimSymlinks: true,
+      filter: (src) => {
+        const rel = path.relative(realRoot, src);
+
+        return rel === '' || !rel.split(path.sep).some((s) => IGNORED_DIRS.has(s));
+      },
+    });
+    const escaping = linksLeaving(dir);
+    if (escaping.length > 0) {
+      throw new VeritasError(
+        'user',
+        'IMPROVE_UNSAFE_LINK',
+        `the project has links outside the project, which the isolated run could write through: ${escaping.join(', ')}`,
+        'replace them with real files or directories before applying an improvement',
+      );
+    }
+    const modules = path.join(realRoot, 'node_modules');
+
+    if (existsSync(modules)) linkPackages(modules, path.join(dir, 'node_modules'));
+
+    return dir;
+  } catch (error) {
+    // A partial copy holds project files (possibly secrets such as .env): never leave one behind.
     removeWorkspace(dir);
-    throw new VeritasError(
-      'user',
-      'IMPROVE_UNSAFE_LINK',
-      `the project has links outside the project, which the isolated run could write through: ${escaping.join(', ')}`,
-      'replace them with real files or directories before applying an improvement',
-    );
+    throw error;
   }
-  const modules = path.join(realRoot, 'node_modules');
-
-  if (existsSync(modules)) linkPackages(modules, path.join(dir, 'node_modules'));
-
-  return dir;
 }
 
 /** Copied symbolic links (kept verbatim) whose target is not inside `dir`, as `path -> target`. */
@@ -242,6 +354,7 @@ function linksLeaving(dir: string): string[] {
 
 export function removeWorkspace(dir: string): void {
   rmSync(dir, { recursive: true, force: true });
+  rmSync(dir + OWNER_SUFFIX, { force: true });
 }
 
 export interface WriteRecord {

@@ -1,4 +1,5 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import {
   appendFileSync,
   existsSync,
@@ -14,7 +15,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -23,7 +24,7 @@ import {
   projectHash,
   readPlan,
 } from '../../packages/improvement/dist/index.js';
-import { copyFixture, json, runCli } from './helpers.js';
+import { CLI, copyFixture, json, runCli } from './helpers.js';
 
 const LONG = 300_000;
 
@@ -211,7 +212,7 @@ describe('improve on agent-loop', () => {
     LONG,
   );
 
-  type Hook = (workspace: string) => void;
+  type Hook = (workspace: string) => void | Promise<void>;
 
   /**
    * Apply the plan with a hook acting in the copy as a test could (after the patch unless `when` says otherwise), and
@@ -240,9 +241,17 @@ describe('improve on agent-loop', () => {
   it(
     'discards the patch when the patched run rewrites a copied source file',
     async () => {
-      const attempt = await applyTampered((workspace) => {
+      let inspector: string | undefined = 'not checked';
+      const attempt = await applyTampered(async (workspace) => {
         appendFileSync(path.join(workspace, 'src/age.ts'), '// rewritten\n');
+        // Code under test may signal the Veritas process to open its inspector; during an apply it stays closed.
+        if (process.platform !== 'win32') {
+          process.kill(process.pid, 'SIGUSR1');
+          await new Promise((r) => setTimeout(r, 300));
+          inspector = (await import('node:inspector')).url();
+        }
       });
+      if (process.platform !== 'win32') expect(inspector).toBeUndefined();
       expect(attempt.outcome).toBe('no_safe_improvement');
       expect(attempt.reasons[0]).toContain("changed the isolated copy beyond the plan's files (src/age.ts)");
     },
@@ -348,6 +357,50 @@ describe('improve on agent-loop', () => {
       expect(attempt.outcome).toBe('no_safe_improvement');
       expect(attempt.reasons[0]).toContain("beyond the plan's files (src/age.ts)");
       expect(projectHash(dir)).toBe(hash);
+    },
+    LONG,
+  );
+
+  it(
+    'removes the copy when an apply is ended by SIGTERM',
+    async () => {
+      // A cache directory of its own, under the real one so its parents are safe.
+      const parent = path.join(homedir(), '.cache');
+      mkdirSync(parent, { recursive: true });
+      const cache = mkdtempSync(path.join(parent, 'veritas-acceptance-'));
+      const base = path.join(cache, 'veritas/improve');
+      const copies = () =>
+        existsSync(base) ? readdirSync(base).filter((n) => /^veritas-improve-\w{6}$/.test(n)) : [];
+
+      try {
+        const child = spawn(
+          process.execPath,
+          [
+            CLI,
+            'improve',
+            '--apply',
+            '--plan',
+            plan.planId,
+            '--approve',
+            plan.approvalToken as string,
+            '--json',
+          ],
+          {
+            cwd: dir,
+            env: { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CACHE_HOME: cache },
+            stdio: 'ignore',
+          },
+        );
+        const exited = once(child, 'exit');
+        const deadline = Date.now() + 60_000;
+        while (copies().length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+        expect(copies()).toHaveLength(1);
+        child.kill('SIGTERM');
+        await exited;
+        expect(readdirSync(base)).toEqual([]);
+      } finally {
+        rmSync(cache, { recursive: true, force: true });
+      }
     },
     LONG,
   );

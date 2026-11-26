@@ -7,6 +7,7 @@ import {
   type ImprovementOutcome,
   loadConfig,
   type MeasurementSnapshot,
+  onExitCleanup,
   PatchAttempt,
   type Property,
   redact,
@@ -186,8 +187,10 @@ async function reassess(
   for (const file of ['config.json', 'approvals.json']) {
     const from = path.join(root, '.veritas', file);
     const to = resolveInsideRoot(workspace, path.join('.veritas', file));
-    // The repository's file, or none: never one the runs in the copy may have left there. A link left there is
-    // removed, not followed, and the copy is created anew.
+    // The repository's file, or none: never one the runs in the copy may have left there. Whatever is at the
+    // destination is removed first (a link itself, not its target) and the file is copied exclusively. A destination
+    // or `.veritas` that resolves outside the copy (a link leading out) is never touched: resolveInsideRoot throws,
+    // and the attempt ends as an error.
     rmSync(to, { force: true });
     if (existsSync(from))
       copyFileSync(from, resolveInsideRoot(workspace, path.join('.veritas', file)), constants.COPYFILE_EXCL);
@@ -534,6 +537,12 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
   const remaining = () => Math.max(1, deadline - Date.now());
   const workspace = createWorkspace(root);
   let written: WriteRecord | null = null;
+  // Ctrl-C or SIGTERM end the process without running `finally`: remove the copy then too.
+  const unregisterCleanup = onExitCleanup(() => removeWorkspace(workspace));
+  // Code under test could send SIGUSR1 to this process to open its inspector; a listener keeps it closed. Child
+  // processes get --disable-sigusr1 (see `projectNodeOptions`).
+  const ignoreSigusr1 = () => {};
+  if (process.platform !== 'win32') process.on('SIGUSR1', ignoreSigusr1);
 
   try {
     // The copy as made, to tell what the runs in it changed; and the dependencies it links to, which it shares
@@ -844,5 +853,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
     );
   } finally {
     removeWorkspace(workspace);
+    unregisterCleanup();
+    process.removeListener('SIGUSR1', ignoreSigusr1);
   }
 }
