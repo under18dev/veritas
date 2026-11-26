@@ -456,7 +456,11 @@ export function createWorkspace(root: string): string {
     return dir;
   } catch (error) {
     // A partial copy holds project files (possibly secrets such as .env): never leave one behind.
-    removeWorkspace(dir);
+    try {
+      removeWorkspace(dir);
+    } catch {
+      // What could not be removed is left to `removeStaleWorkspaces`; the error that ended the copy is the one shown.
+    }
     throw error;
   }
 }
@@ -487,10 +491,15 @@ const exitCleanups = new Map<string, () => void>();
  * last files when they are ended.
  */
 export function removeWorkspace(dir: string): void {
-  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-  rmSync(dir + OWNER_SUFFIX, { force: true });
-  exitCleanups.get(dir)?.();
-  exitCleanups.delete(dir);
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    rmSync(dir + OWNER_SUFFIX, { force: true });
+  } finally {
+    // Also when removing fails (on Windows a file still open in a process the run started is EBUSY or EPERM): the
+    // copy's owner record names this process, so `removeStaleWorkspaces` removes what is left once it has ended.
+    exitCleanups.get(dir)?.();
+    exitCleanups.delete(dir);
+  }
 }
 
 export interface WriteRecord {

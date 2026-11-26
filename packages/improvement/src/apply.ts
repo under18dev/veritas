@@ -888,7 +888,11 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
       { workspace, rolledBack: true },
     );
   } finally {
-    removeWorkspace(workspace);
-    process.removeListener('SIGUSR1', ignoreSigusr1);
+    // The listener goes even when the copy cannot be removed (Windows keeps a file a process still has open).
+    try {
+      removeWorkspace(workspace);
+    } finally {
+      process.removeListener('SIGUSR1', ignoreSigusr1);
+    }
   }
 }
