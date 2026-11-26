@@ -286,8 +286,6 @@ importers:
         specifier: 30.5.2
         version: 30.5.2(@types/node@26.6.6)(supports-color@7.2.0)
 
-  fixtures/node-app: {}
-
   fixtures/no-spec:
     devDependencies:
       '@mizchi/mutator':
@@ -301,6 +299,8 @@ importers:
         version: 5.1.1(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.8.3))
 
   fixtures/no-vitest: {}
+
+  fixtures/node-app: {}
 
   fixtures/number-model:
     devDependencies:
@@ -539,6 +539,9 @@ importers:
       '@under18dev/veritas-property-engine':
         specifier: workspace:*
         version: link:../property-engine
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
       zod:
         specifier: 4.6.7
         version: 4.6.7
