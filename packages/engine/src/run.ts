@@ -1850,7 +1850,9 @@ export function unreadTestFiles(inventory: TestInventory): string[] {
       // A call into a package at the top level (`suite()` from `some-lib`) may register tests through it.
       if (file.packageCall !== undefined)
         return [
-          `${file.path} (it calls into package ${file.packageCall} at the top level and may register tests through it)`,
+          file.packageCallVia === undefined
+            ? `${file.path} (it calls into package ${file.packageCall} at the top level and may register tests through it)`
+            : `${file.path} (it loads ${file.packageCallVia}, which calls into package ${file.packageCall} when it loads and may register tests through it)`,
         ];
 
       if (file.inexactNames === undefined && !file.unseenReach) return [];

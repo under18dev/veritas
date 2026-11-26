@@ -114,6 +114,24 @@ describe('unreadTestFiles', () => {
     ]);
   });
 
+  it('names the local module through which a file calls into a package', () => {
+    const unread = unreadTestFiles({
+      tests: [],
+      edges: [],
+      files: [
+        {
+          ...file('test/a.test.mjs', { usesRunner: false, packageCall: 'shared-tests' }),
+          packageCallVia: 'test/helper.mjs',
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(unread).toEqual([
+      'test/a.test.mjs (it loads test/helper.mjs, which calls into package shared-tests when it loads and may register tests through it)',
+    ]);
+  });
+
   it('lists the first ten files in a message and counts the rest', () => {
     const many = Array.from({ length: 13 }, (_, index) => `f${index}`);
 
