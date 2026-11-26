@@ -484,6 +484,8 @@ interface BodyAnalysis {
   unresolvedImports: Set<string>;
   helperAsserts: boolean;
   opaque: boolean;
+  /** A subtest the body registers may or may not run (its options cannot be read): its body is not counted. */
+  unreadSubtests: boolean;
   /** Calls whose result flows into what the body returns. */
   returned: Set<Invocation>;
   /**
@@ -811,8 +813,8 @@ function analyzeBody(
   if (ts.isCallExpression(body) && (isExpectCall(body) || isAssertCall(body) || contextAssertion(body)))
     assertions.push(body);
   // Subtests that are skipped or todo (`t.test('x', { skip: true }, fn)`) never run: nothing in them counts.
-  const skipped = skippedSubtestBodies(body, checker);
-  const notRun = (node: ts.Node) => skipped.some((fn) => contains(fn, node));
+  const subtests = skippedSubtestBodies(body, checker);
+  const notRun = (node: ts.Node) => subtests.skipped.some((fn) => contains(fn, node));
 
   for (const node of descendants(body)) {
     if (notRun(node)) continue;
@@ -1386,6 +1388,7 @@ function analyzeBody(
     unresolvedImports,
     helperAsserts,
     opaque,
+    unreadSubtests: subtests.unread,
     returned,
     progressOnly,
     observed,
@@ -6472,9 +6475,13 @@ function functionName(value: ts.Expression): string | undefined {
  * their options (`t.test('x', { skip: true }, fn)`, with the runner's reading of option values) or chained
  * (`t.test.skip`, `t.test.todo`), and those whose options cannot be read, which may be skipped.
  */
-function skippedSubtestBodies(body: ts.Node, checker: ts.TypeChecker): ts.Node[] {
-  if (!runner.testOptions) return [];
-  const out: ts.Node[] = [];
+function skippedSubtestBodies(
+  body: ts.Node,
+  checker: ts.TypeChecker,
+): { skipped: ts.Node[]; unread: boolean } {
+  if (!runner.testOptions) return { skipped: [], unread: false };
+  const skipped: ts.Node[] = [];
+  let unread = false;
 
   for (const node of descendants(body)) {
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) continue;
@@ -6491,15 +6498,93 @@ function skippedSubtestBodies(body: ts.Node, checker: ts.TypeChecker): ts.Node[]
       !isTestContext(callee.expression, checker)
     )
       continue;
-    const options = registrationOptions(node);
-    const notRun =
-      chained || options.unknown || options.modifiers.includes('skip') || options.modifiers.includes('todo');
     const fn = node.arguments.findLast((argument) => isFunction(skipParens(argument)));
+    const state = chained ? 'skipped' : subtestState(node, checker);
 
-    if (notRun && fn) out.push(skipParens(fn));
+    if (state === 'runs' || !fn) continue;
+    // A subtest that may or may not run is credited to no one, and leaves the test it is in unjudged.
+    skipped.push(skipParens(fn));
+
+    if (state === 'unknown') unread = true;
   }
 
-  return out;
+  return { skipped, unread };
+}
+
+/**
+ * Whether a subtest (`t.test(title, options, fn)`) runs, as Node reads its options: skipped or todo by an option set
+ * to anything but `false` or `undefined`, also through a constant holding the object literal (`const o = { skip:
+ * true }`); unknown when an option or the options object cannot be read.
+ */
+function subtestState(call: ts.CallExpression, checker: ts.TypeChecker): 'runs' | 'skipped' | 'unknown' {
+  const resolve = (expression: ts.Expression): ts.Expression => {
+    let value = skipParens(expression);
+
+    for (let depth = 0; ts.isIdentifier(value) && depth < 10; depth++) {
+      const declaration = checker.getSymbolAtLocation(value)?.valueDeclaration;
+
+      if (
+        !declaration ||
+        !ts.isVariableDeclaration(declaration) ||
+        (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0 ||
+        !declaration.initializer
+      )
+        break;
+      value = skipParens(declaration.initializer);
+    }
+
+    return value;
+  };
+  let state: 'runs' | 'skipped' | 'unknown' = 'runs';
+
+  for (const [index, argument] of call.arguments.entries()) {
+    const raw = skipParens(argument);
+
+    // The title, and the test function (inline or a local function passed by name).
+    if ((index === 0 && ts.isStringLiteralLike(raw)) || isFunction(raw) || testFunction(raw, checker))
+      continue;
+
+    if (ts.isIdentifier(raw) && raw.text === 'undefined') continue;
+    const value = resolve(raw);
+
+    if (!ts.isObjectLiteralExpression(value)) {
+      state = 'unknown';
+      continue;
+    }
+
+    for (const property of value.properties) {
+      const name =
+        property.name && (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name))
+          ? property.name.text
+          : undefined;
+
+      if (!ts.isPropertyAssignment(property) || name === undefined) {
+        state = 'unknown';
+        continue;
+      }
+
+      if (name !== 'skip' && name !== 'todo') continue;
+      const option = skipParens(property.initializer);
+
+      if (
+        option.kind === ts.SyntaxKind.FalseKeyword ||
+        (ts.isIdentifier(option) && option.text === 'undefined') ||
+        ts.isVoidExpression(option)
+      )
+        continue;
+
+      if (
+        option.kind === ts.SyntaxKind.TrueKeyword ||
+        option.kind === ts.SyntaxKind.NullKeyword ||
+        ts.isStringLiteralLike(option) ||
+        ts.isNumericLiteral(option)
+      )
+        return 'skipped';
+      state = 'unknown';
+    }
+  }
+
+  return state;
 }
 
 /**
@@ -6573,7 +6658,25 @@ function withOptions(node: ts.CallExpression, found: Registration | undefined): 
 
 /** Vitest takes `(name, fn, timeout | options)` as well as `(name, options, fn)`: the callback is the last function. */
 function callbackArgument(node: ts.CallExpression): ts.Expression | undefined {
-  return node.arguments.slice(1).findLast(isFunction) ?? node.arguments.at(-1);
+  const after = node.arguments.slice(1);
+  const inline = after.findLast((argument) => isFunction(skipParens(argument)));
+
+  if (inline) return inline;
+  // By role, not position: a function passed by name may be followed by a timeout (`it('x', check, 1000)`) and
+  // preceded by options (`test('x', { skip }, check)`).
+  const candidates = after.filter((argument) => {
+    const value = skipParens(argument);
+
+    return !numericLiteral(value) && !ts.isObjectLiteralExpression(value) && !ts.isStringLiteralLike(value);
+  });
+  const resolved =
+    runnerChecker === undefined
+      ? undefined
+      : candidates.findLast(
+          (argument) => testFunction(argument, runnerChecker as ts.TypeChecker) !== undefined,
+        );
+
+  return resolved ?? candidates.at(-1) ?? node.arguments.at(-1);
 }
 
 /**
@@ -7156,7 +7259,7 @@ function analyzeTest(
   const body = testFn?.body;
   // A callback passed some other way (an imported function, a call's result) cannot be read: the test is not
   // judged empty for it.
-  const unreadCallback = testFn === undefined && opaqueCallback(info.callback);
+  const unreadCallbackArgument = testFn === undefined && opaqueCallback(info.callback);
   const nodes = body ? descendants(body) : [];
   const contextParameter =
     testFn?.parameters[0] && ts.isIdentifier(testFn.parameters[0].name)
@@ -7183,6 +7286,8 @@ function analyzeTest(
         false,
       )
     : undefined;
+  // What the test runs cannot all be read (its callback, or a subtest that may not run): never judged empty.
+  const unreadCallback = unreadCallbackArgument || analysis?.unreadSubtests === true;
   const assertions = analysis?.assertions ?? [];
   const unresolvedImports = analysis?.unresolvedImports ?? new Set<string>();
   const calledSymbols = [...new Set(analysis?.calls.map((call) => call.target.symbol))];
@@ -7281,7 +7386,7 @@ function analyzeTest(
   )
     suspicions.push('no_assertion');
 
-  if (tautological) suspicions.push('tautological_assertion');
+  if (tautological && !unreadCallback) suspicions.push('tautological_assertion');
   // Code that runs when the file loads (outside any function), its own or that of the local modules it imports,
   // runs before every test in it.
   const loading = fileLoadReach(source, ctx);
@@ -10262,6 +10367,21 @@ function isAssertMessage(argument: ts.Expression, depth = 0): boolean {
   const value = skipParens(argument);
 
   if (ts.isStringLiteralLike(value) || ts.isTemplateExpression(value)) return true;
+
+  // Calls known to return a string: `String(x)`, `x.toString()`, `xs.join(', ')`, `JSON.stringify(x)`.
+  if (ts.isCallExpression(value)) {
+    const callee = skipParens(value.expression);
+
+    return (
+      (ts.isIdentifier(callee) && callee.text === 'String') ||
+      (ts.isPropertyAccessExpression(callee) &&
+        (callee.name.text === 'toString' ||
+          callee.name.text === 'join' ||
+          (callee.name.text === 'stringify' &&
+            ts.isIdentifier(callee.expression) &&
+            callee.expression.text === 'JSON')))
+    );
+  }
 
   if (!ts.isIdentifier(value) || runnerChecker === undefined || depth > 10) return false;
   const declaration = runnerChecker.getSymbolAtLocation(value)?.valueDeclaration;

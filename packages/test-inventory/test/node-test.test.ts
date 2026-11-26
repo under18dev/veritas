@@ -950,6 +950,10 @@ describe('Node.js test runner tests', () => {
         test('message in a constant', () => assert.throws(fail, message));
         test('template message in a constant', () => assert.throws(fail, messageTemplate));
         test('call result', () => assert.throws(fail, messageFor(4) as never));
+        test('String message', () => assert.throws(fail, String(messageFor(5))));
+        test('toString message', () => assert.throws(fail, messageFor(6).toString()));
+        test('join message', () => assert.throws(fail, [messageFor(7)].join(', ')));
+        test('JSON message', () => assert.throws(fail, JSON.stringify(messageFor(8))));
       `,
     });
     const { tests } = inventory(root);
@@ -961,7 +965,14 @@ describe('Node.js test runner tests', () => {
     for (const name of ['class', 'function', 'message in a constant', 'template message in a constant'])
       expect(byName(tests, name).assertionCount, name).toBe(1);
     // A message built from project code is not what the assertion checks.
-    expect(asserted('template message in a constant')).toBe(false);
+    for (const name of [
+      'template message in a constant',
+      'String message',
+      'toString message',
+      'join message',
+      'JSON message',
+    ])
+      expect(asserted(name), name).toBe(false);
   });
 
   it('leaves the bodies of skipped or todo subtests out of the test that registers them', () => {
@@ -982,6 +993,21 @@ describe('Node.js test runner tests', () => {
           const options = { skip: Math.random() > 1 };
           await t.test('child', options, () => { assert.equal(value(1), 2); });
         });
+        test('option read from the environment', async (t) => {
+          await t.test('s', { skip: process.env.CI === 'x' }, () => { assert.equal(value(1), 2); });
+        });
+        test('options from a function', async (t) => {
+          const options = () => ({ timeout: 5 });
+          await t.test('s', options(), () => { assert.equal(value(1), 2); });
+        });
+        test('constant options that run', async (t) => {
+          const o = { timeout: 5 };
+          await t.test('s', o, () => { assert.equal(value(1), 2); });
+        });
+        test('constant options that skip', async (t) => {
+          const o = { skip: true };
+          await t.test('s', o, () => { assert.equal(value(1), 2); });
+        });
         test('running subtest', async (t) => {
           await t.test('child', { skip: false }, () => { assert.equal(value(1), 2); });
         });
@@ -993,17 +1019,66 @@ describe('Node.js test runner tests', () => {
     });
     const { tests } = inventory(root);
 
-    for (const name of ['skipped by option', 'todo with an empty reason', 'unknown options']) {
+    for (const name of [
+      'skipped by option',
+      'todo with an empty reason',
+      'unknown options',
+      'option read from the environment',
+      'options from a function',
+      'constant options that skip',
+    ]) {
       expect(byName(tests, name).assertionCount, name).toBe(0);
       expect(
         byName(tests, name).targetCalls.some((call) => call.asserted),
         name,
       ).toBe(false);
     }
+
+    // A subtest that may or may not run is credited to no one, and the test is left unjudged, never empty.
+    for (const name of ['unknown options', 'option read from the environment', 'options from a function']) {
+      expect(byName(tests, name).suspicions, name).toContain('opaque_call');
+      expect(byName(tests, name).suspicions, name).not.toContain('no_assertion');
+      expect(byName(tests, name).suspicions, name).not.toContain('tautological_assertion');
+    }
+    // Options read through a constant: known to run, or known to be skipped.
+    expect(byName(tests, 'constant options that run')).toMatchObject({ assertionCount: 1, suspicions: [] });
+    expect(byName(tests, 'constant options that skip').suspicions).toContain('no_assertion');
     expect(byName(tests, 'running subtest')).toMatchObject({ assertionCount: 1, suspicions: [] });
     // A skipped test lends its assertions to no other.
     expect(byName(tests, 'active it')).toMatchObject({ assertionCount: 0 });
     expect(byName(tests, 'active it').suspicions).toContain('no_assertion');
+  });
+
+  it('finds a test function passed by name before a timeout or after options, with every runner', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/vitest.test.ts': `
+        import { expect, it } from 'vitest';
+        import { value } from '../src/value.ts';
+        const check = () => expect(value(1)).toBe(2);
+        it('before a timeout', check, 1000);
+        it('after options', { timeout: 1000 }, check);
+      `,
+    });
+    const { tests } = inventory(root, vitest.recognition);
+
+    for (const name of ['before a timeout', 'after options'])
+      expect(byName(tests, name), name).toMatchObject({ assertionCount: 1, suspicions: [] });
+    const node = tempProject({
+      'src/value.ts': VALUE,
+      'test/node.test.ts': `
+        import { test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { value } from '../src/value.ts';
+        function check() { assert.equal(value(1), 2); }
+        test('after options', { timeout: 1000 }, check);
+      `,
+    });
+
+    expect(byName(inventory(node).tests, 'after options')).toMatchObject({
+      assertionCount: 1,
+      suspicions: [],
+    });
   });
 
   it('does not read node:test files with the Vitest API', () => {
