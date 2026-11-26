@@ -1,7 +1,7 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { gitRun } from '@under18dev/veritas-core';
 
 /**
  * Stat snapshot of the installed dependencies that an isolated workspace reaches through its links, keyed by
@@ -216,14 +216,9 @@ function repositoryRoot(start: string): string | null {
 
 /** Whether git ignores `target` in `repository`; null when git cannot tell (not a repository, git missing). */
 function gitIgnores(repository: string, target: string): boolean | null {
-  const run = spawnSync('git', ['-C', repository, 'check-ignore', '-q', '--', target], {
-    env: {
-      PATH: process.env.PATH ?? '',
-      ...(process.env.SYSTEMROOT ? { SYSTEMROOT: process.env.SYSTEMROOT } : {}),
-    },
-    stdio: 'ignore',
-    timeout: 10_000,
-  });
+  // Through core's git options: `check-ignore` reads the index, which would start a file system monitor the
+  // repository configures (core.fsmonitor), and this repository is not even the project's.
+  const run = gitRun(repository, ['check-ignore', '-q', '--', target], { timeoutMs: 10_000 });
 
   return run.status === 0 ? true : run.status === 1 ? false : null;
 }

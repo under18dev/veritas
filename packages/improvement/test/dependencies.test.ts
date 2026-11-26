@@ -1,5 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -243,6 +245,27 @@ describe('snapshotDependencies', () => {
     writeFileSync(path.join(repo, 'logs/today.log'), 'another line');
     expect(diffDependencies(before, snapshotDependencies(root))).toEqual([]);
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'asks git about ignored files without starting a command the repository configures',
+    () => {
+      const root = project({ 'src/a.ts': 'x' });
+      const repo = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-repo-monitor-')));
+      const marker = `${repo}-fsmonitor-ran`;
+      gitInit(repo);
+      const hook = path.join(repo, 'monitor.sh');
+      writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\n`);
+      chmodSync(hook, 0o755);
+      spawnSync('git', ['config', 'core.fsmonitor', hook], { cwd: repo });
+      write(path.join(repo, 'shared/package.json'), '{"name":"shared"}');
+      write(path.join(repo, 'source/index.js'), 'export const shared = 1;');
+      symlinkSync(path.join(repo, 'source'), path.join(repo, 'shared/src'), DIR);
+      mkdirSync(path.join(root, 'node_modules'));
+      symlinkSync(path.join(repo, 'shared'), path.join(root, 'node_modules/shared'), DIR);
+      expect([...snapshotDependencies(root).keys()]).toContain(path.join(repo, 'source/index.js'));
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
 
   it('lists a link once when a tree reached later holds one reached earlier', () => {
     const root = project({ 'src/a.ts': 'x' });
