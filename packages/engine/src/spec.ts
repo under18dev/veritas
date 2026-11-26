@@ -2,13 +2,11 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import {
   type Approval,
-  GIT_ENV,
-  gitArgs,
   listRuns,
   loadConfig,
   type Property,
   RUNS_DIR,
-  runCommand,
+  runGit,
   type VeritasConfig,
   VeritasError,
 } from '@under18dev/veritas-core';
@@ -121,11 +119,7 @@ export function showProperty(
 }
 
 async function gitUser(root: string): Promise<string> {
-  const r = await runCommand('git', gitArgs(['config', 'user.name']), {
-    cwd: root,
-    timeoutMs: 5000,
-    env: { ...GIT_ENV },
-  });
+  const r = await runGit(root, ['config', 'user.name'], { timeoutMs: 5000 });
 
   return r.exitCode === 0 ? r.stdout.trim() : '';
 }

@@ -1,5 +1,7 @@
-import { execFileSync, spawnSync } from 'node:child_process';
-import { DEFAULT_ENV_ALLOWLIST } from './process.js';
+import { spawnSync } from 'node:child_process';
+import { accessSync, constants, statSync } from 'node:fs';
+import path from 'node:path';
+import { type CommandResult, DEFAULT_ENV_ALLOWLIST, type RunCommandOptions, runCommand } from './process.js';
 
 /**
  * Git reads the repository's own configuration (`.git/config`), which can name commands to run. Veritas runs git on
@@ -12,6 +14,9 @@ import { DEFAULT_ENV_ALLOWLIST } from './process.js';
  * - `log.showSignature=false`: `log` would otherwise run `gpg.program` to verify commit signatures.
  * - `--no-pager`: `core.pager` and `pager.<cmd>` are never started (output is not a terminal either).
  * - `--no-optional-locks`: no index refresh is written while reading.
+ * - `diff.ignoreSubmodules=all`, `submodule.recurse=false`: a diff would otherwise start a git in each submodule to
+ *   see whether it is dirty, with the submodule's own configuration (filters and monitor included).
+ * - git itself is found on the absolute entries of PATH only (see `gitExecutable`).
  * - `GIT_TERMINAL_PROMPT=0` and the allowlisted environment: no prompt, and no `GIT_*` override from the caller.
  * - Diffs are run with `--no-ext-diff --no-textconv` by their callers (`diff.external`, `diff.<driver>.command` and
  *   `.textconv`). A diff against the working tree could still run a configured clean filter
@@ -29,6 +34,12 @@ export const SAFE_GIT_OPTIONS: readonly string[] = [
   'core.fsmonitor=false',
   '-c',
   'log.showSignature=false',
+  // A diff that checks whether a submodule is dirty runs a git in the submodule, with the submodule's own
+  // configuration (its filters, its monitor): submodules are never looked into.
+  '-c',
+  'diff.ignoreSubmodules=all',
+  '-c',
+  'submodule.recurse=false',
 ];
 
 /** Git's arguments with `SAFE_GIT_OPTIONS` in front. */
@@ -53,39 +64,107 @@ function gitEnv(): Record<string, string> {
 
 const GIT_TIMEOUT_MS = 30_000;
 
+function executable(file: string, platform: NodeJS.Platform): boolean {
+  try {
+    if (!statSync(file).isFile()) return false;
+
+    if (platform !== 'win32') accessSync(file, constants.X_OK);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The absolute path of git, from the absolute entries of PATH only, or null when there is none. Git runs with the
+ * repository as its working directory; a relative or empty PATH entry (and, on Windows, the working directory itself,
+ * which is searched before PATH) would let a `git` or `git.exe` inside the repository run instead.
+ */
+export function gitExecutable(
+  options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform } = {},
+): string | null {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const separator = platform === 'win32' ? ';' : ':';
+  const isAbsolute = platform === 'win32' ? path.win32.isAbsolute : path.posix.isAbsolute;
+  const join = platform === 'win32' ? path.win32.join : path.posix.join;
+  const name = platform === 'win32' ? 'git.exe' : 'git';
+
+  for (const dir of (env.PATH ?? env.Path ?? '').split(separator)) {
+    if (!dir || !isAbsolute(dir)) continue;
+    const file = join(dir, name);
+
+    if (executable(file, platform)) return file;
+  }
+
+  return null;
+}
+
 /** Run git synchronously with the safe options; the exit status (null when it could not run or timed out) and output. */
 export function gitRun(
   cwd: string,
   args: string[],
   options: { timeoutMs?: number } = {},
 ): { status: number | null; stdout: string } {
-  const run = spawnSync('git', gitArgs(args), {
+  const git = gitExecutable();
+
+  if (git === null) return { status: null, stdout: '' };
+  const run = spawnSync(git, gitArgs(args), {
     cwd,
     env: gitEnv(),
     stdio: ['ignore', 'pipe', 'ignore'],
     timeout: options.timeoutMs ?? GIT_TIMEOUT_MS,
     maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
   });
 
   return { status: run.error ? null : run.status, stdout: run.stdout?.toString() ?? '' };
 }
 
+/** Run git asynchronously (see `runCommand`) with the safe options and the git found by `gitExecutable`. */
+export async function runGit(
+  cwd: string,
+  args: string[],
+  options: Omit<RunCommandOptions, 'cwd'>,
+): Promise<CommandResult> {
+  const git = gitExecutable();
+
+  if (git === null) {
+    return {
+      command: 'git',
+      args,
+      exitCode: null,
+      signal: null,
+      stdout: '',
+      stderr: '',
+      durationMs: 0,
+      timedOut: false,
+      spawnError: 'git was not found on PATH',
+    };
+  }
+
+  return runCommand(git, gitArgs(args), { ...options, cwd, env: { ...(options.env ?? {}), ...GIT_ENV } });
+}
+
 /**
- * Whether the repository at `root` configures a content filter command in its own configuration (`.git/config` and
- * what it includes), which git runs on working tree files. Filters from the user's own configuration (such as Git
- * LFS) are the user's tools and do not count.
+ * Whether git would run a content filter command on working tree files that the repository, not the user, configured:
+ * any `filter.*` key whose scope is not the user's (`global`) or the system's, such as the repository's
+ * `.git/config`, its worktree configuration or a file either includes. Filters from the user's own configuration (such
+ * as Git LFS) are the user's tools. When git cannot tell, it is taken as configured.
  */
 export function gitConfiguresFilters(root: string): boolean {
-  const run = gitRun(root, [
-    'config',
-    '--local',
-    '--includes',
-    '--get-regexp',
-    '^filter\\..*\\.(clean|smudge|process)$',
-  ]);
+  const run = gitRun(root, ['config', '--includes', '--show-scope', '--get-regexp', '^filter\\.']);
 
-  // 1: no such key. Anything else but 0 means git could not tell; assume there may be one.
-  return run.status !== 1;
+  // 1: no such key at all.
+  if (run.status === 1) return false;
+
+  if (run.status !== 0) return true;
+
+  return run.stdout
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .some((line) => !/^(global|system)\t/.test(line));
 }
 
 /**
@@ -98,16 +177,7 @@ export function gitOutput(
   options: { worktreeContent?: boolean } = {},
 ): string | null {
   if (options.worktreeContent && gitConfiguresFilters(root)) return null;
+  const run = gitRun(root, args);
 
-  try {
-    return execFileSync('git', gitArgs(args), {
-      cwd: root,
-      env: gitEnv(),
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: GIT_TIMEOUT_MS,
-      maxBuffer: 64 * 1024 * 1024,
-    }).toString();
-  } catch {
-    return null;
-  }
+  return run.status === 0 ? run.stdout : null;
 }

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { gitConfiguresFilters, gitOutput, gitRun } from '../src/index.js';
+import { gitConfiguresFilters, gitExecutable, gitOutput, gitRun } from '../src/index.js';
 
 function git(cwd: string, ...args: string[]): void {
   const run = spawnSync('git', args, { cwd, stdio: 'ignore' });
@@ -50,5 +50,61 @@ describe.skipIf(process.platform === 'win32')('git calls', () => {
     expect(gitOutput(repo, ['diff', '--name-only', '--'], { worktreeContent: true })).toBeNull();
     // Other commands do not read file contents through filters and still run.
     expect(gitOutput(repo, ['rev-parse', '--show-toplevel'])?.trim()).toBe(repo);
+  });
+
+  it('refuse a diff of the working tree when the worktree configuration names a filter', () => {
+    const repo = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-git-wtfilter-')));
+    git(repo, 'init', '-q');
+    git(repo, 'config', 'extensions.worktreeConfig', 'true');
+    git(repo, 'config', '--worktree', 'filter.evil.clean', 'touch ran');
+    expect(gitConfiguresFilters(repo)).toBe(true);
+    expect(gitOutput(repo, ['diff', '--name-only', '--'], { worktreeContent: true })).toBeNull();
+  });
+
+  it('never look into submodules, whose own configuration may name a filter', () => {
+    const base = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-git-submodule-')));
+    const marker = path.join(base, 'filter-ran');
+    const sub = path.join(base, 'sub');
+    const parent = path.join(base, 'parent');
+    const commit = (cwd: string) =>
+      git(cwd, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'c');
+    git(base, 'init', '-q', sub);
+    git(base, 'init', '-q', parent);
+    writeFileSync(path.join(sub, 'f.txt'), 'one');
+    writeFileSync(path.join(sub, '.gitattributes'), '* filter=evil\n');
+    git(sub, 'add', '.');
+    commit(sub);
+    git(parent, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub, 'm');
+    commit(parent);
+    // The submodule's own configuration (in the parent's .git/modules/m) names the filter; its file becomes dirty.
+    git(path.join(parent, 'm'), 'config', 'filter.evil.clean', `touch '${marker}'; cat`);
+    writeFileSync(path.join(parent, 'm', 'f.txt'), 'two');
+    // Plain git runs it: the layout is hostile as intended.
+    spawnSync('git', ['diff', '--name-only', 'HEAD', '--'], { cwd: parent, stdio: 'ignore' });
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+
+    expect(gitConfiguresFilters(parent)).toBe(false);
+    expect(
+      gitOutput(parent, ['diff', '--name-only', '--no-ext-diff', '--no-textconv', 'HEAD', '--'], {
+        worktreeContent: true,
+      }),
+    ).toBe('');
+    expect(existsSync(marker)).toBe(false);
+  });
+});
+
+describe('gitExecutable', () => {
+  it('finds git on absolute PATH entries only, so never one in the working directory', () => {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-git-path-')));
+    const name = process.platform === 'win32' ? 'git.exe' : 'git';
+    writeFileSync(path.join(dir, name), '');
+    chmodSync(path.join(dir, name), 0o755);
+    const sep = process.platform === 'win32' ? ';' : ':';
+    expect(gitExecutable({ env: { PATH: `.${sep}${sep}relative/bin${sep}${dir}` } })).toBe(
+      path.join(dir, name),
+    );
+    // Relative and empty entries (the working directory) are never searched.
+    expect(gitExecutable({ env: { PATH: `.${sep}${sep}relative/bin` } })).toBeNull();
   });
 });
