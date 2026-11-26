@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   cpSync,
   type Dirent,
   existsSync,
@@ -15,7 +16,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { hashValue, resolveInsideRoot, sha256, VeritasError } from '@under18dev/veritas-core';
 import type { PatchFile } from './schema.js';
@@ -150,11 +151,50 @@ export function unexpectedChanges(
 }
 
 /**
- * Copy the project into a fresh temporary directory, leaving out dependencies and tool state, and link
+ * Where isolated copies are made: `veritas/improve` in the user's cache directory (`$XDG_CACHE_HOME` or `~/.cache` on
+ * POSIX, `%LOCALAPPDATA%` on Windows), not the system temporary directory. Code in the copy resolves modules (test
+ * imports, mutator plugins, Jest's own lookups) by walking up its parent directories; on Linux the temporary
+ * directory is shared by every user, so another user could plant a `node_modules` there that the copy would load.
+ * The parents of the user's cache directory are the user's own home and directories only root can write to.
+ */
+export function workspaceBase(env: NodeJS.ProcessEnv = process.env): string {
+  const base =
+    process.platform === 'win32'
+      ? env.LOCALAPPDATA || path.join(homedir(), 'AppData', 'Local')
+      : env.XDG_CACHE_HOME || path.join(env.HOME || homedir(), '.cache');
+
+  return path.join(base, 'veritas', 'improve');
+}
+
+/** Create `workspaceBase()` private to the user (0700), refusing one that is a link or owned by someone else. */
+function privateBase(): string {
+  const base = workspaceBase();
+  mkdirSync(base, { recursive: true, mode: 0o700 });
+
+  if (process.platform !== 'win32') {
+    const s = lstatSync(base);
+
+    if (!s.isDirectory() || s.uid !== process.getuid?.()) {
+      throw new VeritasError(
+        'user',
+        'IMPROVE_UNSAFE_WORKSPACE_DIR',
+        `${base} is not a directory owned by the current user, so isolated copies cannot be made there`,
+        'remove it, or point XDG_CACHE_HOME to a directory you own',
+      );
+    }
+
+    if ((s.mode & 0o077) !== 0) chmodSync(base, 0o700);
+  }
+
+  return realpathSync(base);
+}
+
+/**
+ * Copy the project into a fresh directory under `workspaceBase()`, leaving out dependencies and tool state, and link
  * `node_modules` so the project's own test runner and mutator are used without reinstalling.
  */
 export function createWorkspace(root: string): string {
-  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-improve-')));
+  const dir = realpathSync(mkdtempSync(path.join(privateBase(), 'veritas-improve-')));
   const realRoot = realpathSync(root);
   cpSync(realRoot, dir, {
     recursive: true,

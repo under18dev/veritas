@@ -83,7 +83,7 @@ note: formal and property-based results re-evaluated in run-20261120T105528565Z-
 
 During `--apply`, Veritas:
 
-1. copies the project to a new temporary directory, without `node_modules` and tool state, and links `node_modules` so your test runner and mutator are used;
+1. copies the project to a new directory private to you under your cache directory (`$XDG_CACHE_HOME/veritas/improve` or `~/.cache/veritas/improve`, `%LOCALAPPDATA%\veritas\improve` on Windows), without `node_modules` and tool state, and links `node_modules` so your test runner and mutator are used;
 2. records the files of the copy and the metadata of the installed dependencies the copy links to (see [Checks on the copy](#checks-on-the-copy));
 3. runs the tests and mutation testing on the copy, and checks that they left the copy as it was;
 4. adds the new test files to the copy and runs the tests and mutation testing again, on every mutant;
@@ -109,6 +109,8 @@ Because the baseline runs must leave the copy unchanged, a project whose own tes
 To apply a plan, keep such output out of the project during the apply: enable coverage and file reporters from the command line (for example in a CI script) instead of in the configuration file, write temporary files under the system temporary directory (`os.tmpdir()`) and remove them, and commit snapshots before applying.
 
 #### Limits
+
+The copy is made in your cache directory rather than the system temporary directory because code in the copy looks for modules in the copy's parent directories, as Node does. On Linux the temporary directory is shared by every user, so another user could put a `node_modules` there for your apply to load. The parents of your cache directory are your home directory and directories only the administrator can write to. If you point `XDG_CACHE_HOME` somewhere shared, that protection is gone. A package the copy does not find in its own `node_modules` is still looked up in those parents: in a monorepo whose dependencies are hoisted above the project, the copy does not see them, and a `node_modules` in your cache or home directory would be used instead.
 
 These checks detect writes after the fact; they do not prevent them. Copying `node_modules` for every attempt would be slow for large dependency trees, and a pnpm or bun layout copied as it is still links into the shared store, so the dependencies stay shared. The checks are a safety net, not a security boundary. A new test can still write anywhere else your user can write, by absolute path, read your files, use the network, and forge what its own test runner reports. Writes after the last check, for example by a background process that a test starts and leaves running, are not seen. The dependency check can be passed by a test that rewrites a file with content of the same size, sets its modification time back, and leaves an extra hard link to the file somewhere else: a change of only the change time and link count is ignored, to avoid false alarms from shared stores. Apply plans only to code you trust, and run Veritas in a container for code you do not (see [Untrusted repositories](/guide/untrusted-repositories)).
 
@@ -144,11 +146,12 @@ Fix the code, or change the specification and review it again, then plan again.
 
 ## When applying is refused
 
-| Error                 | Cause                                                                                                     | What to do                                                  |
-| --------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `APPROVAL_MISMATCH`   | The token does not belong to the plan, or the plan changed (for example, a property it uses was rejected) | Run `veritas improve --dry-run` again and use the new token |
-| `IMPROVE_APPLY_IN_CI` | The `CI` environment variable is set to a value other than empty, `false` or `0`                          | Apply locally; planning works in CI                         |
-| `IMPROVE_UNSAFE_LINK` | The project contains symbolic links that point outside it                                                 | Replace those links with real files or directories          |
+| Error                          | Cause                                                                                                            | What to do                                                  |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `APPROVAL_MISMATCH`            | The token does not belong to the plan, or the plan changed (for example, a property it uses was rejected)        | Run `veritas improve --dry-run` again and use the new token |
+| `IMPROVE_APPLY_IN_CI`          | The `CI` environment variable is set to a value other than empty, `false` or `0`                                 | Apply locally; planning works in CI                         |
+| `IMPROVE_UNSAFE_LINK`          | The project contains symbolic links that point outside it                                                        | Replace those links with real files or directories          |
+| `IMPROVE_UNSAFE_WORKSPACE_DIR` | The directory for isolated copies (`veritas/improve` in your cache directory) is a link or owned by another user | Remove it, or point `XDG_CACHE_HOME` to a directory you own |
 
 ```text
 error[IMPROVE_APPLY_IN_CI]: applying an improvement is refused in CI (improvement.autoApply is always false)

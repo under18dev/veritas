@@ -60,13 +60,13 @@ describe('workspace and repository writes', () => {
     writeFileSync(path.join(outside, 'shared.test.ts'), 'outside');
     const root = project({ 'src/a.ts': 'x' });
     symlinkSync(outside, path.join(root, 'test'), process.platform === 'win32' ? 'junction' : 'dir');
-    // A temporary directory of its own, so workspaces of tests running in parallel do not count.
+    // A cache directory of its own, so workspaces of tests running in parallel do not count.
     const temp = mkdtempSync(path.join(tmpdir(), 'veritas-temp-'));
-    for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, temp);
+    for (const name of ['XDG_CACHE_HOME', 'LOCALAPPDATA']) vi.stubEnv(name, temp);
     try {
       expect(() => createWorkspace(root)).toThrow(/links outside the project/);
       // The partial copy is removed.
-      expect(readdirSync(temp)).toEqual([]);
+      expect(readdirSync(path.join(temp, 'veritas/improve'))).toEqual([]);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -184,6 +184,26 @@ describe('workspace and repository writes', () => {
       ]);
     } finally {
       removeWorkspace(ws);
+    }
+  });
+
+  it("makes copies in the user's cache directory, private to the user, not in the shared temporary directory", () => {
+    const cache = mkdtempSync(path.join(tmpdir(), 'veritas-cache-'));
+    for (const name of ['XDG_CACHE_HOME', 'LOCALAPPDATA']) vi.stubEnv(name, cache);
+    try {
+      const ws = createWorkspace(project({ 'src/a.ts': 'x' }));
+      try {
+        expect(path.dirname(ws)).toBe(realpathSync(path.join(cache, 'veritas/improve')));
+        if (process.platform !== 'win32') {
+          expect(statSync(path.dirname(ws)).mode & 0o077).toBe(0);
+          expect(statSync(ws).mode & 0o077).toBe(0);
+        }
+      } finally {
+        removeWorkspace(ws);
+      }
+      expect(readdirSync(path.join(cache, 'veritas/improve'))).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 });
