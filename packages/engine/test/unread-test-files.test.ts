@@ -6,6 +6,7 @@ type Fields = {
   inexactNames?: 'open_collection' | 'imported_registrations';
   usesRunner?: boolean;
   foreignRunner?: string;
+  packageCall?: string;
 };
 
 const file = (path: string, fields: Fields = {}) => ({
@@ -16,6 +17,7 @@ const file = (path: string, fields: Fields = {}) => ({
   ...(fields.inexactNames ? { inexactNames: fields.inexactNames } : {}),
   ...(fields.usesRunner !== undefined ? { usesRunner: fields.usesRunner } : {}),
   ...(fields.foreignRunner ? { foreignRunner: fields.foreignRunner } : {}),
+  ...(fields.packageCall ? { packageCall: fields.packageCall } : {}),
 });
 
 const unreadOf = (files: ReturnType<typeof file>[]) =>
@@ -65,6 +67,22 @@ describe('unreadTestFiles', () => {
     expect(unread).toEqual([
       "test/bun.test.ts (it uses bun:test, the API of a test runner the project's test runner does not run)",
       "test/deno.test.ts (it uses Deno.test, the API of a test runner the project's test runner does not run)",
+    ]);
+  });
+
+  it('names a file that calls into a package at its top level, even when it does not use the runner', () => {
+    const unread = unreadOf([
+      file('test/suite.test.ts', {
+        inexactNames: 'open_collection',
+        usesRunner: false,
+        packageCall: 'some-lib',
+      }),
+      // A barrel or helper calling nothing at its top level stays out.
+      file('test/barrel.test.ts', { inexactNames: 'open_collection', usesRunner: false }),
+    ]);
+
+    expect(unread).toEqual([
+      'test/suite.test.ts (it calls into package some-lib at the top level and may register tests through it)',
     ]);
   });
 

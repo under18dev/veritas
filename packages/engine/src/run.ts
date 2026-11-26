@@ -1827,7 +1827,8 @@ export function mutationStageStatus(
  * the runner collects them is open (a call, a loop), comes from another module, or reaches code static analysis does
  * not follow (a dynamic import, a `require` it cannot read, a file that does not parse). Each with why. A file that
  * never uses the project's runner, itself or through a local module it loads (a helper that re-exports the runner or
- * does not touch it), is not one; a file that uses another runner's API (`bun:test`, `Deno.test`) always is, saying so.
+ * does not touch it), is not one, unless it calls into a package at its top level (`suite()` from `some-lib`); a file that
+ * uses another runner's API (`bun:test`, `Deno.test`) always is. Each says why.
  */
 export function unreadTestFiles(inventory: TestInventory): string[] {
   const withTests = new Set(inventory.tests.map((test) => test.file));
@@ -1844,6 +1845,12 @@ export function unreadTestFiles(inventory: TestInventory): string[] {
       if (file.foreignRunner !== undefined)
         return [
           `${file.path} (it uses ${file.foreignRunner}, the API of a test runner the project's test runner does not run)`,
+        ];
+
+      // A call into a package at the top level (`suite()` from `some-lib`) may register tests through it.
+      if (file.packageCall !== undefined)
+        return [
+          `${file.path} (it calls into package ${file.packageCall} at the top level and may register tests through it)`,
         ];
 
       if (file.inexactNames === undefined && !file.unseenReach) return [];

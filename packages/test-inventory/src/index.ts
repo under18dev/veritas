@@ -59,6 +59,12 @@ export const TestInventory = z.object({
        * run; absent when it uses none.
        */
       foreignRunner: z.string().optional(),
+      /**
+       * A package the file calls into at its top level (`import { suite } from 'some-lib'; suite()`), other than the
+       * runner's own and packages that only assert or mock: it may register tests through it. Absent when it calls
+       * none.
+       */
+      packageCall: z.string().optional(),
     }),
   ),
   diagnostics: z.array(z.object({ file: z.string(), message: z.string() })),
@@ -322,6 +328,117 @@ function foreignRunner(source: ts.SourceFile): { foreignRunner?: string } {
   return {};
 }
 
+/** Packages that assert or mock and register no tests, called at the top level of a test file for setup. */
+const ASSERTION_OR_MOCK_PACKAGES = new Set([
+  'chai',
+  'expect',
+  'power-assert',
+  'should',
+  'sinon',
+  'testdouble',
+  'jest-mock',
+  'nock',
+  'msw',
+  'fetch-mock',
+  'mockdate',
+  'timekeeper',
+]);
+/** Scopes of such packages. */
+const ASSERTION_OR_MOCK_SCOPES = ['@testing-library/', '@sinonjs/', '@vitest/', '@jest/', '@mswjs/'];
+
+/** The package a bare module specifier names (`lodash/fp` is `lodash`, `@scope/pkg/x` is `@scope/pkg`). */
+function packageName(specifier: string): string {
+  const parts = specifier.split('/');
+
+  return specifier.startsWith('@') ? parts.slice(0, 2).join('/') : (parts[0] ?? specifier);
+}
+
+/** The package a name is bound to by an import or a `require` of a bare specifier, if any. */
+function boundPackage(identifier: ts.Identifier): string | undefined {
+  const symbol = runnerChecker?.getSymbolAtLocation(identifier);
+
+  for (const declaration of symbol?.declarations ?? []) {
+    let specifier: string | undefined;
+    let node: ts.Node = declaration;
+
+    if (ts.isImportSpecifier(node) || ts.isImportClause(node) || ts.isNamespaceImport(node)) {
+      while (!ts.isImportDeclaration(node) && node.parent) node = node.parent;
+
+      if (
+        ts.isImportDeclaration(node) &&
+        !node.importClause?.isTypeOnly &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      )
+        specifier = node.moduleSpecifier.text;
+    } else {
+      while (ts.isBindingElement(node)) node = node.parent.parent;
+
+      if (ts.isVariableDeclaration(node) && node.initializer) specifier = requiredModule(node.initializer);
+    }
+
+    if (specifier === undefined || specifier.startsWith('.') || specifier.startsWith('/')) continue;
+
+    if (specifier.startsWith('node:') || builtinModules.includes(specifier.split('/')[0] ?? '')) continue;
+
+    if (/^[a-z][a-z0-9+.-]*:/i.test(specifier)) continue;
+
+    return packageName(specifier);
+  }
+
+  return undefined;
+}
+
+/**
+ * The package a test file calls into at its top level (`import { suite } from 'some-lib'; suite()`, also `await` of
+ * such a call or one in a declaration's value), which may register tests the runner reports under the file. Not the
+ * runner's own modules, nor packages that only assert or mock. Re-exports, declarations and functions only defined
+ * call nothing.
+ */
+function packageCall(source: ts.SourceFile): { packageCall?: string } {
+  const values = source.statements.flatMap((statement) =>
+    ts.isExpressionStatement(statement)
+      ? [statement.expression]
+      : ts.isVariableStatement(statement)
+        ? statement.declarationList.declarations.flatMap((declaration) =>
+            declaration.initializer ? [declaration.initializer] : [],
+          )
+        : [],
+  );
+
+  for (const written of values) {
+    let value = skipParens(written);
+
+    if (ts.isAwaitExpression(value)) value = skipParens(value.expression);
+
+    if (!ts.isCallExpression(value)) continue;
+    let callee: ts.Expression = skipParens(value.expression);
+
+    // `suite().run()`, `lib.suite()`: the name the call chain starts from.
+    while (
+      ts.isPropertyAccessExpression(callee) ||
+      ts.isElementAccessExpression(callee) ||
+      ts.isCallExpression(callee)
+    )
+      callee = skipParens(callee.expression);
+
+    if (!ts.isIdentifier(callee)) continue;
+    const bound = boundPackage(callee);
+
+    if (
+      bound === undefined ||
+      runner.modules.has(bound) ||
+      RUNNER_MODULES.has(bound) ||
+      ASSERTION_OR_MOCK_PACKAGES.has(bound) ||
+      ASSERTION_OR_MOCK_SCOPES.some((scope) => bound.startsWith(scope))
+    )
+      continue;
+
+    return { packageCall: bound };
+  }
+
+  return {};
+}
+
 /**
  * Inventory the tests of a project statically: what each test registers, calls and asserts. `recognition` names the
  * test API of the project's test runner (its provider's `recognition`).
@@ -504,6 +621,7 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
           return !loadedSource || usesRunner(loadedSource);
         }),
       ...(source ? foreignRunner(source) : {}),
+      ...(source ? packageCall(source) : {}),
     };
   });
 

@@ -87,6 +87,45 @@ describe('node:test bindings', () => {
     ]);
   });
 
+  it('records a package a test file calls into at its top level, and none for barrels and helpers', () => {
+    const root = tempProject({
+      'test/suite.test.ts': "import { suite } from 'some-lib';\nsuite();\n",
+      'test/awaited.test.mjs': "import * as lib from '@scope/shared/run';\nawait lib.default.register();\n",
+      'test/declared.test.cjs': "const { make } = require('other-lib');\nconst tests = make();\n",
+      'test/chained.test.ts': "import { builder } from 'chain-lib';\nbuilder().run();\n",
+      // Not calls into a package that may register tests.
+      'test/barrel.test.ts': "export { suite } from 'some-lib';\nexport * from 'other-lib';\n",
+      'test/defined.test.ts':
+        "import { suite } from 'some-lib';\nexport function later() { suite(); }\nconst run = () => suite();\nexport { run };\n",
+      'test/assertions.test.ts':
+        "import chai from 'chai';\nimport { setupServer } from 'msw/node';\nchai.should();\nsetupServer();\n",
+      'test/builtin.test.ts':
+        "import { setTimeout } from 'node:timers/promises';\nimport path from 'path';\nawait setTimeout(1);\npath.join('a');\n",
+      'test/local.test.ts': "import { helper } from './helper.ts';\nhelper();\n",
+      'test/helper.ts': 'export function helper() {}\n',
+    });
+    const result = inventoryTests({
+      recognition: node.recognitionFor(root),
+      root,
+      config: VeritasConfig.parse({
+        analysis: { testFramework: 'node_test', testInclude: ['test/**/*.test.{ts,mjs,cjs}'] },
+      }),
+    });
+    const called = Object.fromEntries(result.files.map((file) => [file.path, file.packageCall]));
+
+    expect(called).toEqual({
+      'test/assertions.test.ts': undefined,
+      'test/awaited.test.mjs': '@scope/shared',
+      'test/barrel.test.ts': undefined,
+      'test/builtin.test.ts': undefined,
+      'test/chained.test.ts': 'chain-lib',
+      'test/declared.test.cjs': 'other-lib',
+      'test/defined.test.ts': undefined,
+      'test/local.test.ts': undefined,
+      'test/suite.test.ts': 'some-lib',
+    });
+  });
+
   it('records no test for a member read by a computed key, and leaves the file open', () => {
     const root = tempProject({
       'test/computed.test.cjs': `
