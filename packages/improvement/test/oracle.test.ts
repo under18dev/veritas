@@ -1,4 +1,5 @@
 import { equivalenceProperty, translateFunction } from '@under18dev/veritas-formal-core';
+import { nodeTestRunner } from '@under18dev/veritas-test-runner-node';
 import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
 import {
@@ -132,6 +133,35 @@ describe('rendering', () => {
     expect(content).toContain('expect(isSenior(65)).toBe(true);');
     expect(content).not.toMatch(/\.(skip|only|todo)\b/);
     expect(importSpecifier('a.test.ts', 'src/x.mts')).toBe('./src/x.mjs');
+  });
+
+  it('renders for the Node.js test runner with node:assert and the source file name in the import', () => {
+    const content = renderTestFile(
+      'test/veritas-P-1.test.ts',
+      'P-1',
+      [
+        {
+          id: 'PT-1',
+          propertyId: 'P-1',
+          symbol: 'src/age.ts#isSenior',
+          exportName: 'isSenior',
+          module: 'src/age.ts',
+          params: ['age'],
+          input: { age: '65' },
+          expected: true,
+          origin: 'boundary',
+          citations: ['README.md:5'],
+          derivation: 'x',
+        },
+      ],
+      nodeTestRunner.templates(process.cwd()),
+    );
+    expect(content).toContain("import assert from 'node:assert/strict';");
+    expect(content).toContain("import { it } from 'node:test';");
+    expect(content).toContain('import { isSenior } from "../src/age.ts";');
+    expect(content).toContain('assert.strictEqual(isSenior(65), true);');
+    expect(content).not.toContain('expect(');
+    expect(importSpecifier('a.test.ts', 'src/x.mts', true)).toBe('./src/x.mts');
   });
 
   it('refuses an export name that is not an identifier', () => {

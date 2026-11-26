@@ -34,12 +34,15 @@ const jestProject = () =>
   });
 
 describe('test runner selection in the engine', () => {
-  it('brings Vitest, the default, and Jest', () => {
-    expect(TEST_RUNNERS.map((runner) => runner.name)).toEqual(['vitest', 'jest']);
+  it('brings Vitest, the default, Jest and the Node.js test runner', () => {
+    expect(TEST_RUNNERS.map((runner) => runner.name)).toEqual(['vitest', 'jest', 'node_test']);
     expect(testRunnerFor(null).name).toBe('vitest');
     // A configuration written before testFramework had more than one value still means Vitest.
     expect(testRunnerFor(VeritasConfig.parse({})).name).toBe('vitest');
     expect(testRunnerFor(VeritasConfig.parse({ analysis: { testFramework: 'jest' } })).name).toBe('jest');
+    expect(testRunnerFor(VeritasConfig.parse({ analysis: { testFramework: 'node_test' } })).name).toBe(
+      'node_test',
+    );
   });
 
   it('detects the runner of a project without a configuration, and keeps a configured one', () => {
@@ -82,6 +85,62 @@ describe('test runner selection in the engine', () => {
       reason: 'more than one test runner was found; Jest was chosen when asked',
       ambiguous: false,
     });
+  });
+
+  it('sets up a project whose test script runs node --test for the Node.js test runner', () => {
+    const root = project({
+      'package.json': JSON.stringify({ type: 'module', scripts: { test: 'node --test' } }),
+      'test/a.test.mjs': "import { test } from 'node:test';\ntest('a', () => {});\n",
+    });
+    const result = initProject(root, { dryRun: true });
+
+    expect(result.testRunner).toEqual({
+      name: 'node_test',
+      reason:
+        'Node.js test runner is the only test runner found (the test script runs node --test, a file imports node:test)',
+      ambiguous: false,
+    });
+    expect(result.config.analysis.testFramework).toBe('node_test');
+    expect(result.project.testRunner.installedVersion).toBe(process.versions.node);
+  });
+
+  it('never chooses the Node.js test runner only because Node.js has it', () => {
+    const root = project({ 'package.json': JSON.stringify({ devDependencies: { vitest: '5' } }) });
+
+    expect(initProject(root, { dryRun: true }).testRunner).toMatchObject({
+      name: 'vitest',
+      ambiguous: false,
+    });
+    // Configured explicitly, it needs nothing installed.
+    expect(
+      initProject(root, {
+        dryRun: true,
+        config: VeritasConfig.parse({ analysis: { testFramework: 'node_test' } }),
+      }).testRunner.name,
+    ).toBe('node_test');
+  });
+
+  it('keeps Vitest before it is installed, whatever else runs node --test or imports node:test', () => {
+    const declared = project({
+      'package.json': JSON.stringify({
+        scripts: { test: 'vitest run', bench: 'node --test bench/' },
+        devDependencies: { vitest: '5' },
+      }),
+    });
+
+    expect(initProject(declared, { dryRun: true }).testRunner).toMatchObject({
+      name: 'vitest',
+      ambiguous: false,
+    });
+    const configured = project({
+      'package.json': JSON.stringify({ type: 'module' }),
+      'vitest.config.ts': 'export default {};\n',
+      'scripts/check.mjs': "import { test } from 'node:test';\ntest('x', () => {});\n",
+    });
+
+    expect(() => initProject(configured, { dryRun: true })).toThrow(
+      expect.objectContaining({ code: 'VITEST_NOT_FOUND' }),
+    );
   });
 
   it('reports JEST_NOT_FOUND when the configuration names Jest and the project lacks it', () => {

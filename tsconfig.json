@@ -71,6 +71,9 @@
       "path": "packages/test-runners/jest"
     },
     {
+      "path": "packages/test-runners/node"
+    },
+    {
       "path": "packages/solver-lean"
     },
     {

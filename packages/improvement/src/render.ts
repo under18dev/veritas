@@ -8,13 +8,17 @@ export function literal(value: ScalarValue): string {
   return typeof value === 'boolean' ? String(value) : String(BigInt(value));
 }
 
-/** ESM import specifier from the test file to the module, using the `.js` form TypeScript projects use. */
-export function importSpecifier(testFile: string, module: string): string {
-  const rel = path.posix
-    .relative(path.posix.dirname(testFile), module)
-    .replace(/\.(m|c)?tsx?$/, (ext) =>
-      ext.startsWith('.m') ? '.mjs' : ext.startsWith('.c') ? '.cjs' : '.js',
-    );
+/**
+ * ESM import specifier from the test file to the module, using the `.js` form TypeScript projects use, or with
+ * `source` the module's own file name (`.ts`), as Node.js running TypeScript by stripping types needs.
+ */
+export function importSpecifier(testFile: string, module: string, source = false): string {
+  const relative = path.posix.relative(path.posix.dirname(testFile), module);
+  const rel = source
+    ? relative
+    : relative.replace(/\.(m|c)?tsx?$/, (ext) =>
+        ext.startsWith('.m') ? '.mjs' : ext.startsWith('.c') ? '.cjs' : '.js',
+      );
 
   return rel.startsWith('.') ? rel : `./${rel}`;
 }
@@ -45,7 +49,7 @@ export function renderTestFile(
     `// Added by \`veritas improve\` for property ${propertyId}.`,
     `// Expected values come from the specification${citations.length ? ` (${citations.join(', ')})` : ''}, not from the implementation.`,
     ...templates.imports(['expect', 'it']),
-    `import { ${first.exportName} } from ${JSON.stringify(importSpecifier(file, first.module))};`,
+    `import { ${first.exportName} } from ${JSON.stringify(importSpecifier(file, first.module, templates.sourceImports === true))};`,
   ];
 
   for (const t of tests) {

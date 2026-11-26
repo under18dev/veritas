@@ -163,7 +163,9 @@ export async function runDoctor(
     runner.name,
     runnerVersion ? 'available' : 'unavailable',
     runnerVersion
-      ? 'resolved from project'
+      ? runner.detection.builtIn
+        ? `built into Node.js ${runnerVersion}`
+        : 'resolved from project'
       : project.plugAndPlay
         ? "Yarn Plug'n'Play is not supported; set `nodeLinker: node-modules` in .yarnrc.yml and run `yarn install`"
         : project.testRunner.declared
@@ -176,7 +178,10 @@ export async function runDoctor(
   const { minMajor, mutatorRunner, experimental } = runner.mutation;
   const tooOld = minMajor !== null && (majorVersion(runnerVersion) ?? minMajor) < minMajor;
   const unsupported =
-    mutator.version && mutatorRunner !== null && !tooOld ? runner.mutation.unsupportedReason(root) : null;
+    mutator.version && !tooOld
+      ? (runner.mutation.unsupportedReason(root) ??
+        (mutatorRunner === null ? `@mizchi/mutator cannot run ${runner.displayName} tests` : null))
+      : null;
   add(
     'mutator',
     !mutator.version || mutatorRunner === null || tooOld || unsupported !== null
@@ -186,13 +191,11 @@ export async function runDoctor(
         : 'available',
     !mutator.version
       ? '@mizchi/mutator not installed'
-      : mutatorRunner === null
-        ? `@mizchi/mutator cannot run ${runner.displayName} tests`
-        : tooOld
-          ? `@mizchi/mutator needs ${runner.displayName} ${minMajor} or later; the project has ${runner.displayName} ${runnerVersion}`
-          : unsupported !== null
-            ? unsupported
-            : `@mizchi/mutator resolved from ${mutator.from}${experimental !== null ? `; experimental: ${experimental}` : ''}`,
+      : tooOld
+        ? `@mizchi/mutator needs ${runner.displayName} ${minMajor} or later; the project has ${runner.displayName} ${runnerVersion}`
+        : unsupported !== null
+          ? unsupported
+          : `@mizchi/mutator resolved from ${mutator.from}${experimental !== null ? `; experimental: ${experimental}` : ''}`,
     mutator.version,
   );
 

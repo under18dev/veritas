@@ -199,6 +199,9 @@ importers:
       '@under18dev/veritas-test-runner-jest':
         specifier: workspace:*
         version: link:packages/test-runners/jest
+      '@under18dev/veritas-test-runner-node':
+        specifier: workspace:*
+        version: link:packages/test-runners/node
       '@under18dev/veritas-test-runner-vitest':
         specifier: workspace:*
         version: link:packages/test-runners/vitest
@@ -241,6 +244,8 @@ importers:
       vitest:
         specifier: 5.1.1
         version: 5.1.1(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.8.3))
+
+  fixtures/declared-properties: {}
 
   fixtures/discount-boundary:
     devDependencies:
@@ -294,6 +299,8 @@ importers:
         version: 5.1.1(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(yaml@2.8.3))
 
   fixtures/no-vitest: {}
+
+  fixtures/node-app: {}
 
   fixtures/number-model:
     devDependencies:
@@ -475,6 +482,9 @@ importers:
       '@under18dev/veritas-test-runner-jest':
         specifier: workspace:*
         version: link:../test-runners/jest
+      '@under18dev/veritas-test-runner-node':
+        specifier: workspace:*
+        version: link:../test-runners/node
       '@under18dev/veritas-test-runner-vitest':
         specifier: workspace:*
         version: link:../test-runners/vitest
@@ -529,6 +539,9 @@ importers:
       '@under18dev/veritas-property-engine':
         specifier: workspace:*
         version: link:../property-engine
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -720,6 +733,12 @@ importers:
         version: 4.6.7
 
   packages/test-runners/jest:
+    dependencies:
+      '@under18dev/veritas-core':
+        specifier: workspace:*
+        version: link:../../core
+
+  packages/test-runners/node:
     dependencies:
       '@under18dev/veritas-core':
         specifier: workspace:*

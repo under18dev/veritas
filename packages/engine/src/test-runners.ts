@@ -15,10 +15,11 @@ import {
   VeritasConfig,
 } from '@under18dev/veritas-core';
 import { jestTestRunner } from '@under18dev/veritas-test-runner-jest';
+import { nodeTestRunner } from '@under18dev/veritas-test-runner-node';
 import { vitestTestRunner } from '@under18dev/veritas-test-runner-vitest';
 
 /** The test runner providers this installation brings; the first is the default. */
-export const TEST_RUNNERS: readonly TestRunnerProvider[] = [vitestTestRunner, jestTestRunner];
+export const TEST_RUNNERS: readonly TestRunnerProvider[] = [vitestTestRunner, jestTestRunner, nodeTestRunner];
 
 const DEFAULT_FRAMEWORK = VeritasConfig.parse({}).analysis.testFramework;
 

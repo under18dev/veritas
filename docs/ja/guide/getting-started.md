@@ -8,12 +8,12 @@
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | Node.js                              | 24 以上                                                                                                                                       |
 | プロジェクトのコードを動かす Node.js | 25 以上（26 を推奨）。property-based testing と反例の再実行で、ネットワークを遮断して関数を動かすのに使います                                 |
-| テストランナー                       | プロジェクトに入っている Vitest または Jest                                                                                                   |
+| テストランナー                       | プロジェクトに入っている Vitest か Jest、または Node.js のテストランナー（`node --test`）                                                     |
 | 言語                                 | TypeScript または JavaScript（ESM）                                                                                                           |
 | OS                                   | Linux、macOS、Windows                                                                                                                         |
 | 任意                                 | git（`--since` とコミット情報に使います）、`prove --engine lean` 用の Lean 4 と Lake（[elan](https://github.com/leanprover/elan) で入れます） |
 
-Z3、`@mizchi/mutator`、fast-check はパッケージに含まれています。
+Z3、`@mizchi/mutator`、fast-check はパッケージに含まれています。ただし `@mizchi/mutator` は Node.js のテストランナー向けに書かれたテストを実行できないので、それを使うプロジェクトでは mutation の証拠を集められません。詳しくは[対応環境](/ja/concepts/support-matrix#テストランナー)を参照してください。
 
 property-based testing と反例の再実行には、Veritas を動かしている Node.js、`VERITAS_SANDBOX_NODE`、`PATH` 上の `node` の順に使います。どれも 25 未満の場合、これらの検査は行わず、結果は inconclusive になります。
 
@@ -71,7 +71,7 @@ next:
 | `--force`   | 既存の `.veritas/config.json` を上書きする |
 | `--dry-run` | 書き出さずに設定を表示する                 |
 
-`init` はプロジェクトのテストランナーを見つけて `analysis.testFramework` に書き込みます。対象は Vitest と Jest で、それぞれの設定ファイル、package.json、`test` スクリプトから判断し、どちらをなぜ選んだかを表示します。インストール済みのランナーは、設定ファイルがあるだけのものより優先します。両方がインストールされていて `test` スクリプトが片方だけを実行しているなら、そちらを選びます。判断できないときは Vitest を選び、設定を確かめるよう伝えます（ターミナルではどちらを使うか尋ね、TUI では選んだランナーと理由を表示します）。詳しい規則は[対応環境](/ja/concepts/support-matrix#テストランナー)にあります。どちらも見つからなければ `VITEST_NOT_FOUND` で、渡した設定が Jest を指定しているのにプロジェクトに Jest がなければ `JEST_NOT_FOUND` で止まります。既定の設定では、ネットワーク上の出典と LLM はオフで、形式検証の整数の範囲は `[-10000, 10000]` です。すべての設定項目は[設定リファレンス](/ja/reference/configuration)にあります。
+`init` はプロジェクトのテストランナーを見つけて `analysis.testFramework` に書き込みます。Vitest と Jest はそれぞれの設定ファイル、package.json、`test` スクリプトから、Node.js のテストランナー（`node_test`）は `node --test` を実行するスクリプトや `node:test` を import するテストファイルから判断し、どれをなぜ選んだかを表示します。インストール済みのランナーは、設定ファイルがあるだけのものより優先します。Node.js のテストランナーは Node.js に組み込まれているので、使えるというだけで選ばれることはありません。両方がインストールされていて `test` スクリプトが片方だけを実行しているなら、そちらを選びます。判断できないときは Vitest を選び、設定を確かめるよう伝えます（ターミナルではどちらを使うか尋ね、TUI では選んだランナーと理由を表示します）。詳しい規則は[対応環境](/ja/concepts/support-matrix#テストランナー)にあります。どれも見つからなければ `VITEST_NOT_FOUND` で、渡した設定が Jest を指定しているのにプロジェクトに Jest がなければ `JEST_NOT_FOUND` で止まります。既定の設定では、ネットワーク上の出典と LLM はオフで、形式検証の整数の範囲は `[-10000, 10000]` です。すべての設定項目は[設定リファレンス](/ja/reference/configuration)にあります。
 
 ### 端末で質問に答える
 

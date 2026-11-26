@@ -203,8 +203,15 @@ export function workspacePackages(root: string, pkg: Record<string, unknown> | n
   return [...dirs];
 }
 
-/** Whether any file below `dir` matches `name`, looking at no more than `limit` directories. */
-function hasFileNamed(dir: string, test: (name: string, parent: string) => boolean, limit = 2000): boolean {
+/**
+ * Whether any file below `dir` passes `test` (given its name and directory), looking at no more than `limit`
+ * directories and never into `node_modules`, `.git`, `dist` or `.veritas`.
+ */
+export function hasFileNamed(
+  dir: string,
+  test: (name: string, parent: string) => boolean,
+  limit = 2000,
+): boolean {
   const queue = [dir];
 
   for (let seen = 0; queue.length > 0 && seen < limit; seen++) {
@@ -229,7 +236,7 @@ function hasFileNamed(dir: string, test: (name: string, parent: string) => boole
 }
 
 /** Whether source text imports or requires one of `modules` (`import { it } from 'vitest'`, `require('vitest')`). */
-function importsModule(text: string, modules: readonly string[]): boolean {
+export function importsModule(text: string, modules: readonly string[]): boolean {
   if (modules.length === 0) return false;
   const names = modules.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
 
@@ -294,6 +301,20 @@ export function detectProject(root: string, runner: TestRunnerProvider): Project
     )
   )
     testGlobs.push(`**/__tests__/**/*.${EXTENSIONS}`);
+
+  // The runner's other default patterns (Node's `*-test.js`, `test/**`), again only when a matching file uses it.
+  for (const glob of runner.detection.extraTestGlobs ?? [])
+    if (
+      hasFileNamed(
+        root,
+        (name, parent) =>
+          path.posix.matchesGlob(
+            path.relative(root, path.join(parent, name)).split(path.sep).join('/'),
+            glob,
+          ) && usesRunner(name, parent),
+      )
+    )
+      testGlobs.push(glob);
 
   return {
     root,

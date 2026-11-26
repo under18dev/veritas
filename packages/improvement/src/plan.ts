@@ -27,6 +27,7 @@ import {
   testRunnerFor,
 } from '@under18dev/veritas-engine';
 import { applyApprovals, loadApprovals } from '@under18dev/veritas-property-engine';
+import { applyUnavailableReason } from './availability.js';
 import { expectedFromSpec, type SpecClause } from './oracle.js';
 import { callText, literal, renderTestFile, unifiedDiff } from './render.js';
 import {
@@ -573,13 +574,15 @@ export async function planImprovement(options: PlanOptions): Promise<PlanResult>
     });
   }
 
+  const unavailable = applyUnavailableReason(root, testRunner);
+
   return finish(root, context, {
     ...common,
     outcome: 'planned',
     plan,
     files,
     tests: planned,
-    reasons,
+    reasons: unavailable === null ? reasons : [unavailable, ...reasons],
   });
 }
 

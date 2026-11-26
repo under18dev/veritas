@@ -83,6 +83,8 @@ veritas explain <finding-id>
 
 The outcome summarizes the evidence vector below; it is not a grade.
 
+With the Node.js test runner (`node --test`) there is no mutation testing, so no test is `meaningful_with_evidence`: tests that assert project results are `inconclusive` with "detection power was not measured (no mutation results)", while weak and tautological tests are still reported as such from static evidence. See the [support matrix](/concepts/support-matrix#test-runners).
+
 ### What counts as checking project code
 
 A test checks project code when an assertion looks at what project code produced. For a plain function that is its return value, an object it changed, or how it called a callback or a `vi.fn()` mock the test handed to it.

@@ -54,6 +54,8 @@ plan: .veritas/improvements/IP-a14164357e16/plan.json (no project file was writt
 
 The plan shows the goal, each proposed test with the property and source line its expected value comes from, the gaps it addresses, the budget, the full patch, the inputs it skipped with the reason, and the approval token. It is saved as `.veritas/improvements/<plan-id>/plan.json`.
 
+The tests are written for the project's test runner. With the Node.js test runner (`analysis.testFramework: "node_test"`) they import `it` from `node:test` and `assert` from `node:assert/strict`, check with `assert.strictEqual(f(x), expected)`, and import the source module by its `.ts` file name, as Node's type stripping needs.
+
 ## Approve and apply
 
 Read the patch preview. Passing the token approves exactly that patch.
@@ -89,6 +91,8 @@ During `--apply`, Veritas:
 4. adds the new test files to the copy and runs the tests and mutation testing again, on every mutant;
 5. re-evaluates the formal and property-based results on the copy with the stages and options of the run the plan came from, offline;
 6. writes the new files into the project only if the copy differs from what was copied by the new files alone, with exactly the planned content, the installed dependencies are unchanged, every test passes, more mutants are killed, at least one of the new tests kills a mutant that survived before the patch, both mutation runs are complete (mutator's time budget did not run out and no source file was left out), and the re-evaluation completes without an error. Every proof or counterexample, whether about the implementation itself or about a mutant, must be produced again and stay decided. The one exception is a mutant that survived before the patch and that one of the new tests kills: its results may be absent. A passed property-based test must stay decided when it is produced again, and results that were already undecided may stay `unknown` or `timeout`; the attempt records them. Otherwise it discards the copy and your project is unchanged.
+
+With the Node.js test runner, applying cannot measure anything, because mutation testing is unsupported for those tests (see the [support matrix](/concepts/support-matrix#test-runners)). The plan's first reason says that `improve --apply` is not available, and `--apply` is refused with `IMPROVE_APPLY_UNSUPPORTED` (exit code 2) before an approval is recorded, a copy is made or any project code runs. Planning with `--dry-run` works as usual; add the planned tests you want yourself.
 
 ### Checks on the copy
 
@@ -127,7 +131,7 @@ Each attempt is recorded as `.veritas/improvements/<plan-id>/attempt-<n>.json`, 
 | `planned`, `improved` | `0`       | A plan is ready, or an applied plan improved the results                                                                                                                                                                                                                                                                          |
 | `no_safe_improvement` | `4`       | No test with a specification-derived expected value could be built; the applied tests failed or no new test killed an additional mutant; a mutation run was incomplete (its time budget ran out or a file was left out), so before and after cannot be compared; or a run changed files of the copy other than the new test files |
 | `needs_spec_decision` | `4`       | You must decide on the specification first                                                                                                                                                                                                                                                                                        |
-| `blocked`             | `1`       | The patch fails the safety checks, or the plan's attempts are used up                                                                                                                                                                                                                                                             |
+| `blocked`             | `1`       | The patch fails the safety checks (for example, it skips or focuses a test with `.skip`, `.only`, `.todo`, or a `{ skip }`, `{ todo }` or `{ only }` test option), or the plan's attempts are used up                                                                                                                             |
 | (error message)       | `2`       | Wrong approval token, or `--apply` in CI                                                                                                                                                                                                                                                                                          |
 | `error`               | `3`       | A tool failed, or a run in the copy changed the installed dependencies                                                                                                                                                                                                                                                            |
 

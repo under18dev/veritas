@@ -83,6 +83,8 @@ veritas explain <finding-id>
 
 判定は、次の evidence vector を短くまとめたもので、成績ではありません。
 
+Node.js のテストランナー（`node --test`）では mutation testing を行えないので、`meaningful_with_evidence` になるテストはありません。プロジェクトの結果を assert するテストは「detection power was not measured (no mutation results)」として `inconclusive` になります。弱いテストや振る舞いを確かめていないテストは、静的な証拠からそのとおりに報告します。詳しくは[対応環境](/ja/concepts/support-matrix#テストランナー)を参照してください。
+
 ### プロジェクトのコードを確かめているとみなす条件
 
 assert がプロジェクトのコードが生んだものを見ていれば、そのテストはプロジェクトのコードを確かめているとみなします。ふつうの関数なら、戻り値、関数が書き換えたオブジェクト、テストから渡したコールバックや `vi.fn()` のモックがどう呼ばれたか、が対象です。

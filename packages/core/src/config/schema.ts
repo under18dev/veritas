@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { IntLiteral } from '../schema/ir.js';
 
 /** The test runners Veritas supports; each one has a test runner provider (see `TestRunnerProvider`). */
-export const TEST_FRAMEWORKS = ['vitest', 'jest'] as const;
+export const TEST_FRAMEWORKS = ['vitest', 'jest', 'node_test'] as const;
 
 /** The test runner a project uses; each one has a test runner provider (see `TestRunnerProvider`). */
 export const TestFramework = z.enum(TEST_FRAMEWORKS);

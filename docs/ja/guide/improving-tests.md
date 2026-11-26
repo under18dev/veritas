@@ -54,6 +54,8 @@ plan: .veritas/improvements/IP-a14164357e16/plan.json (no project file was writt
 
 計画には、目的、提案するテストと期待値の出どころ（Property と出典の行）、対象の穴、予算、パッチの全文、見送った入力とその理由、承認トークンが含まれます。計画は `.veritas/improvements/<plan-id>/plan.json` に保存されます。
 
+テストは、プロジェクトのテストランナー向けに書きます。Node.js のテストランナー（`analysis.testFramework: "node_test"`）では、`node:test` から `it` を、`node:assert/strict` から `assert` を import し、`assert.strictEqual(f(x), expected)` で確かめます。ソースのモジュールは、Node.js の型の除去（type stripping）に合わせて `.ts` のファイル名で import します。
+
 ## 承認して適用する
 
 パッチのプレビューを読んでください。トークンを渡すことは、そのパッチをそのまま承認することを意味します。
@@ -89,6 +91,8 @@ note: formal and property-based results re-evaluated in run-20261120T105528565Z-
 4. コピーに新しいテストファイルを加え、すべての mutant についてテストと mutation testing をもう一度実行します。
 5. 計画の元になった実行と同じステージとオプションで、形式検証と property-based testing の結果をオフラインで評価し直します。
 6. 次の条件をすべて満たしたときだけ、新しいファイルをプロジェクトに書き込みます。コピーとコピー元との違いが、計画どおりの内容の新しいファイルだけであること、インストール済みの依存関係が変わっていないこと、すべてのテストが通ること、kill した mutant が増えること、パッチの前に生き残っていた mutant を新しいテストのどれかが kill すること、mutation の 2 回の実行がどちらも最後まで終わっていること（mutator の時間の予算が尽きず、外したソースファイルもないこと）、評価し直しがエラーなく終わること。証明と反例は、実装そのものについても mutant についても、もう一度作られて決着したままでなければなりません。例外は、パッチの前には生き残っていて、新しいテストのどれかが kill した mutant で、その結果は作られなくてもかまいません。通った property-based test は、もう一度作られた場合に決着したままでなければなりません。もともと決着していなかった結果は `unknown` や `timeout` のままでもかまいません。どれも試行の記録に残ります。条件を満たさなければコピーを捨て、プロジェクトは変わりません。
+
+Node.js のテストランナーでは、そのテストで mutation testing に対応していないため、適用しても何も測れません（[対応環境](/ja/concepts/support-matrix#テストランナー)を参照）。計画の最初の理由に `improve --apply` は使えないと書かれ、`--apply` は承認の記録、コピーの作成、プロジェクトのコードの実行のどれよりも前に `IMPROVE_APPLY_UNSUPPORTED`（終了コード 2）で拒否されます。`--dry-run` による計画はいつもどおり使えるので、必要なテストは自分で追加してください。
 
 ### コピーの検査 {#checks-on-the-copy}
 
@@ -127,7 +131,7 @@ note: formal and property-based results re-evaluated in run-20261120T105528565Z-
 | `planned`、`improved` | `0`        | 計画ができた、または適用して結果がよくなった                                                                                                                                                                                                                                |
 | `no_safe_improvement` | `4`        | 仕様から期待値を取ったテストを作れなかった、追加したテストが失敗したか新しいテストで kill が増えなかった、mutation の実行が最後まで終わらず（時間の予算が尽きたか、ファイルを外した）前後を比べられなかった、または実行が新しいテストファイル以外のコピーのファイルを変えた |
 | `needs_spec_decision` | `4`        | 先に仕様を決める必要がある                                                                                                                                                                                                                                                  |
-| `blocked`             | `1`        | パッチが安全性の検査を通らない、または試行の上限に達した                                                                                                                                                                                                                    |
+| `blocked`             | `1`        | パッチが安全性の検査を通らない（`.skip`、`.only`、`.todo` や、テストのオプション `{ skip }`、`{ todo }`、`{ only }` でテストをスキップ・限定している など）、または試行の上限に達した                                                                                       |
 | （エラー表示）        | `2`        | 承認トークンが違う、または CI の中で `--apply` した                                                                                                                                                                                                                         |
 | `error`               | `3`        | ツールが失敗した、またはコピーでの実行がインストール済みの依存関係を変えた                                                                                                                                                                                                  |
 

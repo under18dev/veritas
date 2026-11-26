@@ -191,7 +191,8 @@
           "type": "string",
           "enum": [
             "vitest",
-            "jest"
+            "jest",
+            "node_test"
           ]
         },
         "inferSpecsFromCode": {

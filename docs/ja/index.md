@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Veritas
   text: そのテストは、本当に何を保証していますか？
-  tagline: TypeScript と Vitest・Jest のための、仕様を踏まえたテスト検証ツール。スコアは出さず、mutant・反例・証明を根拠に答えます。
+  tagline: TypeScript と Vitest・Jest・Node.js のテストランナーのための、仕様を踏まえたテスト検証ツール。スコアは出さず、mutant・反例・証明を根拠に答えます。
   actions:
     - theme: brand
       text: はじめる

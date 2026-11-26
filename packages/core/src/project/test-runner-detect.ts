@@ -39,8 +39,11 @@ function commandName(word: string): string {
   return (word.split(/[\\/]/).pop() ?? word).replace(/\.(?:[cm]?js|cmd|ps1)$/, '');
 }
 
-/** Whether one command segment (no `&&`, `;` or `|` in it) runs one of `wanted`. */
-function segmentRuns(words: string[], wanted: ReadonlySet<string>): boolean {
+/**
+ * The command one command segment (no `&&`, `;` or `|` in it) runs, after environment assignments, launchers such as
+ * `npx` or `cross-env` and package managers' `exec` or `run`: its name and the words after it; null without one.
+ */
+function segmentCommand(words: string[]): { name: string; args: string[] } | null {
   let i = 0;
   const skipOptions = () => {
     while (i < words.length && (words[i] as string).startsWith('-')) i++;
@@ -50,7 +53,7 @@ function segmentRuns(words: string[], wanted: ReadonlySet<string>): boolean {
     while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++;
     const word = words[i];
 
-    if (word === undefined) return false;
+    if (word === undefined) return null;
     const name = commandName(word);
     i++;
 
@@ -65,15 +68,121 @@ function segmentRuns(words: string[], wanted: ReadonlySet<string>): boolean {
       continue;
     }
 
-    if (name === 'node') {
-      skipOptions();
-      const file = words[i];
+    return { name, args: words.slice(i) };
+  }
+}
 
-      return file !== undefined && wanted.has(commandName(file));
+/** Whether one command segment runs one of `wanted`, also as the file `node` runs. */
+function segmentRuns(words: string[], wanted: ReadonlySet<string>): boolean {
+  const command = segmentCommand(words);
+
+  if (command === null) return false;
+
+  if (command.name === 'node') {
+    const file = command.args.find((arg) => !arg.startsWith('-'));
+
+    return file !== undefined && wanted.has(commandName(file));
+  }
+
+  return wanted.has(command.name);
+}
+
+/** The words of each command segment of a script (split at `&&`, `||`, `;`, `|`), with quoted text emptied. */
+function scriptSegments(script: string): string[][] {
+  // Quoted text is an argument of its segment, never the command.
+  const unquoted = script.replace(/"[^"]*"|'[^']*'/g, '""');
+
+  return unquoted.split(/&&|\|\||[;|&]/).map((segment) => segment.trim().split(/\s+/).filter(Boolean));
+}
+
+/**
+ * Node.js options that take their value as the next word when written without `=` (`--import tsx`, `-r ts-node/register`).
+ * Every other option is a flag or written `--name=value`.
+ */
+const NODE_VALUE_OPTIONS = new Set([
+  '-r',
+  '--require',
+  '--import',
+  '--loader',
+  '--experimental-loader',
+  '-e',
+  '--eval',
+  '-p',
+  '--print',
+  '-C',
+  '--conditions',
+  '--input-type',
+  '--env-file',
+  '--env-file-if-exists',
+  '--experimental-config-file',
+  '--disable-warning',
+  '--redirect-warnings',
+  '--title',
+  '--watch-path',
+  '--inspect-port',
+  '--debug-port',
+  '--diagnostic-dir',
+  '--report-dir',
+  '--report-directory',
+  '--report-filename',
+  '--report-signal',
+  '--localstorage-file',
+  '--heapsnapshot-signal',
+  '--cpu-prof-dir',
+  '--cpu-prof-name',
+  '--heap-prof-dir',
+  '--heap-prof-name',
+  '--icu-data-dir',
+  '--openssl-config',
+  '--secure-heap',
+  '--secure-heap-min',
+  '--stack-trace-limit',
+  '--unhandled-rejections',
+  '--test-concurrency',
+  '--test-coverage-branches',
+  '--test-coverage-exclude',
+  '--test-coverage-functions',
+  '--test-coverage-include',
+  '--test-coverage-lines',
+  '--test-isolation',
+  '--test-name-pattern',
+  '--test-reporter',
+  '--test-reporter-destination',
+  '--test-shard',
+  '--test-skip-pattern',
+  '--test-timeout',
+  '--test-global-setup',
+  '--allow-fs-read',
+  '--allow-fs-write',
+]);
+
+/**
+ * Whether a package.json script runs `node` with `flag` among its own options (`node --test`, `node -r
+ * ts-node/register --test test/`), through launchers as `scriptRuns` reads them. Node's options end at the first word
+ * that is neither an option nor the value of one taking a value: the script file, whose own options follow it
+ * (`node scripts/check.js --test` does not run Node's test runner).
+ */
+export function scriptRunsNodeWith(script: unknown, flag: string): boolean {
+  if (typeof script !== 'string') return false;
+
+  return scriptSegments(script).some((words) => {
+    const command = segmentCommand(words);
+
+    if (command?.name !== 'node') return false;
+
+    for (let i = 0; i < command.args.length; i++) {
+      const arg = command.args[i] as string;
+
+      if (arg === flag) return true;
+
+      // `--` ends the options; any other word is the script file.
+      if (arg === '--' || !arg.startsWith('-')) return false;
+
+      if (!arg.includes('=') && NODE_VALUE_OPTIONS.has(arg)) i++;
     }
 
-    return wanted.has(name);
-  }
+    return false;
+  });
 }
 
 /**
@@ -85,12 +194,8 @@ function segmentRuns(words: string[], wanted: ReadonlySet<string>): boolean {
 export function scriptRuns(script: unknown, commands: readonly string[]): boolean {
   if (typeof script !== 'string' || commands.length === 0) return false;
   const wanted = new Set(commands);
-  // Quoted text is an argument of its segment, never the command.
-  const unquoted = script.replace(/"[^"]*"|'[^']*'/g, '""');
 
-  return unquoted
-    .split(/&&|\|\||[;|&]/)
-    .some((segment) => segmentRuns(segment.trim().split(/\s+/).filter(Boolean), wanted));
+  return scriptSegments(script).some((words) => segmentRuns(words, wanted));
 }
 
 /** Detect a runner from the usual signals: dependencies, `node_modules`, config files, package.json and scripts. */
@@ -157,14 +262,36 @@ interface Entry {
   installation: TestRunnerInstallation;
 }
 
-const shows = ({ installation }: Entry) =>
-  installation.evidence.length > 0 || installation.installedVersion !== null;
+/**
+ * Installed in a way that tells something about the project, among the runners detection found (`all`). A runner
+ * built into Node.js (`node --test`) is always there, so it counts as installed only on evidence that the project
+ * uses it, and only evidence as strong as a dependency: its `test` script runs it, or no other runner shows any
+ * evidence at all. Otherwise a project whose declared or configured runner is not installed yet (before `npm
+ * install`) would get the built-in one instead of that runner's NOT_FOUND error, because of a `bench` script that runs
+ * `node --test` or a file importing `node:test`.
+ */
+function installed(entry: Entry, all: readonly Entry[]): boolean {
+  const { provider, installation } = entry;
 
-function describe({ installation }: Entry): string {
+  if (installation.installedVersion === null) return false;
+
+  if (!provider.detection.builtIn) return true;
+
+  return (
+    installation.evidence.length > 0 &&
+    (installation.testScript ||
+      all.every((other) => other === entry || other.installation.evidence.length === 0))
+  );
+}
+
+const shows = (entry: Entry, all: readonly Entry[]) =>
+  entry.installation.evidence.length > 0 || installed(entry, all);
+
+function describe(entry: Entry, all: readonly Entry[]): string {
+  const { installation } = entry;
+
   if (installation.evidence.length === 0)
-    return installation.installedVersion
-      ? 'installed, with nothing in package.json or config files'
-      : 'nothing';
+    return installed(entry, all) ? 'installed, with nothing in package.json or config files' : 'nothing';
 
   return `${installation.evidence.join(', ')}${installation.installedVersion ? '' : ', but not installed'}`;
 }
@@ -174,8 +301,10 @@ function describe({ installation }: Entry): string {
  * first: installed ones, then (when none is installed) declared ones, then those only a config file or a package.json
  * key points at. Among the runners of the first group that has any, the one the `test` script runs wins, then the
  * only one with evidence (config file, package.json key or dependency); if that does not decide, the first in
- * `providers` is chosen and the choice is marked ambiguous. So a runner that is neither declared nor installed is
- * never chosen over one that is installed. With nothing found at all the first provider is returned, so that its
+ * `providers` is chosen and the choice is marked ambiguous; a file importing a runner's module alone (`importsOnly`)
+ * never decides. So a runner that is neither declared nor installed is
+ * never chosen over one that is installed. A runner built into Node.js counts as installed only when its `test` script
+ * runs it or no other runner shows any evidence (see `installed`). With nothing found at all the first provider is returned, so that its
  * NOT_FOUND error says what is missing.
  */
 export function chooseTestRunner(
@@ -190,15 +319,15 @@ export function chooseTestRunner(
     installation: installations[index] as TestRunnerInstallation,
   }));
   const groups: [string, Entry[]][] = [
-    ['installed', all.filter(({ installation }) => installation.installedVersion !== null)],
+    ['installed', all.filter((entry) => installed(entry, all))],
     ['declared in package.json', all.filter(({ installation }) => installation.declared)],
     ['configured', all.filter(({ installation }) => installation.evidence.length > 0)],
   ];
   const [state, group] = groups.find(([, entries]) => entries.length > 0) ?? ['', []];
   const others = (chosen: Entry) =>
     all
-      .filter((entry) => entry !== chosen && shows(entry))
-      .map((entry) => `; ${entry.provider.displayName} also shows up (${describe(entry)})`)
+      .filter((entry) => entry !== chosen && shows(entry, all))
+      .map((entry) => `; ${entry.provider.displayName} also shows up (${describe(entry, all)})`)
       .join('');
   const decided = (chosen: Entry, why: string): TestRunnerChoice => ({
     provider: chosen.provider,
@@ -220,11 +349,11 @@ export function chooseTestRunner(
   }
 
   if (!second) {
-    const alone = all.every((entry) => entry === only || !shows(entry));
+    const alone = all.every((entry) => entry === only || !shows(entry, all));
 
     return decided(
       only,
-      `${only.provider.displayName} is the only test runner ${alone ? 'found' : state} (${describe(only)})`,
+      `${only.provider.displayName} is the only test runner ${alone ? 'found' : state} (${describe(only, all)})`,
     );
   }
   const names = group.map(({ provider }) => provider.displayName).join(' and ');
@@ -235,12 +364,16 @@ export function chooseTestRunner(
       scripted[0],
       `${names} are ${state}; the test script runs ${scripted[0].provider.displayName}`,
     );
-  const withEvidence = group.filter(({ installation }) => installation.evidence.length > 0);
+  // A file importing a runner's module does not tell runners apart: in a monorepo it may be one package of several,
+  // the others tested with the runner that is installed.
+  const withEvidence = group.filter(
+    ({ installation }) => installation.evidence.length > 0 && installation.importsOnly !== true,
+  );
 
   if (withEvidence.length === 1 && withEvidence[0])
     return decided(
       withEvidence[0],
-      `${names} are ${state}; only ${withEvidence[0].provider.displayName} has a config file or a dependency (${describe(withEvidence[0])})`,
+      `${names} are ${state}; only ${withEvidence[0].provider.displayName} has a config file, a dependency or a script that runs it (${describe(withEvidence[0], all)})`,
     );
 
   return {

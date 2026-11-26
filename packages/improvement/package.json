@@ -26,6 +26,7 @@
     "@under18dev/veritas-engine": "workspace:*",
     "@under18dev/veritas-formal-core": "workspace:*",
     "@under18dev/veritas-mutation-adapter": "workspace:*",
+    "typescript": "6.0.3",
     "zod": "4.6.7",
     "@under18dev/veritas-property-engine": "workspace:*"
   }
