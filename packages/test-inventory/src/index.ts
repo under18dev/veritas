@@ -73,9 +73,9 @@ export const TestInventory = z.object({
       /**
        * The file runs code while it loads that may register tests, itself or through a local module it loads: a call,
        * `new` or tagged template its module scope evaluates (other than a few inert builtins such as `Symbol()` and
-       * path helpers), a package it loads, or a local module that does not resolve. A test file with no recorded test
-       * is left out of the unread files only when this is false and it does not use the runner. Absent in inventories
-       * written before it was recorded.
+       * path helpers), a package it loads for its side effects or re-exports whole, or a local module that does not
+       * resolve. A test file with no recorded test is left out of the unread files only when this is false. Absent in
+       * inventories written before it was recorded.
        */
       loadsCode: z.boolean().optional(),
     }),
@@ -573,11 +573,18 @@ function inertCall(node: ts.CallExpression | ts.NewExpression | ts.TaggedTemplat
       ambientDeclaration(declaration),
     );
 
-  if (
-    ts.isCallExpression(node) &&
-    (node.expression.kind === ts.SyntaxKind.ImportKeyword || requireFunction(callee))
-  )
+  // A dynamic import of a package may run anything; a `require` of one only binds it (`const { pick } =
+  // require('lodash')`), unless it is a bare statement, loaded for its side effects (`require('shared-tests/register')`).
+  if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
     return literal !== undefined && !loadsPackageCode(literal);
+
+  if (ts.isCallExpression(node) && requireFunction(callee)) {
+    let use: ts.Node = node;
+
+    while (ts.isParenthesizedExpression(use.parent)) use = use.parent;
+
+    return literal !== undefined && (!loadsPackageCode(literal) || !ts.isExpressionStatement(use.parent));
+  }
 
   if (ts.isNewExpression(node)) return global(callee, 'URL');
 
@@ -599,8 +606,8 @@ const moduleRunsCodeCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; valu
 /**
  * Whether a module runs code while it loads that may register tests: any call, `new` or tagged template its module
  * scope evaluates (in control flow, arguments, class static blocks and field initialisers, functions called where they
- * are written, local functions it calls), other than `inertCall`s, or a value import, re-export or `require` of a
- * package (`loadsPackageCode`). The bodies of functions only defined are not read: their call sites count.
+ * are written, local functions it calls), other than `inertCall`s, or a package (`loadsPackageCode`) it loads for its
+ * side effects (`import 'pkg'`, `require('pkg')` as a statement) or re-exports whole (`export * from 'pkg'`). The bodies of functions only defined are not read: their call sites count.
  */
 function moduleRunsCode(source: ts.SourceFile): boolean {
   const cached = moduleRunsCodeCache.get(source);
@@ -621,13 +628,14 @@ function moduleRunsCode(source: ts.SourceFile): boolean {
       !immediatelyInvoked(node)
     )
       return;
+    // A package loaded for its side effects (`import 'shared-tests/register'`) or re-exported whole (`export * from
+    // 'pkg'`) may register tests. A package whose bindings are only imported (`import { pick } from 'lodash'`) runs
+    // nothing that counts unless one of them is called while the module loads, which is a call like any other.
     const specifier =
-      (ts.isImportDeclaration(node) && !node.importClause?.isTypeOnly) ||
-      (ts.isExportDeclaration(node) && !node.isTypeOnly)
+      (ts.isImportDeclaration(node) && node.importClause === undefined) ||
+      (ts.isExportDeclaration(node) && !node.isTypeOnly && node.exportClause === undefined)
         ? node.moduleSpecifier
-        : ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)
-          ? node.moduleReference.expression
-          : undefined;
+        : undefined;
 
     if (specifier !== undefined && ts.isStringLiteralLike(specifier) && loadsPackageCode(specifier.text)) {
       found = true;
