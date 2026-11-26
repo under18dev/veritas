@@ -125,6 +125,14 @@ describe('unreadTestFiles', () => {
         "import path from 'node:path';\nexport const dir = path.join('a', 'b');\nexport const key = Symbol('k');\nexport const frozen = Object.freeze({ a: 1 });\nexport function later() { return later2(); }\nfunction later2() {}\n",
       'test/defines.test.mjs':
         "import { later } from './helpers/pure.mjs';\nexport function run() { later(); }\n",
+      // Local JSON data runs no code when it loads.
+      'test/helpers/data.json': '{ "n": 1 }\n',
+      'test/json.test.mjs':
+        "import data from './helpers/data.json' with { type: 'json' };\nexport const loading = import('./helpers/data.json', { with: { type: 'json' } });\nexport { data };\n",
+      'test/json-assert.test.mjs':
+        "import data from './helpers/data.json' assert { type: 'json' };\nexport { data };\n",
+      'test/json-require.test.cjs':
+        "const data = require('./helpers/data.json');\nmodule.exports = { data };\n",
       // A helper matched only by the directory glob: a package imported by name and used inside functions.
       'test/helpers/lodash.mjs':
         "import { pick } from 'lodash';\nexport function select(o) { return pick(o, 'a'); }\n",
