@@ -16,7 +16,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir, hostname } from 'node:os';
+import { homedir, hostname, userInfo } from 'node:os';
 import path from 'node:path';
 import { hashValue, resolveInsideRoot, sha256, VeritasError } from '@under18dev/veritas-core';
 import type { PatchFile } from './schema.js';
@@ -175,21 +175,84 @@ function unsafeBase(base: string, why: string): VeritasError {
   );
 }
 
+function within(p: string, dir: string): boolean {
+  const rel = path.relative(dir, p);
+
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/** The real path of `p`, resolving the longest prefix of it that exists. */
+function realpathOfExisting(p: string): string {
+  const rest: string[] = [];
+
+  for (let current = path.resolve(p); ; current = path.dirname(current)) {
+    try {
+      return path.join(realpathSync(current), ...rest);
+    } catch {
+      if (path.dirname(current) === current) return path.resolve(p);
+      rest.unshift(path.basename(current));
+    }
+  }
+}
+
 /**
- * Create `workspaceBase()` private to the user (0700) and return its real path. Refused when it lies in the project
- * (the copy would copy itself), and on POSIX when it is a link or not the user's, or when a directory above it is not
- * owned by the user or root or can be written by others (as a shared temporary directory can, sticky or not): others
- * could then put a `node_modules` where code in the copy looks for modules.
+ * Whether group `gid` is the private group of the user (user private groups, the default on Debian and Ubuntu, where
+ * a umask of 002 makes directories group-writable): it is the user's primary group, `/etc/group` names it after the
+ * user with no other members, and no other account in `/etc/passwd` has it as primary group. A group that cannot be
+ * found in those files (directory services) is not taken as private.
+ */
+export function isPrivateGroup(
+  gid: number,
+  user: { username: string; uid: number; gid: number },
+  files: { group: string; passwd: string },
+): boolean {
+  if (gid !== user.gid) return false;
+  const group = files.group
+    .split('\n')
+    .map((line) => line.split(':'))
+    .find((fields) => fields.length >= 4 && Number(fields[2]) === gid);
+
+  if (!group || group[0] !== user.username) return false;
+  const members = (group[3] ?? '').split(',').filter((m) => m.trim() !== '');
+
+  if (members.some((m) => m.trim() !== user.username)) return false;
+
+  return !files.passwd
+    .split('\n')
+    .map((line) => line.split(':'))
+    .some((fields) => fields.length >= 4 && Number(fields[3]) === gid && Number(fields[2]) !== user.uid);
+}
+
+function privateGroupOfUser(gid: number): boolean {
+  try {
+    const info = userInfo();
+
+    return isPrivateGroup(
+      gid,
+      { username: info.username, uid: info.uid, gid: info.gid },
+      { group: readFileSync('/etc/group', 'utf8'), passwd: readFileSync('/etc/passwd', 'utf8') },
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Create `workspaceBase()` private to the user (0700) and return its real path. Refused, before anything is created,
+ * when it lies in the project (the copy would copy itself). On POSIX also refused when it is a link or not the user's,
+ * or when a directory above it belongs to another user than the user or root, can be written by every user (as a
+ * shared temporary directory can, sticky or not), or can be written by a group other than the user's private group:
+ * others could then put a `node_modules` where code in the copy looks for modules.
  */
 function privateBase(root: string): string {
   const base = workspaceBase();
+  const realRoot = realpathSync(root);
+
+  if (within(realpathOfExisting(base), realRoot)) throw unsafeBase(base, 'it is inside the project');
   mkdirSync(base, { recursive: true, mode: 0o700 });
   const realBase = realpathSync(base);
-  const realRoot = realpathSync(root);
-  const rel = path.relative(realRoot, realBase);
 
-  if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)))
-    throw unsafeBase(realBase, 'it is inside the project');
+  if (within(realBase, realRoot)) throw unsafeBase(realBase, 'it is inside the project');
 
   if (process.platform === 'win32') return realBase;
   const uid = process.getuid?.();
@@ -203,8 +266,20 @@ function privateBase(root: string): string {
   for (let dir = path.dirname(realBase); ; dir = path.dirname(dir)) {
     const a = lstatSync(dir);
 
-    if ((a.uid !== uid && a.uid !== 0) || (a.mode & 0o022) !== 0)
-      throw unsafeBase(realBase, `${dir} above it can be written by other users`);
+    if (a.uid !== uid && a.uid !== 0)
+      throw unsafeBase(realBase, `${dir} above it belongs to another user (uid ${a.uid})`);
+
+    if ((a.mode & 0o002) !== 0)
+      throw unsafeBase(
+        realBase,
+        `${dir} above it can be written by every user; run \`chmod o-w ${dir}\` if it is yours`,
+      );
+
+    if ((a.mode & 0o020) !== 0 && !privateGroupOfUser(a.gid))
+      throw unsafeBase(
+        realBase,
+        `${dir} above it can be written by its group (gid ${a.gid}), which is not your private group; run \`chmod g-w ${dir}\``,
+      );
 
     if (path.dirname(dir) === dir) break;
   }
@@ -218,6 +293,35 @@ const OWNER_SUFFIX = '.owner';
 const UNOWNED_STALE_MS = 24 * 60 * 60 * 1000;
 /** A copy made on another host sharing this cache directory is removed after this long. */
 const FOREIGN_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function readOrNull(file: string): string | null {
+  try {
+    return readFileSync(file, 'utf8').trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where this process runs, to tell whether the process named in an owner record can be checked from here: the host
+ * name, and on Linux the boot id and the pid namespace (containers on one host share the boot id and may share a
+ * host name, but not the pid namespace).
+ */
+export function workspaceMachine(): { host: string; bootId: string | null; pidNamespace: string | null } {
+  let pidNamespace: string | null = null;
+
+  try {
+    pidNamespace = process.platform === 'linux' ? readlinkSync('/proc/self/ns/pid') : null;
+  } catch {
+    pidNamespace = null;
+  }
+
+  return {
+    host: hostname(),
+    bootId: process.platform === 'linux' ? readOrNull('/proc/sys/kernel/random/boot_id') : null,
+    pidNamespace,
+  };
+}
 
 function processAlive(pid: number): boolean {
   try {
@@ -237,6 +341,7 @@ function processAlive(pid: number): boolean {
  */
 export function removeStaleWorkspaces(base: string, now = Date.now()): string[] {
   const removed: string[] = [];
+  const here = workspaceMachine();
   let entries: string[];
 
   try {
@@ -263,7 +368,7 @@ export function removeStaleWorkspaces(base: string, now = Date.now()): string[] 
 
     try {
       const age = now - lstatSync(dir).mtimeMs;
-      let owner: { pid?: unknown; host?: unknown } | null = null;
+      let owner: { pid?: unknown; host?: unknown; bootId?: unknown; pidNamespace?: unknown } | null = null;
 
       try {
         owner = JSON.parse(readFileSync(dir + OWNER_SUFFIX, 'utf8'));
@@ -274,7 +379,9 @@ export function removeStaleWorkspaces(base: string, now = Date.now()): string[] 
       stale =
         owner === null || typeof owner.pid !== 'number'
           ? age > UNOWNED_STALE_MS
-          : owner.host === hostname()
+          : owner.host === here.host &&
+              owner.bootId === here.bootId &&
+              owner.pidNamespace === here.pidNamespace
             ? !processAlive(owner.pid)
             : age > FOREIGN_STALE_MS;
     } catch {
@@ -300,9 +407,13 @@ export function createWorkspace(root: string): string {
   const dir = realpathSync(mkdtempSync(path.join(base, 'veritas-improve-')));
 
   try {
-    writeFileSync(dir + OWNER_SUFFIX, JSON.stringify({ pid: process.pid, host: hostname() }), {
-      mode: 0o600,
-    });
+    const owner = {
+      pid: process.pid,
+      ...workspaceMachine(),
+      // When the owning process started: with the pid, it tells a reused pid apart when reading the record by hand.
+      startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+    };
+    writeFileSync(dir + OWNER_SUFFIX, JSON.stringify(owner), { mode: 0o600 });
     const realRoot = realpathSync(root);
     cpSync(realRoot, dir, {
       recursive: true,

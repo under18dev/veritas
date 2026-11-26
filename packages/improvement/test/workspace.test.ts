@@ -16,12 +16,13 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { hostname, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createWorkspace,
   diffSnapshots,
+  isPrivateGroup,
   projectHash,
   removeStaleWorkspaces,
   removeWorkspace,
@@ -31,6 +32,7 @@ import {
   undoWrites,
   unexpectedChanges,
   workspaceBase,
+  workspaceMachine,
   writeNewFiles,
 } from '../src/index.js';
 import { project } from './helpers.js';
@@ -216,6 +218,8 @@ describe('workspace and repository writes', () => {
     vi.stubEnv('LOCALAPPDATA', path.join(root, '.cache'));
     try {
       expect(() => createWorkspace(root)).toThrow(/inside the project/);
+      // Refused before anything is created there.
+      expect(existsSync(path.join(root, '.cache'))).toBe(false);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -228,10 +232,37 @@ describe('workspace and repository writes', () => {
       mkdirSync(shared);
       chmodSync(shared, 0o1777);
       vi.stubEnv('XDG_CACHE_HOME', path.join(shared, 'cache'));
-      expect(() => createWorkspace(root)).toThrow(/can be written by other users/);
+      expect(() => createWorkspace(root)).toThrow(/can be written by every user/);
+      // Writable by a group shared with others (macOS's staff): refused, with the fix.
+      if (process.platform === 'darwin') {
+        const grouped = path.join(cache, 'grouped');
+        mkdirSync(grouped);
+        chmodSync(grouped, 0o770);
+        vi.stubEnv('XDG_CACHE_HOME', path.join(grouped, 'cache'));
+        expect(() => createWorkspace(root)).toThrow(/not your private group; run `chmod g-w /);
+      }
     } finally {
       releaseCacheDir(cache);
     }
+  });
+
+  it("takes a group as private only when it is the user's own, with no other members or accounts", () => {
+    const user = { username: 'ann', uid: 1000, gid: 1000 };
+    const passwd =
+      'root:x:0:0::/root:/bin/sh\nann:x:1000:1000::/home/ann:/bin/bash\nbob:x:1001:1001::/home/bob:/bin/bash\n';
+    const group = 'root:x:0:\nann:x:1000:\nbob:x:1001:\nstaff:x:50:ann,bob\n';
+    expect(isPrivateGroup(1000, user, { group, passwd })).toBe(true);
+    // Not the user's primary group, a shared group, another member, or another account with it as primary group.
+    expect(isPrivateGroup(1001, user, { group, passwd })).toBe(false);
+    expect(isPrivateGroup(50, { ...user, gid: 50 }, { group, passwd })).toBe(false);
+    expect(
+      isPrivateGroup(1000, user, { group: group.replace('ann:x:1000:', 'ann:x:1000:bob'), passwd }),
+    ).toBe(false);
+    expect(
+      isPrivateGroup(1000, user, { group, passwd: `${passwd}eve:x:1002:1000::/home/eve:/bin/sh\n` }),
+    ).toBe(false);
+    // Unknown to the files (a directory service): not taken as private.
+    expect(isPrivateGroup(1000, user, { group: '', passwd })).toBe(false);
   });
 
   it('removes a partial copy when copying fails', () => {
@@ -261,8 +292,11 @@ describe('workspace and repository writes', () => {
     };
     const dead = spawnSync(process.execPath, ['-e', '']).pid as number;
     const day = 24 * 60 * 60 * 1000;
-    const gone = copy('dead00', { pid: dead, host: hostname() });
-    const running = copy('alive0', { pid: process.pid, host: hostname() }, 30 * day);
+    const here = workspaceMachine();
+    const gone = copy('dead00', { pid: dead, ...here });
+    const running = copy('alive0', { pid: process.pid, ...here }, 30 * day);
+    // Same host name, but another boot or pid namespace (a container): its process cannot be checked from here.
+    const container = copy('cntnr1', { pid: dead, ...here, pidNamespace: 'pid:[1]' }, day);
     const foreignFresh = copy('frgn01', { pid: 1, host: 'other-host' }, day);
     const foreignOld = copy('frgn02', { pid: 1, host: 'other-host' }, 8 * day);
     const unownedFresh = copy('noown1', null, 60_000);
@@ -274,6 +308,8 @@ describe('workspace and repository writes', () => {
       [
         path.basename(running),
         `${path.basename(running)}.owner`,
+        path.basename(container),
+        `${path.basename(container)}.owner`,
         path.basename(foreignFresh),
         `${path.basename(foreignFresh)}.owner`,
         path.basename(unownedFresh),
