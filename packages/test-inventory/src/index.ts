@@ -5132,7 +5132,11 @@ function staticRunnerRequire(node: ts.Node): string | undefined {
 function staticRunnerRequireCall(call: ts.CallExpression): boolean {
   let current: ts.Node = call;
 
-  while (ts.isPropertyAccessExpression(current.parent) || ts.isParenthesizedExpression(current.parent))
+  while (
+    ts.isPropertyAccessExpression(current.parent) ||
+    ts.isParenthesizedExpression(current.parent) ||
+    (ts.isElementAccessExpression(current.parent) && current.parent.expression === current)
+  )
     current = current.parent;
 
   return staticRunnerRequire(current.parent) !== undefined;
@@ -6889,10 +6893,7 @@ function runnerName(identifier: ts.Identifier): string {
 
         if (ts.isIdentifier(declaration.name)) {
           // `require('node:test').describe` binds that member.
-          const member = ts.isPropertyAccessExpression(skipParens(declaration.initializer as ts.Expression))
-            ? (skipParens(declaration.initializer as ts.Expression) as ts.PropertyAccessExpression).name.text
-            : undefined;
-          aliases.set(declaration.name.text, member ?? runner.defaultExport ?? NAMESPACE);
+          aliases.set(declaration.name.text, requiredRunnerMember(declaration.initializer as ts.Expression));
         } else if (ts.isObjectBindingPattern(declaration.name))
           for (const element of declaration.name.elements)
             aliases.set(
@@ -7083,9 +7084,7 @@ function resolveDeclaration(declaration: ts.Declaration): string {
 
   // `const test = require('node:test')` is the module's default export; `require('node:test').describe` that member.
   if (ts.isVariableDeclaration(declaration) && runner.modules.has(staticRunnerRequire(declaration) ?? '')) {
-    const value = skipParens(declaration.initializer as ts.Expression);
-
-    return ts.isPropertyAccessExpression(value) ? value.name.text : (runner.defaultExport ?? NAMESPACE);
+    return requiredRunnerMember(declaration.initializer as ts.Expression);
   }
 
   if (ts.isExportSpecifier(declaration)) {
@@ -7164,6 +7163,18 @@ function resolveDeclaration(declaration: ts.Declaration): string {
   const root = resolved.split('.')[0] ?? '';
 
   return runner.tests.has(root) || runner.suites.has(root) ? resolved : NOT_RUNNER;
+}
+
+/**
+ * What `require('node:test')` or a member of it stands for: the module's default export (or its namespace), the
+ * member read (`.describe`, `['describe']`), or nothing of the runner's for a deeper or computed member.
+ */
+function requiredRunnerMember(initializer: ts.Expression): string {
+  const members = readMembers(initializer);
+
+  if (members.length === 0) return runner.defaultExport ?? NAMESPACE;
+
+  return members.length === 1 && members[0] !== COMPUTED_MEMBER ? (members[0] as string) : NOT_RUNNER;
 }
 
 /** What `runnerName` returns for a name the file binds to something other than the runner's API. */
@@ -9098,24 +9109,26 @@ const RECORDED_MOCK_ROLES = new Set<MockCallRole>([
  */
 function mockCall(node: ts.Expression, checker: ts.TypeChecker): MockCallRole | undefined {
   if (!ts.isCallExpression(node)) return undefined;
-  const callee = node.expression;
+  const callee = skipParens(node.expression);
 
-  // The mock API of a test's context (`t.mock.method(...)`, Node's test runner).
+  // `mock.fn(...)` and `mock['fn'](...)`; a member read by a computed key is not known to be one.
+  if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) return undefined;
+  const name = memberName(callee);
+
+  if (name === undefined) return undefined;
+  const holder = skipParens(callee.expression);
+
+  // The mock API of a test's context (`t.mock.method(...)`, `t['mock'].method(...)`, Node's test runner).
   if (
     runner.mockContextMember !== undefined &&
-    ts.isPropertyAccessExpression(callee) &&
-    ts.isPropertyAccessExpression(callee.expression) &&
-    callee.expression.name.text === runner.mockContextMember &&
-    ts.isIdentifier(callee.expression.expression) &&
-    isTestContext(callee.expression.expression, checker)
+    (ts.isPropertyAccessExpression(holder) || ts.isElementAccessExpression(holder)) &&
+    memberName(holder) === runner.mockContextMember &&
+    ts.isIdentifier(skipParens(holder.expression)) &&
+    isTestContext(skipParens(holder.expression) as ts.Identifier, checker)
   )
-    return runner.mockCalls.get(callee.name.text);
+    return runner.mockCalls.get(name);
 
-  if (!ts.isPropertyAccessExpression(callee)) return undefined;
-
-  return runnerMockObject(skipParens(callee.expression), checker)
-    ? runner.mockCalls.get(callee.name.text)
-    : undefined;
+  return runnerMockObject(holder, checker) ? runner.mockCalls.get(name) : undefined;
 }
 
 /** Whether a `require(...)` call loads one of the runner's modules. */
@@ -9137,8 +9150,8 @@ function requiresRunnerModule(node: ts.Expression): boolean {
  * (`nt.mock` with `nt` the required, default-imported or namespace-imported module, `require('node:test').mock`).
  */
 function runnerMockObject(expression: ts.Expression, checker: ts.TypeChecker): boolean {
-  if (ts.isPropertyAccessExpression(expression)) {
-    if (!runner.mockObjects.has(expression.name.text)) return false;
+  if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
+    if (!runner.mockObjects.has(memberName(expression) ?? '')) return false;
     const base = skipParens(expression.expression);
 
     if (requiresRunnerModule(base)) return true;
@@ -9357,13 +9370,21 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
     // `<spy>.mockReturnValue(...)` and friends, only on real spies of the test runner.
     const callee = node.expression;
 
-    if (!ts.isPropertyAccessExpression(callee) || !runner.configureMethod.test(callee.name.text)) continue;
+    if (
+      (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) ||
+      !runner.configureMethod.test(memberName(callee) ?? '')
+    )
+      continue;
     let receiver = skipParens(callee.expression);
 
     // Node's mocks hold their configuration methods in `.mock` (`spy.mock.mockImplementation(...)`); only for a
     // runner whose mocks do, as `x.mock` means something else elsewhere. The mock under it is checked like any other.
     if (runner.mockController !== undefined) {
-      if (!ts.isPropertyAccessExpression(receiver) || receiver.name.text !== runner.mockController) continue;
+      if (
+        (!ts.isPropertyAccessExpression(receiver) && !ts.isElementAccessExpression(receiver)) ||
+        memberName(receiver) !== runner.mockController
+      )
+        continue;
       receiver = skipParens(receiver.expression);
     }
     const receiverRole = mockCall(receiver, checker);
@@ -10293,12 +10314,7 @@ function nodeAssertCall(
   const root = rootIdentifierNode(callee);
 
   if (root === undefined) return undefined;
-  const path: string[] = [];
-
-  for (let current: ts.Expression = callee; ts.isPropertyAccessExpression(current); ) {
-    path.unshift(current.name.text);
-    current = skipParens(current.expression);
-  }
+  const path = readMembers(callee);
   let base: string;
   let extra: string[];
   const binding = assertModuleBinding(root);
@@ -10322,6 +10338,10 @@ function nodeAssertCall(
     base = path[1];
     extra = path.slice(2);
   } else return undefined;
+
+  // A member read by a computed key (`assert[name](...)`) may be any assertion: all its arguments are compared.
+  if (base === COMPUTED_MEMBER || extra.includes(COMPUTED_MEMBER))
+    return { name: UNKNOWN_EXPORT, via: 'direct' };
 
   if (NODE_ASSERT_NON_ASSERTIONS.has(base)) return undefined;
 
@@ -10935,6 +10955,26 @@ const MODULE_ITSELF = new Set(['*', 'default', 'strict']);
 /** The export of a binding that cannot be read; its calls keep all their arguments as compared values. */
 const UNKNOWN_EXPORT = '?';
 
+/** A member read through brackets by a key that is not a literal (`assert[name]`). */
+const COMPUTED_MEMBER = '[computed]';
+
+/**
+ * The members an expression reads, outermost last, from the name or call it starts with: `assert.strict.equal` and
+ * `assert['strict']['equal']` are `strict, equal`; a key that is not a literal is `COMPUTED_MEMBER`.
+ */
+function readMembers(expression: ts.Expression): string[] {
+  const path: string[] = [];
+
+  for (
+    let current = skipParens(expression);
+    ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current);
+    current = skipParens(current.expression)
+  )
+    path.unshift(memberName(current) ?? COMPUTED_MEMBER);
+
+  return path;
+}
+
 /** A member path read on an assertion module with the leading `strict`s (the module in strict mode) left out. */
 function moduleMembers(path: string[]): string[] {
   let start = 0;
@@ -10951,14 +10991,9 @@ function moduleMembers(path: string[]): string[] {
  * (`require('node:assert').strictEqual`, `require('node:assert').strict.equal`), or unknown for anything deeper.
  */
 function requiredExport(expression: ts.Expression): string {
-  const path: string[] = [];
-  let current = skipParens(expression);
+  const rest = moduleMembers(readMembers(expression));
 
-  while (ts.isPropertyAccessExpression(current)) {
-    path.unshift(current.name.text);
-    current = skipParens(current.expression);
-  }
-  const rest = moduleMembers(path);
+  if (rest.includes(COMPUTED_MEMBER)) return UNKNOWN_EXPORT;
 
   return rest.length === 0 ? '*' : rest.length === 1 ? (rest[0] as string) : UNKNOWN_EXPORT;
 }
@@ -10966,7 +11001,8 @@ function requiredExport(expression: ts.Expression): string {
 function requiredModule(expression: ts.Expression): string | undefined {
   let current = skipParens(expression);
 
-  while (ts.isPropertyAccessExpression(current)) current = skipParens(current.expression);
+  while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current))
+    current = skipParens(current.expression);
 
   return ts.isCallExpression(current) &&
     ts.isIdentifier(current.expression) &&

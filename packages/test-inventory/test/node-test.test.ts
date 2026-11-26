@@ -128,6 +128,10 @@ describe('Node.js test runner tests', () => {
           test.skip('skipped', () => eq(double(1), 2));
         });
         nodeTest('through the module', () => eq(double(3), 6));
+        const bracketSuite = require('node:test')['describe'];
+        bracketSuite('bracket suite', () => {
+          it('in the bracket suite', () => eq(double(4), 8));
+        });
         nodeTest.describe('member suite', () => {
           nodeTest.it('member case', () => {
             const eq = (a, b) => a === b;
@@ -149,6 +153,7 @@ describe('Node.js test runner tests', () => {
       ['doubles', ['doubling'], [], 1],
       ['skipped', ['doubling'], ['skip'], 1],
       ['through the module', [], [], 1],
+      ['in the bracket suite', ['bracket suite'], [], 1],
       ['member case', ['member suite'], [], 0],
     ]);
     expect(result.files.find((file) => file.path === 'test/required.test.cjs')).toMatchObject({
@@ -1079,6 +1084,60 @@ describe('Node.js test runner tests', () => {
       assertionCount: 1,
       suspicions: [],
     });
+  });
+
+  it('reads members written in brackets as written with a dot, and a computed one as unknown', () => {
+    const SERVICE = `${VALUE}export const service = { fetch: (id: number) => id };\n`;
+    const root = tempProject({
+      'src/value.ts': SERVICE,
+      'test/brackets.test.ts': `
+        import { mock, test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { service, value } from '../src/value.ts';
+        const required = require('node:assert')['strictEqual'];
+        const name = 'strictEqual' as keyof typeof assert;
+        test('bracket member', () => { assert['strictEqual'](2, value(1)); });
+        test('bracket under strict', () => { assert.strict['equal'](2, value(1)); });
+        test('template key', () => { assert[\`deepStrictEqual\`]([2], [value(1)]); });
+        test('required bracket member', () => { required(2, value(1)); });
+        test('context bracket', (t) => { t.assert['equal'](2, value(1)); });
+        test('context member in brackets', (t) => { t['assert'].equal(2, value(1)); });
+        test('computed member', () => { (assert[name] as (...args: unknown[]) => void)(2, value(1)); });
+        test('bracket message', () => { assert['strictEqual'](1, 1, String(value(1))); });
+        test('bracket mock', (t) => {
+          t['mock']['method'](service, 'fetch', () => 999);
+          assert.equal(service.fetch(1), 999);
+        });
+        test('bracket configure', () => {
+          const spy = mock['method'](service, 'fetch');
+          spy['mock']['mockImplementation'](() => 999);
+          assert.equal(service.fetch(1), 999);
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+    const asserted = (name: string) => byName(tests, name).targetCalls.some((call) => call.asserted);
+
+    for (const name of [
+      'bracket member',
+      'bracket under strict',
+      'template key',
+      'required bracket member',
+      'context bracket',
+      'context member in brackets',
+    ]) {
+      expect(byName(tests, name), name).toMatchObject({ assertionCount: 1, suspicions: [] });
+      expect(asserted(name), name).toBe(true);
+    }
+    // A computed member may be any assertion: counted, with all its arguments compared.
+    expect(byName(tests, 'computed member').assertionCount).toBe(1);
+    expect(asserted('computed member')).toBe(true);
+    expect(byName(tests, 'computed member').suspicions).not.toContain('tautological_assertion');
+    // A message is left out in brackets too.
+    expect(byName(tests, 'bracket message').suspicions).toContain('tautological_assertion');
+
+    for (const name of ['bracket mock', 'bracket configure'])
+      expect(byName(tests, name).suspicions, name).toContain('unconditional_mock');
   });
 
   it('does not read node:test files with the Vitest API', () => {
