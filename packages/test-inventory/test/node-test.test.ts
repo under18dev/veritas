@@ -219,6 +219,59 @@ describe('Node.js test runner tests', () => {
     });
   });
 
+  it('reads which node:assert function a required member or a strict path is, and keeps all arguments otherwise', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/members.test.cjs': `
+        const { test } = require('node:test');
+        const { value } = require('../src/value.ts');
+        const strictEqual = require('node:assert').strictEqual;
+        const equalStrict = require('node:assert/strict').equal;
+        const viaStrict = require('node:assert').strict.equal;
+        const deep = require('assert').deepStrictEqual;
+        const { strict: { notEqual } } = require('node:assert');
+        const deeper = require('node:assert').strict.equal.call;
+        test('member', () => { strictEqual(2, value(1)); });
+        test('strict module member', () => { equalStrict(2, value(1)); });
+        test('member under strict', () => { viaStrict(2, value(1)); });
+        test('bare assert member', () => { deep([2], [value(1)]); });
+        test('nested pattern', () => { notEqual(3, value(1)); });
+        test('unknown member', () => { deeper(null, 2, value(1)); });
+        test('member message', () => { strictEqual(1, 1, String(value(1))); });
+      `,
+      'test/esm.test.ts': `
+        import { test } from 'node:test';
+        import { strict } from 'node:assert';
+        import * as nodeAssert from 'node:assert';
+        import { value } from '../src/value.ts';
+        test('esm strict member', () => strict.equal(2, value(1)));
+        test('esm strict call', () => strict(value(1) === 2));
+        test('esm namespace', () => nodeAssert.strict.deepEqual([2], [value(1)]));
+        test('spread before message', () => strict.equal(...[1, 1], String(value(1))));
+      `,
+    });
+    const { tests } = inventory(root);
+    const asserted = (name: string) => byName(tests, name).targetCalls.some((call) => call.asserted);
+
+    for (const name of [
+      'member',
+      'strict module member',
+      'member under strict',
+      'bare assert member',
+      'nested pattern',
+      'unknown member',
+      'esm strict member',
+      'esm strict call',
+      'esm namespace',
+      'spread before message',
+    ]) {
+      expect(asserted(name), name).toBe(true);
+      expect(byName(tests, name).suspicions, name).not.toContain('tautological_assertion');
+    }
+    expect(asserted('member message')).toBe(false);
+    expect(byName(tests, 'member message').suspicions).toContain('tautological_assertion');
+  });
+
   it('never takes the message of a node:assert call for what it checks', () => {
     const root = tempProject({
       'src/value.ts': VALUE,
@@ -360,7 +413,11 @@ describe('Node.js test runner tests', () => {
         test('skip reason', { skip: 'flaky on CI' }, () => assert.equal(value(1), 2));
         test('todo reason', { todo: 'later' }, () => assert.equal(value(1), 2));
         test('only option', { only: true, timeout: 100 }, () => assert.equal(value(1), 2));
-        test('not skipped', { skip: false, todo: '' }, () => assert.equal(value(1), 2));
+        test('not skipped', { skip: false, todo: undefined, only: void 0 }, () => assert.equal(value(1), 2));
+        test('empty reason', { skip: '' }, () => assert.equal(value(1), 2));
+        test('zero', { skip: 0 }, () => assert.equal(value(1), 2));
+        test('null', { skip: null }, () => assert.equal(value(1), 2));
+        test('empty todo', { todo: '' }, () => assert.equal(value(1), 2));
         test('not node options', { fails: true, concurrent: true }, () => assert.equal(value(1), 2));
         describe.skip('skipped suite', () => {
           it('inside', () => assert.equal(value(1), 2));
@@ -378,6 +435,11 @@ describe('Node.js test runner tests', () => {
     expect(modifiers('todo reason')).toEqual(['todo']);
     expect(modifiers('only option')).toEqual(['only']);
     expect(modifiers('not skipped')).toEqual([]);
+    // Node sets an option for any value but false and undefined, as \`node --test\` shows.
+    expect(modifiers('empty reason')).toEqual(['skip']);
+    expect(modifiers('zero')).toEqual(['skip']);
+    expect(modifiers('null')).toEqual(['skip']);
+    expect(modifiers('empty todo')).toEqual(['todo']);
     expect(modifiers('not node options')).toEqual([]);
     expect(modifiers('inside')).toContain('skip');
   });

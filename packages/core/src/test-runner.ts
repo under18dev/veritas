@@ -153,6 +153,11 @@ export interface TestRunnerRecognition {
    */
   readonly chainedModifiersWin?: boolean;
   /**
+   * An option of `testOptions` is set by any value but `false` and `undefined` (Node: `{ skip: '' }`, `{ skip: 0 }`
+   * and `{ skip: null }` skip); without it a value sets the option when it is truthy, as in Vitest.
+   */
+  readonly optionsSetUnlessFalse?: boolean;
+  /**
    * The export a default import of one of `modules` stands for (`import test from 'node:test'` is `test`); without
    * it a default import is not part of the API.
    */

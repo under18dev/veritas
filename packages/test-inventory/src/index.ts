@@ -67,6 +67,8 @@ interface RunnerApi {
   testOptions: boolean;
   /** A chained modifier holds whatever the options object says (Node). */
   chainedModifiersWin: boolean;
+  /** An option is set by any value but `false` and `undefined` (Node). */
+  optionsSetUnlessFalse: boolean;
   /** The export a default import of the runner's module stands for (`import test from 'node:test'`), if any. */
   defaultExport: string | undefined;
   beforeEach: Set<string>;
@@ -104,6 +106,7 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
     tableFactories: new Set(recognition.tableFactories),
     testOptions: recognition.testOptions === true,
     chainedModifiersWin: recognition.chainedModifiersWin === true,
+    optionsSetUnlessFalse: recognition.optionsSetUnlessFalse === true,
     defaultExport: recognition.defaultExport,
     beforeEach: new Set(hooks.beforeEach),
     setup: new Set([...hooks.beforeEach, ...hooks.beforeAll]),
@@ -6347,8 +6350,24 @@ function registrationOptions(node: ts.CallExpression): {
       )
         continue;
 
+      const value = skipParens(property.initializer);
+
       if (property.initializer.kind === ts.SyntaxKind.TrueKeyword) set.set(modifier, true);
       else if (property.initializer.kind === ts.SyntaxKind.FalseKeyword) set.set(modifier, false);
+      // Node: `undefined` leaves the option off, any other literal sets it (`''`, `0`, `null`).
+      else if (
+        runner.optionsSetUnlessFalse &&
+        (ts.isIdentifier(value) ? value.text === 'undefined' : ts.isVoidExpression(value))
+      )
+        set.set(modifier, false);
+      else if (
+        runner.optionsSetUnlessFalse &&
+        (ts.isStringLiteralLike(value) ||
+          ts.isNumericLiteral(value) ||
+          value.kind === ts.SyntaxKind.NullKeyword ||
+          (ts.isPrefixUnaryExpression(value) && ts.isNumericLiteral(value.operand)))
+      )
+        set.set(modifier, true);
       // A reason given as a string sets it (Node's `{ skip: 'flaky on CI' }`); an empty one does not.
       else if (ts.isStringLiteralLike(property.initializer))
         set.set(modifier, property.initializer.text !== '');
@@ -9831,16 +9850,28 @@ function nodeAssertName(call: ts.CallExpression): string | undefined {
 
     if (binding === undefined) return undefined;
 
-    return binding.exported === 'default' || binding.exported === '*' || binding.exported === 'strict'
-      ? 'ok'
-      : binding.exported;
+    // The module itself is `assert(value, message)`; a member keeps its name, an unknown one stays unknown.
+    return MODULE_ITSELF.has(binding.exported) ? 'ok' : binding.exported;
   }
 
   if (!ts.isPropertyAccessExpression(callee)) return undefined;
-  const name = callee.name.text === 'strict' ? 'ok' : callee.name.text;
   const root = rootIdentifierNode(callee);
+  const rootBinding = root === undefined ? undefined : assertModuleBinding(root);
 
-  if (root !== undefined && assertModuleBinding(root) !== undefined) return name;
+  if (rootBinding !== undefined) {
+    // `assert.strict.equal` reads `equal` on the module; a member read on anything else is unknown.
+    if (!MODULE_ITSELF.has(rootBinding.exported)) return UNKNOWN_EXPORT;
+    const path: string[] = [];
+
+    for (let current: ts.Expression = callee; ts.isPropertyAccessExpression(current); ) {
+      path.unshift(current.name.text);
+      current = skipParens(current.expression);
+    }
+    const rest = moduleMembers(path);
+
+    return rest.length === 0 ? 'ok' : rest.length === 1 ? (rest[0] as string) : UNKNOWN_EXPORT;
+  }
+  const name = callee.name.text === 'strict' ? 'ok' : callee.name.text;
   const holder = skipParens(callee.expression);
 
   return runnerChecker !== undefined &&
@@ -9859,6 +9890,9 @@ function nodeAssertName(call: ts.CallExpression): string | undefined {
  * string or any other value may be the message. Unknown functions keep all their arguments.
  */
 function nodeAssertCompared(name: string, values: ts.Expression[]): ts.Expression[] {
+  // After a spread the positions of the arguments are unknown: none is taken for a message.
+  if (values.some(ts.isSpreadElement)) return values;
+
   if (NODE_ASSERT_PAIRS.has(name)) return values.slice(0, 2);
 
   if (NODE_ASSERT_SINGLE.has(name)) return values.slice(0, 1);
@@ -10411,6 +10445,38 @@ function assertModuleBinding(identifier: ts.Identifier): AssertBinding | undefin
 }
 
 /** The module a `require('…')` call loads, through member accesses on its result (`require('node:assert').strict`). */
+/** What an assertion module binding stands for when it is the module itself: the module, its default, `strict`. */
+const MODULE_ITSELF = new Set(['*', 'default', 'strict']);
+/** The export of a binding that cannot be read; its calls keep all their arguments as compared values. */
+const UNKNOWN_EXPORT = '?';
+
+/** A member path read on an assertion module with the leading `strict`s (the module in strict mode) left out. */
+function moduleMembers(path: string[]): string[] {
+  let start = 0;
+
+  while (path[start] === 'strict') start++;
+
+  return path.slice(start);
+}
+
+/**
+ * The export of an assertion module a `require` expression stands for: `*` for the module
+ * (`require('node:assert')`, also through `.strict`, which is the module in strict mode), the member read on it
+ * (`require('node:assert').strictEqual`, `require('node:assert').strict.equal`), or unknown for anything deeper.
+ */
+function requiredExport(expression: ts.Expression): string {
+  const path: string[] = [];
+  let current = skipParens(expression);
+
+  while (ts.isPropertyAccessExpression(current)) {
+    path.unshift(current.name.text);
+    current = skipParens(current.expression);
+  }
+  const rest = moduleMembers(path);
+
+  return rest.length === 0 ? '*' : rest.length === 1 ? (rest[0] as string) : UNKNOWN_EXPORT;
+}
+
 function requiredModule(expression: ts.Expression): string | undefined {
   let current = skipParens(expression);
 
@@ -10445,9 +10511,15 @@ function assertModuleBindings(source: ts.SourceFile): Map<string, AssertBinding>
     for (const element of name.elements) {
       if (ts.isOmittedExpression(element)) continue;
       const key = element.propertyName ?? element.name;
-      // `const { throws: mustThrow } = require('node:assert')` binds `throws`; a nested pattern binds its members.
-      const member = ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : '*';
-      bind(element.name, element, ts.isObjectBindingPattern(name) ? member : '*');
+      // `const { throws: mustThrow } = require('node:assert')` binds `throws`, also below `strict` (the module
+      // itself); a member of anything else, a computed key or an array pattern is unknown.
+      const member =
+        ts.isObjectBindingPattern(name) && !element.dotDotDotToken && MODULE_ITSELF.has(exported)
+          ? ts.isIdentifier(key) || ts.isStringLiteralLike(key)
+            ? key.text
+            : UNKNOWN_EXPORT
+          : UNKNOWN_EXPORT;
+      bind(element.name, element, member);
     }
   };
 
@@ -10489,7 +10561,7 @@ function assertModuleBindings(source: ts.SourceFile): Map<string, AssertBinding>
           const loaded = declaration.initializer ? requiredModule(declaration.initializer) : undefined;
 
           if (loaded !== undefined && runner.assertModules.has(loaded))
-            bind(declaration.name, declaration, '*');
+            bind(declaration.name, declaration, requiredExport(declaration.initializer as ts.Expression));
         }
     }
   assertBindings.set(source, { modules: runner.assertModules, names });
