@@ -1733,10 +1733,8 @@ function runsCallback(assertion: ts.CallExpression): boolean {
 
   return (
     (ts.isPropertyAccessExpression(callee) && RUNNING_ASSERTIONS.has(callee.name.text)) ||
-    // `throws(fn)` imported by name from an assertion module (`node:assert`).
-    (ts.isIdentifier(callee) &&
-      RUNNING_ASSERTIONS.has(callee.text) &&
-      assertModuleBindings(assertion.getSourceFile()).has(callee.text))
+    // `throws(fn)` imported from an assertion module (`node:assert`), under any local name.
+    (ts.isIdentifier(callee) && RUNNING_ASSERTIONS.has(assertModuleBinding(callee)?.exported ?? ''))
   );
 }
 
@@ -6796,10 +6794,25 @@ function runnerExport(expression: ts.Expression): { name: string; chain: string[
     return { name: root ?? name, chain: [...chain, ...members.reverse()] };
   }
 
-  if (name !== NAMESPACE) return { name, chain };
+  if (name !== NAMESPACE) return defaultExportMember({ name, chain });
   const member = chain.pop();
 
-  return member === undefined ? undefined : { name: member, chain };
+  return member === undefined ? undefined : defaultExportMember({ name: member, chain });
+}
+
+/**
+ * The runner's API reached as a member of its default export (Node's `test.describe`, `test.it`, `test.before`, which
+ * are the same functions as the named exports); other members (`test.skip`) stay in the chain as modifiers.
+ */
+function defaultExportMember(resolved: { name: string; chain: string[] }): { name: string; chain: string[] } {
+  const member = resolved.chain.at(-1);
+
+  if (runner.defaultExport === undefined || resolved.name !== runner.defaultExport || member === undefined)
+    return resolved;
+
+  return runner.tests.has(member) || runner.suites.has(member) || runner.hooks.has(member)
+    ? { name: member, chain: resolved.chain.slice(0, -1) }
+    : resolved;
 }
 
 /** The modifiers of a call to one of `names` (`it.skip(...)`), or undefined when it calls none of them. */
@@ -6845,11 +6858,14 @@ function analyzeTest(
     callback && isFunction(callback) && callback.parameters[0] && ts.isIdentifier(callback.parameters[0].name)
       ? checker.getSymbolAtLocation(callback.parameters[0].name)
       : undefined;
+  const contextParameters = contextParameter
+    ? subtestContexts(contextParameter, nodes, checker)
+    : new Set<ts.Symbol>();
   const analysis = body
     ? analyzeBody(
         body,
         ctx,
-        (node) => isContextAssertion(node, contextParameter, checker),
+        (node) => isContextAssertion(node, contextParameters, checker),
         setupRenders(source, ctx)
           .filter(
             ({ node, call }) => !contains(body, node) && !contains(body, call) && runsBefore(call, body),
@@ -9904,23 +9920,63 @@ const CONTEXT_ASSERTIONS = new Set([
  */
 function isContextAssertion(
   node: ts.CallExpression,
-  parameter: ts.Symbol | undefined,
+  parameters: ReadonlySet<ts.Symbol | undefined>,
   checker: ts.TypeChecker,
 ) {
   const callee = node.expression;
 
-  if (parameter === undefined || !ts.isPropertyAccessExpression(callee)) return false;
+  if (parameters.size === 0 || !ts.isPropertyAccessExpression(callee)) return false;
   const holder = callee.expression;
+  const isContext = (identifier: ts.Identifier) => {
+    const symbol = checker.getSymbolAtLocation(identifier);
 
-  if (ts.isIdentifier(holder))
-    return CONTEXT_ASSERTIONS.has(callee.name.text) && checker.getSymbolAtLocation(holder) === parameter;
+    return symbol !== undefined && parameters.has(symbol);
+  };
+
+  if (ts.isIdentifier(holder)) return CONTEXT_ASSERTIONS.has(callee.name.text) && isContext(holder);
 
   return (
     ts.isPropertyAccessExpression(holder) &&
     holder.name.text === 'assert' &&
     ts.isIdentifier(holder.expression) &&
-    checker.getSymbolAtLocation(holder.expression) === parameter
+    isContext(holder.expression)
   );
+}
+
+/**
+ * The test context `outer` and the contexts of the subtests registered through it, at any depth: the first parameter
+ * of the callback given to `t.test(name, child => { ... })` (Node's test runner, tap).
+ */
+function subtestContexts(
+  outer: ts.Symbol,
+  nodes: readonly ts.Node[],
+  checker: ts.TypeChecker,
+): Set<ts.Symbol> {
+  const contexts = new Set([outer]);
+
+  // `descendants` lists a call before the callbacks inside it, so a parent's context is known before its subtests'.
+  for (const node of nodes) {
+    if (
+      !ts.isCallExpression(node) ||
+      !ts.isPropertyAccessExpression(node.expression) ||
+      node.expression.name.text !== 'test' ||
+      !ts.isIdentifier(node.expression.expression)
+    )
+      continue;
+    const holder = checker.getSymbolAtLocation(node.expression.expression);
+
+    if (holder === undefined || !contexts.has(holder)) continue;
+    const callback = node.arguments.findLast((argument) => isFunction(skipParens(argument)));
+    const parameter = callback
+      ? (skipParens(callback) as ts.FunctionLikeDeclaration).parameters[0]
+      : undefined;
+    const symbol =
+      parameter && ts.isIdentifier(parameter.name) ? checker.getSymbolAtLocation(parameter.name) : undefined;
+
+    if (symbol) contexts.add(symbol);
+  }
+
+  return contexts;
 }
 
 const TYPE_CHECK_NAMES = /\b(?:Expect|Equal|IsEqual|IsExact|AssertTrue|AssertFalse|AssertEqual|Assert)\b/;
@@ -10072,12 +10128,35 @@ function isAssertCall(node: ts.CallExpression): boolean {
       runner.assertionCounts.has(node.expression.name.text))
   )
     return true;
-  const root = rootIdentifier(node.expression);
+  const root = rootIdentifierNode(node.expression);
 
-  return root !== undefined && assertModuleBindings(node.getSourceFile()).has(root);
+  return root !== undefined && assertModuleBinding(root) !== undefined;
 }
 
-const assertBindings = new WeakMap<ts.SourceFile, { modules: Set<string>; names: Set<string> }>();
+/** A name bound to a value of an assertion module: the declaration that binds it and the export it stands for. */
+interface AssertBinding {
+  declaration: ts.Node;
+  /** The export (`throws`), `default` for a default import, `*` for the whole module. */
+  exported: string;
+}
+
+const assertBindings = new WeakMap<
+  ts.SourceFile,
+  { modules: Set<string>; names: Map<string, AssertBinding> }
+>();
+
+/**
+ * The assertion module binding an identifier refers to, resolved by symbol when the type checker is at hand: a local
+ * of the same name that shadows the import (`const eq = (a, b) => a === b`) is not the assertion.
+ */
+function assertModuleBinding(identifier: ts.Identifier): AssertBinding | undefined {
+  const binding = assertModuleBindings(identifier.getSourceFile()).get(identifier.text);
+
+  if (binding === undefined || runnerChecker === undefined) return binding;
+  const symbol = runnerChecker.getSymbolAtLocation(identifier);
+
+  return symbol?.declarations?.includes(binding.declaration as ts.Declaration) ? binding : undefined;
+}
 
 /** The module a `require('…')` call loads, through member accesses on its result (`require('node:assert').strict`). */
 function requiredModule(expression: ts.Expression): string | undefined {
@@ -10099,14 +10178,25 @@ function requiredModule(expression: ts.Expression): string | undefined {
  * 'node:assert/strict'`, `import { equal } from 'node:assert'`, `const assert = require('node:assert')`), each a
  * function or an object of functions that assert when called. Type-only imports bind nothing.
  */
-function assertModuleBindings(source: ts.SourceFile): Set<string> {
+function assertModuleBindings(source: ts.SourceFile): Map<string, AssertBinding> {
   const cached = assertBindings.get(source);
 
   if (cached && cached.modules === runner.assertModules) return cached.names;
-  const names = new Set<string>();
-  const bind = (name: ts.BindingName): void => {
-    if (ts.isIdentifier(name)) names.add(name.text);
-    else for (const element of name.elements) if (!ts.isOmittedExpression(element)) bind(element.name);
+  const names = new Map<string, AssertBinding>();
+  const bind = (name: ts.BindingName, declaration: ts.Node, exported: string): void => {
+    if (ts.isIdentifier(name)) {
+      names.set(name.text, { declaration, exported });
+
+      return;
+    }
+
+    for (const element of name.elements) {
+      if (ts.isOmittedExpression(element)) continue;
+      const key = element.propertyName ?? element.name;
+      // `const { throws: mustThrow } = require('node:assert')` binds `throws`; a nested pattern binds its members.
+      const member = ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : '*';
+      bind(element.name, element, ts.isObjectBindingPattern(name) ? member : '*');
+    }
   };
 
   if (runner.assertModules.size > 0)
@@ -10122,12 +10212,18 @@ function assertModuleBindings(source: ts.SourceFile): Set<string> {
         )
           continue;
 
-        if (clause.name) names.add(clause.name.text);
+        if (clause.name) names.set(clause.name.text, { declaration: clause, exported: 'default' });
         const bindings = clause.namedBindings;
 
-        if (bindings && ts.isNamespaceImport(bindings)) names.add(bindings.name.text);
+        if (bindings && ts.isNamespaceImport(bindings))
+          names.set(bindings.name.text, { declaration: bindings, exported: '*' });
         else if (bindings)
-          for (const element of bindings.elements) if (!element.isTypeOnly) names.add(element.name.text);
+          for (const element of bindings.elements)
+            if (!element.isTypeOnly)
+              names.set(element.name.text, {
+                declaration: element,
+                exported: (element.propertyName ?? element.name).text,
+              });
       } else if (
         ts.isImportEqualsDeclaration(statement) &&
         !statement.isTypeOnly &&
@@ -10135,17 +10231,28 @@ function assertModuleBindings(source: ts.SourceFile): Set<string> {
         ts.isStringLiteralLike(statement.moduleReference.expression) &&
         runner.assertModules.has(statement.moduleReference.expression.text)
       )
-        names.add(statement.name.text);
+        names.set(statement.name.text, { declaration: statement, exported: '*' });
       else if (ts.isVariableStatement(statement))
         for (const declaration of statement.declarationList.declarations) {
           const loaded = declaration.initializer ? requiredModule(declaration.initializer) : undefined;
 
-          if (loaded !== undefined && runner.assertModules.has(loaded)) bind(declaration.name);
+          if (loaded !== undefined && runner.assertModules.has(loaded))
+            bind(declaration.name, declaration, '*');
         }
     }
   assertBindings.set(source, { modules: runner.assertModules, names });
 
   return names;
+}
+
+/** The identifier an expression starts from (`assert` in `assert.strict.equal`), if any. */
+function rootIdentifierNode(expression: ts.Expression): ts.Identifier | undefined {
+  let current = expression;
+
+  while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current))
+    current = current.expression;
+
+  return ts.isIdentifier(current) ? current : undefined;
 }
 
 function rootIdentifier(expression: ts.Expression): string | undefined {

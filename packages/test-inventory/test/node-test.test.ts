@@ -126,6 +126,85 @@ describe('Node.js test runner tests', () => {
     });
   });
 
+  it('credits a callback-running assertion imported under another name', () => {
+    const root = tempProject({
+      'src/value.ts':
+        'export const value = (input: number) => { if (input < 0) throw new Error("bad"); return input; };\n',
+      'test/alias.test.ts': `
+        import { test } from 'node:test';
+        import { throws as mustThrow } from 'node:assert/strict';
+        import { value } from '../src/value.ts';
+        test('aliased throws', () => {
+          mustThrow(() => value(-1), /bad/);
+        });
+      `,
+    });
+    const test = byName(inventory(root).tests, 'aliased throws');
+
+    expect(test).toMatchObject({ assertionCount: 1, suspicions: [] });
+    expect(test.targetCalls[0]?.asserted).toBe(true);
+  });
+
+  it('never takes a local function for an assertion, even one shadowing an imported assertion', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/shadow.test.ts': `
+        import { test } from 'node:test';
+        import { strictEqual as eq } from 'node:assert/strict';
+        import { value } from '../src/value.ts';
+        test('shadowed', () => {
+          const eq = (a: number, b: number) => a === b;
+          eq(value(1), 2);
+        });
+        test('imported', () => {
+          eq(value(1), 2);
+        });
+      `,
+      'test/local.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/value.ts';
+        const assert = Object.assign((x: unknown) => x, { equal: (a: unknown, b: unknown) => a === b });
+        test('local assert', () => {
+          assert(value(1) === 2);
+          assert.equal(value(1), 2);
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    expect(byName(tests, 'shadowed')).toMatchObject({ assertionCount: 0, suspicions: ['no_assertion'] });
+    expect(byName(tests, 'imported')).toMatchObject({ assertionCount: 1, suspicions: [] });
+    expect(byName(tests, 'local assert')).toMatchObject({ assertionCount: 0, suspicions: ['no_assertion'] });
+  });
+
+  it('reads the API through members of the default export', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/members.test.ts': `
+        import test from 'node:test';
+        import assert from 'node:assert/strict';
+        import { value } from '../src/value.ts';
+        test.describe('suite', () => {
+          test.before(() => {});
+          test.it('case', () => assert.equal(value(1), 2));
+          test.it.skip('skipped case', () => assert.equal(value(1), 2));
+          test.test('nested test', () => assert.equal(value(0), 1));
+        });
+        test('direct', () => assert.equal(value(2), 3));
+        test.skip('direct skipped', () => assert.equal(value(2), 3));
+      `,
+    });
+    const { tests } = inventory(root);
+
+    expect(tests.map((test) => [test.name, test.suitePath, test.modifiers])).toEqual([
+      ['case', ['suite'], []],
+      ['skipped case', ['suite'], ['skip']],
+      ['nested test', ['suite'], []],
+      ['direct', [], []],
+      ['direct skipped', [], ['skip']],
+    ]);
+  });
+
   it('records .skip, .todo, .only and the same as options, a reason string included', () => {
     const root = tempProject({
       'src/value.ts': VALUE,
@@ -174,6 +253,13 @@ describe('Node.js test runner tests', () => {
             assert.equal(value(1), 2);
           });
         });
+        test('own context', async (t) => {
+          await t.test('child', async (child) => {
+            await child.test('grandchild', (grandchild) => {
+              grandchild.assert.equal(value(0), 1);
+            });
+          });
+        });
         test('constant only', async (t) => {
           await t.test('child', () => {
             t.assert.ok(true);
@@ -183,7 +269,10 @@ describe('Node.js test runner tests', () => {
     });
     const { tests } = inventory(root);
 
-    expect(tests.map((test) => test.name)).toEqual(['parent', 'constant only']);
+    expect(tests.map((test) => test.name)).toEqual(['parent', 'own context', 'constant only']);
+    // Assertions on a subtest's own context count for the test that registers it, at any depth.
+    expect(byName(tests, 'own context')).toMatchObject({ assertionCount: 1, suspicions: [] });
+    expect(byName(tests, 'own context').targetCalls[0]?.asserted).toBe(true);
     expect(byName(tests, 'parent')).toMatchObject({
       assertionCount: 1,
       calledSymbols: ['src/value.ts#value'],
