@@ -40,6 +40,9 @@ describe('patch validation', () => {
     ['skipIf', "it.skipIf(true)('x', () => {});"],
     ['xit', "xit('x', () => {});"],
     ['fit', "fit('x', () => {});"],
+    ['skip option', "test('x', { skip: true }, () => {});"],
+    ['todo option with a reason', "it('x', { todo: 'later' }, () => {});"],
+    ['only option', "test('x', { timeout: 10, only: true }, () => {});"],
   ])('rejects a %s marker', (_name, content) => {
     expect(validatePatch(repo(), [add('test/veritas-x.test.ts', content)], RULES).join()).toMatch(
       /skip\/only\/todo/,

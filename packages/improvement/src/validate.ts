@@ -11,10 +11,14 @@ export interface PatchRules {
 /** Directories that never receive patch files. */
 const FORBIDDEN_DIRS = new Set(['node_modules', '.git', '.veritas', '.mutator']);
 
-/** Focus, skip and todo markers in Vitest/Jest style, including the `x`/`f` aliases. */
+/**
+ * Focus, skip and todo markers in Vitest/Jest style, including the `x`/`f` aliases, and as test options (Vitest's and
+ * Node's `{ skip: true }`, Node's `{ todo: 'reason' }`).
+ */
 const DISABLING = [
   /\.\s*(?:skip|only|todo|skipIf|runIf)\b/,
   /\b(?:xit|xtest|xdescribe|fit|fdescribe|ftest)\s*\(/,
+  /[{,]\s*['"]?(?:skip|only|todo)['"]?\s*:/,
 ];
 
 function isMarkdownOrReadme(file: string): boolean {
