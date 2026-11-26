@@ -329,6 +329,66 @@ describe('Node.js test runner tests', () => {
     expect(byName(tests, 'constant only').suspicions).toContain('tautological_assertion');
   });
 
+  it("recognises mocks made through the test context and configured through a mock's .mock", () => {
+    const SERVICE = `${VALUE}export const service = { fetch: (id: number) => id, mock: { mockImplementation: (f: unknown) => f } };\n`;
+    const root = tempProject({
+      'src/value.ts': SERVICE,
+      'test/context.test.ts': `
+        import { describe, it, mock, test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { service } from '../src/value.ts';
+        test('context method', (t) => {
+          t.mock.method(service, 'fetch', () => 999);
+          assert.equal(service.fetch(1), 999);
+        });
+        describe('suite', () => {
+          it('renamed context fn', async (ctx) => {
+            await ctx.test('child', (child) => {
+              const spy = child.mock.method(service, 'fetch');
+              spy.mock.mockImplementationOnce(() => 7);
+              assert.equal(service.fetch(1), 7);
+            });
+          });
+        });
+        test('configured spy', () => {
+          const spy = mock.method(service, 'fetch');
+          spy.mock.mockImplementation(() => 999);
+          assert.equal(service.fetch(1), 999);
+        });
+        test('configured in one chain', (t) => {
+          t.mock.method(service, 'fetch').mock.mockImplementation(() => 999);
+          assert.equal(service.fetch(1), 999);
+        });
+        test('unrelated .mock of a project object', () => {
+          service.mock.mockImplementation(() => 1);
+          assert.equal(service.fetch(1), 1);
+        });
+        test('plain spy', () => {
+          mock.method(service, 'fetch');
+          assert.equal(service.fetch(1), 1);
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of [
+      'context method',
+      'renamed context fn',
+      'configured spy',
+      'configured in one chain',
+    ]) {
+      expect(byName(tests, name).usesMocks, name).toBe(true);
+      expect(byName(tests, name).suspicions, name).toContain('unconditional_mock');
+    }
+    expect(byName(tests, 'unrelated .mock of a project object')).toMatchObject({ usesMocks: false });
+    expect(byName(tests, 'unrelated .mock of a project object').suspicions).not.toContain(
+      'unconditional_mock',
+    );
+    // A spy left as it is calls the real method.
+    expect(byName(tests, 'plain spy').usesMocks).toBe(true);
+    expect(byName(tests, 'plain spy').suspicions).not.toContain('unconditional_mock');
+  });
+
   it('recognises the hooks and the mock API of node:test', () => {
     const root = tempProject({
       'src/value.ts': `${VALUE}export const service = { fetch: (id: number) => id };\n`,

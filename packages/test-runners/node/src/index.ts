@@ -79,6 +79,9 @@ export const nodeTestRunner: TestRunnerProvider = {
       },
       // `fn.mock.mockImplementation(...)`, `fn.mock.mockImplementationOnce(...)`.
       configureMethod: '^mock[A-Z]',
+      // `t.mock.fn()`, `t.mock.method(object, 'name')`: the test context's own mock tracker.
+      contextMember: 'mock',
+      controller: 'mock',
     },
   },
   recognitionFor() {

@@ -184,6 +184,16 @@ export interface TestRunnerRecognition {
     readonly calls: Readonly<Record<string, MockCallRole>>;
     /** Methods configuring an existing mock (`spy.mockReturnValue(1)`), as a regular expression source. */
     readonly configureMethod: string;
+    /**
+     * The member of a test's context that holds the mock API, as `objects` do (Node's `t.mock.method(...)`), on the
+     * first parameter of a test, hook or suite callback, under any name; absent when the context has none.
+     */
+    readonly contextMember?: string;
+    /**
+     * The member of a mock that holds its configuration methods (Node's `spy.mock.mockImplementation(...)`); absent
+     * when they are called on the mock itself (`spy.mockReturnValue(1)` with Vitest and Jest).
+     */
+    readonly controller?: string;
   };
 }
 

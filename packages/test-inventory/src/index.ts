@@ -79,6 +79,10 @@ interface RunnerApi {
   mockObjects: Set<string>;
   mockCalls: Map<string, MockCallRole>;
   configureMethod: RegExp;
+  /** The test context member holding the mock API (Node's `t.mock`), if any. */
+  mockContextMember: string | undefined;
+  /** The member of a mock holding its configuration methods (Node's `spy.mock`), if any. */
+  mockController: string | undefined;
 }
 
 function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
@@ -107,6 +111,8 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
     mockObjects: new Set(recognition.mocks.objects),
     mockCalls: new Map(Object.entries(recognition.mocks.calls)),
     configureMethod: new RegExp(recognition.mocks.configureMethod),
+    mockContextMember: recognition.mocks.contextMember,
+    mockController: recognition.mocks.controller,
   };
 }
 
@@ -8779,6 +8785,17 @@ function mockCall(node: ts.Expression, checker: ts.TypeChecker): MockCallRole | 
   if (!ts.isCallExpression(node)) return undefined;
   const callee = node.expression;
 
+  // The mock API of a test's context (`t.mock.method(...)`, Node's test runner).
+  if (
+    runner.mockContextMember !== undefined &&
+    ts.isPropertyAccessExpression(callee) &&
+    ts.isPropertyAccessExpression(callee.expression) &&
+    callee.expression.name.text === runner.mockContextMember &&
+    ts.isIdentifier(callee.expression.expression) &&
+    isTestContext(callee.expression.expression, checker)
+  )
+    return runner.mockCalls.get(callee.name.text);
+
   if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)) return undefined;
 
   if (!runner.mockObjects.has(callee.expression.text)) return undefined;
@@ -8791,6 +8808,37 @@ function mockCall(node: ts.Expression, checker: ts.TypeChecker): MockCallRole | 
   });
 
   return fromRunner ? runner.mockCalls.get(callee.name.text) : undefined;
+}
+
+/**
+ * Whether an identifier is the context a runner hands a test, hook or suite callback (its first parameter, under any
+ * name), also the context of a subtest registered through one (`t.test('child', (child) => …)`).
+ */
+function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth = 0): boolean {
+  const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
+
+  if (!declaration || !ts.isParameter(declaration) || depth > 20) return false;
+  const fn = declaration.parent;
+
+  if (!isFunction(fn) || fn.parameters[0] !== declaration) return false;
+  const call = fn.parent;
+
+  if (!ts.isCallExpression(call) || !call.arguments.includes(fn)) return false;
+  const callee = skipParens(call.expression);
+
+  if (
+    ts.isPropertyAccessExpression(callee) &&
+    callee.name.text === 'test' &&
+    ts.isIdentifier(callee.expression) &&
+    isTestContext(callee.expression, checker, depth + 1)
+  )
+    return true;
+
+  return (
+    testRegistration(call) !== undefined ||
+    describeRegistration(call) !== undefined ||
+    runner.hooks.has(runnerExport(callee)?.name ?? '')
+  );
 }
 
 function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
@@ -8842,8 +8890,14 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
     const role = mockCall(node, checker);
 
     if (role && RECORDED_MOCK_ROLES.has(role)) {
+      const implementation = node.arguments[2] && skipParens(node.arguments[2]);
       const targets =
-        role === 'module_hoisted' || role === 'module' ? moduleExports(node.arguments[0], ctx) : [];
+        role === 'module_hoisted' || role === 'module'
+          ? moduleExports(node.arguments[0], ctx)
+          : // A spy given its implementation when made (Node's `mock.method(object, 'name', () => 1)`) is configured.
+            role === 'spy' && implementation !== undefined && isFunction(implementation)
+            ? spyTargets(node)
+            : [];
       records.push({ node, fileWide: role === 'module_hoisted', targets });
       continue;
     }
@@ -8851,7 +8905,14 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
     const callee = node.expression;
 
     if (!ts.isPropertyAccessExpression(callee) || !runner.configureMethod.test(callee.name.text)) continue;
-    const receiver = skipParens(callee.expression);
+    let receiver = skipParens(callee.expression);
+
+    // Node's mocks hold their configuration methods in `.mock` (`spy.mock.mockImplementation(...)`); only for a
+    // runner whose mocks do, as `x.mock` means something else elsewhere. The mock under it is checked like any other.
+    if (runner.mockController !== undefined) {
+      if (!ts.isPropertyAccessExpression(receiver) || receiver.name.text !== runner.mockController) continue;
+      receiver = skipParens(receiver.expression);
+    }
     const receiverRole = mockCall(receiver, checker);
 
     if (receiverRole === 'spy' || receiverRole === 'wrap' || receiverRole === 'create')
