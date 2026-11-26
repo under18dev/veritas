@@ -193,10 +193,14 @@ export function gitPathEntries(
   return classifyGitPathEntries(pathValue, platform, excluded).kept;
 }
 
+/** The `git-not-used` warnings this process has logged. */
+const warnedGitNotUsed = new Set<string>();
+
 /**
  * The absolute path of git from the PATH entries `gitPathEntries` keeps, or null when there is none. Git is spawned by
  * that path, so a `git` or `git.exe` in the repository (which Windows searches before PATH) never runs. When none is
- * left but a skipped entry has one, a warning names it and why, since git features then turn off.
+ * left but a skipped entry has one, a warning names it and why, since git features then turn off; the same warning is
+ * logged at most once per process.
  */
 export function gitExecutable(
   options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; excluded?: readonly string[] } = {},
@@ -215,13 +219,12 @@ export function gitExecutable(
 
   for (const entry of skipped) {
     if (entry.dir !== '' && executable(join(entry.dir, name), platform)) {
-      logEvent(
-        'warn',
-        `git in ${entry.dir} was not used: ${entry.reason}; git features are off for this run`,
-        {
-          event: 'git-not-used',
-        },
-      );
+      const message = `git in ${entry.dir} was not used: ${entry.reason}; git features are off for this run`;
+
+      // Git is looked up for every git command of a run: the same warning is logged once per process.
+      if (warnedGitNotUsed.has(message)) continue;
+      warnedGitNotUsed.add(message);
+      logEvent('warn', message, { event: 'git-not-used' });
     }
   }
 

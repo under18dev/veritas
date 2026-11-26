@@ -215,5 +215,24 @@ describe.skipIf(process.platform === 'win32')(
       const warning = events.find((e) => e.level === 'warn');
       expect(warning?.message).toContain(`git in ${bin} was not used: a node_modules directory`);
     });
+
+    it('logs the warning about a git it does not take once per process', async () => {
+      const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-git-warn-once-')));
+      const bin = path.join(dir, 'node_modules/.bin');
+      const other = path.join(dir, 'other/node_modules/.bin');
+      fakeGit(bin);
+      fakeGit(other);
+      const events: LogEvent[] = [];
+      await withRunContext({ sinks: [(e) => events.push(e)] }, async () => {
+        for (let i = 0; i < 5; i++) expect(gitExecutable({ env: { PATH: bin } })).toBeNull();
+        // Another directory is another warning, logged once too.
+        gitExecutable({ env: { PATH: other } });
+        gitExecutable({ env: { PATH: other } });
+      });
+      const warnings = events.filter((e) => e.level === 'warn').map((e) => e.message);
+      expect(warnings).toHaveLength(2);
+      expect(warnings[0]).toContain(`git in ${bin} was not used`);
+      expect(warnings[1]).toContain(`git in ${other} was not used`);
+    });
   },
 );
