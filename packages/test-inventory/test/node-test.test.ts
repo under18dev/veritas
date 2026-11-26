@@ -9,7 +9,9 @@ const inventory = (root: string, recognition = node.recognitionFor(root)) =>
   inventoryTests({
     recognition,
     root,
-    config: VeritasConfig.parse({ analysis: { testFramework: 'node_test' } }),
+    config: VeritasConfig.parse({
+      analysis: { testFramework: 'node_test', testInclude: ['**/*.test.{ts,tsx,js,mjs,cjs,mts,cts}'] },
+    }),
   });
 
 function byName(tests: ReturnType<typeof inventory>['tests'], name: string) {
@@ -88,6 +90,10 @@ describe('Node.js test runner tests', () => {
     });
     const { tests } = inventory(root);
 
+    // The CommonJS file: the required API and assertions, here on no project code.
+    expect(byName(tests, 'required')).toMatchObject({ file: 'test/required.test.cjs', assertionCount: 1 });
+    expect(byName(tests, 'required').suspicions).toEqual(['target_not_called']);
+
     for (const name of [
       'called',
       'method',
@@ -104,6 +110,48 @@ describe('Node.js test runner tests', () => {
         calledSymbols: ['src/value.ts#value'],
         suspicions: [],
       });
+  });
+
+  it('reads CommonJS test files that require node:test and node:assert', () => {
+    const root = tempProject({
+      'test/required.test.cjs': `
+        const { test, describe: group, it } = require('node:test');
+        const nodeTest = require('node:test');
+        const assert = require('node:assert').strict;
+        const { strictEqual: eq } = require('node:assert/strict');
+        const double = (n) => n * 2;
+        group('doubling', () => {
+          it('doubles', () => assert.equal(double(2), 4));
+          test.skip('skipped', () => eq(double(1), 2));
+        });
+        nodeTest('through the module', () => eq(double(3), 6));
+        nodeTest.describe('member suite', () => {
+          nodeTest.it('member case', () => {
+            const eq = (a, b) => a === b;
+            eq(double(1), 2);
+          });
+        });
+      `,
+    });
+    const result = inventoryTests({
+      recognition: node.recognition,
+      root,
+      config: VeritasConfig.parse({
+        analysis: { testFramework: 'node_test', testInclude: ['**/*.test.{cjs,mjs,js,ts}'] },
+      }),
+    });
+    const { tests } = result;
+
+    expect(tests.map((test) => [test.name, test.suitePath, test.modifiers, test.assertionCount])).toEqual([
+      ['doubles', ['doubling'], [], 1],
+      ['skipped', ['doubling'], ['skip'], 1],
+      ['through the module', [], [], 1],
+      ['member case', ['member suite'], [], 0],
+    ]);
+    expect(result.files.find((file) => file.path === 'test/required.test.cjs')).toMatchObject({
+      unseenReach: false,
+    });
+    expect(result.files.find((file) => file.path === 'test/required.test.cjs')?.inexactNames).toBeUndefined();
   });
 
   it('does not take a function of another module named like an assertion for one', () => {

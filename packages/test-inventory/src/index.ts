@@ -3297,6 +3297,9 @@ function opaqueModule(specifier: string): string | undefined {
  * to static analysis.
  */
 function isOpaqueCall(node: ts.CallExpression | ts.NewExpression, checker: ts.TypeChecker): boolean {
+  // A top-level `const { test } = require('node:test')` binds the runner's API or assertions as an import does.
+  if (ts.isCallExpression(node) && staticRunnerRequireCall(node)) return false;
+
   if (ts.isCallExpression(node) && isRuntimeLoad(node, checker)) return true;
   // By import source, which works without @types/node: `spawnSync(...)`, `cp.spawnSync(...)`, `new vm.Script(...)`.
   const callee = skipParens(node.expression);
@@ -5065,6 +5068,50 @@ function mockedModules(source: ts.SourceFile): string[] | undefined {
   return names;
 }
 
+/**
+ * The runner or assertion module a top-level `const` binds with a plain `require` (CommonJS test files): `const {
+ * test, describe: suite } = require('node:test')`, `const test = require('node:test')`, `const assert =
+ * require('node:assert').strict`. Such a declaration binds names as an import does and runs nothing else; undefined
+ * for anything else (a `let`, a nested declaration, a default or rest element in the pattern, another module).
+ */
+function staticRunnerRequire(node: ts.Node): string | undefined {
+  if (
+    !ts.isVariableDeclaration(node) ||
+    !node.initializer ||
+    (ts.getCombinedNodeFlags(node) & ts.NodeFlags.Const) === 0 ||
+    !ts.isVariableStatement(node.parent.parent) ||
+    !ts.isSourceFile(node.parent.parent.parent)
+  )
+    return undefined;
+  const loaded = requiredModule(node.initializer);
+
+  if (loaded === undefined || !(runner.modules.has(loaded) || runner.assertModules.has(loaded)))
+    return undefined;
+
+  if (ts.isIdentifier(node.name)) return loaded;
+
+  return ts.isObjectBindingPattern(node.name) &&
+    node.name.elements.every(
+      (element) =>
+        !element.dotDotDotToken &&
+        !element.initializer &&
+        ts.isIdentifier(element.name) &&
+        (!element.propertyName || ts.isIdentifier(element.propertyName)),
+    )
+    ? loaded
+    : undefined;
+}
+
+/** Whether a call is the `require(...)` of a declaration `staticRunnerRequire` accepts (also under `.strict`). */
+function staticRunnerRequireCall(call: ts.CallExpression): boolean {
+  let current: ts.Node = call;
+
+  while (ts.isPropertyAccessExpression(current.parent) || ts.isParenthesizedExpression(current.parent))
+    current = current.parent;
+
+  return staticRunnerRequire(current.parent) !== undefined;
+}
+
 /** Whether a file calls `it`, `test` or `describe` (or one of their variants) anywhere. */
 function registersTests(source: ts.SourceFile): boolean {
   return descendants(source).some(
@@ -5634,9 +5681,10 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
       return node.declarationList.declarations.every(
         // Defaults in a destructuring pattern (`const { a = setup() } = {}`) run too.
         (declaration) =>
-          (!declaration.initializer || inert(declaration.initializer)) &&
-          inertBinding(declaration.name) &&
-          destructurable(declaration),
+          staticRunnerRequire(declaration) !== undefined ||
+          ((!declaration.initializer || inert(declaration.initializer)) &&
+            inertBinding(declaration.name) &&
+            destructurable(declaration)),
       );
 
     return (
@@ -6524,6 +6572,31 @@ function runnerName(identifier: ts.Identifier): string {
           if (element.propertyName) aliases.set(element.name.text, element.propertyName.text);
     }
 
+    // The same bindings through a top-level CommonJS `require` (`const { test, describe: d } = require('node:test')`,
+    // `const test = require('node:test')`, which is the module's default export).
+    for (const statement of source.statements) {
+      if (!ts.isVariableStatement(statement)) continue;
+
+      for (const declaration of statement.declarationList.declarations) {
+        const loaded = staticRunnerRequire(declaration);
+
+        if (loaded === undefined || !runner.modules.has(loaded)) continue;
+
+        if (ts.isIdentifier(declaration.name)) {
+          // `require('node:test').describe` binds that member.
+          const member = ts.isPropertyAccessExpression(skipParens(declaration.initializer as ts.Expression))
+            ? (skipParens(declaration.initializer as ts.Expression) as ts.PropertyAccessExpression).name.text
+            : undefined;
+          aliases.set(declaration.name.text, member ?? runner.defaultExport ?? NAMESPACE);
+        } else if (ts.isObjectBindingPattern(declaration.name))
+          for (const element of declaration.name.elements)
+            aliases.set(
+              (element.name as ts.Identifier).text,
+              ((element.propertyName ?? element.name) as ts.Identifier).text,
+            );
+      }
+    }
+
     // A default import of the runner's module (`import check from 'node:test'`) is its default export, if it has one.
     for (const statement of source.statements) {
       const clause = ts.isImportDeclaration(statement) ? statement.importClause : undefined;
@@ -6669,6 +6742,15 @@ function resolveBindingElement(element: ts.BindingElement): string {
   const holder = pattern.parent;
   let source: string;
 
+  // `const { describe: group } = require('node:test')` binds the export its key names.
+  if (
+    runner.modules.has(staticRunnerRequire(holder) ?? '') &&
+    !ts.isPropertyAccessExpression(
+      skipParens((holder as ts.VariableDeclaration).initializer as ts.Expression),
+    )
+  )
+    return key.text;
+
   if (ts.isBindingElement(holder)) source = resolveBindingElement(holder);
   else if (
     ts.isVariableDeclaration(holder) &&
@@ -6685,6 +6767,13 @@ function resolveBindingElement(element: ts.BindingElement): string {
 /** What a declaration a name resolves to stands for (see `resolveBinding`). */
 function resolveDeclaration(declaration: ts.Declaration): string {
   if (ts.isBindingElement(declaration)) return resolveBindingElement(declaration);
+
+  // `const test = require('node:test')` is the module's default export; `require('node:test').describe` that member.
+  if (ts.isVariableDeclaration(declaration) && runner.modules.has(staticRunnerRequire(declaration) ?? '')) {
+    const value = skipParens(declaration.initializer as ts.Expression);
+
+    return ts.isPropertyAccessExpression(value) ? value.name.text : (runner.defaultExport ?? NAMESPACE);
+  }
 
   if (ts.isExportSpecifier(declaration)) {
     const exportDeclaration = declaration.parent.parent;
@@ -7467,8 +7556,10 @@ function moduleSafety(
           (ts.isIdentifier(callee) && callee.text === 'require') ||
           getsBuiltinModule(callee)
         ) {
-          // `process.getBuiltinModule('node:vm')` loads a module at run time as `require` does.
-          if (argument && ts.isStringLiteralLike(argument)) loadedAtRunTime(argument.text);
+          // `process.getBuiltinModule('node:vm')` loads a module at run time as `require` does. A top-level
+          // `const { test } = require('node:test')` binds the runner's API as an import does.
+          if (staticRunnerRequireCall(node)) add((argument as ts.StringLiteralLike).text);
+          else if (argument && ts.isStringLiteralLike(argument)) loadedAtRunTime(argument.text);
           else found.unknown = true;
         } else if (
           (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
