@@ -1,11 +1,14 @@
 import {
+  appendFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,7 +20,9 @@ import {
   projectHash,
   removeWorkspace,
   snapshotTree,
+  statTree,
   undoWrites,
+  unexpectedChanges,
   writeNewFiles,
 } from '../src/index.js';
 import { project } from './helpers.js';
@@ -102,5 +107,40 @@ describe('workspace and repository writes', () => {
     expect(undoWrites(record)).toEqual([]);
     expect(diffSnapshots(before, snapshotTree(root))).toEqual([]);
     expect(existsSync(path.join(root, 'test'))).toBe(false);
+  });
+
+  it('accepts only the planned files with their exact content as changes', () => {
+    const root = project({ 'src/a.ts': 'x', 'test/a.test.ts': 't' });
+    const before = snapshotTree(root);
+    const files = [{ operation: 'add' as const, path: 'test/veritas-p.test.ts', content: 'planned' }];
+    writeNewFiles(root, files);
+    expect(unexpectedChanges(before, snapshotTree(root), files)).toEqual([]);
+    // Without the plan, the added file is a change; a planned file that is missing or differs is one too.
+    expect(unexpectedChanges(before, snapshotTree(root), [])).toEqual(['test/veritas-p.test.ts']);
+    writeFileSync(path.join(root, 'test/veritas-p.test.ts'), 'rewritten');
+    appendFileSync(path.join(root, 'test/a.test.ts'), '// changed');
+    mkdirSync(path.join(root, 'test/__snapshots__'));
+    writeFileSync(path.join(root, 'test/__snapshots__/a.test.ts.snap'), '');
+    expect(unexpectedChanges(before, snapshotTree(root), files)).toEqual([
+      'test/__snapshots__/a.test.ts.snap',
+      'test/a.test.ts',
+      'test/veritas-p.test.ts',
+    ]);
+  });
+
+  it('notices a file rewritten and restored, and empty directories, through metadata', () => {
+    const root = project({ 'src/a.ts': 'x' });
+    const before = statTree(root);
+    const file = path.join(root, 'src/a.ts');
+    const { atime, mtime } = statSync(file);
+    writeFileSync(file, 'y');
+    writeFileSync(file, 'x');
+    utimesSync(file, atime, mtime);
+    mkdirSync(path.join(root, 'src/empty'));
+    // Tool output in ignored directories does not count.
+    mkdirSync(path.join(root, '.veritas/runs'), { recursive: true });
+    writeFileSync(path.join(root, '.veritas/runs/x.json'), '{}');
+    expect(diffSnapshots(before, statTree(root))).toEqual(['src/a.ts', 'src/empty']);
+    expect(diffSnapshots(snapshotTree(root), snapshotTree(root))).toEqual([]);
   });
 });

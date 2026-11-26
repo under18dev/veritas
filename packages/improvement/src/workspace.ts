@@ -1,5 +1,6 @@
 import {
   cpSync,
+  type Dirent,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -22,24 +23,48 @@ import type { PatchFile } from './schema.js';
 /** Directories that are tool state or dependencies, not project content. */
 export const IGNORED_DIRS = new Set(['node_modules', '.git', '.veritas', '.mutator']);
 
-/** sha256 per project file (symlinks by their target text), keyed by POSIX relative path. */
-export function snapshotTree(root: string): Map<string, string> {
-  const out = new Map<string, string>();
+/** Visit every entry of a project tree except ignored directories (and links named like them), without following links. */
+function walkTree(root: string, visit: (relPath: string, abs: string, entry: Dirent) => void): void {
   const walk = (dir: string, rel: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (IGNORED_DIRS.has(entry.name) && (entry.isDirectory() || entry.isSymbolicLink())) continue;
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
       const abs = path.join(dir, entry.name);
+      visit(relPath, abs, entry);
 
-      if (entry.isDirectory()) {
-        if (!IGNORED_DIRS.has(entry.name)) walk(abs, relPath);
-      } else if (entry.isSymbolicLink()) {
-        if (!IGNORED_DIRS.has(entry.name)) out.set(relPath, `symlink:${readlinkSync(abs)}`);
-      } else if (entry.isFile()) {
-        out.set(relPath, sha256(readFileSync(abs)));
-      }
+      if (entry.isDirectory()) walk(abs, relPath);
     }
   };
   walk(root, '');
+}
+
+/** sha256 per project file (symlinks by their target text), keyed by POSIX relative path. */
+export function snapshotTree(root: string): Map<string, string> {
+  const out = new Map<string, string>();
+  walkTree(root, (relPath, abs, entry) => {
+    if (entry.isSymbolicLink()) out.set(relPath, `symlink:${readlinkSync(abs)}`);
+    else if (entry.isFile()) out.set(relPath, sha256(readFileSync(abs)));
+  });
+
+  return out;
+}
+
+/**
+ * Metadata of every entry of a project tree (same exclusions as `snapshotTree`), keyed by POSIX relative path. A file
+ * rewritten and then restored keeps its content but not its change time, which user code cannot set. Directories are
+ * recorded by identity only: tool output in an ignored directory updates the times of its parent.
+ */
+export function statTree(root: string): Map<string, string> {
+  const out = new Map<string, string>();
+  walkTree(root, (relPath, abs) => {
+    const s = lstatSync(abs, { bigint: true });
+    out.set(
+      relPath,
+      s.isDirectory()
+        ? `dir|${s.ino}|${s.mode}`
+        : `${s.isFile() ? 'file' : s.isSymbolicLink() ? 'link' : 'other'}|${s.size}|${s.mtimeNs}|${s.ctimeNs}|${s.ino}|${s.mode}`,
+    );
+  });
 
   return out;
 }
@@ -61,6 +86,27 @@ export function diffSnapshots(before: Map<string, string>, after: Map<string, st
   for (const p of after.keys()) if (!before.has(p)) changed.add(p);
 
   return [...changed].sort();
+}
+
+/**
+ * Paths that differ between two snapshots of a tree other than the given new files with exactly their content:
+ * anything else created, changed or deleted, and a given file that is missing, differs or already existed.
+ */
+export function unexpectedChanges(
+  before: Map<string, string>,
+  after: Map<string, string>,
+  files: PatchFile[],
+): string[] {
+  const expected = new Map(files.map((f) => [f.path, sha256(f.content)]));
+  const out = new Set(
+    diffSnapshots(before, after).filter(
+      (p) => !(expected.has(p) && !before.has(p) && after.get(p) === expected.get(p)),
+    ),
+  );
+
+  for (const [p, h] of expected) if (before.has(p) || after.get(p) !== h) out.add(p);
+
+  return [...out].sort();
 }
 
 /**
