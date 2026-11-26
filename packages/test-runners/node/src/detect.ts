@@ -97,6 +97,7 @@ export function detectNodeTest(root: string, packageJson: PackageJson | null): T
     configFile: null,
     testScript,
     evidence,
+    importsOnly: imports && scripts.length === 0,
     reason: `Node.js test runner: ${found}; built into Node.js ${version}`,
   };
 }

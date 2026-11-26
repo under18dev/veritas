@@ -72,6 +72,12 @@ export interface TestRunnerInstallation {
    * empty when nothing does. Being installed is not listed: another dependency may have brought the package in.
    */
   readonly evidence: readonly string[];
+  /**
+   * The only evidence is a file importing the runner's module (`node:test`), which says less than a config file, a
+   * dependency or a script: in a monorepo it may be one package among others tested with another runner. Such
+   * evidence makes a built-in runner count as installed, but never decides between runners.
+   */
+  readonly importsOnly?: boolean;
   /** One sentence saying what was found, or that nothing was, for people. */
   readonly reason: string;
 }

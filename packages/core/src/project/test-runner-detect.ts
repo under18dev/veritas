@@ -96,8 +96,71 @@ function scriptSegments(script: string): string[][] {
 }
 
 /**
- * Whether a package.json script runs `node` with `flag` among its own options (`node --test`, `node --import tsx
- * --test test/`), through launchers as `scriptRuns` reads them. An option after the script file is the script's.
+ * Node.js options that take their value as the next word when written without `=` (`--import tsx`, `-r ts-node/register`).
+ * Every other option is a flag or written `--name=value`.
+ */
+const NODE_VALUE_OPTIONS = new Set([
+  '-r',
+  '--require',
+  '--import',
+  '--loader',
+  '--experimental-loader',
+  '-e',
+  '--eval',
+  '-p',
+  '--print',
+  '-C',
+  '--conditions',
+  '--input-type',
+  '--env-file',
+  '--env-file-if-exists',
+  '--experimental-config-file',
+  '--disable-warning',
+  '--redirect-warnings',
+  '--title',
+  '--watch-path',
+  '--inspect-port',
+  '--debug-port',
+  '--diagnostic-dir',
+  '--report-dir',
+  '--report-directory',
+  '--report-filename',
+  '--report-signal',
+  '--localstorage-file',
+  '--heapsnapshot-signal',
+  '--cpu-prof-dir',
+  '--cpu-prof-name',
+  '--heap-prof-dir',
+  '--heap-prof-name',
+  '--icu-data-dir',
+  '--openssl-config',
+  '--secure-heap',
+  '--secure-heap-min',
+  '--stack-trace-limit',
+  '--unhandled-rejections',
+  '--test-concurrency',
+  '--test-coverage-branches',
+  '--test-coverage-exclude',
+  '--test-coverage-functions',
+  '--test-coverage-include',
+  '--test-coverage-lines',
+  '--test-isolation',
+  '--test-name-pattern',
+  '--test-reporter',
+  '--test-reporter-destination',
+  '--test-shard',
+  '--test-skip-pattern',
+  '--test-timeout',
+  '--test-global-setup',
+  '--allow-fs-read',
+  '--allow-fs-write',
+]);
+
+/**
+ * Whether a package.json script runs `node` with `flag` among its own options (`node --test`, `node -r
+ * ts-node/register --test test/`), through launchers as `scriptRuns` reads them. Node's options end at the first word
+ * that is neither an option nor the value of one taking a value: the script file, whose own options follow it
+ * (`node scripts/check.js --test` does not run Node's test runner).
  */
 export function scriptRunsNodeWith(script: unknown, flag: string): boolean {
   if (typeof script !== 'string') return false;
@@ -107,14 +170,15 @@ export function scriptRunsNodeWith(script: unknown, flag: string): boolean {
 
     if (command?.name !== 'node') return false;
 
-    for (const [i, arg] of command.args.entries()) {
+    for (let i = 0; i < command.args.length; i++) {
+      const arg = command.args[i] as string;
+
       if (arg === flag) return true;
 
-      if (arg.startsWith('-')) continue;
-      const previous = command.args[i - 1];
+      // `--` ends the options; any other word is the script file.
+      if (arg === '--' || !arg.startsWith('-')) return false;
 
-      // A word after an option written without `=` may be its value (`--import tsx`); any other is the script file.
-      if (previous === undefined || !previous.startsWith('--') || previous.includes('=')) return false;
+      if (!arg.includes('=') && NODE_VALUE_OPTIONS.has(arg)) i++;
     }
 
     return false;
@@ -221,7 +285,8 @@ function describe(entry: Entry): string {
  * first: installed ones, then (when none is installed) declared ones, then those only a config file or a package.json
  * key points at. Among the runners of the first group that has any, the one the `test` script runs wins, then the
  * only one with evidence (config file, package.json key or dependency); if that does not decide, the first in
- * `providers` is chosen and the choice is marked ambiguous. So a runner that is neither declared nor installed is
+ * `providers` is chosen and the choice is marked ambiguous; a file importing a runner's module alone (`importsOnly`)
+ * never decides. So a runner that is neither declared nor installed is
  * never chosen over one that is installed. A runner built into Node.js counts as installed only with evidence that the
  * project uses it. With nothing found at all the first provider is returned, so that its
  * NOT_FOUND error says what is missing.
@@ -283,12 +348,16 @@ export function chooseTestRunner(
       scripted[0],
       `${names} are ${state}; the test script runs ${scripted[0].provider.displayName}`,
     );
-  const withEvidence = group.filter(({ installation }) => installation.evidence.length > 0);
+  // A file importing a runner's module does not tell runners apart: in a monorepo it may be one package of several,
+  // the others tested with the runner that is installed.
+  const withEvidence = group.filter(
+    ({ installation }) => installation.evidence.length > 0 && installation.importsOnly !== true,
+  );
 
   if (withEvidence.length === 1 && withEvidence[0])
     return decided(
       withEvidence[0],
-      `${names} are ${state}; only ${withEvidence[0].provider.displayName} has a config file or a dependency (${describe(withEvidence[0])})`,
+      `${names} are ${state}; only ${withEvidence[0].provider.displayName} has a config file, a dependency or a script that runs it (${describe(withEvidence[0])})`,
     );
 
   return {

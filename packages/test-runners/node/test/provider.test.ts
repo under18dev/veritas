@@ -40,6 +40,9 @@ describe('scriptRunsNodeWith', () => {
       'node --test',
       'node --test test/',
       'node --import tsx --test',
+      'node -r ts-node/register --test test/',
+      'node --require=./setup.cjs --no-warnings --test',
+      'node --env-file .env --test',
       'node --experimental-strip-types --test "test/**/*.test.ts"',
       'cross-env NODE_ENV=test node --test',
       'tsc -p . && node --test dist/',
@@ -52,6 +55,9 @@ describe('scriptRunsNodeWith', () => {
     for (const script of [
       'node test.js --test',
       'node scripts/run.mjs --test',
+      'node --no-warnings scripts/check.js --test',
+      'node --enable-source-maps test.js --test',
+      'node -- --test',
       'vitest run --test',
       'echo "node --test"',
       'node',
@@ -150,6 +156,45 @@ describe('choosing the Node.js test runner', () => {
 
     expect(choice).toMatchObject({ provider: { name: 'node_test' }, ambiguous: false });
     expect(choice.reason).toContain('the test script runs Node.js test runner');
+  });
+
+  it('does not let a package importing node:test outvote an installed runner in a monorepo', () => {
+    // Vitest is hoisted to the root but declared only by packages/a; packages/b runs node --test.
+    const root = project({
+      'package.json': manifest({
+        private: true,
+        workspaces: ['packages/*'],
+        scripts: { test: 'pnpm -r test' },
+      }),
+      ...installed('vitest', '5.1.1'),
+      'packages/a/package.json': manifest({
+        scripts: { test: 'vitest run' },
+        devDependencies: { vitest: '5.1.1' },
+      }),
+      'packages/a/src/a.test.ts': "import { it } from 'vitest';\nit('a', () => {});\n",
+      'packages/b/package.json': manifest({ scripts: { test: 'node --test' } }),
+      'packages/b/test/b.test.mjs': NODE_TEST_FILE,
+    });
+    const choice = choose(root);
+
+    expect(detect(root)).toMatchObject({ evidence: ['a file imports node:test'], importsOnly: true });
+    expect(choice).toMatchObject({ provider: { name: 'vitest' }, ambiguous: true });
+    expect(choice.candidates.map((runner) => runner.name)).toEqual(['vitest', 'node_test']);
+    expect(choice.reason).toContain('nothing tells them apart');
+  });
+
+  it('decides on a script that runs node --test, saying so', () => {
+    const choice = choose(
+      project({
+        'package.json': manifest({ scripts: { 'test:node': 'node --test' } }),
+        ...installed('vitest', '5.1.1'),
+      }),
+    );
+
+    expect(choice).toMatchObject({ provider: { name: 'node_test' }, ambiguous: false });
+    expect(choice.reason).toBe(
+      'Vitest and Node.js test runner are installed; only Node.js test runner has a config file, a dependency or a script that runs it (the "test:node" script runs node --test); Vitest also shows up (installed, with nothing in package.json or config files)',
+    );
   });
 
   it('is selected by analysis.testFramework "node_test"', () => {
