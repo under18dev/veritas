@@ -514,55 +514,83 @@ function boundPackage(identifier: ts.Identifier): string | undefined {
   return undefined;
 }
 
+/** Whether a function is called where it is written (`(() => suite())()`, `(function () { … }).call(this)`). */
+function immediatelyInvoked(fn: ts.Node): boolean {
+  let use: ts.Node = fn;
+
+  while (ts.isParenthesizedExpression(use.parent)) use = use.parent;
+  const parent = use.parent;
+
+  if (ts.isCallExpression(parent) && parent.expression === use) return true;
+
+  // `fn.call(…)`, `fn.apply(…)`.
+  return (
+    ts.isPropertyAccessExpression(parent) &&
+    parent.expression === use &&
+    ['call', 'apply'].includes(parent.name.text) &&
+    ts.isCallExpression(parent.parent) &&
+    parent.parent.expression === parent
+  );
+}
+
 /**
- * The package a test file calls into at its top level (`import { suite } from 'some-lib'; suite()`, also `await` of
- * such a call or one in a declaration's value), which may register tests the runner reports under the file. Not the
- * runner's own modules, nor packages that only assert or mock. Re-exports, declarations and functions only defined
- * call nothing.
+ * The package a test file calls into while it loads (`import { suite } from 'some-lib'; suite()`), which may register
+ * tests the runner reports under the file. Everything the module scope evaluates is read: blocks, `if`, loops, `try`,
+ * `switch`, conditional, logical and comma expressions, call arguments, template literals, class static blocks and
+ * field initialisers, and functions called where they are written (IIFEs); not the bodies of functions only defined.
+ * A call counts when its callee starts from a name bound to a bare package, other than the runner's own modules,
+ * Node.js builtins and packages that only assert or mock. Whether the call really runs is not decided: listing the
+ * file is the safe side.
  */
 function packageCall(source: ts.SourceFile): { packageCall?: string } {
-  const values = source.statements.flatMap((statement) =>
-    ts.isExpressionStatement(statement)
-      ? [statement.expression]
-      : ts.isVariableStatement(statement)
-        ? statement.declarationList.declarations.flatMap((declaration) =>
-            declaration.initializer ? [declaration.initializer] : [],
-          )
-        : [],
-  );
+  let found: string | undefined;
+  const visit = (node: ts.Node): void => {
+    if (found !== undefined) return;
 
-  for (const written of values) {
-    let value = skipParens(written);
-
-    if (ts.isAwaitExpression(value)) value = skipParens(value.expression);
-
-    if (!ts.isCallExpression(value)) continue;
-    let callee: ts.Expression = skipParens(value.expression);
-
-    // `suite().run()`, `lib.suite()`: the name the call chain starts from.
-    while (
-      ts.isPropertyAccessExpression(callee) ||
-      ts.isElementAccessExpression(callee) ||
-      ts.isCallExpression(callee)
-    )
-      callee = skipParens(callee.expression);
-
-    if (!ts.isIdentifier(callee)) continue;
-    const bound = boundPackage(callee);
-
+    // A function only defined runs nothing while the file loads; one called where it is written does.
     if (
-      bound === undefined ||
-      runner.modules.has(bound) ||
-      RUNNER_MODULES.has(bound) ||
-      ASSERTION_OR_MOCK_PACKAGES.has(bound) ||
-      ASSERTION_OR_MOCK_SCOPES.some((scope) => bound.startsWith(scope))
+      (ts.isFunctionDeclaration(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isArrowFunction(node) ||
+        ts.isMethodDeclaration(node) ||
+        ts.isGetAccessorDeclaration(node) ||
+        ts.isSetAccessorDeclaration(node) ||
+        ts.isConstructorDeclaration(node)) &&
+      !immediatelyInvoked(node)
     )
-      continue;
+      return;
 
-    return { packageCall: bound };
-  }
+    if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node)) {
+      let callee: ts.Expression = skipParens(
+        ts.isTaggedTemplateExpression(node) ? node.tag : node.expression,
+      );
 
-  return {};
+      // `suite().run()`, `lib.suite()`: the name the call chain starts from.
+      while (
+        ts.isPropertyAccessExpression(callee) ||
+        ts.isElementAccessExpression(callee) ||
+        ts.isCallExpression(callee)
+      )
+        callee = skipParens(callee.expression);
+      const bound = ts.isIdentifier(callee) ? boundPackage(callee) : undefined;
+
+      if (
+        bound !== undefined &&
+        !runner.modules.has(bound) &&
+        !RUNNER_MODULES.has(bound) &&
+        !ASSERTION_OR_MOCK_PACKAGES.has(bound) &&
+        !ASSERTION_OR_MOCK_SCOPES.some((scope) => bound.startsWith(scope))
+      ) {
+        found = bound;
+
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(source, visit);
+
+  return found === undefined ? {} : { packageCall: found };
 }
 
 /**

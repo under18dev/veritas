@@ -142,10 +142,20 @@ describe('node:test bindings', () => {
       'test/awaited.test.mjs': "import * as lib from '@scope/shared/run';\nawait lib.default.register();\n",
       'test/declared.test.cjs': "const { make } = require('other-lib');\nconst tests = make();\n",
       'test/chained.test.ts': "import { builder } from 'chain-lib';\nbuilder().run();\n",
+      // Inside collection-time control flow.
+      'test/if.test.ts': "import { suite } from 'shared-tests';\nif (true) suite();\n",
+      'test/and.test.ts': "import { suite } from 'shared-tests';\ntrue && suite();\n",
+      'test/iife.test.ts': "import { suite } from 'shared-tests';\n(() => { suite(); })();\n",
+      'test/loop.test.ts': "import { suite } from 'shared-tests';\nfor (const n of [1, 2]) suite(n);\n",
+      'test/try.test.ts': "import { suite } from 'shared-tests';\ntry { suite(); } catch {}\n",
+      'test/static.test.ts':
+        "import { suite } from 'shared-tests';\nclass Holder { static { suite(); } }\nvoid Holder;\n",
+      'test/argument.test.ts':
+        "import { suite } from 'shared-tests';\nconsole.log(String(suite()), [suite()].length);\n",
       // Not calls into a package that may register tests.
       'test/barrel.test.ts': "export { suite } from 'some-lib';\nexport * from 'other-lib';\n",
       'test/defined.test.ts':
-        "import { suite } from 'some-lib';\nexport function later() { suite(); }\nconst run = () => suite();\nexport { run };\n",
+        "import { suite } from 'some-lib';\nexport function later() { suite(); }\nconst run = () => suite();\nexport { run };\nclass Later { method() { suite(); } }\nexport { Later };\n",
       'test/assertions.test.ts':
         "import chai from 'chai';\nimport { setupServer } from 'msw/node';\nchai.should();\nsetupServer();\n",
       'test/builtin.test.ts':
@@ -164,6 +174,13 @@ describe('node:test bindings', () => {
 
     expect(called).toEqual({
       'test/assertions.test.ts': undefined,
+      'test/and.test.ts': 'shared-tests',
+      'test/argument.test.ts': 'shared-tests',
+      'test/if.test.ts': 'shared-tests',
+      'test/iife.test.ts': 'shared-tests',
+      'test/loop.test.ts': 'shared-tests',
+      'test/static.test.ts': 'shared-tests',
+      'test/try.test.ts': 'shared-tests',
       'test/awaited.test.mjs': '@scope/shared',
       'test/barrel.test.ts': undefined,
       'test/builtin.test.ts': undefined,
