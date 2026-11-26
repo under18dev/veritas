@@ -198,15 +198,30 @@ describe('memory limits', () => {
         timeoutMs: 20_000,
         ...(memoryMb ? { memoryMb } : {}),
       });
-    expect((await run(512)).stdout).toBe('--max-old-space-size=512');
-    expect((await run()).stdout).toBe('none');
+    // Node.js 22.14 and later also get --disable-sigusr1 (see `projectNodeOptions`).
+    const sigusr1 = process.allowedNodeEnvironmentFlags.has('--disable-sigusr1') ? ' --disable-sigusr1' : '';
+    expect((await run(512)).stdout).toBe(`--max-old-space-size=512${sigusr1}`);
+    expect((await run()).stdout).toBe(sigusr1 ? sigusr1.trim() : 'none');
     expect(await withRunContext({ memoryMb: 768 }, () => run().then((r) => r.stdout))).toBe(
-      '--max-old-space-size=768',
+      `--max-old-space-size=768${sigusr1}`,
     );
     expect(nodeMemoryFlags(1024)).toEqual(['--max-old-space-size=1024']);
     expect(
       outOfMemory('FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory'),
     ).toBe(true);
+  });
+
+  it('keeps the inspector of project test runs closed to SIGUSR1 where Node.js allows it', async () => {
+    if (process.platform === 'win32' || !process.allowedNodeEnvironmentFlags.has('--disable-sigusr1')) return;
+    const run = await runProjectTests(
+      process.execPath,
+      [
+        '-e',
+        "process.kill(process.pid, 'SIGUSR1'); setTimeout(() => process.stdout.write(String(require('node:inspector').url())), 300)",
+      ],
+      { cwd: tmp(), timeoutMs: 20_000 },
+    );
+    expect(run.stdout).toBe('undefined');
   });
 
   it('reports a sandboxed call that runs out of memory as an error, never a result', async () => {

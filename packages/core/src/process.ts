@@ -49,6 +49,11 @@ export interface RunCommandOptions {
   logOutput?: boolean;
   /** The name log events give the process (default: the executable's name), e.g. `mutator` for `node cli.js`. */
   label?: string;
+  /**
+   * Every piece of output as it arrives, decoded, before any cap: for a caller that must see all of it, such as a
+   * marker that may come after `maxOutputBytes`. A line may be split between two calls.
+   */
+  onOutput?: (stream: 'stdout' | 'stderr', text: string) => void;
 }
 
 /** Characters of stderr kept from its end once the head buffer is full. */
@@ -281,6 +286,7 @@ export function runCommand(
     const decoders = { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') };
     const onData = (stream: OutputStream, text: string) => {
       if (!text) return;
+      options.onOutput?.(stream, text);
 
       if (stream === 'stdout') {
         if (stdout.length < max) stdout += text;
@@ -360,14 +366,56 @@ function installExitHook(): void {
   exitHookInstalled = true;
   process.once('exit', () => {
     for (const child of running) killTree(child);
+    runCleanups();
   });
 
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
       for (const child of running) killTree(child);
+      runCleanups();
       process.kill(process.pid, signal);
     });
   }
+}
+
+const cleanups = new Set<() => void>();
+
+function runCleanups(): void {
+  for (const cleanup of [...cleanups]) {
+    cleanups.delete(cleanup);
+
+    try {
+      cleanup();
+    } catch {
+      // Best effort while exiting: one failed cleanup must not stop the others.
+    }
+  }
+}
+
+/**
+ * Run `cleanup` (synchronously) if the process exits or is ended by SIGINT or SIGTERM before the returned function
+ * is called, after the child processes are killed; `finally` blocks do not run in those cases. Returns the function
+ * that unregisters it.
+ */
+export function onExitCleanup(cleanup: () => void): () => void {
+  installExitHook();
+  cleanups.add(cleanup);
+
+  return () => {
+    cleanups.delete(cleanup);
+  };
+}
+
+/**
+ * Node.js options for every process that runs project code: `--disable-sigusr1` where this Node.js supports it in
+ * `NODE_OPTIONS` (22.14 and later). Otherwise code under test could send SIGUSR1 to its parent (the runner, mutator)
+ * and open the inspector there, to run code outside the test it is in.
+ */
+export function projectNodeOptions(memoryMb?: number): string[] {
+  return [
+    ...nodeMemoryFlags(memoryMb),
+    ...(process.allowedNodeEnvironmentFlags.has('--disable-sigusr1') ? ['--disable-sigusr1'] : []),
+  ];
 }
 
 /** Kill a child and everything it started: its descendants (found by parent pid, including ones that started their
@@ -501,8 +549,9 @@ export async function runProjectTests(
 ): Promise<CommandResult> {
   const home = mkdtempSync(path.join(tmpdir(), 'veritas-home-'));
   // NODE_OPTIONS is not in the environment allowlist, so the user's own value never reaches the tests; the
-  // memory limit (limits.memoryMb) is the only option set, and every Node.js process the runner starts inherits it.
-  const memory = nodeMemoryFlags(options.memoryMb);
+  // memory limit (limits.memoryMb) and `--disable-sigusr1` are the only options set, and every Node.js process the
+  // runner starts inherits them.
+  const memory = projectNodeOptions(options.memoryMb);
 
   try {
     return await runCommand(command, args, {
