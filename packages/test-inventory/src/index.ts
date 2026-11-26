@@ -7246,9 +7246,12 @@ function defaultExportMember(resolved: { name: string; chain: string[] }): { nam
   if (runner.defaultExport === undefined || resolved.name !== runner.defaultExport || member === undefined)
     return resolved;
 
-  return runner.tests.has(member) || runner.suites.has(member) || runner.hooks.has(member)
-    ? { name: member, chain: resolved.chain.slice(0, -1) }
-    : resolved;
+  // A modifier of the registration itself (`test.skip`, `test.only`, `test.todo`) stays in the chain.
+  if (runner.modifiers.has(member) || runner.expectedFailure.has(member)) return resolved;
+
+  // Any other member is an export of its own (`test.describe`, `test.before`; `test.mock`, `test.snapshot`,
+  // `test.run` or anything unknown), never the registration of a test.
+  return { name: member, chain: resolved.chain.slice(0, -1) };
 }
 
 /** The modifiers of a call to one of `names` (`it.skip(...)`), or undefined when it calls none of them. */
@@ -9241,7 +9244,14 @@ function requiresRunnerModule(node: ts.Expression): boolean {
 function runnerMockObject(expression: ts.Expression, checker: ts.TypeChecker): boolean {
   if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
     if (!runner.mockObjects.has(memberName(expression) ?? '')) return false;
-    const base = skipParens(expression.expression);
+    let base = skipParens(expression.expression);
+
+    // `nt.default.mock`: the module's default export holds the same mock object.
+    if (
+      (ts.isPropertyAccessExpression(base) || ts.isElementAccessExpression(base)) &&
+      memberName(base) === 'default'
+    )
+      base = skipParens(base.expression);
 
     if (requiresRunnerModule(base)) return true;
 

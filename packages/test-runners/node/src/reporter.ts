@@ -20,6 +20,13 @@ export interface NodeTestReport {
     /** Node's `failureType` of a failure (`testCodeFailure`, `subtestsFailed`, `hookFailed`, ...). */
     failureType: string | null;
     message: string | null;
+    /**
+     * The event may be the one Node.js makes for a test file as a whole (a file that ran no test it could report,
+     * or failed outside its tests): it comes from the runner, not from the file's own process, so it has no
+     * `entryFile`, and it sits at the start of the file (line 1, column 1). A test the file registers has an
+     * `entryFile` (Node.js 24 and later) or the position of its call.
+     */
+    fileLevel: boolean;
   }[];
   /** Whether Node.js reported the whole run as successful, or null without its summary. */
   success: boolean | null;
@@ -31,6 +38,7 @@ interface EventData {
   file?: string;
   line?: number;
   column?: number;
+  entryFile?: string;
   skip?: unknown;
   todo?: unknown;
   success?: boolean;
@@ -98,6 +106,8 @@ export default async function* nodeTestReporter(
                 : 'passed',
         failureType: failed ? (error?.failureType ?? null) : null,
         message: failed ? errorMessage(error) : null,
+        fileLevel:
+          nesting === 0 && data.entryFile === undefined && (data.line ?? 1) === 1 && (data.column ?? 1) === 1,
       });
     } else if (event.type === 'test:summary' && data.file === undefined) {
       // The summary of the whole run comes last; one per file comes before it.

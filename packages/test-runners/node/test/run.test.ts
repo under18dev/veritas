@@ -163,6 +163,22 @@ test('never', () => {});
     expect(run.status === 'ok' && run.passed).toBe(1);
   });
 
+  it('keeps real tests titled with their file path in a real run', async () => {
+    const root = project({
+      'test/titled.test.mjs': `import { test } from 'node:test';
+test(import.meta.filename, () => {});
+test('test/titled.test.mjs', () => {});
+`,
+    });
+    const run = await runNodeTest(root, { timeoutMs: 60_000, label: 'titled' });
+
+    expect(run.status === 'ok' && Object.fromEntries(run.tests)).toEqual({
+      [`test/titled.test.mjs::${path.join(root, 'test', 'titled.test.mjs')}`]: 'passed',
+      'test/titled.test.mjs::test/titled.test.mjs': 'passed',
+    });
+    expect(run.status === 'ok' && run.passed).toBe(2);
+  });
+
   it('records a failed hook of a suite under the suite', async () => {
     const root = project({
       'test/hook.test.mjs': `import { describe, before, it } from 'node:test';
@@ -243,6 +259,21 @@ describe('parseNodeTestReport', () => {
 
     expect(Object.fromEntries(run.tests)).toEqual({ 'test/a.test.mjs::(file)': 'skipped' });
     expect(run.passed).toBe(0);
+  });
+
+  it('keeps a real test titled with its file path, which Node.js does not report as the file itself', () => {
+    const run = parseNodeTestReport(root, {
+      tests: [
+        { ...entry, name: file, status: 'passed', fileLevel: false },
+        { ...entry, name: 'test/a.test.mjs', status: 'passed', fileLevel: false },
+      ],
+      success: true,
+    });
+
+    expect(Object.fromEntries(run.tests)).toEqual({
+      [`test/a.test.mjs::${file}`]: 'passed',
+      'test/a.test.mjs::test/a.test.mjs': 'passed',
+    });
   });
 
   it('keeps a failure when a test of the same name passes later', () => {

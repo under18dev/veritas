@@ -76,9 +76,12 @@ export function parseNodeTestReport(cwd: string, report: unknown): Extract<TestR
 
     if (entry.type === 'suite' && (!failed || entry.failureType === 'subtestsFailed')) continue;
     // Node.js reports a file that fails outside its tests as a top-level test named after the file.
+    // Only an event Node.js made for the file as a whole, never a test titled with the file's path
+    // (`test(import.meta.filename, fn)`): told apart by where the event comes from, not by its title alone.
     const fileLevel =
       entry.ancestors.length === 0 &&
       entry.file !== null &&
+      entry.fileLevel !== false &&
       (entry.name === rel || longPath(path.resolve(cwd, entry.name)) === longPath(entry.file));
     const key = fileLevel
       ? `${rel}::(file)`

@@ -1293,6 +1293,52 @@ describe('Node.js test runner tests', () => {
     }
   });
 
+  it('never reads a runtime member of the default export as a registration, and reads its mock', () => {
+    const SERVICE = `${VALUE}export const service = { fetch: (id: number) => id };\n`;
+    const root = tempProject({
+      'src/value.ts': SERVICE,
+      'test/members.test.ts': `
+        import test from 'node:test';
+        import * as nt from 'node:test';
+        import assert from 'node:assert/strict';
+        import { service, value } from '../src/value.ts';
+        test('through the default', () => {
+          const fn = test.mock.fn(value, () => 999);
+          test.mock.method(service, 'fetch', () => 999);
+          assert.equal(fn(1) + service.fetch(1), 1998);
+        });
+        test('namespace default mock', () => {
+          nt.default.mock.method(service, 'fetch', () => 999);
+          assert.equal(service.fetch(1), 999);
+        });
+        test('other runtime members', () => {
+          void test.snapshot;
+          assert.equal(value(1), 2);
+        });
+      `,
+      'test/members.test.cjs': `
+        const test = require('node:test');
+        const assert = require('node:assert/strict');
+        const { service } = require('../src/value.ts');
+        test('required default mock', () => {
+          test.mock.method(service, 'fetch', () => 999);
+          assert.equal(service.fetch(1), 999);
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    expect(tests.map((test) => test.name)).toEqual([
+      'required default mock',
+      'through the default',
+      'namespace default mock',
+      'other runtime members',
+    ]);
+
+    for (const name of ['through the default', 'namespace default mock', 'required default mock'])
+      expect(byName(tests, name).suspicions, name).toContain('unconditional_mock');
+  });
+
   it('recognises the context of a test function passed by name', () => {
     const SERVICE = `${VALUE}export const service = { fetch: (id: number) => id };\n`;
     const root = tempProject({
