@@ -1,3 +1,9 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { VeritasConfig } from '@under18dev/veritas-core';
+import { inventoryTests } from '@under18dev/veritas-test-inventory';
+import { nodeTestRunner } from '@under18dev/veritas-test-runner-node';
 import { describe, expect, it } from 'vitest';
 import { listUnreadTestFiles, unreadTestFiles } from '../src/run.js';
 
@@ -38,10 +44,11 @@ describe('unreadTestFiles', () => {
     ]);
   });
 
-  it('leaves out helpers that never use the runner, but not one whose imports register tests', () => {
+  it('leaves out only helpers shown not to use the runner', () => {
     const unread = unreadOf([
       // `export { test } from 'node:test'`, or a helper with no runner call at all.
       file('test/support.ts', { inexactNames: 'open_collection', usesRunner: false }),
+      // Reaching code static analysis does not follow, it is not shown not to use the runner.
       file('test/fixtures.ts', { unseenReach: true, usesRunner: false }),
       file('test/shared.test.ts', { inexactNames: 'imported_registrations', usesRunner: false }),
       // It calls the runner in a way static analysis cannot read (`test[key](...)`).
@@ -49,9 +56,30 @@ describe('unreadTestFiles', () => {
     ]);
 
     expect(unread).toEqual([
+      'test/fixtures.ts (it reaches code static analysis does not follow)',
       'test/shared.test.ts (a module it imports registers its tests)',
       'test/computed.test.ts (it runs code while its tests are collected that may register tests)',
     ]);
+  });
+
+  it('keeps listing a test file that loads the runner with a dynamic import', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'veritas-unread-'));
+    mkdirSync(path.join(root, 'test'));
+    writeFileSync(
+      path.join(root, 'test/dynamic.test.mjs'),
+      "const nt = await import('node:test');\nnt.test('x', () => {});\n",
+    );
+    writeFileSync(path.join(root, 'test/support.mjs'), "export { test } from 'node:test';\n");
+    const inventory = inventoryTests({
+      recognition: nodeTestRunner.recognitionFor(root),
+      root,
+      config: VeritasConfig.parse({
+        analysis: { testFramework: 'node_test', testInclude: ['test/**/*.mjs'] },
+      }),
+    });
+
+    expect(inventory.tests).toEqual([]);
+    expect(unreadTestFiles(inventory)).toEqual([expect.stringMatching(/^test\/dynamic\.test\.mjs \(/)]);
   });
 
   it("says a file uses another runner's API instead of that it may register tests", () => {

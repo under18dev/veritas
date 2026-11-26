@@ -1855,9 +1855,12 @@ export function unreadTestFiles(inventory: TestInventory): string[] {
 
       if (file.inexactNames === undefined && !file.unseenReach) return [];
 
-      // A helper the glob matched that never uses the runner (it only re-exports it, or does not touch it) registers
-      // no test, whatever else it runs; unless a module it imports registers tests, which the runner reports here.
-      if (file.usesRunner === false && file.inexactNames !== 'imported_registrations') return [];
+      // Left out only when it is shown not to touch the runner: a helper the glob matched that only re-exports it or
+      // does not use it, loads nothing at run time (`usesRunner` is false for no dynamic `import()`, computed
+      // `require`, `createRequire` or `eval`), reaches no code static analysis does not follow, and imports no module
+      // that registers tests. Anything short of that keeps it listed.
+      if (file.usesRunner === false && !file.unseenReach && file.inexactNames !== 'imported_registrations')
+        return [];
 
       return [
         `${file.path} (${file.inexactNames !== undefined ? why[file.inexactNames] : 'it reaches code static analysis does not follow'})`,
