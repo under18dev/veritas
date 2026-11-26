@@ -544,6 +544,109 @@ describe('Node.js test runner tests', () => {
     expect(byName(tests, 'plain spy').suspicions).not.toContain('unconditional_mock');
   });
 
+  it('reads a replacement passed by reference as configuring the spy, and a non-function as not', () => {
+    const SERVICE = `${VALUE}export const service = { fetch: (id: number) => id };\n`;
+    const root = tempProject({
+      'src/value.ts': SERVICE,
+      'test/replacement.test.ts': `
+        import { mock, test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { service, value } from '../src/value.ts';
+        const replacement = () => 999;
+        function declared() { return 999; }
+        const notAFunction = { answer: 1 };
+        test('const arrow', () => {
+          mock.method(service, 'fetch', replacement);
+          assert.equal(service.fetch(1), 999);
+        });
+        test('function declaration', () => {
+          mock.method(service, 'fetch', declared);
+          assert.equal(service.fetch(1), 999);
+        });
+        test('getter with an implementation', () => {
+          mock.getter(service, 'fetch', () => () => 999);
+          assert.equal(service.fetch(1), 999);
+        });
+        test('non-function constant', () => {
+          mock.method(service, 'fetch', notAFunction as never);
+          assert.equal(service.fetch(1), 1);
+        });
+        test('options only', () => {
+          mock.method(service, 'fetch', { times: 1 } as never);
+          assert.equal(service.fetch(1), 1);
+        });
+        test('mock.fn roles', () => {
+          const plain = mock.fn(replacement);
+          const wrapped = mock.fn(value, replacement);
+          assert.equal(plain() + wrapped(1), 1998);
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of ['const arrow', 'function declaration', 'getter with an implementation'])
+      expect(byName(tests, name).suspicions, name).toContain('unconditional_mock');
+
+    for (const name of ['non-function constant', 'options only']) {
+      expect(byName(tests, name).usesMocks, name).toBe(true);
+      expect(byName(tests, name).suspicions, name).not.toContain('unconditional_mock');
+    }
+    expect(byName(tests, 'mock.fn roles').usesMocks).toBe(true);
+  });
+
+  it('recognises the mock tracker required from node:test, and not a local object named mock', () => {
+    const SERVICE = `${VALUE}export const service = { fetch: (id: number) => id };\n`;
+    const root = tempProject({
+      'src/value.ts': SERVICE,
+      'test/required.test.cjs': `
+        const { test, mock } = require('node:test');
+        const { mock: tracker } = require('node:test');
+        const nt = require('node:test');
+        const member = require('node:test').mock;
+        const assert = require('node:assert/strict');
+        const { service } = require('../src/value.ts');
+        test('destructured', () => {
+          mock.method(service, 'fetch', () => 999);
+          assert.equal(service.fetch(1), 999);
+        });
+        test('renamed', () => {
+          tracker.method(service, 'fetch', () => 999);
+          assert.equal(service.fetch(1), 999);
+        });
+        test('module member', () => {
+          nt.mock.method(service, 'fetch', () => 999);
+          assert.equal(service.fetch(1), 999);
+        });
+        test('required member', () => {
+          member.method(service, 'fetch', () => 999);
+          assert.equal(service.fetch(1), 999);
+        });
+        test('inline require', () => {
+          require('node:test').mock.method(service, 'fetch', () => 999);
+          assert.equal(service.fetch(1), 999);
+        });
+      `,
+      'test/local.test.ts': `
+        import { test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { service } from '../src/value.ts';
+        const mock = { method: (object: unknown, name: string, impl: unknown) => impl };
+        test('local mock object', () => {
+          mock.method(service, 'fetch', () => 999);
+          assert.equal(service.fetch(1), 1);
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of ['destructured', 'renamed', 'module member', 'required member', 'inline require']) {
+      expect(byName(tests, name).usesMocks, name).toBe(true);
+      expect(byName(tests, name).suspicions, name).toContain('unconditional_mock');
+    }
+    expect(byName(tests, 'local mock object')).toMatchObject({ usesMocks: false });
+    expect(byName(tests, 'local mock object').suspicions).not.toContain('unconditional_mock');
+  });
+
   it('recognises the hooks and the mock API of node:test', () => {
     const root = tempProject({
       'src/value.ts': `${VALUE}export const service = { fetch: (id: number) => id };\n`,

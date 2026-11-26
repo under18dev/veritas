@@ -8832,18 +8832,111 @@ function mockCall(node: ts.Expression, checker: ts.TypeChecker): MockCallRole | 
   )
     return runner.mockCalls.get(callee.name.text);
 
-  if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)) return undefined;
+  if (!ts.isPropertyAccessExpression(callee)) return undefined;
 
-  if (!runner.mockObjects.has(callee.expression.text)) return undefined;
-  const declarations = checker.getSymbolAtLocation(callee.expression)?.declarations ?? [];
-  const fromRunner = declarations.every((declaration) => {
-    if (!ts.isImportSpecifier(declaration)) return declaration.getSourceFile().isDeclarationFile;
-    const specifier = declaration.parent.parent.parent.moduleSpecifier;
+  return runnerMockObject(skipParens(callee.expression), checker)
+    ? runner.mockCalls.get(callee.name.text)
+    : undefined;
+}
 
-    return ts.isStringLiteral(specifier) && runner.modules.has(specifier.text);
+/** Whether a `require(...)` call loads one of the runner's modules. */
+function requiresRunnerModule(node: ts.Expression): boolean {
+  return (
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === 'require' &&
+    node.arguments.length === 1 &&
+    ts.isStringLiteralLike(node.arguments[0] as ts.Expression) &&
+    runner.modules.has((node.arguments[0] as ts.StringLiteralLike).text)
+  );
+}
+
+/**
+ * Whether an expression is the runner's mock object (`vi`, Node's `mock`): imported from the runner's module (under
+ * any name), an ambient global of that name, bound by a top-level `require` of the module (`const { mock } =
+ * require('node:test')`, `const mock = require('node:test').mock`), or read as a member of the module itself
+ * (`nt.mock` with `nt` the required, default-imported or namespace-imported module, `require('node:test').mock`).
+ */
+function runnerMockObject(expression: ts.Expression, checker: ts.TypeChecker): boolean {
+  if (ts.isPropertyAccessExpression(expression)) {
+    if (!runner.mockObjects.has(expression.name.text)) return false;
+    const base = skipParens(expression.expression);
+
+    if (requiresRunnerModule(base)) return true;
+
+    if (!ts.isIdentifier(base)) return false;
+    const declarations = checker.getSymbolAtLocation(base)?.declarations ?? [];
+
+    return (
+      declarations.length > 0 &&
+      declarations.every(
+        (declaration) =>
+          ((ts.isImportClause(declaration) || ts.isNamespaceImport(declaration)) &&
+            importsRunnerModule(declaration)) ||
+          (ts.isVariableDeclaration(declaration) &&
+            runner.modules.has(staticRunnerRequire(declaration) ?? '') &&
+            requiresRunnerModule(skipParens(declaration.initializer as ts.Expression))),
+      )
+    );
+  }
+
+  if (!ts.isIdentifier(expression)) return false;
+  const declarations = checker.getSymbolAtLocation(expression)?.declarations ?? [];
+
+  // A global the project's types do not declare (Jest's `jest` without its types installed).
+  if (declarations.length === 0) return runner.mockObjects.has(expression.text);
+
+  return declarations.every((declaration) => {
+    if (ts.isImportSpecifier(declaration))
+      return (
+        importsRunnerModule(declaration) &&
+        runner.mockObjects.has((declaration.propertyName ?? declaration.name).text)
+      );
+
+    if (ts.isBindingElement(declaration)) {
+      const holder = declaration.parent.parent;
+      const key = declaration.propertyName ?? declaration.name;
+
+      return (
+        ts.isVariableDeclaration(holder) &&
+        runner.modules.has(staticRunnerRequire(holder) ?? '') &&
+        requiresRunnerModule(skipParens(holder.initializer as ts.Expression)) &&
+        ts.isIdentifier(key) &&
+        runner.mockObjects.has(key.text)
+      );
+    }
+
+    if (ts.isVariableDeclaration(declaration)) {
+      const value = declaration.initializer && skipParens(declaration.initializer);
+
+      return (
+        runner.modules.has(staticRunnerRequire(declaration) ?? '') &&
+        value !== undefined &&
+        ts.isPropertyAccessExpression(value) &&
+        runner.mockObjects.has(value.name.text) &&
+        requiresRunnerModule(skipParens(value.expression))
+      );
+    }
+
+    // The runner's ambient global (`vi` with Vitest's globals, `jest`).
+    return declaration.getSourceFile().isDeclarationFile && runner.mockObjects.has(expression.text);
   });
+}
 
-  return fromRunner ? runner.mockCalls.get(callee.name.text) : undefined;
+/** Whether an import clause, namespace import or import specifier comes from one of the runner's modules. */
+function importsRunnerModule(
+  declaration: ts.ImportClause | ts.NamespaceImport | ts.ImportSpecifier,
+): boolean {
+  let node: ts.Node = declaration;
+
+  while (!ts.isImportDeclaration(node) && node.parent) node = node.parent;
+
+  return (
+    ts.isImportDeclaration(node) &&
+    !node.importClause?.isTypeOnly &&
+    ts.isStringLiteral(node.moduleSpecifier) &&
+    runner.modules.has(node.moduleSpecifier.text)
+  );
 }
 
 /**
@@ -8875,6 +8968,51 @@ function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth
     describeRegistration(call) !== undefined ||
     runner.hooks.has(runnerExport(callee)?.name ?? '')
   );
+}
+
+/**
+ * Whether the argument after a spied member's name supplies its implementation. With Vitest and Jest that argument
+ * is an access type (`spyOn(object, 'name', 'get')`), so only a function written there counts. With Node's test
+ * runner (whose mocks are configured through `.mock`) it is the implementation: anything that may be a function
+ * counts, also by reference (`mock.method(object, 'name', replacement)`), and only a value that is plainly not one
+ * (a string, number, object or array literal, or a constant holding one) does not.
+ */
+function suppliesImplementation(argument: ts.Expression, checker: ts.TypeChecker, depth = 0): boolean {
+  const value = skipParens(argument);
+
+  if (isFunction(value)) return true;
+
+  if (runner.mockController === undefined || depth > 10) return false;
+
+  if (
+    ts.isStringLiteralLike(value) ||
+    ts.isTemplateExpression(value) ||
+    ts.isNumericLiteral(value) ||
+    ts.isBigIntLiteral(value) ||
+    ts.isObjectLiteralExpression(value) ||
+    ts.isArrayLiteralExpression(value) ||
+    ts.isRegularExpressionLiteral(value) ||
+    value.kind === ts.SyntaxKind.NullKeyword ||
+    value.kind === ts.SyntaxKind.TrueKeyword ||
+    value.kind === ts.SyntaxKind.FalseKeyword ||
+    (ts.isIdentifier(value) && value.text === 'undefined') ||
+    ts.isVoidExpression(value)
+  )
+    return false;
+
+  if (ts.isIdentifier(value)) {
+    const declaration = checker.getSymbolAtLocation(value)?.valueDeclaration;
+
+    if (
+      declaration &&
+      ts.isVariableDeclaration(declaration) &&
+      (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 &&
+      declaration.initializer
+    )
+      return suppliesImplementation(declaration.initializer, checker, depth + 1);
+  }
+
+  return true;
 }
 
 function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
@@ -8931,7 +9069,7 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
         role === 'module_hoisted' || role === 'module'
           ? moduleExports(node.arguments[0], ctx)
           : // A spy given its implementation when made (Node's `mock.method(object, 'name', () => 1)`) is configured.
-            role === 'spy' && implementation !== undefined && isFunction(implementation)
+            role === 'spy' && implementation !== undefined && suppliesImplementation(implementation, checker)
             ? spyTargets(node)
             : [];
       records.push({ node, fileWide: role === 'module_hoisted', targets });
