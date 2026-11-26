@@ -449,6 +449,9 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     });
   const reportPath = path.join(reportDir, 'mutation.json');
   const spawn = (argv: string[], timeoutMs = options.config.mutation.timeoutMs) => {
+    // A report left in place (by an earlier run, or planted) must not be read as this run's.
+    rmSync(reportPath, { force: true });
+
     if (options.isolatedCopy) rmSync(path.join(options.root, '.mutator'), { recursive: true, force: true });
 
     return runProjectTests(process.execPath, [binPath, ...argv], {

@@ -284,15 +284,17 @@ describe('runMutation failures', () => {
     expect(r.mutants).toEqual([]);
   });
 
-  it('in an isolated copy, starts without mutator state left in the root', async () => {
+  it('in an isolated copy, starts without mutator state or an old report left in the root', async () => {
     const { root, bin } = stubCli(
       "fs.writeFileSync(require('node:path').join(dir, '..', 'state-seen.txt'), String(fs.existsSync('.mutator'))); console.log('{}');",
     );
     const reportDir = path.join(root, 'out');
-    // Forged resume state and as a test running in the copy could leave them.
+    // Forged resume state and a forged report, as a test running in the copy could leave them.
     mkdirSync(path.join(root, '.mutator/scopes'), { recursive: true });
     writeFileSync(path.join(root, '.mutator/scopes/snapshot.json.resume.sqlite'), 'forged');
-    await runMutation({
+    mkdirSync(reportDir, { recursive: true });
+    writeFileSync(path.join(reportDir, 'mutation.json'), '{"forged":true}');
+    const r = await runMutation({
       testRunner: vitest,
       root,
       config: config(),
@@ -302,6 +304,8 @@ describe('runMutation failures', () => {
     });
     expect(readFileSync(path.join(root, 'state-seen.txt'), 'utf8')).toBe('false');
     expect(existsSync(path.join(root, '.mutator'))).toBe(false);
+    expect(r).toMatchObject({ status: 'error', rawReportPath: null });
+    expect(r.detail).toMatch(/did not write/);
   });
 
   it('runs mutator with the heap limit of limits.memoryMb', async () => {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import {
   redact,
@@ -46,6 +46,8 @@ export async function runVitest(cwd: string, options: TestRunOptions): Promise<T
   const outDir = path.join(cwd, '.veritas', 'improve');
   mkdirSync(outDir, { recursive: true });
   const outFile = path.join(outDir, `vitest-${options.label}.json`);
+  // A report left by an earlier run with the same label must not be read as this run's.
+  rmSync(outFile, { force: true });
   const result = await runProjectTests(
     process.execPath,
     [bin, 'run', '--reporter=json', `--outputFile=${outFile}`, ...(options.files ?? [])],
