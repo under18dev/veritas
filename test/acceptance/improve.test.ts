@@ -115,7 +115,7 @@ describe('improve on agent-loop', () => {
   beforeAll(() => {
     dir = analyzed('agent-loop');
     statusBefore = gitStatus(dir);
-    const result = runCli(['improve', '--dry-run', '--max-iterations', '10', '--json'], dir);
+    const result = runCli(['improve', '--dry-run', '--max-iterations', '20', '--json'], dir);
     expect(result.status, result.stderr).toBe(0);
     plan = json<PlanJson>(result);
   }, LONG);
@@ -211,8 +211,13 @@ describe('improve on agent-loop', () => {
     LONG,
   );
 
-  /** Apply the plan with `hook` acting in the copy as an added test could, and check the repository is unchanged. */
-  async function applyTampered(hook: (workspace: string) => void) {
+  type Hook = (workspace: string) => void;
+
+  /**
+   * Apply the plan with a hook acting in the copy as a test could (after the patch unless `when` says otherwise), and
+   * check the repository is unchanged.
+   */
+  async function applyTampered(hook: Hook, when: 'baseline' | 'patch' | 'patched-runs' = 'patch') {
     const hash = projectHash(dir);
     const status = gitStatus(dir);
     const attempt = await applyImprovement({
@@ -220,9 +225,11 @@ describe('improve on agent-loop', () => {
       planId: plan.planId,
       approvalToken: plan.approvalToken as string,
       env: {},
-      afterPatchInWorkspace: hook,
+      ...(when === 'baseline' ? { afterBaselineInWorkspace: hook } : {}),
+      ...(when === 'patch' ? { afterPatchInWorkspace: hook } : {}),
+      ...(when === 'patched-runs' ? { afterPatchedRunsInWorkspace: hook } : {}),
     });
-    expect(attempt.rolledBack).toBe(true);
+    expect(attempt.rolledBack).toBe(when !== 'baseline');
     expect(existsSync(attempt.workspace)).toBe(false);
     expect(projectHash(dir)).toBe(hash);
     expect(gitStatus(dir)).toBe(status);
@@ -273,32 +280,95 @@ describe('improve on agent-loop', () => {
   );
 
   it(
-    'reports an error and writes nothing when the patched run writes into a linked dependency',
+    'discards the measurement when the baseline runs change the copy',
     async () => {
-      // A package installed outside the project, linked into its node_modules like a pnpm store entry.
-      const pkg = path.join(realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-dep-'))), 'tamper-target');
-      mkdirSync(pkg);
-      writeFileSync(path.join(pkg, 'index.js'), 'export const value = 1;\n');
-      const link = path.join(dir, 'node_modules/tamper-target');
-      symlinkSync(pkg, link, process.platform === 'win32' ? 'junction' : 'dir');
+      const attempt = await applyTampered((workspace) => {
+        appendFileSync(path.join(workspace, 'src/age.ts'), '// rewritten\n');
+      }, 'baseline');
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain(
+        'the baseline runs changed files of the isolated copy (src/age.ts)',
+      );
+    },
+    LONG,
+  );
 
-      try {
-        const attempt = await applyTampered((workspace) => {
-          writeFileSync(
-            path.join(workspace, 'node_modules/tamper-target/index.js'),
-            'export const value = 2;\n',
-          );
-        });
+  it(
+    'discards the patch when the copy changes during the patched mutation run or the re-evaluation',
+    async () => {
+      const attempt = await applyTampered((workspace) => {
+        appendFileSync(path.join(workspace, 'test/age.test.ts'), '// rewritten\n');
+      }, 'patched-runs');
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain("beyond the plan's files (test/age.test.ts)");
+    },
+    LONG,
+  );
+
+  it(
+    "discards the patch when a package link of the copy's node_modules is replaced",
+    async () => {
+      // Re-created to the same place, so the runs still work; a fake package in its place would forge them.
+      const attempt = await applyTampered((workspace) => {
+        const link = path.join(workspace, 'node_modules/vitest');
+        const target = realpathSync(link);
+        unlinkSync(link);
+        symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+      });
+      expect(attempt.outcome).toBe('no_safe_improvement');
+      expect(attempt.reasons[0]).toContain("beyond the plan's files (node_modules/vitest)");
+    },
+    LONG,
+  );
+
+  /** Run `fn` with a package installed outside the project and linked into it like a pnpm store entry. */
+  async function withLinkedDependency(fn: (pkg: string) => Promise<void>) {
+    const pkg = path.join(realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-dep-'))), 'tamper-target');
+    mkdirSync(pkg);
+    writeFileSync(path.join(pkg, 'index.js'), 'export const value = 1;\n');
+    const link = path.join(dir, 'node_modules/tamper-target');
+    symlinkSync(pkg, link, process.platform === 'win32' ? 'junction' : 'dir');
+
+    try {
+      await fn(pkg);
+    } finally {
+      unlinkSync(link);
+      rmSync(path.dirname(pkg), { recursive: true, force: true });
+    }
+  }
+
+  const writeDependency = (workspace: string) =>
+    writeFileSync(path.join(workspace, 'node_modules/tamper-target/index.js'), 'export const value = 2;\n');
+
+  it(
+    'reports an error and writes nothing when the patched run writes into a linked dependency',
+    () =>
+      withLinkedDependency(async (pkg) => {
+        const attempt = await applyTampered(writeDependency);
         expect(attempt.outcome).toBe('error');
         expect(attempt.reasons[0]).toMatch(/changed 1 path\(s\) of the installed dependencies/);
         expect(attempt.reasons[0]).toContain(path.join(pkg, 'index.js'));
         expect(attempt.reasons[0]).toMatch(/cannot undo this: reinstall the dependencies/);
         expect(attempt.reasons).toContain('nothing was written to the repository');
-      } finally {
-        unlinkSync(link);
-        rmSync(path.dirname(pkg), { recursive: true, force: true });
-      }
-    },
+      }),
+    LONG,
+  );
+
+  it(
+    'reports a dependency write first when the attempt stops early for another reason',
+    () =>
+      withLinkedDependency(async (pkg) => {
+        const added = plan.plan?.proposedTestCases[0]?.file as string;
+        const attempt = await applyTampered((workspace) => {
+          writeDependency(workspace);
+          // The added test now fails, which ends the attempt before the patched mutation run.
+          const file = path.join(workspace, added);
+          writeFileSync(file, readFileSync(file, 'utf8').replace('toBe(true)', 'toBe(false)'));
+        });
+        expect(attempt.outcome).toBe('error');
+        expect(attempt.reasons[0]).toContain(path.join(pkg, 'index.js'));
+        expect(attempt.reasons.join('\n')).toMatch(/do not all pass/);
+      }),
     LONG,
   );
 

@@ -6,8 +6,10 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -21,11 +23,14 @@ import {
   removeWorkspace,
   snapshotTree,
   statTree,
+  statWorkspaceModules,
   undoWrites,
   unexpectedChanges,
   writeNewFiles,
 } from '../src/index.js';
 import { project } from './helpers.js';
+
+const DIR = process.platform === 'win32' ? 'junction' : 'dir';
 
 describe('workspace and repository writes', () => {
   it('copies the project without tool state and links each installed package', () => {
@@ -142,5 +147,43 @@ describe('workspace and repository writes', () => {
     writeFileSync(path.join(root, '.veritas/runs/x.json'), '{}');
     expect(diffSnapshots(before, statTree(root))).toEqual(['src/a.ts', 'src/empty']);
     expect(diffSnapshots(snapshotTree(root), snapshotTree(root))).toEqual([]);
+  });
+
+  it("notices a package of the copy's node_modules swapped for another, which the runner is resolved from", () => {
+    const store = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-store-')));
+    const real = path.join(store, 'node_modules/.pnpm/mut@1/node_modules/@mizchi/mutator');
+    mkdirSync(real, { recursive: true });
+    writeFileSync(path.join(real, 'package.json'), '{"name":"@mizchi/mutator","bin":"cli.js"}');
+    mkdirSync(path.join(store, 'node_modules/vitest'));
+    const root = project({ 'src/a.ts': 'x' });
+    mkdirSync(path.join(root, 'node_modules/@mizchi'), { recursive: true });
+    symlinkSync(real, path.join(root, 'node_modules/@mizchi/mutator'), DIR);
+    symlinkSync(path.join(store, 'node_modules/vitest'), path.join(root, 'node_modules/vitest'), DIR);
+    const ws = createWorkspace(root);
+
+    try {
+      const before = statWorkspaceModules(ws);
+      expect([...before.keys()]).toEqual(
+        expect.arrayContaining(['node_modules', 'node_modules/@mizchi/mutator', 'node_modules/vitest']),
+      );
+      // Caches the tools write while they run do not count.
+      mkdirSync(path.join(ws, 'node_modules/.vite/vitest'), { recursive: true });
+      expect(diffSnapshots(before, statWorkspaceModules(ws))).toEqual([]);
+      // A fake package in place of the link, a link re-created to the same place, and a new package all count.
+      const link = path.join(ws, 'node_modules/@mizchi/mutator');
+      unlinkSync(link);
+      mkdirSync(link);
+      writeFileSync(path.join(link, 'package.json'), '{"name":"@mizchi/mutator","bin":"cli.js"}');
+      unlinkSync(path.join(ws, 'node_modules/vitest'));
+      symlinkSync(path.join(store, 'node_modules/vitest'), path.join(ws, 'node_modules/vitest'), DIR);
+      mkdirSync(path.join(ws, 'node_modules/shadow'));
+      expect(diffSnapshots(before, statWorkspaceModules(ws))).toEqual([
+        'node_modules/@mizchi/mutator',
+        'node_modules/shadow',
+        'node_modules/vitest',
+      ]);
+    } finally {
+      removeWorkspace(ws);
+    }
   });
 });

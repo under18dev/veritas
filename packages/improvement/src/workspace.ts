@@ -49,24 +49,64 @@ export function snapshotTree(root: string): Map<string, string> {
   return out;
 }
 
+function describeEntry(abs: string): string {
+  const s = lstatSync(abs, { bigint: true });
+
+  if (s.isDirectory()) return `dir|${s.ino}|${s.mode}`;
+  const target = s.isSymbolicLink() ? readlinkSync(abs) : '';
+
+  return `${s.isFile() ? 'file' : s.isSymbolicLink() ? 'link' : 'other'}|${s.size}|${s.mtimeNs}|${s.ctimeNs}|${s.ino}|${s.mode}|${target}`;
+}
+
 /**
  * Metadata of every entry of a project tree (same exclusions as `snapshotTree`), keyed by POSIX relative path. A file
- * rewritten and then restored keeps its content but not its change time, which user code cannot set. Directories are
- * recorded by identity only: tool output in an ignored directory updates the times of its parent.
+ * rewritten and then restored keeps its content but not its change time, which ordinary file APIs cannot set on macOS
+ * and Linux (Windows lets a process set it). Directories are recorded by identity only: tool output in an ignored
+ * directory updates the times of its parent.
  */
 export function statTree(root: string): Map<string, string> {
   const out = new Map<string, string>();
   walkTree(root, (relPath, abs) => {
-    const s = lstatSync(abs, { bigint: true });
-    out.set(
-      relPath,
-      s.isDirectory()
-        ? `dir|${s.ino}|${s.mode}`
-        : `${s.isFile() ? 'file' : s.isSymbolicLink() ? 'link' : 'other'}|${s.size}|${s.mtimeNs}|${s.ctimeNs}|${s.ino}|${s.mode}`,
-    );
+    out.set(relPath, describeEntry(abs));
   });
 
   return out;
+}
+
+/**
+ * Metadata of the package entries of a workspace's own `node_modules` directory (each package link, the links in each
+ * `@scope` directory, and `.bin`), keyed by POSIX relative path. The test runner and mutator are resolved from these
+ * links, so code that swaps one for a package of its own could forge the measurement. Other hidden entries are
+ * caches the tools write while they run (`.vite`, `.vitest`).
+ */
+export function statWorkspaceModules(dir: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const modules = path.join(dir, 'node_modules');
+
+  if (!existsSync(modules) && !isLink(modules)) return out;
+  out.set('node_modules', describeEntry(modules));
+  const walk = (abs: string, rel: string, scope: boolean) => {
+    for (const name of readdirSync(abs)) {
+      if (name.startsWith('.') && !(name === '.bin' && !scope)) continue;
+      const child = path.join(abs, name);
+      const entry = describeEntry(child);
+      out.set(`${rel}/${name}`, entry);
+
+      if (!scope && name.startsWith('@') && entry.startsWith('dir|')) walk(child, `${rel}/${name}`, true);
+    }
+  };
+
+  if (describeEntry(modules).startsWith('dir|')) walk(modules, 'node_modules', false);
+
+  return out;
+}
+
+function isLink(abs: string): boolean {
+  try {
+    return lstatSync(abs).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 export function treeHash(snapshot: Map<string, string>): string {

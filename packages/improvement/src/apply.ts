@@ -34,6 +34,7 @@ import {
   removeWorkspace,
   snapshotTree,
   statTree,
+  statWorkspaceModules,
   treeHash,
   undoWrites,
   unexpectedChanges,
@@ -56,6 +57,13 @@ export interface ApplyOptions {
    * made by such a test.
    */
   afterPatchInWorkspace?: (workspace: string) => void | Promise<void>;
+  /** Test hook like `afterPatchInWorkspace`, run after the baseline runs, as code run by an existing test would. */
+  afterBaselineInWorkspace?: (workspace: string) => void | Promise<void>;
+  /**
+   * Test hook like `afterPatchInWorkspace`, run after the patched mutation run and the re-evaluation, as code run by
+   * an added test during those runs would.
+   */
+  afterPatchedRunsInWorkspace?: (workspace: string) => void | Promise<void>;
   /** Who approves (recorded); defaults to VERITAS_ACTOR, then the git user name. */
   actor?: string;
   /** Entry point recorded with the approval (default `api`). */
@@ -458,12 +466,21 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
   };
   // Installed dependencies as they were before anything ran in the workspace, until they are compared again.
   let dependencies: DependencySnapshot | null = null;
-  const dependencyChanges = (): string[] => {
+  /** Reasons the dependencies are not as they were (empty when they are); a failed comparison is one too. */
+  const dependencyProblems = (): string[] => {
     if (dependencies === null) return [];
-    const changed = diffDependencies(dependencies, snapshotDependencies(root));
+    const before = dependencies;
     dependencies = null;
 
-    return changed;
+    try {
+      const changed = diffDependencies(before, snapshotDependencies(root));
+
+      return changed.length > 0 ? [dependencyChangeReason(changed)] : [];
+    } catch (error) {
+      return [
+        `could not compare the installed dependencies with their state before the runs: ${(error as Error).message}; check them, and reinstall them if in doubt`,
+      ];
+    }
   };
   const end = (
     outcome: ImprovementOutcome,
@@ -476,7 +493,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
     },
   ): PatchAttempt => {
     // Whatever the measurement concluded, code that wrote into the real dependencies is reported first.
-    const changed = dependencyChanges();
+    const problems = dependencyProblems();
 
     return persist({
       ...base,
@@ -484,10 +501,8 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
       before: fields.before ?? null,
       after: fields.after ?? null,
       rolledBack: fields.rolledBack,
-      outcome: changed.length > 0 ? 'error' : outcome,
-      reasons: [...(changed.length > 0 ? [dependencyChangeReason(changed)] : []), ...reasons].map((r) =>
-        redact(r),
-      ),
+      outcome: problems.length > 0 ? 'error' : outcome,
+      reasons: [...problems, ...reasons].map((r) => redact(r)),
     });
   };
 
@@ -516,14 +531,17 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
     // The copy as made, to tell what the runs in it changed; and the dependencies it links to, which it shares
     // with the project.
     const original = snapshotTree(workspace);
-    const originalStat = statTree(workspace);
+    // Metadata of the copy's files and of the package links in its own node_modules, which the runner and mutator
+    // are resolved from.
+    const statCopy = () => new Map([...statTree(workspace), ...statWorkspaceModules(workspace)]);
+    const originalStat = statCopy();
     // Files changed since the copy was made, other than `files` with exactly their content, or touched at all since
     // `stat` was taken (a file rewritten and restored keeps its content, not its change time).
     const copyChanges = (stat: Map<string, string>, files: PatchFile[]): string[] =>
       [
         ...new Set([
           ...unexpectedChanges(original, snapshotTree(workspace), files),
-          ...diffSnapshots(stat, statTree(workspace)),
+          ...diffSnapshots(stat, statCopy()),
         ]),
       ].sort();
     dependencies = snapshotDependencies(root);
@@ -572,6 +590,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         { workspace, rolledBack: false },
       );
     }
+    await options.afterBaselineInWorkspace?.(workspace);
     const changedByBaseline = copyChanges(originalStat, []);
 
     if (changedByBaseline.length > 0) {
@@ -598,7 +617,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
 
     // Patched.
     writeNewFiles(workspace, doc.files);
-    const patchedStat = statTree(workspace);
+    const patchedStat = statCopy();
     await options.afterPatchInWorkspace?.(workspace);
     const testsAfter = await measureTests('after');
 
@@ -676,6 +695,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
     }
     // The patched mutation run and the re-evaluation ran the added tests again: check the copy once more before
     // trusting what they measured.
+    await options.afterPatchedRunsInWorkspace?.(workspace);
     const tamperedLater = copyChanges(patchedStat, doc.files);
 
     if (tamperedLater.length > 0) {
@@ -736,14 +756,15 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         rolledBack: true,
       });
     }
-    const changedDependencies = dependencyChanges();
+    const changedDependencies = dependencyProblems();
 
     if (changedDependencies.length > 0) {
-      return end(
-        'error',
-        [dependencyChangeReason(changedDependencies), 'nothing was written to the repository'],
-        { workspace, before, after, rolledBack: true },
-      );
+      return end('error', [...changedDependencies, 'nothing was written to the repository'], {
+        workspace,
+        before,
+        after,
+        rolledBack: true,
+      });
     }
     const repoBefore = snapshotTree(root);
 
