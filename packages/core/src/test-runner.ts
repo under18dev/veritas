@@ -153,6 +153,11 @@ export interface TestRunnerRecognition {
    */
   readonly chainedModifiersWin?: boolean;
   /**
+   * A registration may take no title, the name of its function being the title (Node: `test(function addsOne() {})`,
+   * `test(namedFn)`, `test({ skip: true }, function x() {})`); otherwise only a title written first counts.
+   */
+  readonly functionTitles?: boolean;
+  /**
    * An option of `testOptions` is set by any value but `false` and `undefined` (Node: `{ skip: '' }`, `{ skip: 0 }`
    * and `{ skip: null }` skip); without it a value sets the option when it is truthy, as in Vitest.
    */

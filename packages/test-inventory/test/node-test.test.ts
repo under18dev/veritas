@@ -272,6 +272,97 @@ describe('Node.js test runner tests', () => {
     expect(byName(tests, 'member message').suspicions).toContain('tautological_assertion');
   });
 
+  it('counts only a call that runs a node:assert function, never one that binds or reads it', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/bound.test.ts': `
+        import { test } from 'node:test';
+        import assert, { strictEqual } from 'node:assert/strict';
+        import * as nodeAssert from 'node:assert';
+        import { value } from '../src/value.ts';
+        test('bound, never called', () => {
+          const check = assert.strictEqual.bind(null, value(1), 2);
+          void check;
+        });
+        test('bound named import', () => {
+          const check = strictEqual.bind(null, value(1), 2);
+          void check;
+        });
+        test('call member', () => {
+          strictEqual.call(null, value(1), 2);
+        });
+        test('unknown member of the module', () => {
+          assert.notAFunction(value(1), 2);
+        });
+        test('context bind', (t) => {
+          const check = t.assert.equal.bind(null, value(1), 2);
+          void check;
+        });
+        test('default member', () => {
+          nodeAssert.default.equal(value(1), 2);
+        });
+        test('strict member', () => {
+          assert.strict.equal(value(1), 2);
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+    const asserted = (name: string) => byName(tests, name).targetCalls.some((call) => call.asserted);
+
+    for (const name of [
+      'bound, never called',
+      'bound named import',
+      'call member',
+      'unknown member of the module',
+      'context bind',
+    ]) {
+      expect(byName(tests, name).assertionCount, name).toBe(0);
+      expect(byName(tests, name).suspicions, name).toContain('no_assertion');
+      expect(asserted(name), name).toBe(false);
+    }
+
+    for (const name of ['default member', 'strict member']) {
+      expect(byName(tests, name), name).toMatchObject({ assertionCount: 1, suspicions: [] });
+      expect(asserted(name), name).toBe(true);
+    }
+  });
+
+  it('titles a registration without a title by the name of its function, as Node does', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/titles.test.ts': `
+        import { describe, it, test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { value } from '../src/value.ts';
+        function declared() { assert.equal(value(1), 2); }
+        const arrowConst = () => assert.equal(value(1), 2);
+        const namedExpression = function own() { assert.equal(value(1), 2); };
+        test(function addsOne() { assert.equal(value(1), 2); });
+        test(declared);
+        test(arrowConst);
+        test(namedExpression);
+        test({ skip: true }, function optioned() { assert.equal(value(1), 2); });
+        describe(function suiteName() {
+          it(function inner() { assert.equal(value(1), 2); });
+        });
+        test(() => assert.equal(value(1), 2));
+      `,
+    });
+    const { tests } = inventory(root);
+
+    expect(tests.map((test) => [test.name, test.suitePath, test.modifiers])).toEqual([
+      ['addsOne', [], []],
+      ['declared', [], []],
+      ['arrowConst', [], []],
+      ['own', [], []],
+      ['optioned', [], ['skip']],
+      ['inner', ['suiteName'], []],
+      ['<dynamic test>', [], []],
+    ]);
+    expect(byName(tests, 'addsOne')).toMatchObject({ assertionCount: 1, suspicions: [] });
+    expect(byName(tests, '<dynamic test>').inexactName).toBe('dynamic_title');
+  });
+
   it('never takes the message of a node:assert call for what it checks', () => {
     const root = tempProject({
       'src/value.ts': VALUE,

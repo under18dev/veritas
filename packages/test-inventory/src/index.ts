@@ -67,6 +67,8 @@ interface RunnerApi {
   testOptions: boolean;
   /** A chained modifier holds whatever the options object says (Node). */
   chainedModifiersWin: boolean;
+  /** A registration without a title takes its function's name (Node). */
+  functionTitles: boolean;
   /** An option is set by any value but `false` and `undefined` (Node). */
   optionsSetUnlessFalse: boolean;
   /** The export a default import of the runner's module stands for (`import test from 'node:test'`), if any. */
@@ -106,6 +108,7 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
     tableFactories: new Set(recognition.tableFactories),
     testOptions: recognition.testOptions === true,
     chainedModifiersWin: recognition.chainedModifiersWin === true,
+    functionTitles: recognition.functionTitles === true,
     optionsSetUnlessFalse: recognition.optionsSetUnlessFalse === true,
     defaultExport: recognition.defaultExport,
     beforeEach: new Set(hooks.beforeEach),
@@ -4377,7 +4380,7 @@ function visitTests(
       const describe = describeRegistration(node);
 
       if (describe) {
-        const name = literalString(node.arguments[0]);
+        const name = describe.name;
         const callback = callbackArgument(node);
         const inherited = inherit(describe, plainDescribeRegistration(node)?.modifiers ?? []);
 
@@ -6300,7 +6303,8 @@ function registrationOptions(node: ts.CallExpression): {
   // Each modifier's value as the object ends up with it: later keys override earlier ones.
   const set = new Map<TestCaseType['modifiers'][number], boolean>();
 
-  const after = node.arguments.slice(1);
+  // Node's `test({ skip: true }, fn)` has no title: its options come first.
+  const after = optionsFirst(node) ? [...node.arguments] : node.arguments.slice(1);
   // The last argument that is not a timeout (`it('x', check, 1000)`): where the callback goes.
   let last = after.length - 1;
 
@@ -6383,6 +6387,52 @@ function registrationOptions(node: ts.CallExpression): {
   return { modifiers, cleared, unknown };
 }
 
+/** A registration without a title whose options come first (Node's `test({ skip: true }, function x() {})`). */
+function optionsFirst(node: ts.CallExpression): boolean {
+  const first = node.arguments[0] && skipParens(node.arguments[0]);
+
+  return runner.functionTitles && first !== undefined && ts.isObjectLiteralExpression(first);
+}
+
+/**
+ * The title of a registration: a literal written first, or, for a runner that titles a registration without one by
+ * its function (Node), the name of that function: a named function expression, a function declaration or a constant
+ * holding a function referred to by name (`test(addsOne)`). Undefined (dynamic) otherwise, an anonymous arrow
+ * included.
+ */
+function registrationTitle(node: ts.CallExpression): string | undefined {
+  const literal = literalString(node.arguments[0]);
+
+  if (literal !== undefined || !runner.functionTitles) return literal;
+  const fn = node.arguments[optionsFirst(node) ? 1 : 0];
+  const value = fn && skipParens(fn);
+
+  if (value === undefined) return undefined;
+
+  if (ts.isFunctionExpression(value)) return value.name?.text;
+
+  if (!ts.isIdentifier(value) || runnerChecker === undefined) return undefined;
+  const declaration = runnerChecker.getSymbolAtLocation(value)?.valueDeclaration;
+
+  if (declaration && ts.isFunctionDeclaration(declaration)) return declaration.name?.text;
+
+  if (
+    declaration &&
+    ts.isVariableDeclaration(declaration) &&
+    ts.isIdentifier(declaration.name) &&
+    declaration.initializer
+  ) {
+    const initializer = skipParens(declaration.initializer);
+
+    // JavaScript names a function assigned to a variable after it, unless it has a name of its own.
+    if (ts.isArrowFunction(initializer)) return declaration.name.text;
+
+    if (ts.isFunctionExpression(initializer)) return initializer.name?.text ?? declaration.name.text;
+  }
+
+  return undefined;
+}
+
 /** A registration with the modifiers its options object sets added. */
 function withOptions(node: ts.CallExpression, found: Registration | undefined): Registration | undefined {
   if (!found) return undefined;
@@ -6438,7 +6488,7 @@ function plainTestRegistration(node: ts.CallExpression): Registration | undefine
   const direct = makesRegistration(node) ? undefined : registration(node, runner.tests);
 
   if (direct && Array.isArray(direct))
-    return { name: literalString(node.arguments[0]), callback: callbackArgument(node), modifiers: direct };
+    return { name: registrationTitle(node), callback: callbackArgument(node), modifiers: direct };
 
   const factory = registrationFactory(node);
 
@@ -6461,7 +6511,7 @@ function plainTestRegistration(node: ts.CallExpression): Registration | undefine
       if (chain.some((name) => runner.expectedFailure.has(name))) eachModifiers.push('expected_failure');
 
       return {
-        name: literalString(node.arguments[0]),
+        name: registrationTitle(node),
         callback: callbackArgument(node),
         modifiers: eachModifiers,
       };
@@ -6479,7 +6529,7 @@ function plainDescribeRegistration(node: ts.CallExpression): Registration | unde
   const direct = makesRegistration(node) ? undefined : registration(node, runner.suites);
 
   if (direct && Array.isArray(direct)) {
-    return { name: literalString(node.arguments[0]), callback: callbackArgument(node), modifiers: direct };
+    return { name: registrationTitle(node), callback: callbackArgument(node), modifiers: direct };
   }
 
   const factory = registrationFactory(node);
@@ -6502,7 +6552,7 @@ function plainDescribeRegistration(node: ts.CallExpression): Registration | unde
   if (implied !== undefined && !eachModifiers.includes(implied)) eachModifiers.unshift(implied);
 
   return {
-    name: literalString(node.arguments[0]),
+    name: registrationTitle(node),
     callback: callbackArgument(node),
     modifiers: eachModifiers,
   };
@@ -9955,6 +10005,30 @@ function comparedValues(assertion: ts.CallExpression): ts.Expression[] {
   return values;
 }
 
+/** The functions of node:assert (and of the test context's `assert`) that assert when called. */
+const NODE_ASSERT_FUNCTIONS = new Set([
+  'ok',
+  'equal',
+  'notEqual',
+  'strictEqual',
+  'notStrictEqual',
+  'deepEqual',
+  'notDeepEqual',
+  'deepStrictEqual',
+  'notDeepStrictEqual',
+  'partialDeepStrictEqual',
+  'throws',
+  'doesNotThrow',
+  'rejects',
+  'doesNotReject',
+  'match',
+  'doesNotMatch',
+  'ifError',
+  'fail',
+  'snapshot',
+  'fileSnapshot',
+]);
+
 /** node:assert functions that compare their first two arguments and take a message third. */
 const NODE_ASSERT_PAIRS = new Set([
   'equal',
@@ -9988,8 +10062,13 @@ function nodeAssertName(call: ts.CallExpression): string | undefined {
 
     if (binding === undefined) return undefined;
 
-    // The module itself is `assert(value, message)`; a member keeps its name, an unknown one stays unknown.
-    return MODULE_ITSELF.has(binding.exported) ? 'ok' : binding.exported;
+    // The module itself is `assert(value, message)`; a function keeps its name; a binding whose export cannot be
+    // read stays unknown (all its arguments compared); any other export (`AssertionError`) asserts nothing.
+    if (MODULE_ITSELF.has(binding.exported)) return 'ok';
+
+    return binding.exported === UNKNOWN_EXPORT || NODE_ASSERT_FUNCTIONS.has(binding.exported)
+      ? binding.exported
+      : undefined;
   }
 
   if (!ts.isPropertyAccessExpression(callee)) return undefined;
@@ -9997,8 +10076,10 @@ function nodeAssertName(call: ts.CallExpression): string | undefined {
   const rootBinding = root === undefined ? undefined : assertModuleBinding(root);
 
   if (rootBinding !== undefined) {
-    // `assert.strict.equal` reads `equal` on the module; a member read on anything else is unknown.
-    if (!MODULE_ITSELF.has(rootBinding.exported)) return UNKNOWN_EXPORT;
+    // Only a function read on the module runs an assertion (`assert.equal`, `assert.strict.equal`,
+    // `nodeAssert.default.ok`): `strictEqual.bind(...)` makes a function and asserts nothing, and `.call`,
+    // `.apply` or any other member read on a function or an unknown member are not followed.
+    if (!MODULE_ITSELF.has(rootBinding.exported)) return undefined;
     const path: string[] = [];
 
     for (let current: ts.Expression = callee; ts.isPropertyAccessExpression(current); ) {
@@ -10007,17 +10088,20 @@ function nodeAssertName(call: ts.CallExpression): string | undefined {
     }
     const rest = moduleMembers(path);
 
-    return rest.length === 0 ? 'ok' : rest.length === 1 ? (rest[0] as string) : UNKNOWN_EXPORT;
+    if (rest.length === 0) return 'ok';
+
+    return rest.length === 1 && NODE_ASSERT_FUNCTIONS.has(rest[0] as string) ? rest[0] : undefined;
   }
-  const name = callee.name.text === 'strict' ? 'ok' : callee.name.text;
   const holder = skipParens(callee.expression);
 
+  // `t.assert.equal(...)` on the test context; `t.assert.equal.bind(...)` is not an assertion.
   return runnerChecker !== undefined &&
+    NODE_ASSERT_FUNCTIONS.has(callee.name.text) &&
     ts.isPropertyAccessExpression(holder) &&
     holder.name.text === 'assert' &&
     ts.isIdentifier(holder.expression) &&
     isTestContext(holder.expression, runnerChecker)
-    ? name
+    ? callee.name.text
     : undefined;
 }
 
@@ -10359,7 +10443,9 @@ function isContextAssertion(
 
   if (ts.isIdentifier(holder)) return CONTEXT_ASSERTIONS.has(callee.name.text) && isContext(holder);
 
+  // `t.assert.equal(...)`; only a function that asserts, never `t.assert.equal.bind` or another member.
   return (
+    NODE_ASSERT_FUNCTIONS.has(callee.name.text) &&
     ts.isPropertyAccessExpression(holder) &&
     holder.name.text === 'assert' &&
     ts.isIdentifier(holder.expression) &&
@@ -10552,9 +10638,8 @@ function isAssertCall(node: ts.CallExpression): boolean {
       runner.assertionCounts.has(node.expression.name.text))
   )
     return true;
-  const root = rootIdentifierNode(node.expression);
-
-  return root !== undefined && assertModuleBinding(root) !== undefined;
+  // A call that runs a node:assert function, never one that only reads or binds it (`assert.equal.bind(...)`).
+  return nodeAssertName(node) !== undefined;
 }
 
 /** A name bound to a value of an assertion module: the declaration that binds it and the export it stands for. */
@@ -10592,7 +10677,8 @@ const UNKNOWN_EXPORT = '?';
 function moduleMembers(path: string[]): string[] {
   let start = 0;
 
-  while (path[start] === 'strict') start++;
+  // `strict` is the module in strict mode, `default` the module itself (a namespace import's default).
+  while (path[start] === 'strict' || path[start] === 'default') start++;
 
   return path.slice(start);
 }

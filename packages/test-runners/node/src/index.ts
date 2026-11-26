@@ -55,6 +55,8 @@ export const nodeTestRunner: TestRunnerProvider = {
     testOptions: true,
     // Node forces `.skip`, `.todo` and `.only`: `{ skip: false }` does not undo `test.skip`.
     chainedModifiersWin: true,
+    // `test(function addsOne() {})` is titled `addsOne`.
+    functionTitles: true,
     // Node checks `skip !== undefined && skip !== false`: an empty reason, 0 or null still skips.
     optionsSetUnlessFalse: true,
     hooks: {
