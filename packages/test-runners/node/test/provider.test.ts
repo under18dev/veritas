@@ -224,6 +224,18 @@ describe('choosing the Node.js test runner', () => {
     );
   });
 
+  it('proposes .test.cjs, .test.mts and .test.cts files, which the standard pattern leaves out', () => {
+    const root = project({
+      'package.json': manifest({ scripts: { test: 'node --test' } }),
+      'lib/value.test.cjs': "const { test } = require('node:test');\ntest('x', () => {});\n",
+    });
+
+    expect(detectProject(root, nodeTestRunner).testGlobs).toEqual([
+      '**/*.{test,spec}.{ts,tsx,js,mjs}',
+      '**/*.test.{mts,cts,cjs}',
+    ]);
+  });
+
   it('is selected by analysis.testFramework "node_test"', () => {
     expect(selectTestRunner(providers, 'node_test')).toBe(nodeTestRunner);
   });

@@ -27,6 +27,9 @@ export const nodeTestRunner: TestRunnerProvider = {
     packageName: 'node:test',
     builtIn: true,
     extraTestGlobs: [
+      // `*.test.*` and `test.*` with the extensions `init`'s standard patterns leave out.
+      '**/*.test.{mts,cts,cjs}',
+      '**/test.{mts,cts,cjs}',
       `**/*-test.${EXTENSIONS}`,
       `**/*_test.${EXTENSIONS}`,
       `**/test-*.${EXTENSIONS}`,
@@ -58,7 +61,8 @@ export const nodeTestRunner: TestRunnerProvider = {
     assertions: {
       expect: [],
       typeLevel: [],
-      objects: ['assert'],
+      // Only what is bound to node:assert counts (resolved by symbol), never a local named `assert`.
+      objects: [],
       counts: [],
       // Every value export of node:assert asserts: `assert(x)`, `assert.equal(a, b)`, `strictEqual(a, b)`, ...
       modules: ['node:assert', 'node:assert/strict', 'assert', 'assert/strict'],

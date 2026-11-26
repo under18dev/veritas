@@ -87,6 +87,35 @@ describe('runNodeTest', () => {
     expect(run.failures[0]).toMatch(/^test\/pricing\.test\.ts::discount > is wrong on purpose: .*0 !== 5/);
   });
 
+  it('keys subtests a helper in another file registers under the test that ran them', async () => {
+    const root = project({
+      'test/helper.mjs': "export async function check(t) {\n  await t.test('child', () => {});\n}\n",
+      'test/a.test.mjs': `import { test } from 'node:test';
+import { check } from './helper.mjs';
+test('first parent', async (t) => { await check(t); });
+test('second parent', async (t) => { await check(t); });
+`,
+      'test/b.test.mjs': `import { test } from 'node:test';
+import { check } from './helper.mjs';
+test('other file', async (t) => { await check(t); });
+`,
+    });
+    const run = await runNodeTest(root, {
+      timeoutMs: 60_000,
+      label: 'helper',
+      files: ['test/a.test.mjs', 'test/b.test.mjs'],
+    });
+
+    expect(run.status === 'ok' && Object.fromEntries(run.tests)).toEqual({
+      'test/a.test.mjs::first parent > child': 'passed',
+      'test/a.test.mjs::first parent': 'passed',
+      'test/a.test.mjs::second parent > child': 'passed',
+      'test/a.test.mjs::second parent': 'passed',
+      'test/b.test.mjs::other file > child': 'passed',
+      'test/b.test.mjs::other file': 'passed',
+    });
+  });
+
   it('runs only the files it is given', async () => {
     const root = project({
       'src/pricing.ts': PRICING,

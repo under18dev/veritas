@@ -6,7 +6,10 @@
 export interface NodeTestReport {
   /** Tests and suites in the order they ended. */
   tests: {
-    /** The file the test is in, as Node.js reports it (absolute), or null. */
+    /**
+     * The test file whose run the test belongs to (absolute, as Node.js reports it), or null: the file of its top-level
+     * test, also for a subtest a helper in another file registers (`t.test` called in an imported function).
+     */
     file: string | null;
     /** The titles of the suites and tests it is nested in, outermost first. */
     ancestors: string[];
@@ -53,28 +56,34 @@ export default async function* nodeTestReporter(
   source: AsyncIterable<{ type: string; data?: EventData }>,
 ): AsyncGenerator<string> {
   const report: NodeTestReport = { tests: [], success: null };
-  // Per file, the titles of the tests started last at each nesting level; and the ancestors of each test as they
-  // were when it started (its own end comes after its subtests').
-  const stacks = new Map<string, string[]>();
-  const ancestry = new Map<string, string[]>();
+  // Node.js reports the tests of one file after another, each in the order they ran, so the titles started last at
+  // each nesting level are the ancestors of what starts next, whatever file registered it. A test ends after its
+  // subtests, so what it started under is kept per start (in order, as a helper may register the same subtest under
+  // two parents) and taken back at its end.
+  const stack: string[] = [];
+  let root: string | null = null;
+  const started = new Map<string, { ancestors: string[]; file: string | null }[]>();
 
   for await (const event of source) {
     const data = event.data ?? {};
     const nesting = data.nesting ?? 0;
 
     if (event.type === 'test:start') {
-      const stack = stacks.get(data.file ?? '') ?? [];
-      stack.length = nesting;
-      ancestry.set(where(data), stack.slice());
-      stack.push(data.name ?? '');
-      stacks.set(data.file ?? '', stack);
+      if (nesting === 0) root = data.file ?? null;
+      stack.length = Math.min(stack.length, nesting);
+      const queue = started.get(where(data)) ?? [];
+      queue.push({ ancestors: Array.from({ length: nesting }, (_, i) => stack[i] ?? ''), file: root });
+      started.set(where(data), queue);
+      stack[nesting] = data.name ?? '';
     } else if (event.type === 'test:pass' || event.type === 'test:fail') {
-      const ancestors = ancestry.get(where(data)) ?? (stacks.get(data.file ?? '') ?? []).slice(0, nesting);
+      const start = started.get(where(data))?.shift();
+      const ancestors = start?.ancestors ?? stack.slice(0, nesting);
+      const file = start?.file ?? (nesting === 0 ? (data.file ?? null) : (root ?? data.file ?? null));
       const failed = event.type === 'test:fail';
       const error = data.details?.error;
 
       report.tests.push({
-        file: data.file ?? null,
+        file,
         ancestors,
         name: data.name ?? '',
         type: data.details?.type === 'suite' ? 'suite' : 'test',
