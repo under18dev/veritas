@@ -275,6 +275,10 @@ describe('node:test bindings', () => {
       'test/bun.test.ts': "import { test, expect } from 'bun:test';\ntest('bun', () => expect(1).toBe(1));\n",
       'test/deno.test.ts': "Deno.test('deno', () => {});\n",
       'test/std.test.ts': "import { it } from 'jsr:@std/testing/bdd';\nit('std', () => {});\n",
+      'test/vitest-types.test.ts':
+        "import { type TestContext } from 'vitest';\nexport type { TestContext };\n",
+      'test/vitest-type-export.test.ts': "export { type TestContext } from 'vitest';\n",
+      'test/bun-reexport.test.ts': "export { test } from 'bun:test';\n",
       'test/plain.test.ts': "import { test } from 'node:test';\ntest('plain', () => {});\n",
       'test/shared-suite.ts':
         "import { test } from 'node:test';\nexport function registerAll() { test('elsewhere', () => {}); }\n",
@@ -299,6 +303,10 @@ describe('node:test bindings', () => {
     expect(fileOf('test/bun.test.ts')).toMatchObject({ usesRunner: false, foreignRunner: 'bun:test' });
     expect(fileOf('test/deno.test.ts')).toMatchObject({ foreignRunner: 'Deno.test' });
     expect(fileOf('test/std.test.ts')).toMatchObject({ foreignRunner: 'jsr:@std/testing/bdd' });
+    // Types of another runner use no API of it; a re-export of its API does.
+    expect(fileOf('test/vitest-types.test.ts')?.foreignRunner).toBeUndefined();
+    expect(fileOf('test/vitest-type-export.test.ts')?.foreignRunner).toBeUndefined();
+    expect(fileOf('test/bun-reexport.test.ts')).toMatchObject({ foreignRunner: 'bun:test' });
   });
 
   it('takes a parameter for a context only where the function runs as a test, not where it is called directly', () => {
@@ -460,6 +468,73 @@ describe('node:test bindings', () => {
     expect(byName(tests, 'mutual through a call').suspicions).not.toContain('no_assertion');
     expect(byName(tests, 'mutual through a call').suspicions).toContain('opaque_call');
     expect(byName(tests, 'mutual plain object').targetCalls.some((call) => call.asserted)).toBe(false);
+  });
+
+  it('takes a test registered through the namespace, default or required module for a real context', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/namespace.test.ts': `
+        import * as nt from 'node:test';
+        import { value } from '../src/value.ts';
+        function check(t) { t.assert.equal(value(1), 2); }
+        nt.test('namespace caller', (t) => check(t));
+      `,
+      'test/default.test.ts': `
+        import nodeTest from 'node:test';
+        import { value } from '../src/value.ts';
+        function check(t) { t.assert.equal(value(1), 2); }
+        nodeTest.test('default caller', (t) => check(t));
+      `,
+      'test/required.test.cjs': `
+        const nt = require('node:test');
+        const { value } = require('../src/value.ts');
+        function check(t) { t.assert.equal(value(1), 2); }
+        nt.test('required caller', (t) => check(t));
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of ['namespace caller', 'default caller', 'required caller']) {
+      expect(byName(tests, name).suspicions, name).not.toContain('no_assertion');
+      expect(
+        byName(tests, name).targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(true);
+    }
+  });
+
+  it('follows a const alias of a context, and leaves a value it cannot trace inconclusive', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/alias.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/value.ts';
+        function check(t) { t.assert.equal(value(1), 2); }
+        test('by reference', check);
+        test('const alias', (t) => {
+          const context = t;
+          check(context as typeof t);
+        });
+      `,
+      'test/untraced.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/value.ts';
+        function verify(t) { t.assert.equal(value(1), 2); }
+        test('let alias', (t) => {
+          let context = t;
+          verify(context);
+        });
+        test('plain object', () => verify({ assert: { equal() {} } }));
+      `,
+    });
+    const { tests } = inventory(root);
+
+    expect(byName(tests, 'const alias').suspicions).not.toContain('no_assertion');
+    expect(byName(tests, 'const alias').targetCalls.some((call) => call.asserted)).toBe(true);
+    // Not traced: inconclusive, never no_assertion.
+    expect(byName(tests, 'let alias').suspicions).not.toContain('no_assertion');
+    expect(byName(tests, 'let alias').suspicions).toContain('opaque_call');
+    expect(byName(tests, 'plain object').targetCalls.some((call) => call.asserted)).toBe(false);
   });
 
   it('takes require for the module loader only when the file does not declare its own', () => {
@@ -721,6 +796,16 @@ describe('node:test bindings', () => {
           args.push(value(1));
           strictEqual.apply(null, args as [number, number]);
         });
+        test('array also passed to Reflect.apply', () => {
+          const args = [1, 1] as const;
+          Reflect.apply(String, args, []);
+          strictEqual.apply(null, args as unknown as [number, number]);
+        });
+        test('array also passed to another apply', () => {
+          const args = [1, 1] as const;
+          Math.max.apply(null, args as unknown as number[]);
+          strictEqual.apply(null, args as unknown as [number, number]);
+        });
       `,
     });
     const { tests } = inventory(root);
@@ -733,5 +818,12 @@ describe('node:test bindings', () => {
     // Not read: every argument counts, so the call stays an assertion.
     expect(byName(tests, 'array changed before').assertionCount).toBe(1);
     expect(byName(tests, 'array changed before').suspicions).not.toContain('no_assertion');
+    // Any use but the assertion's own .apply leaves it unread, never read as the literal.
+    for (const name of ['array also passed to Reflect.apply', 'array also passed to another apply'])
+      expect(byName(tests, name).assertionCount, name).toBe(1);
+    // Reflect.apply takes the array as `this`, which may change it: not read as constants.
+    expect(byName(tests, 'array also passed to Reflect.apply').suspicions).not.toContain(
+      'tautological_assertion',
+    );
   });
 });
