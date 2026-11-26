@@ -1,0 +1,27 @@
+{
+  "name": "@under18dev/veritas-test-runner-node",
+  "version": "0.2.2",
+  "description": "Node.js test runner (node:test) provider for the Veritas test runner interface",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/under18dev/veritas.git",
+    "directory": "packages/test-runners/node"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@under18dev/veritas-core": "workspace:*"
+  }
+}

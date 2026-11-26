@@ -1,0 +1,220 @@
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { parseNodeTestReport, runNodeTest } from '../src/run.js';
+
+function project(files: Record<string, string>): string {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-node-run-')));
+  writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'p', type: 'module' }));
+
+  for (const [relative, content] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
+    writeFileSync(path.join(root, relative), content);
+  }
+
+  return root;
+}
+
+const PRICING = `export function discount(total: number): number {
+  return total > 1000 ? 100 : 0;
+}
+`;
+
+const SUITE = `import { describe, it, test } from 'node:test';
+import assert from 'node:assert/strict';
+import { discount } from '../src/pricing.ts';
+
+describe('discount', () => {
+  it('gives 100 on large orders', () => {
+    assert.equal(discount(2000), 100);
+  });
+
+  it('is wrong on purpose', () => {
+    assert.equal(discount(10), 5);
+  });
+
+  it.skip('is skipped', () => {});
+
+  it('is todo', { todo: 'later' }, () => {});
+
+  describe('nested', () => {
+    test('gives nothing on small orders', () => {
+      assert.equal(discount(10), 0);
+    });
+  });
+});
+
+test('with subtests', async (t) => {
+  await t.test('first', () => {
+    t.assert.equal(discount(0), 0);
+  });
+  await t.test('second', () => {
+    assert.equal(discount(5000), 100);
+  });
+});
+`;
+
+describe('runNodeTest', () => {
+  it('runs the real node --test and keys every test, subtests included, by file and full name', async () => {
+    const root = project({ 'src/pricing.ts': PRICING, 'test/pricing.test.ts': SUITE });
+    const run = await runNodeTest(root, { timeoutMs: 60_000, label: 'all' });
+
+    expect(run.status).toBe('ok');
+
+    if (run.status !== 'ok') return;
+    expect(Object.fromEntries(run.tests)).toEqual({
+      'test/pricing.test.ts::discount > gives 100 on large orders': 'passed',
+      'test/pricing.test.ts::discount > is wrong on purpose': 'failed',
+      'test/pricing.test.ts::discount > is skipped': 'skipped',
+      'test/pricing.test.ts::discount > is todo': 'skipped',
+      'test/pricing.test.ts::discount > nested > gives nothing on small orders': 'passed',
+      'test/pricing.test.ts::with subtests > first': 'passed',
+      'test/pricing.test.ts::with subtests > second': 'passed',
+      'test/pricing.test.ts::with subtests': 'passed',
+    });
+    expect(run.passed).toBe(5);
+    expect(run.failed).toBe(1);
+    expect(run.failures).toHaveLength(1);
+    expect(run.failures[0]).toMatch(/^test\/pricing\.test\.ts::discount > is wrong on purpose: .*0 !== 5/);
+  });
+
+  it('runs only the files it is given', async () => {
+    const root = project({
+      'src/pricing.ts': PRICING,
+      'test/pricing.test.ts': SUITE,
+      'test/other.test.mjs': "import { test } from 'node:test';\ntest('other', () => {});\n",
+    });
+    const run = await runNodeTest(root, { timeoutMs: 60_000, label: 'one', files: ['test/other.test.mjs'] });
+
+    expect(run.status === 'ok' && Object.fromEntries(run.tests)).toEqual({
+      'test/other.test.mjs::other': 'passed',
+    });
+  });
+
+  it('records a file that does not load as <file>::(file), failed', async () => {
+    const root = project({ 'test/broken.test.mjs': "import './missing.mjs';\n" });
+    const run = await runNodeTest(root, { timeoutMs: 60_000, label: 'broken' });
+
+    expect(run.status === 'ok' && Object.fromEntries(run.tests)).toEqual({
+      'test/broken.test.mjs::(file)': 'failed',
+    });
+    expect(run.status === 'ok' && run.failures[0]).toMatch(/^test\/broken\.test\.mjs:/);
+  });
+
+  it('records a failed hook of a suite under the suite', async () => {
+    const root = project({
+      'test/hook.test.mjs': `import { describe, before, it } from 'node:test';
+describe('with a broken hook', () => {
+  before(() => { throw new Error('no database'); });
+  it('never runs', () => {});
+});
+`,
+    });
+    const run = await runNodeTest(root, { timeoutMs: 60_000, label: 'hook' });
+
+    expect(run.status).toBe('ok');
+    expect(run.status === 'ok' && run.failed).toBeGreaterThan(0);
+    expect(run.status === 'ok' && run.tests.get('test/hook.test.mjs::with a broken hook > never runs')).toBe(
+      'failed',
+    );
+  });
+
+  it('refuses file filters that read as options, globs or paths out of the project', async () => {
+    const root = project({});
+
+    for (const file of ['--test-only', '../x.test.mjs', '/abs.test.mjs', 'test/*.test.mjs', ''])
+      expect(await runNodeTest(root, { timeoutMs: 5_000, label: 'x', files: [file] })).toMatchObject({
+        status: 'error',
+        detail: expect.stringMatching(/invalid test file/),
+      });
+  });
+
+  it('refuses to write its report through a .veritas that links outside the project', async () => {
+    const root = project({});
+    const outside = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-node-outside-')));
+    symlinkSync(outside, path.join(root, '.veritas'), process.platform === 'win32' ? 'junction' : 'dir');
+    const run = await runNodeTest(root, { timeoutMs: 30_000, label: 't' });
+
+    expect(run).toMatchObject({ status: 'error' });
+    expect(run.status === 'error' && run.detail).toMatch(/inside the project/);
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  it('does not read a stale report of an earlier run with the same label', async () => {
+    const root = project({ 'test/a.test.mjs': "import { test } from 'node:test';\ntest('a', () => {});\n" });
+    const stale = path.join(root, '.veritas', 'improve', 'node-test-same.json');
+    mkdirSync(path.dirname(stale), { recursive: true });
+    writeFileSync(stale, JSON.stringify({ tests: [], success: true }));
+    const run = await runNodeTest(root, { timeoutMs: 60_000, label: 'same' });
+
+    expect(run.status === 'ok' && Object.fromEntries(run.tests)).toEqual({ 'test/a.test.mjs::a': 'passed' });
+    expect(existsSync(stale)).toBe(true);
+  });
+});
+
+describe('parseNodeTestReport', () => {
+  const root = realpathSync(tmpdir());
+  const file = path.join(root, 'test', 'a.test.mjs');
+  const entry = {
+    file,
+    ancestors: [] as string[],
+    type: 'test' as const,
+    failureType: null,
+    message: null,
+  };
+
+  it('never reads a run Node.js reported as failed as passing', () => {
+    const run = parseNodeTestReport(root, {
+      tests: [{ ...entry, name: 'a', status: 'passed' }],
+      success: false,
+    });
+
+    expect(run.tests.get('(run)::(report)')).toBe('failed');
+    expect(run.failed).toBe(1);
+  });
+
+  it('keeps a failure when a test of the same name passes later', () => {
+    const run = parseNodeTestReport(root, {
+      tests: [
+        { ...entry, name: 'twice', status: 'failed', failureType: 'testCodeFailure', message: 'boom' },
+        { ...entry, name: 'twice', status: 'passed' },
+      ],
+      success: false,
+    });
+
+    expect(run.tests.get('test/a.test.mjs::twice')).toBe('failed');
+    expect(run.failures).toEqual(['test/a.test.mjs::twice: boom']);
+  });
+
+  it('leaves out suites, except one that failed by itself', () => {
+    const run = parseNodeTestReport(root, {
+      tests: [
+        { ...entry, name: 'ok suite', type: 'suite', status: 'passed' },
+        {
+          ...entry,
+          name: 'with failed tests',
+          type: 'suite',
+          status: 'failed',
+          failureType: 'subtestsFailed',
+        },
+        { ...entry, name: 'threw', type: 'suite', status: 'failed', failureType: 'testCodeFailure' },
+      ],
+      success: false,
+    });
+
+    expect([...run.tests.keys()]).toEqual(['test/a.test.mjs::threw']);
+  });
+
+  it('reads nothing from a report that is not one', () => {
+    expect(parseNodeTestReport(root, null)).toMatchObject({ passed: 0, failed: 0, failures: [] });
+  });
+});
