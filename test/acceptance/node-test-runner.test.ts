@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { copyFixture, json, runCli } from './helpers.js';
@@ -76,7 +76,10 @@ describe('a project tested with the Node.js test runner (node-app)', () => {
     const byName = (name: string) => tests.find((t) => t.name === name);
 
     // The default import, describe/it, subtests (part of their test), .skip and a { todo } option.
-    expect(tests).toHaveLength(12);
+    expect(tests).toHaveLength(14);
+    // CommonJS tests that require node:test and node:assert are read like imported ones.
+    expect(byName('doubles two')?.suitePath).toEqual(['legacy doubling']);
+    expect(byName('doubles zero')?.suspicions).toEqual(['target_not_called']);
     expect(byName('ships free exactly at the threshold')?.suitePath).toEqual([
       'shippingFee',
       'at the free shipping threshold',
@@ -88,6 +91,29 @@ describe('a project tested with the Node.js test runner (node-app)', () => {
     expect(byName('logs the order')?.suspicions).toEqual([]);
     expect(byName('pricing works')?.suspicions).toContain('tautological_assertion');
     expect(run.findings.some((f) => f.kind === 'tautological_test')).toBe(true);
+  });
+
+  it('names a test file whose tests it cannot read instead of leaving it out silently', () => {
+    const dir = copyFixture('node-app', { git: true });
+    expect(runCli(['init', '--yes'], dir).status).toBe(0);
+    // The tests are registered by a helper the test file calls: static analysis reads none of them.
+    writeFileSync(
+      path.join(dir, 'test/shared-suite.mjs'),
+      "import { test } from 'node:test';\nexport function registerAll() {\n  test('registered elsewhere', () => {});\n}\n",
+    );
+    writeFileSync(
+      path.join(dir, 'test/registered.test.mjs'),
+      "import { registerAll } from './shared-suite.mjs';\nregisterAll();\n",
+    );
+    const result = runCli(['run', '--profile', 'quick', '--offline', '--json'], dir);
+    expect(result.status, result.stderr).toBe(0);
+    const run = json<RunJson>(result);
+    const map = run.stages.find((s) => s.stage === 'map');
+    expect(map?.status).toBe('partial');
+    expect(map?.messages.join('\n')).toContain(
+      'static analysis read no test registration from them, so their tests are not assessed: test/registered.test.mjs (',
+    );
+    expect(run.status).not.toBe('pass');
   });
 
   it('reports mutation as unsupported in the standard profile and judges no test meaningful without it', () => {

@@ -13,5 +13,6 @@ The discount-boundary project tested with Node's built-in test runner (`node --t
 | `test/wrapping-weak.test.ts`     | calls `isWrapped` far from the boundary (weak); `improve` proposes `isWrapped(2999)` and `isWrapped(3000)`                  |
 | `test/checkout-mocks.test.ts`    | `mock.fn()` from `node:test` passed to `checkout`                                                                            |
 | `test/tautological.test.ts`      | asserts a constant; never calls the implementation                                                                           |
-| Tests                            | 12 registrations; `node --test` reports 14 tests (the two subtests too), one skipped and one todo                           |
+| `test/legacy.test.cjs`           | CommonJS: `require('node:test')` and `require('node:assert/strict')`, a `describe` with two tests                          |
+| Tests                            | 14 registrations; `node --test` reports 16 tests (the two subtests too), one skipped and one todo                           |
 | Mutation                         | unsupported: @mizchi/mutator cannot run `node --test`, so no test is `meaningful_with_evidence`; `improve --apply` is refused before anything runs |

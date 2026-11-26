@@ -764,13 +764,20 @@ async function runInContext(
     dependsOn: [],
     run: async () => {
       const inventory = inventoryTests({ root, config, recognition: testRunner.recognitionFor(root) });
+      const unread = unreadTestFiles(inventory);
 
       return {
-        status: 'succeeded',
+        // A test file whose tests could not be read is never left out silently: the stage is partial and says which.
+        status: unread.length > 0 ? 'partial' : 'succeeded',
         output: inventory,
         messages: [
           // Counted as written in the test files, so the test runner, which counts each case of a loop or .each, may report more.
           `${inventory.tests.length} test registration(s) (a loop or .each counts once), ${inventory.edges.length} symbol edge(s)`,
+          ...(unread.length > 0
+            ? [
+                `${unread.length} test file(s) match analysis.testInclude, but static analysis read no test registration from them, so their tests are not assessed: ${unread.join('; ')}`,
+              ]
+            : []),
         ],
       };
     },
@@ -1813,4 +1820,25 @@ export function mutationStageStatus(
     undecided,
     empty,
   };
+}
+
+/**
+ * Test files the inventory recorded no test for although it could not read all they run: what they register while
+ * the runner collects them is open (a call, a loop), comes from another module, or reaches code static analysis does
+ * not follow (a dynamic import, a `require` it cannot read, a file that does not parse). Each with why.
+ */
+export function unreadTestFiles(inventory: TestInventory): string[] {
+  const withTests = new Set(inventory.tests.map((test) => test.file));
+  const why: Record<NonNullable<TestInventory['files'][number]['inexactNames']>, string> = {
+    open_collection: 'it runs code while its tests are collected that may register tests',
+    imported_registrations: 'a module it imports registers its tests',
+    imported_open_module: 'a module it imports runs code that may register tests',
+  };
+
+  return inventory.files
+    .filter((file) => !withTests.has(file.path) && (file.inexactNames !== undefined || file.unseenReach))
+    .map(
+      (file) =>
+        `${file.path} (${file.inexactNames !== undefined ? why[file.inexactNames] : 'it reaches code static analysis does not follow'})`,
+    );
 }
