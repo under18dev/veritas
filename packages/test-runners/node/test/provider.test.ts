@@ -183,6 +183,33 @@ describe('choosing the Node.js test runner', () => {
     expect(choice.reason).toContain('nothing tells them apart');
   });
 
+  it('keeps a declared runner that is not installed yet over a bench script that runs node --test', () => {
+    const choice = choose(
+      project({
+        'package.json': manifest({
+          scripts: { test: 'vitest run', bench: 'node --test bench/' },
+          devDependencies: { vitest: '5.1.1' },
+        }),
+      }),
+    );
+
+    expect(choice).toMatchObject({ provider: { name: 'vitest' }, ambiguous: false });
+    expect(choice.reason).toMatch(/^Vitest is the only test runner declared in package.json/);
+  });
+
+  it('keeps a configured runner that is not installed yet over a file importing node:test', () => {
+    const choice = choose(
+      project({
+        'package.json': manifest({}),
+        'vitest.config.ts': 'export default {};\n',
+        'scripts/check.mjs': NODE_TEST_FILE,
+      }),
+    );
+
+    expect(choice).toMatchObject({ provider: { name: 'vitest' }, ambiguous: false });
+    expect(choice.reason).toContain('only Vitest has a config file');
+  });
+
   it('decides on a script that runs node --test, saying so', () => {
     const choice = choose(
       project({

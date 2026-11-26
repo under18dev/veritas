@@ -263,19 +263,35 @@ interface Entry {
 }
 
 /**
- * Installed in a way that tells something about the project: a runner built into Node.js (`node --test`) is always
- * there, so only evidence that the project uses it counts.
+ * Installed in a way that tells something about the project, among the runners detection found (`all`). A runner
+ * built into Node.js (`node --test`) is always there, so it counts as installed only on evidence that the project
+ * uses it, and only evidence as strong as a dependency: its `test` script runs it, or no other runner shows any
+ * evidence at all. Otherwise a project whose declared or configured runner is not installed yet (before `npm
+ * install`) would get the built-in one instead of that runner's NOT_FOUND error, because of a `bench` script that runs
+ * `node --test` or a file importing `node:test`.
  */
-const installed = ({ provider, installation }: Entry) =>
-  installation.installedVersion !== null && (!provider.detection.builtIn || installation.evidence.length > 0);
+function installed(entry: Entry, all: readonly Entry[]): boolean {
+  const { provider, installation } = entry;
 
-const shows = (entry: Entry) => entry.installation.evidence.length > 0 || installed(entry);
+  if (installation.installedVersion === null) return false;
 
-function describe(entry: Entry): string {
+  if (!provider.detection.builtIn) return true;
+
+  return (
+    installation.evidence.length > 0 &&
+    (installation.testScript ||
+      all.every((other) => other === entry || other.installation.evidence.length === 0))
+  );
+}
+
+const shows = (entry: Entry, all: readonly Entry[]) =>
+  entry.installation.evidence.length > 0 || installed(entry, all);
+
+function describe(entry: Entry, all: readonly Entry[]): string {
   const { installation } = entry;
 
   if (installation.evidence.length === 0)
-    return installed(entry) ? 'installed, with nothing in package.json or config files' : 'nothing';
+    return installed(entry, all) ? 'installed, with nothing in package.json or config files' : 'nothing';
 
   return `${installation.evidence.join(', ')}${installation.installedVersion ? '' : ', but not installed'}`;
 }
@@ -287,8 +303,8 @@ function describe(entry: Entry): string {
  * only one with evidence (config file, package.json key or dependency); if that does not decide, the first in
  * `providers` is chosen and the choice is marked ambiguous; a file importing a runner's module alone (`importsOnly`)
  * never decides. So a runner that is neither declared nor installed is
- * never chosen over one that is installed. A runner built into Node.js counts as installed only with evidence that the
- * project uses it. With nothing found at all the first provider is returned, so that its
+ * never chosen over one that is installed. A runner built into Node.js counts as installed only when its `test` script
+ * runs it or no other runner shows any evidence (see `installed`). With nothing found at all the first provider is returned, so that its
  * NOT_FOUND error says what is missing.
  */
 export function chooseTestRunner(
@@ -303,15 +319,15 @@ export function chooseTestRunner(
     installation: installations[index] as TestRunnerInstallation,
   }));
   const groups: [string, Entry[]][] = [
-    ['installed', all.filter(installed)],
+    ['installed', all.filter((entry) => installed(entry, all))],
     ['declared in package.json', all.filter(({ installation }) => installation.declared)],
     ['configured', all.filter(({ installation }) => installation.evidence.length > 0)],
   ];
   const [state, group] = groups.find(([, entries]) => entries.length > 0) ?? ['', []];
   const others = (chosen: Entry) =>
     all
-      .filter((entry) => entry !== chosen && shows(entry))
-      .map((entry) => `; ${entry.provider.displayName} also shows up (${describe(entry)})`)
+      .filter((entry) => entry !== chosen && shows(entry, all))
+      .map((entry) => `; ${entry.provider.displayName} also shows up (${describe(entry, all)})`)
       .join('');
   const decided = (chosen: Entry, why: string): TestRunnerChoice => ({
     provider: chosen.provider,
@@ -333,11 +349,11 @@ export function chooseTestRunner(
   }
 
   if (!second) {
-    const alone = all.every((entry) => entry === only || !shows(entry));
+    const alone = all.every((entry) => entry === only || !shows(entry, all));
 
     return decided(
       only,
-      `${only.provider.displayName} is the only test runner ${alone ? 'found' : state} (${describe(only)})`,
+      `${only.provider.displayName} is the only test runner ${alone ? 'found' : state} (${describe(only, all)})`,
     );
   }
   const names = group.map(({ provider }) => provider.displayName).join(' and ');
@@ -357,7 +373,7 @@ export function chooseTestRunner(
   if (withEvidence.length === 1 && withEvidence[0])
     return decided(
       withEvidence[0],
-      `${names} are ${state}; only ${withEvidence[0].provider.displayName} has a config file, a dependency or a script that runs it (${describe(withEvidence[0])})`,
+      `${names} are ${state}; only ${withEvidence[0].provider.displayName} has a config file, a dependency or a script that runs it (${describe(withEvidence[0], all)})`,
     );
 
   return {

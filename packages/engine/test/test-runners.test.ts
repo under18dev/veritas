@@ -120,6 +120,29 @@ describe('test runner selection in the engine', () => {
     ).toBe('node_test');
   });
 
+  it('keeps Vitest before it is installed, whatever else runs node --test or imports node:test', () => {
+    const declared = project({
+      'package.json': JSON.stringify({
+        scripts: { test: 'vitest run', bench: 'node --test bench/' },
+        devDependencies: { vitest: '5' },
+      }),
+    });
+
+    expect(initProject(declared, { dryRun: true }).testRunner).toMatchObject({
+      name: 'vitest',
+      ambiguous: false,
+    });
+    const configured = project({
+      'package.json': JSON.stringify({ type: 'module' }),
+      'vitest.config.ts': 'export default {};\n',
+      'scripts/check.mjs': "import { test } from 'node:test';\ntest('x', () => {});\n",
+    });
+
+    expect(() => initProject(configured, { dryRun: true })).toThrow(
+      expect.objectContaining({ code: 'VITEST_NOT_FOUND' }),
+    );
+  });
+
   it('reports JEST_NOT_FOUND when the configuration names Jest and the project lacks it', () => {
     const root = project({ 'package.json': JSON.stringify({ devDependencies: { vitest: '5' } }) });
 
