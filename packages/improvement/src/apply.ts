@@ -477,6 +477,8 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
   };
   // Installed dependencies as they were before anything ran in the workspace, until they are compared again.
   let dependencies: DependencySnapshot | null = null;
+  // Links the dependency check does not follow, said in every attempt rather than implied to be checked.
+  let unchecked: string[] = [];
   /** Reasons the dependencies are not as they were (empty when they are); a failed comparison is one too. */
   const dependencyProblems = (): string[] => {
     if (dependencies === null) return [];
@@ -513,7 +515,15 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
       after: fields.after ?? null,
       rolledBack: fields.rolledBack,
       outcome: problems.length > 0 ? 'error' : outcome,
-      reasons: [...problems, ...reasons].map((r) => redact(r)),
+      reasons: [
+        ...problems,
+        ...reasons,
+        ...(unchecked.length > 0
+          ? [
+              `not checked for writes: ${unchecked.length} link(s) in linked packages that lead outside their repository to something that is not a package (${listPaths(unchecked)})`,
+            ]
+          : []),
+      ].map((r) => redact(r)),
     });
   };
 
@@ -540,7 +550,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
   // Ctrl-C or SIGTERM end the process without running `finally`: remove the copy then too.
   const unregisterCleanup = onExitCleanup(() => removeWorkspace(workspace));
   // Code under test could send SIGUSR1 to this process to open its inspector; a listener keeps it closed. Child
-  // processes get --disable-sigusr1 (see `projectNodeOptions`).
+  // processes get --disable-sigusr1 (see `closedInspectorFlags`).
   const ignoreSigusr1 = () => {};
   if (process.platform !== 'win32') process.on('SIGUSR1', ignoreSigusr1);
 
@@ -562,6 +572,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
         ]),
       ].sort();
     dependencies = snapshotDependencies(root);
+    unchecked = dependencies.unchecked;
     const measureTests = async (label: string): Promise<TestRunResult> => {
       let run: TestRunResult = { status: 'error', detail: 'not run' };
 

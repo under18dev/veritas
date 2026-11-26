@@ -1,4 +1,12 @@
-import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import path from 'node:path';
 
 /**
@@ -10,7 +18,17 @@ import path from 'node:path';
  * macOS and Linux: restoring a file's content and modification time still changes it. (Windows lets a process set
  * it through `SetFileInformationByHandle`, so there the comparison is weaker.)
  */
-export type DependencySnapshot = Map<string, string>;
+export class DependencySnapshot extends Map<string, string> {
+  /**
+   * Links in a package linked from outside node_modules whose targets were not walked, as `link -> target`: they lead
+   * out of the package's repository to something that is not a package (`logs -> /var/log`). Writes through them are
+   * not detected; the caller must say so rather than imply they were checked.
+   */
+  unchecked: string[] = [];
+}
+
+/** Entries walked at most; a larger snapshot is refused rather than cut short. */
+export const MAX_DEPENDENCY_ENTRIES = 2_000_000;
 
 const NODE_MODULES = 'node_modules';
 
@@ -51,15 +69,20 @@ function describe(abs: string): string {
 
 /**
  * Snapshot every dependency tree reachable from `<root>/node_modules`: that directory (or the store it lives in),
- * and, transitively, the real location of every link found in a tree already reached (inside a `node_modules`
- * directory or not: a workspace package may link part of its code from elsewhere). Links are recorded, never followed
+ * and, transitively, the real location of every link found in a tree already reached: inside a `node_modules`
+ * directory always, outside one only to dependency code (see `dependencyTarget`; the others are listed in
+ * `unchecked`). Links are recorded, never followed
  * while walking; their targets are walked once each, by real path, so link cycles end. A hidden entry at the top of a `node_modules` directory (other than `.bin`) is walked
  * only when a link leads into it, as into a `.pnpm` or `.bun` store; the others are tool caches (`.vite`, `.cache`)
  * that the workspace does not link (it gets a `node_modules` directory of its own) and that tools running in the real
  * project may update at any time.
  */
-export function snapshotDependencies(root: string): DependencySnapshot {
-  const out: DependencySnapshot = new Map();
+export function snapshotDependencies(
+  root: string,
+  options: { maxEntries?: number } = {},
+): DependencySnapshot {
+  const maxEntries = options.maxEntries ?? MAX_DEPENDENCY_ENTRIES;
+  const out = new DependencySnapshot();
   const realRoot = realpathSync(root);
   const modules = path.join(realRoot, NODE_MODULES);
 
@@ -97,6 +120,13 @@ export function snapshotDependencies(root: string): DependencySnapshot {
 
     if (covered.some((c) => inside(real, c))) return;
 
+    // Outside node_modules a link may lead anywhere (`logs -> /var/log`): only follow it to dependency code.
+    if (!link.split(path.sep).includes(NODE_MODULES) && !dependencyTarget(link, real)) {
+      // Into the project: its files are copied, not shared, and the repository is compared before writing.
+      if (!inside(real, realRoot)) out.unchecked.push(`${link} -> ${real}`);
+      return;
+    }
+
     try {
       if (statSync(real).isDirectory() || real.split(path.sep).includes(NODE_MODULES)) {
         // Follow the link again once its tree is walked: the target may lie in a hidden store skipped there.
@@ -131,6 +161,11 @@ export function snapshotDependencies(root: string): DependencySnapshot {
       const entry = describe(abs);
       out.set(abs, entry);
 
+      if (out.size > maxEntries)
+        throw new Error(
+          `the installed dependencies have more than ${maxEntries} entries (reached through ${dir}), too many to check for changes`,
+        );
+
       if (entry.startsWith('dir|')) walk(abs);
       else if (entry.startsWith('link|')) links.push(abs);
     }
@@ -154,6 +189,37 @@ export function snapshotDependencies(root: string): DependencySnapshot {
   }
 
   return out;
+}
+
+/** Markers of a repository or workspace root. */
+function repositoryRoot(start: string): string | null {
+  for (let dir = start; ; dir = path.dirname(dir)) {
+    if (existsSync(path.join(dir, '.git')) || existsSync(path.join(dir, 'pnpm-workspace.yaml'))) return dir;
+
+    try {
+      const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as {
+        workspaces?: unknown;
+      };
+
+      if (pkg.workspaces !== undefined) return dir;
+    } catch {
+      /* no package.json, or not one of a workspace root */
+    }
+
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
+/**
+ * Whether a link found outside node_modules leads to dependency code worth walking: into a node_modules directory, to
+ * a package (a directory with a package.json), or to anything in the repository the link is in (a workspace package
+ * linking its sources from a sibling directory, `shared/src -> ../source`).
+ */
+function dependencyTarget(link: string, real: string): boolean {
+  if (real.split(path.sep).includes(NODE_MODULES) || existsSync(path.join(real, 'package.json'))) return true;
+  const repository = repositoryRoot(path.dirname(link));
+
+  return repository !== null && inside(real, repository);
 }
 
 /**

@@ -154,7 +154,8 @@ describe('snapshotDependencies', () => {
   it('follows links inside a linked package outside node_modules, such as a source directory linked from elsewhere', () => {
     const root = project({ 'src/a.ts': 'x' });
     const repo = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-linked-src-')));
-    // node_modules/shared -> <repo>/shared, and <repo>/shared/src -> <repo>/source.
+    // node_modules/shared -> <repo>/shared, and <repo>/shared/src -> <repo>/source, in one repository.
+    mkdirSync(path.join(repo, '.git'));
     write(path.join(repo, 'source/index.js'), 'export const shared = 1;');
     write(path.join(repo, 'shared/package.json'), '{"name":"shared"}');
     symlinkSync(path.join(repo, 'source'), path.join(repo, 'shared/src'), DIR);
@@ -173,6 +174,35 @@ describe('snapshotDependencies', () => {
     } finally {
       removeWorkspace(ws);
     }
+  });
+
+  it('does not walk what a linked package links outside its repository, but lists it', () => {
+    const root = project({ 'src/a.ts': 'x' });
+    const repo = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-linked-out-')));
+    const elsewhere = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-elsewhere-')));
+    mkdirSync(path.join(repo, '.git'));
+    write(path.join(repo, 'shared/index.js'), 'export const shared = 1;');
+    write(path.join(elsewhere, 'logs/today.log'), 'line');
+    // Like `logs -> /var/log` or `big -> /usr/share`: not dependency code, and changing all the time.
+    symlinkSync(path.join(elsewhere, 'logs'), path.join(repo, 'shared/logs'), DIR);
+    // Into the project: copied, not shared, so neither walked nor listed.
+    symlinkSync(path.join(root, 'src'), path.join(repo, 'shared/project-src'), DIR);
+    mkdirSync(path.join(root, 'node_modules'));
+    symlinkSync(path.join(repo, 'shared'), path.join(root, 'node_modules/shared'), DIR);
+    const before = snapshotDependencies(root);
+    expect(
+      [...before.keys()].some((p) => p.startsWith(elsewhere) || p.startsWith(path.join(root, 'src'))),
+    ).toBe(false);
+    expect(before.unchecked).toEqual([
+      `${path.join(repo, 'shared/logs')} -> ${path.join(elsewhere, 'logs')}`,
+    ]);
+    writeFileSync(path.join(elsewhere, 'logs/today.log'), 'another line');
+    expect(diffDependencies(before, snapshotDependencies(root))).toEqual([]);
+  });
+
+  it('refuses a snapshot larger than the entry cap instead of cutting it short', () => {
+    const { root } = linkedProject();
+    expect(() => snapshotDependencies(root, { maxEntries: 3 })).toThrow(/more than 3 entries/);
   });
 
   it('is empty for a project without node_modules', () => {
