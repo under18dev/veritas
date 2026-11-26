@@ -63,6 +63,8 @@ interface RunnerApi {
   registrationFactories: Set<string>;
   tableFactories: Set<string>;
   testOptions: boolean;
+  /** The export a default import of the runner's module stands for (`import test from 'node:test'`), if any. */
+  defaultExport: string | undefined;
   beforeEach: Set<string>;
   /** Hooks that run before a test: `beforeEach` and `beforeAll`. */
   setup: Set<string>;
@@ -72,6 +74,8 @@ interface RunnerApi {
   typeLevel: Set<string>;
   assertObjects: Set<string>;
   assertionCounts: Set<string>;
+  /** Modules every value export of which asserts (`node:assert`). */
+  assertModules: Set<string>;
   mockObjects: Set<string>;
   mockCalls: Map<string, MockCallRole>;
   configureMethod: RegExp;
@@ -90,6 +94,7 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
     registrationFactories: new Set(recognition.registrationFactories),
     tableFactories: new Set(recognition.tableFactories),
     testOptions: recognition.testOptions === true,
+    defaultExport: recognition.defaultExport,
     beforeEach: new Set(hooks.beforeEach),
     setup: new Set([...hooks.beforeEach, ...hooks.beforeAll]),
     hooks: new Set([...hooks.beforeEach, ...hooks.beforeAll, ...hooks.afterEach, ...hooks.afterAll]),
@@ -98,6 +103,7 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
     typeLevel: new Set(recognition.assertions.typeLevel),
     assertObjects: new Set(recognition.assertions.objects),
     assertionCounts: new Set(recognition.assertions.counts),
+    assertModules: new Set(recognition.assertions.modules ?? []),
     mockObjects: new Set(recognition.mocks.objects),
     mockCalls: new Map(Object.entries(recognition.mocks.calls)),
     configureMethod: new RegExp(recognition.mocks.configureMethod),
@@ -781,6 +787,11 @@ function analyzeBody(
     // What the setup render was handed (`render(<Dialog {...props} />)`) is checked as if handed here.
     bindCallOutputs(node);
   }
+
+  // A callback whose whole body is one assertion (`() => assert(ok(x))`, `() => assert.equal(a, b)`): the call is the
+  // body itself, which is not among its descendants.
+  if (ts.isCallExpression(body) && (isExpectCall(body) || isAssertCall(body) || contextAssertion(body)))
+    assertions.push(body);
 
   for (const node of descendants(body)) {
     if (ts.isTryStatement(node) && node.catchClause?.variableDeclaration)
@@ -1720,7 +1731,13 @@ function runsCallback(assertion: ts.CallExpression): boolean {
     return true;
   const callee = skipParens(assertion.expression);
 
-  return ts.isPropertyAccessExpression(callee) && RUNNING_ASSERTIONS.has(callee.name.text);
+  return (
+    (ts.isPropertyAccessExpression(callee) && RUNNING_ASSERTIONS.has(callee.name.text)) ||
+    // `throws(fn)` imported by name from an assertion module (`node:assert`).
+    (ts.isIdentifier(callee) &&
+      RUNNING_ASSERTIONS.has(callee.text) &&
+      assertModuleBindings(assertion.getSourceFile()).has(callee.text))
+  );
 }
 
 /** The name of a member access: `a.b` and `a['b']` name `b`; a computed `a[key]` names none. */
@@ -6193,7 +6210,7 @@ function numericLiteral(node: ts.Expression): boolean {
   );
 }
 
-/** Vitest test options that set a modifier (`it('x', { only: true }, fn)`). */
+/** Test options that set a modifier (Vitest's `it('x', { only: true }, fn)`, Node's `test('x', { skip: true }, fn)`). */
 const OPTION_MODIFIERS = new Map<string, TestCaseType['modifiers'][number]>([
   ['only', 'only'],
   ['skip', 'skip'],
@@ -6263,10 +6280,20 @@ function registrationOptions(node: ts.CallExpression): {
       }
       const modifier = OPTION_MODIFIERS.get(name);
 
-      if (modifier === undefined) continue;
+      // Only options the runner has (Node's test runner has no `fails` or `concurrent`).
+      if (
+        modifier === undefined ||
+        (modifier === 'expected_failure'
+          ? !runner.expectedFailure.has(name)
+          : !runner.modifiers.has(modifier))
+      )
+        continue;
 
       if (property.initializer.kind === ts.SyntaxKind.TrueKeyword) set.set(modifier, true);
       else if (property.initializer.kind === ts.SyntaxKind.FalseKeyword) set.set(modifier, false);
+      // A reason given as a string sets it (Node's `{ skip: 'flaky on CI' }`); an empty one does not.
+      else if (ts.isStringLiteralLike(property.initializer))
+        set.set(modifier, property.initializer.text !== '');
       else {
         unknown = true;
         set.delete(modifier);
@@ -6497,6 +6524,19 @@ function runnerName(identifier: ts.Identifier): string {
       else
         for (const element of bindings.elements)
           if (element.propertyName) aliases.set(element.name.text, element.propertyName.text);
+    }
+
+    // A default import of the runner's module (`import check from 'node:test'`) is its default export, if it has one.
+    for (const statement of source.statements) {
+      const clause = ts.isImportDeclaration(statement) ? statement.importClause : undefined;
+
+      if (
+        clause?.name &&
+        !clause.isTypeOnly &&
+        ts.isStringLiteral((statement as ts.ImportDeclaration).moduleSpecifier) &&
+        runner.modules.has(((statement as ts.ImportDeclaration).moduleSpecifier as ts.StringLiteral).text)
+      )
+        aliases.set(clause.name.text, runner.defaultExport ?? NOT_RUNNER);
     }
     runnerAliases.set(source, aliases);
   }
@@ -7362,6 +7402,8 @@ function moduleSafety(
       if (target && local(target)) {
         if (!found.locals.includes(target)) found.locals.push(target);
       } else if (name.startsWith('.') || path.isAbsolute(name)) found.unknown = true;
+      // The runner's own module, also when it is a builtin (`node:test`).
+      else if (runner.modules.has(name)) return;
       // A builtin that may run source text or load modules (`node:vm`, `node:inspector`'s `Runtime.evaluate`,
       // `node:repl`, `node:worker_threads`, …) reaches code that is not followed; only those known not to are let
       // through (see `INERT_BUILTINS`).
@@ -9856,7 +9898,10 @@ const CONTEXT_ASSERTIONS = new Set([
   'expect',
 ]);
 
-/** `t.is(a, b)` or `ctx.expect(a)` where `t`/`ctx` is the test callback's first parameter. */
+/**
+ * `t.is(a, b)` or `ctx.expect(a)` where `t`/`ctx` is the test callback's first parameter, or a method of its
+ * `assert` object (`t.assert.equal(a, b)`, the test context of Node's test runner).
+ */
 function isContextAssertion(
   node: ts.CallExpression,
   parameter: ts.Symbol | undefined,
@@ -9864,12 +9909,17 @@ function isContextAssertion(
 ) {
   const callee = node.expression;
 
+  if (parameter === undefined || !ts.isPropertyAccessExpression(callee)) return false;
+  const holder = callee.expression;
+
+  if (ts.isIdentifier(holder))
+    return CONTEXT_ASSERTIONS.has(callee.name.text) && checker.getSymbolAtLocation(holder) === parameter;
+
   return (
-    parameter !== undefined &&
-    ts.isPropertyAccessExpression(callee) &&
-    CONTEXT_ASSERTIONS.has(callee.name.text) &&
-    ts.isIdentifier(callee.expression) &&
-    checker.getSymbolAtLocation(callee.expression) === parameter
+    ts.isPropertyAccessExpression(holder) &&
+    holder.name.text === 'assert' &&
+    ts.isIdentifier(holder.expression) &&
+    checker.getSymbolAtLocation(holder.expression) === parameter
   );
 }
 
@@ -10010,13 +10060,92 @@ function isExpectCall(node: ts.CallExpression): boolean {
   return root !== undefined && (runner.expect.has(root) || runner.typeLevel.has(root));
 }
 
-/** `assert.equal(a, b)` on one of the runner's assertion objects, or `expect.assertions(n)` on anything. */
+/**
+ * `assert.equal(a, b)` on one of the runner's assertion objects, `expect.assertions(n)` on anything, or a call of a
+ * name the file imports or requires from one of the runner's assertion modules (`assert(x)`, `strictEqual(a, b)`,
+ * `assert.strict.equal(a, b)` with `assert` from `node:assert`).
+ */
 function isAssertCall(node: ts.CallExpression): boolean {
-  return (
+  if (
     ts.isPropertyAccessExpression(node.expression) &&
     (runner.assertObjects.has(node.expression.expression.getText()) ||
       runner.assertionCounts.has(node.expression.name.text))
-  );
+  )
+    return true;
+  const root = rootIdentifier(node.expression);
+
+  return root !== undefined && assertModuleBindings(node.getSourceFile()).has(root);
+}
+
+const assertBindings = new WeakMap<ts.SourceFile, { modules: Set<string>; names: Set<string> }>();
+
+/** The module a `require('…')` call loads, through member accesses on its result (`require('node:assert').strict`). */
+function requiredModule(expression: ts.Expression): string | undefined {
+  let current = skipParens(expression);
+
+  while (ts.isPropertyAccessExpression(current)) current = skipParens(current.expression);
+
+  return ts.isCallExpression(current) &&
+    ts.isIdentifier(current.expression) &&
+    current.expression.text === 'require' &&
+    current.arguments.length === 1 &&
+    ts.isStringLiteralLike(current.arguments[0] as ts.Expression)
+    ? (current.arguments[0] as ts.StringLiteralLike).text
+    : undefined;
+}
+
+/**
+ * The names a file binds at its top level to values of the runner's assertion modules (`import assert from
+ * 'node:assert/strict'`, `import { equal } from 'node:assert'`, `const assert = require('node:assert')`), each a
+ * function or an object of functions that assert when called. Type-only imports bind nothing.
+ */
+function assertModuleBindings(source: ts.SourceFile): Set<string> {
+  const cached = assertBindings.get(source);
+
+  if (cached && cached.modules === runner.assertModules) return cached.names;
+  const names = new Set<string>();
+  const bind = (name: ts.BindingName): void => {
+    if (ts.isIdentifier(name)) names.add(name.text);
+    else for (const element of name.elements) if (!ts.isOmittedExpression(element)) bind(element.name);
+  };
+
+  if (runner.assertModules.size > 0)
+    for (const statement of source.statements) {
+      if (ts.isImportDeclaration(statement)) {
+        const clause = statement.importClause;
+
+        if (
+          !clause ||
+          clause.isTypeOnly ||
+          !ts.isStringLiteral(statement.moduleSpecifier) ||
+          !runner.assertModules.has(statement.moduleSpecifier.text)
+        )
+          continue;
+
+        if (clause.name) names.add(clause.name.text);
+        const bindings = clause.namedBindings;
+
+        if (bindings && ts.isNamespaceImport(bindings)) names.add(bindings.name.text);
+        else if (bindings)
+          for (const element of bindings.elements) if (!element.isTypeOnly) names.add(element.name.text);
+      } else if (
+        ts.isImportEqualsDeclaration(statement) &&
+        !statement.isTypeOnly &&
+        ts.isExternalModuleReference(statement.moduleReference) &&
+        ts.isStringLiteralLike(statement.moduleReference.expression) &&
+        runner.assertModules.has(statement.moduleReference.expression.text)
+      )
+        names.add(statement.name.text);
+      else if (ts.isVariableStatement(statement))
+        for (const declaration of statement.declarationList.declarations) {
+          const loaded = declaration.initializer ? requiredModule(declaration.initializer) : undefined;
+
+          if (loaded !== undefined && runner.assertModules.has(loaded)) bind(declaration.name);
+        }
+    }
+  assertBindings.set(source, { modules: runner.assertModules, names });
+
+  return names;
 }
 
 function rootIdentifier(expression: ts.Expression): string | undefined {
