@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import {
   gitCommit,
@@ -183,7 +183,10 @@ async function reassess(
   mkdirSync(path.join(workspace, '.veritas'), { recursive: true });
   for (const file of ['config.json', 'approvals.json']) {
     const from = path.join(root, '.veritas', file);
-    if (existsSync(from)) copyFileSync(from, path.join(workspace, '.veritas', file));
+    const to = path.join(workspace, '.veritas', file);
+    // The repository's file, or none: never one the runs in the copy may have left there.
+    if (existsSync(from)) copyFileSync(from, to);
+    else rmSync(to, { force: true });
   }
   const original = readArtifact(root, runId, 'run').data;
   // Mutant relations (equivalence, distinguishability, detection) need the mutate stage as well.
