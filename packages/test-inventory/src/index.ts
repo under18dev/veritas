@@ -263,6 +263,35 @@ function readsRunner(source: ts.SourceFile): boolean {
   }
 
   return descendants(source).some((node) => {
+    // `const load = require; load('node:test')`: CommonJS's `require` used as a value, not called, may load anything.
+    if (ts.isIdentifier(node) && node.text === 'require' && isCommonJsRequire(node)) {
+      let use: ts.Node = node;
+
+      while (ts.isParenthesizedExpression(use.parent)) use = use.parent;
+      const parent = use.parent;
+      const called = ts.isCallExpression(parent) && parent.expression === use;
+      const declared =
+        (ts.isVariableDeclaration(parent) || ts.isFunctionDeclaration(parent) || ts.isParameter(parent)) &&
+        parent.name === node;
+
+      if (!called && !declared) return true;
+    }
+
+    // `globalThis[key]`, `globalThis.describe`: a global reached by a name not read, or the runner's own.
+    if (
+      (ts.isElementAccessExpression(node) || ts.isPropertyAccessExpression(node)) &&
+      ts.isIdentifier(skipParens(node.expression)) &&
+      GLOBAL_OBJECTS.has((skipParens(node.expression) as ts.Identifier).text)
+    ) {
+      const member = memberName(node);
+
+      return member === undefined || apiNames.has(member);
+    }
+
+    if (!ts.isCallExpression(node) && !ts.isNewExpression(node)) return false;
+
+    if (loadsUnreadCode(node)) return true;
+
     if (!ts.isCallExpression(node)) return false;
 
     if (runner.modules.has(requiredModule(node) ?? '')) return true;
@@ -273,6 +302,42 @@ function readsRunner(source: ts.SourceFile): boolean {
 
     return name !== NOT_RUNNER && (name === NAMESPACE || apiNames.has(name.split('.')[0] ?? ''));
   });
+}
+
+/**
+ * Whether a call loads or runs code at run time that may be the runner, which static analysis cannot rule out: a
+ * dynamic `import()` other than of a Node.js builtin that is not the runner (`import('node:test')`, `import(name)`,
+ * `import('./suite.mjs')`), a `require` of a name that is not a literal, `createRequire` and the function it makes,
+ * `process.getBuiltinModule`, `eval` and `Function`.
+ */
+function loadsUnreadCode(node: ts.CallExpression | ts.NewExpression): boolean {
+  const callee = skipParens(node.expression);
+  const first = node.arguments?.[0] && skipParens(node.arguments[0]);
+  const literal = first !== undefined && ts.isStringLiteralLike(first) ? first.text : undefined;
+  const plainBuiltin = (name: string) =>
+    !runner.modules.has(name) &&
+    (name.startsWith('node:') || builtinModules.includes(name.split('/')[0] ?? ''));
+
+  if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
+    return literal === undefined || !plainBuiltin(literal);
+
+  // `createRequire(import.meta.url)('node:test')`: the function a call returns, called.
+  if (ts.isCallExpression(callee)) return loadsUnreadCode(callee);
+  const name = ts.isIdentifier(callee)
+    ? callee.text
+    : ts.isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : undefined;
+
+  if (name === 'createRequire' || name === 'eval' || name === 'Function') return true;
+
+  if (name === 'getBuiltinModule') return literal === undefined || !plainBuiltin(literal);
+
+  // `module.require(name)`.
+  if (name === 'require' && ts.isPropertyAccessExpression(callee))
+    return literal === undefined || runner.modules.has(literal);
+
+  return requireFunction(callee) && literal === undefined;
 }
 
 /** Modules of test runners, any of which may be another runner than the project's. */
@@ -9621,8 +9686,7 @@ function requiresRunnerConst(node: ts.Node): node is ts.VariableDeclaration {
 function requiresRunnerModule(node: ts.Expression): boolean {
   return (
     ts.isCallExpression(node) &&
-    ts.isIdentifier(node.expression) &&
-    isCommonJsRequire(node.expression) &&
+    requireFunction(node.expression) &&
     node.arguments.length === 1 &&
     ts.isStringLiteralLike(node.arguments[0] as ts.Expression) &&
     runner.modules.has((node.arguments[0] as ts.StringLiteralLike).text)
@@ -11047,12 +11111,21 @@ function nodeAssertCall(
   if (runner.assertModules.size === 0) return undefined;
   const callee = skipParens(call.expression);
   const root = rootIdentifierNode(callee);
+  // `require('node:assert').equal(a, b)`, `require('node:assert')(x)`: the module required where it is called.
+  let start: ts.Expression = callee;
 
-  if (root === undefined) return undefined;
+  while (ts.isPropertyAccessExpression(start) || ts.isElementAccessExpression(start))
+    start = skipParens(start.expression);
+  const inline =
+    ts.isCallExpression(start) && runner.assertModules.has(requiredModule(start) ?? '')
+      ? { declaration: start, exported: '*' }
+      : undefined;
+
+  if (root === undefined && inline === undefined) return undefined;
   const path = readMembers(callee);
   let base: string;
   let extra: string[];
-  const binding = assertModuleBinding(root);
+  const binding = inline ?? (root ? assertModuleBinding(root) : undefined);
 
   if (binding !== undefined) {
     if (MODULE_ITSELF.has(binding.exported)) {
@@ -11065,6 +11138,7 @@ function nodeAssertCall(
     }
   } else if (
     runnerChecker !== undefined &&
+    root !== undefined &&
     path[0] === 'assert' &&
     path[1] !== undefined &&
     isTestContext(root, runnerChecker)
@@ -11761,12 +11835,16 @@ function requiredExport(expression: ts.Expression): string {
 }
 
 /**
- * Whether an identifier named `require` is CommonJS's own: no declaration of the file's code binds it (`function
- * require() {}`, `const require = createFake()`, a parameter), only an ambient one (Node's types) or none at all.
+ * Whether an identifier is a `require` function: `require` that is CommonJS's own (no declaration of the file's code
+ * binds it, such as `function require() {}`, `const require = createFake()` or a parameter; only an ambient one, from
+ * Node's types, or none at all), or a name bound to `createRequire(…)` (`const load = createRequire(import.meta.url)`).
  */
 function isCommonJsRequire(identifier: ts.Identifier): boolean {
-  if (identifier.text !== 'require') return false;
   const declarations = runnerChecker?.getSymbolAtLocation(identifier)?.declarations ?? [];
+
+  // `const load = createRequire(import.meta.url)`, under any name, at the top level or in a function.
+  if (identifier.text !== 'require')
+    return declarations.length > 0 && declarations.every((declaration) => createdRequire(declaration));
 
   return declarations.every((declaration) => ambientDeclaration(declaration) || createdRequire(declaration));
 }
@@ -11790,6 +11868,21 @@ function createdRequire(declaration: ts.Declaration): boolean {
   );
 }
 
+/** Whether a callee is a `require` function: a name `isCommonJsRequire` accepts, or `createRequire(…)` called inline. */
+function requireFunction(callee: ts.Expression): boolean {
+  const value = skipParens(callee);
+
+  if (ts.isIdentifier(value)) return isCommonJsRequire(value);
+
+  if (!ts.isCallExpression(value)) return false;
+  const inner = skipParens(value.expression);
+
+  return (
+    (ts.isIdentifier(inner) && inner.text === 'createRequire') ||
+    (ts.isPropertyAccessExpression(inner) && inner.name.text === 'createRequire')
+  );
+}
+
 function requiredModule(expression: ts.Expression): string | undefined {
   let current = skipParens(expression);
 
@@ -11797,8 +11890,7 @@ function requiredModule(expression: ts.Expression): string | undefined {
     current = skipParens(current.expression);
 
   return ts.isCallExpression(current) &&
-    ts.isIdentifier(current.expression) &&
-    isCommonJsRequire(current.expression) &&
+    requireFunction(current.expression) &&
     current.arguments.length === 1 &&
     ts.isStringLiteralLike(current.arguments[0] as ts.Expression)
     ? (current.arguments[0] as ts.StringLiteralLike).text

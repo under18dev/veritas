@@ -87,6 +87,54 @@ describe('node:test bindings', () => {
     ]);
   });
 
+  it('takes a file that loads code at run time for one that may use the runner', () => {
+    const root = tempProject({
+      // The repro of the review: the runner loaded by a dynamic import.
+      'test/dynamic.test.mjs': "const nt = await import('node:test');\nnt.test('x', () => {});\n",
+      'test/then.test.mjs': "import('node:test').then((nt) => nt.test('x', () => {}));\n",
+      'test/computed.test.mjs': "const name = 'node:' + 'test';\nawait import(name);\n",
+      'test/local.test.mjs': "await import('./suite.mjs');\n",
+      'test/created.test.mjs':
+        "import { createRequire } from 'node:module';\ncreateRequire(import.meta.url)('node:test').test('x', () => {});\n",
+      'test/required.test.cjs': "const name = 'node:test';\nrequire(name).test('x', () => {});\n",
+      'test/builtin.test.mjs': "process.getBuiltinModule('node:test').test('x', () => {});\n",
+      'test/evaluated.test.mjs': 'eval("import(\'node:test\')");\n',
+      'test/global.test.mjs': "const key = 'x';\nglobalThis[key]();\n",
+      'test/aliased.test.cjs': "const require2 = require;\nrequire2('node:test').test('x', () => {});\n",
+      'test/module-require.test.cjs': "module.require('node:test').test('x', () => {});\n",
+      'test/named-created.test.mjs':
+        "import { createRequire } from 'node:module';\nconst load = createRequire(import.meta.url);\nload('node:test').test('x', () => {});\n",
+      // Shown not to: a Node.js builtin loaded at run time is not the runner.
+      'test/plain-builtin.test.mjs': "const { join } = await import('node:path');\njoin('a');\n",
+      'test/suite.mjs': 'export {};\n',
+    });
+    const result = inventoryTests({
+      recognition: node.recognitionFor(root),
+      root,
+      config: VeritasConfig.parse({
+        analysis: { testFramework: 'node_test', testInclude: ['test/**/*.test.{mjs,cjs}'] },
+      }),
+    });
+    const uses = Object.fromEntries(result.files.map((file) => [file.path, file.usesRunner]));
+
+    expect(uses).toEqual({
+      'test/aliased.test.cjs': true,
+      'test/module-require.test.cjs': true,
+      'test/named-created.test.mjs': true,
+      'test/builtin.test.mjs': true,
+      'test/computed.test.mjs': true,
+      'test/created.test.mjs': true,
+      'test/dynamic.test.mjs': true,
+      'test/evaluated.test.mjs': true,
+      'test/global.test.mjs': true,
+      'test/local.test.mjs': true,
+      'test/plain-builtin.test.mjs': false,
+      'test/required.test.cjs': true,
+      'test/then.test.mjs': true,
+    });
+    expect(result.tests).toEqual([]);
+  });
+
   it('records a package a test file calls into at its top level, and none for barrels and helpers', () => {
     const root = tempProject({
       'test/suite.test.ts': "import { suite } from 'some-lib';\nsuite();\n",
@@ -333,6 +381,62 @@ describe('node:test bindings', () => {
     expect(byName(tests, 'local let is not trusted').assertionCount).toBe(0);
     expect(byName(tests, 'local mock').usesMocks).toBe(true);
     expect(byName(tests, 'local mock').suspicions).toContain('unconditional_mock');
+  });
+
+  it('reads node:assert required inline and through createRequire, and not through a shadowing require', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/inline.test.cjs': `
+        const { test } = require('node:test');
+        const { value } = require('../src/value.ts');
+        test('inline member', () => { require('node:assert').equal(value(1), 2); });
+        test('inline strict', () => { require('node:assert').strict.equal(value(1), 2); });
+        test('inline module', () => { require('node:assert')(value(1) === 2); });
+      `,
+      'test/created.test.mjs': `
+        import { createRequire } from 'node:module';
+        import { test } from 'node:test';
+        import { value } from '../src/value.ts';
+        test('created in the test', () => {
+          const r = createRequire(import.meta.url);
+          const assert = r('node:assert');
+          assert.equal(value(1), 2);
+        });
+        test('created inline', () => {
+          createRequire(import.meta.url)('node:assert').equal(value(1), 2);
+        });
+      `,
+      'test/shadowed.test.cjs': `
+        const { test } = require('node:test');
+        const { value } = require('../src/value.ts');
+        test('local require', () => {
+          const require = () => ({ equal() {} });
+          require('node:assert').equal(value(1), 2);
+        });
+        test('local loader not made by createRequire', () => {
+          const r = (name) => ({ equal() {} });
+          const assert = r('node:assert');
+          assert.equal(value(1), 2);
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of [
+      'inline member',
+      'inline strict',
+      'inline module',
+      'created in the test',
+      'created inline',
+    ]) {
+      expect(byName(tests, name).assertionCount, name).toBe(1);
+      expect(byName(tests, name).suspicions, name).not.toContain('no_assertion');
+    }
+
+    for (const name of ['local require', 'local loader not made by createRequire']) {
+      expect(byName(tests, name).assertionCount, name).toBe(0);
+      expect(byName(tests, name).suspicions, name).toContain('no_assertion');
+    }
   });
 
   it('reads the arguments of .apply through a constant array, and keeps all of them otherwise', () => {
