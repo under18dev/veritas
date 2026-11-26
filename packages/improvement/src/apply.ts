@@ -22,6 +22,7 @@ import {
 import { readArtifact, recordedRunOptions, runVeritas, testRunnerFor } from '@under18dev/veritas-engine';
 import { type MutationRunResult, runMutation } from '@under18dev/veritas-mutation-adapter';
 import { applyApprovals, loadApprovals } from '@under18dev/veritas-property-engine';
+import { applyUnavailableReason } from './availability.js';
 import { type DependencySnapshot, diffDependencies, snapshotDependencies } from './dependencies.js';
 import { expectedFromSpec } from './oracle.js';
 import { renderTestFile } from './render.js';
@@ -425,6 +426,17 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
     );
   }
   const config = loaded.config;
+  // Without mutation testing nothing could show that the added tests improve anything: refused before an approval
+  // is recorded, a copy is made or any project code runs.
+  const unavailable = applyUnavailableReason(root, testRunnerFor(config));
+
+  if (unavailable !== null)
+    throw new VeritasError(
+      'user',
+      'IMPROVE_APPLY_UNSUPPORTED',
+      unavailable,
+      'see the planned tests with `veritas improve --dry-run`; nothing was run or written',
+    );
   const token = approvalTokenFor(doc);
   const approvalId = stableId('AP', { planId, token });
   const context = {

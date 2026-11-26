@@ -81,7 +81,7 @@ Use what `doctor` reports instead of retrying:
 
 - mutation testing `disabled` (no mutator or test runner): run `--profile quick`, or `mutate --import` an existing report, and say mutation evidence is missing;
 - `mutator` `degraded` with Jest: mutation testing is experimental there; keep its warning next to any mutation result you report, and treat `unsupported` (not native ESM) as missing evidence;
-- `mutator` `unavailable` with the Node.js test runner (`node_test`): mutator cannot run `node:test` tests, so there is no mutation evidence at all; no test can be `meaningful_with_evidence`, `inconclusive` tests stay unmeasured, and `improve --apply` stops with `error` (exit 3) after the baseline run, so offer the `--dry-run` plan for the user to add by hand;
+- `mutator` `unavailable` with the Node.js test runner (`node_test`): mutator cannot run `node:test` tests, so there is no mutation evidence at all; no test can be `meaningful_with_evidence`, `inconclusive` tests stay unmeasured, and `improve --apply` is refused (`IMPROVE_APPLY_UNSUPPORTED`, exit 2) before anything runs, so offer the `--dry-run` plan for the user to add by hand;
 - `sandbox` unavailable (Node.js below 25): property tests and counterexample replay are not run; report the affected results as inconclusive, or ask the user for Node.js 25+ (`VERITAS_SANDBOX_NODE`);
 - `lean` unavailable: pass `--engine z3` to `prove` (the configuration may say `lean` or `both`); do not install Lean unless asked;
 - no LLM configured: rule-based extraction still works; statements it cannot read stay unmapped, which is reported, not guessed;

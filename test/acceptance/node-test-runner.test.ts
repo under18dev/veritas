@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { copyFixture, json, runCli } from './helpers.js';
@@ -170,22 +170,26 @@ describe('improve on a node:test project (node-app)', () => {
     expect(preview).toContain('+  assert.strictEqual(isWrapped(3000), true);');
     // The discount boundary is a real violation: reported, never turned into a test.
     expect(plan.reasons.join('\n')).toContain('spec violation candidate: discountAmount(1000) returns 0');
+    // The plan says up front that it cannot be applied here, and why.
+    expect(plan.reasons[0]).toMatch(/^improve --apply is not available for this project: .*mutation testing/);
     expect(gitStatus(dir)).toBe(statusBefore);
   });
 
   it(
-    'runs the baseline with node --test in the copy, then stops without mutation evidence and changes nothing',
+    'refuses to apply before running anything, since nothing could measure the added tests',
     () => {
+      const attemptsDir = path.join(dir, '.veritas/improvements', plan.planId);
       const result = runCli(
         ['improve', '--apply', '--plan', plan.planId, '--approve', plan.approvalToken as string, '--json'],
         dir,
       );
-      const attempt = json<{ attempt: { outcome: string; rolledBack: boolean; reasons: string[] } }>(result);
-      expect(attempt.attempt.outcome).toBe('error');
-      expect(attempt.attempt.reasons.join('\n')).toContain(
-        'baseline mutation run is unsupported: @mizchi/mutator cannot run tests written for the Node.js test runner',
-      );
-      expect(result.status).toBe(3);
+      expect(result.status).toBe(2);
+      const error = json<{ code: string; message: string }>(result);
+      expect(error.code).toBe('IMPROVE_APPLY_UNSUPPORTED');
+      expect(error.message).toContain('improve --apply is not available for this project');
+      expect(error.message).toContain('@mizchi/mutator cannot run tests written for the Node.js test runner');
+      // No approval recorded, no attempt, no copy made, no project file changed.
+      expect(readdirSync(attemptsDir).sort()).toEqual(['implementation-fix-proposal.json', 'plan.json']);
       expect(gitStatus(dir)).toBe(statusBefore);
     },
     LONG,
