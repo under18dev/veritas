@@ -6,8 +6,9 @@ import path from 'node:path';
  * absolute real path. The workspace links each package to its real location (see `createWorkspace`), so code run
  * there can write into the project's real dependencies; comparing two snapshots shows whether it did.
  *
- * Only metadata is read (no hashing), so a large `node_modules` takes a fraction of a second. The change time is
- * recorded because user code cannot set it: restoring a file's content and modification time still changes it.
+ * Only metadata is read (no hashing). The change time is recorded because ordinary file APIs cannot set it on
+ * macOS and Linux: restoring a file's content and modification time still changes it. (Windows lets a process set
+ * it through `SetFileInformationByHandle`, so there the comparison is weaker.)
  */
 export type DependencySnapshot = Map<string, string>;
 
@@ -41,7 +42,8 @@ function describe(abs: string): string {
     const type = s.isSymbolicLink() ? 'link' : s.isFile() ? 'file' : 'other';
     const target = s.isSymbolicLink() ? readlinkSync(abs) : '';
 
-    return `${type}|${s.size}|${s.mtimeNs}|${s.ctimeNs}|${s.ino}|${s.mode}|${target}`;
+    // The change time and link count come last: see `sameEntry`.
+    return `${type}|${s.size}|${s.mtimeNs}|${s.ino}|${s.mode}|${target}|${s.ctimeNs}|${s.nlink}`;
   } catch (error) {
     return `unreadable|${(error as NodeJS.ErrnoException).code ?? 'error'}`;
   }
@@ -121,6 +123,10 @@ export function snapshotDependencies(root: string): DependencySnapshot {
         skipped.add(abs);
         continue;
       }
+
+      // In a package linked from outside any node_modules (`link:../lib`, a workspace package), hidden entries are
+      // repository and tool state (`.git`, `.turbo`, `.cache`) that git and build tools update, not package code.
+      if (!underModules && name.startsWith('.')) continue;
       const entry = describe(abs);
       out.set(abs, entry);
 
@@ -149,11 +155,32 @@ export function snapshotDependencies(root: string): DependencySnapshot {
   return out;
 }
 
+/**
+ * Whether two descriptions of an entry are the same. A change of the change time together with the link count alone
+ * is not a change: a package manager that hard-links files of a shared content-addressed store (pnpm on Linux, bun)
+ * changes both when another project links the same file. Rewriting the file in place also changes its size or
+ * modification time unless those are restored, and restoring them while keeping an extra hard link elsewhere is the
+ * one way past this check; it is a safety net, not a security boundary.
+ */
+function sameEntry(a: string, b: string): boolean {
+  if (a === b) return true;
+  const x = a.split('|');
+  const y = b.split('|');
+
+  if (x[0] === 'dir' || x.length !== 8 || y.length !== 8) return false;
+
+  return x.slice(0, 6).join('|') === y.slice(0, 6).join('|') && x[7] !== y[7];
+}
+
 /** Paths added, removed or changed between two dependency snapshots, sorted. */
 export function diffDependencies(before: DependencySnapshot, after: DependencySnapshot): string[] {
   const changed = new Set<string>();
 
-  for (const [p, v] of before) if (after.get(p) !== v) changed.add(p);
+  for (const [p, v] of before) {
+    const now = after.get(p);
+
+    if (now === undefined || !sameEntry(v, now)) changed.add(p);
+  }
 
   for (const p of after.keys()) if (!before.has(p)) changed.add(p);
 

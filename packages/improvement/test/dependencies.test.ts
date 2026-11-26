@@ -1,4 +1,5 @@
 import {
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -120,6 +121,34 @@ describe('snapshotDependencies', () => {
     const paths = [...snapshotDependencies(root).keys()];
     expect(paths).toContain(path.join(pkg, 'index.js'));
     expect(paths.some((p) => p.includes(`${path.sep}.cache${path.sep}`))).toBe(false);
+  });
+
+  it('ignores a hard link added to a store file elsewhere, which only changes its link count and change time', () => {
+    const { root } = linkedProject();
+    const before = snapshotDependencies(root);
+    const other = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-other-')));
+    // Another project importing the same file from a content-addressed store.
+    linkSync(
+      path.join(root, 'node_modules/.pnpm/a@1.0.0/node_modules/a/index.js'),
+      path.join(other, 'index.js'),
+    );
+    expect(diffDependencies(before, snapshotDependencies(root))).toEqual([]);
+  });
+
+  it('leaves out hidden entries of a package linked from outside node_modules, but not its build output', () => {
+    const { root, outside } = linkedProject();
+    write(path.join(outside, '.git/HEAD'), 'ref: refs/heads/main');
+    write(path.join(outside, 'dist/index.js'), 'export const shared = 1;');
+    const before = snapshotDependencies(root);
+    expect([...before.keys()].some((p) => p.includes(`${path.sep}.git`))).toBe(false);
+    // git and tools write repository state; a rebuilt dist is different code for the copy.
+    write(path.join(outside, '.git/index'), 'index');
+    write(path.join(outside, '.turbo/cache'), 'x');
+    expect(diffDependencies(before, snapshotDependencies(root))).toEqual([]);
+    writeFileSync(path.join(outside, 'dist/index.js'), 'export const shared = 2;');
+    expect(diffDependencies(before, snapshotDependencies(root))).toEqual([
+      path.join(outside, 'dist/index.js'),
+    ]);
   });
 
   it('is empty for a project without node_modules', () => {
