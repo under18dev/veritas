@@ -386,9 +386,10 @@ describe('improve on agent-loop', () => {
       withLinkedDependency(async (pkg) => {
         const attempt = await applyTampered(writeDependency);
         expect(attempt.outcome).toBe('error');
-        expect(attempt.reasons[0]).toMatch(/changed 1 path\(s\) of the installed dependencies/);
+        expect(attempt.reasons[0]).toMatch(/changed 1 path\(s\) of the dependencies/);
         expect(attempt.reasons[0]).toContain(path.join(pkg, 'index.js'));
-        expect(attempt.reasons[0]).toMatch(/cannot undo this: reinstall the dependencies/);
+        // A package linked from outside node_modules: its files are restored, not reinstalled.
+        expect(attempt.reasons[0]).toMatch(/cannot undo this: restore the files of the linked packages/);
         expect(attempt.reasons).toContain('nothing was written to the repository');
       }),
     LONG,

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import {
   linkSync,
   mkdirSync,
@@ -11,11 +12,22 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { createWorkspace, diffDependencies, removeWorkspace, snapshotDependencies } from '../src/index.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createWorkspace,
+  dependencyChangeReason,
+  diffDependencies,
+  removeWorkspace,
+  snapshotDependencies,
+} from '../src/index.js';
 import { project } from './helpers.js';
 
 const DIR = process.platform === 'win32' ? 'junction' : 'dir';
+
+function gitInit(dir: string): void {
+  const run = spawnSync('git', ['init', '-q'], { cwd: dir, stdio: 'ignore' });
+  if (run.status !== 0) throw new Error(`git init failed in ${dir}`);
+}
 
 function write(file: string, content: string): void {
   mkdirSync(path.dirname(file), { recursive: true });
@@ -155,7 +167,7 @@ describe('snapshotDependencies', () => {
     const root = project({ 'src/a.ts': 'x' });
     const repo = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-linked-src-')));
     // node_modules/shared -> <repo>/shared, and <repo>/shared/src -> <repo>/source, in one repository.
-    mkdirSync(path.join(repo, '.git'));
+    gitInit(repo);
     write(path.join(repo, 'source/index.js'), 'export const shared = 1;');
     write(path.join(repo, 'shared/package.json'), '{"name":"shared"}');
     symlinkSync(path.join(repo, 'source'), path.join(repo, 'shared/src'), DIR);
@@ -180,7 +192,7 @@ describe('snapshotDependencies', () => {
     const root = project({ 'src/a.ts': 'x' });
     const repo = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-linked-out-')));
     const elsewhere = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-elsewhere-')));
-    mkdirSync(path.join(repo, '.git'));
+    gitInit(repo);
     write(path.join(repo, 'shared/index.js'), 'export const shared = 1;');
     write(path.join(elsewhere, 'logs/today.log'), 'line');
     // Like `logs -> /var/log` or `big -> /usr/share`: not dependency code, and changing all the time.
@@ -203,6 +215,81 @@ describe('snapshotDependencies', () => {
   it('refuses a snapshot larger than the entry cap instead of cutting it short', () => {
     const { root } = linkedProject();
     expect(() => snapshotDependencies(root, { maxEntries: 3 })).toThrow(/more than 3 entries/);
+  });
+
+  it('does not follow a link to what git ignores in the repository, or to the repository itself', () => {
+    const root = project({ 'src/a.ts': 'x' });
+    const repo = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-repo-ignored-')));
+    gitInit(repo);
+    writeFileSync(path.join(repo, '.gitignore'), 'logs/\n');
+    write(path.join(repo, 'shared/package.json'), '{"name":"shared"}');
+    write(path.join(repo, 'logs/today.log'), 'line');
+    write(path.join(repo, 'source/index.js'), 'export const shared = 1;');
+    symlinkSync(path.join(repo, 'logs'), path.join(repo, 'shared/logs'), DIR);
+    symlinkSync(repo, path.join(repo, 'shared/all'), DIR);
+    symlinkSync(path.join(repo, 'source'), path.join(repo, 'shared/src'), DIR);
+    mkdirSync(path.join(root, 'node_modules'));
+    symlinkSync(path.join(repo, 'shared'), path.join(root, 'node_modules/shared'), DIR);
+    const before = snapshotDependencies(root);
+    // Tracked source is followed; ignored files and the whole repository are not, and are listed.
+    expect([...before.keys()]).toContain(path.join(repo, 'source/index.js'));
+    expect([...before.keys()].some((p) => p.startsWith(path.join(repo, 'logs')))).toBe(false);
+    expect(before.unchecked).toEqual(
+      [
+        `${path.join(repo, 'shared/all')} -> ${repo}`,
+        `${path.join(repo, 'shared/logs')} -> ${path.join(repo, 'logs')}`,
+      ].sort(),
+    );
+    writeFileSync(path.join(repo, 'logs/today.log'), 'another line');
+    expect(diffDependencies(before, snapshotDependencies(root))).toEqual([]);
+  });
+
+  it('lists a link once when a tree reached later holds one reached earlier', () => {
+    const root = project({ 'src/a.ts': 'x' });
+    const outer = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-nested-')));
+    const elsewhere = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-nested-out-')));
+    write(path.join(outer, 'package.json'), '{"name":"outer"}');
+    write(path.join(outer, 'inner/package.json'), '{"name":"inner"}');
+    symlinkSync(elsewhere, path.join(outer, 'inner/data'), DIR);
+    mkdirSync(path.join(root, 'node_modules'));
+    // The inner package is reached first, then the package holding it.
+    symlinkSync(path.join(outer, 'inner'), path.join(root, 'node_modules/a-inner'), DIR);
+    symlinkSync(outer, path.join(root, 'node_modules/b-outer'), DIR);
+    const snapshot = snapshotDependencies(root);
+    expect(snapshot.unchecked).toEqual([`${path.join(outer, 'inner/data')} -> ${elsewhere}`]);
+    expect([...snapshot.keys()]).toContain(path.join(outer, 'inner/package.json'));
+  });
+
+  it('never takes the home directory, or above, as the repository of a linked package', () => {
+    // A dotfiles repository in the home directory.
+    const home = realpathSync(mkdtempSync(path.join(tmpdir(), 'veritas-home-repo-')));
+    gitInit(home);
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('USERPROFILE', home);
+    try {
+      const root = path.join(home, 'project');
+      mkdirSync(path.join(root, 'node_modules'), { recursive: true });
+      const repo = path.join(home, 'work');
+      write(path.join(repo, 'shared/package.json'), '{"name":"shared"}');
+      write(path.join(repo, 'source/index.js'), 'export const shared = 1;');
+      symlinkSync(path.join(repo, 'source'), path.join(repo, 'shared/src'), DIR);
+      symlinkSync(path.join(repo, 'shared'), path.join(root, 'node_modules/shared'), DIR);
+      const snapshot = snapshotDependencies(root);
+      expect(snapshot.unchecked).toEqual([
+        `${path.join(repo, 'shared/src')} -> ${path.join(repo, 'source')}`,
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('tells to reinstall only for installed packages, and to restore files of linked packages', () => {
+    const installed = path.join(tmpdir(), 'p/node_modules/.pnpm/a@1/node_modules/a/index.js');
+    const linked = path.join(tmpdir(), 'repo/source/index.js');
+    expect(dependencyChangeReason([installed])).toMatch(/cannot undo this: reinstall the dependencies/);
+    expect(dependencyChangeReason([linked])).not.toMatch(/reinstall/);
+    expect(dependencyChangeReason([linked])).toMatch(/restore the files of the linked packages/);
+    expect(dependencyChangeReason([installed, linked])).toMatch(/reinstall .*, and restore the files/);
   });
 
   it('is empty for a project without node_modules', () => {

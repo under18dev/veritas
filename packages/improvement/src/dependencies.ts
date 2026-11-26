@@ -1,12 +1,6 @@
-import {
-  existsSync,
-  lstatSync,
-  readdirSync,
-  readFileSync,
-  readlinkSync,
-  realpathSync,
-  statSync,
-} from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 
 /**
@@ -24,7 +18,12 @@ export class DependencySnapshot extends Map<string, string> {
    * out of the package's repository to something that is not a package (`logs -> /var/log`). Writes through them are
    * not detected; the caller must say so rather than imply they were checked.
    */
-  unchecked: string[] = [];
+  get unchecked(): string[] {
+    return [...this.uncheckedLinks].sort();
+  }
+
+  /** @internal */
+  readonly uncheckedLinks = new Set<string>();
 }
 
 /** Entries walked at most; a larger snapshot is refused rather than cut short. */
@@ -123,7 +122,7 @@ export function snapshotDependencies(
     // Outside node_modules a link may lead anywhere (`logs -> /var/log`): only follow it to dependency code.
     if (!link.split(path.sep).includes(NODE_MODULES) && !dependencyTarget(link, real)) {
       // Into the project: its files are copied, not shared, and the repository is compared before writing.
-      if (!inside(real, realRoot)) out.unchecked.push(`${link} -> ${real}`);
+      if (!inside(real, realRoot)) out.uncheckedLinks.add(`${link} -> ${real}`);
       return;
     }
 
@@ -166,8 +165,10 @@ export function snapshotDependencies(
           `the installed dependencies have more than ${maxEntries} entries (reached through ${dir}), too many to check for changes`,
         );
 
-      if (entry.startsWith('dir|')) walk(abs);
-      else if (entry.startsWith('link|')) links.push(abs);
+      // A tree of its own (queued or walked already) inside this one is walked once, as itself.
+      if (entry.startsWith('dir|')) {
+        if (!covered.includes(abs)) walk(abs);
+      } else if (entry.startsWith('link|')) links.push(abs);
     }
   };
 
@@ -191,35 +192,57 @@ export function snapshotDependencies(
   return out;
 }
 
-/** Markers of a repository or workspace root. */
+/**
+ * The git repository a path is in: the nearest directory above it with `.git`, below the user's home directory. The
+ * home directory and its parents never count: a dotfiles repository there would make the whole home one repository.
+ */
 function repositoryRoot(start: string): string | null {
-  for (let dir = start; ; dir = path.dirname(dir)) {
-    if (existsSync(path.join(dir, '.git')) || existsSync(path.join(dir, 'pnpm-workspace.yaml'))) return dir;
+  let home: string;
 
-    try {
-      const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as {
-        workspaces?: unknown;
-      };
+  try {
+    home = realpathSync(homedir());
+  } catch {
+    home = path.resolve(homedir());
+  }
 
-      if (pkg.workspaces !== undefined) return dir;
-    } catch {
-      /* no package.json, or not one of a workspace root */
-    }
+  for (let dir = start; !inside(home, dir); dir = path.dirname(dir)) {
+    if (existsSync(path.join(dir, '.git'))) return dir;
 
     if (path.dirname(dir) === dir) return null;
   }
+
+  return null;
+}
+
+/** Whether git ignores `target` in `repository`; null when git cannot tell (not a repository, git missing). */
+function gitIgnores(repository: string, target: string): boolean | null {
+  const run = spawnSync('git', ['-C', repository, 'check-ignore', '-q', '--', target], {
+    env: {
+      PATH: process.env.PATH ?? '',
+      ...(process.env.SYSTEMROOT ? { SYSTEMROOT: process.env.SYSTEMROOT } : {}),
+    },
+    stdio: 'ignore',
+    timeout: 10_000,
+  });
+
+  return run.status === 0 ? true : run.status === 1 ? false : null;
 }
 
 /**
  * Whether a link found outside node_modules leads to dependency code worth walking: into a node_modules directory, to
- * a package (a directory with a package.json), or to anything in the repository the link is in (a workspace package
- * linking its sources from a sibling directory, `shared/src -> ../source`).
+ * a package (a directory with a package.json), or to tracked source elsewhere in the git repository the link is in (a
+ * workspace package linking its sources from a sibling directory, `shared/src -> ../source`). A target in the same
+ * repository is not followed when git ignores it (`logs -> ../logs`, build caches: they change on their own and are
+ * not code the package ships) or when it holds the linking package itself (the repository root: walking it would walk
+ * the whole repository). Outside a git repository, or when git cannot tell, it is not followed either.
  */
 function dependencyTarget(link: string, real: string): boolean {
   if (real.split(path.sep).includes(NODE_MODULES) || existsSync(path.join(real, 'package.json'))) return true;
   const repository = repositoryRoot(path.dirname(link));
 
-  return repository !== null && inside(real, repository);
+  if (repository === null || !inside(real, repository) || inside(path.dirname(link), real)) return false;
+
+  return gitIgnores(repository, real) === false;
 }
 
 /**
