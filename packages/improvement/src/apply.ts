@@ -6,6 +6,7 @@ import {
   gitOutput,
   type ImprovementOutcome,
   loadConfig,
+  logEvent,
   type MeasurementSnapshot,
   PatchAttempt,
   type Property,
@@ -376,6 +377,26 @@ export function dependencyChangeReason(paths: string[]): string {
  * not change the installed dependencies the copy links to. These checks catch an added test that tampers with its
  * own measurement or writes through the links; they are a safety net, not a security boundary.
  */
+/**
+ * Remove the isolated copy once an apply has its result. A removal that fails (EBUSY or EPERM on Windows while a
+ * process still holds a file of the copy) is logged as a warning and never replaces the result or the error the apply
+ * ended with: the copy stays registered for removal when the process exits.
+ */
+export function removeWorkspaceAfterApply(
+  workspace: string,
+  remove: (dir: string) => void = removeWorkspace,
+): void {
+  try {
+    remove(workspace);
+  } catch (error) {
+    logEvent(
+      'warn',
+      `the isolated copy ${workspace} could not be removed: ${(error as Error).message}; it is removed again when this process exits`,
+      { event: 'workspace-not-removed' },
+    );
+  }
+}
+
 export async function applyImprovement(options: ApplyOptions): Promise<PatchAttempt> {
   const { root, planId } = options;
   assertPlanId(planId);
@@ -888,12 +909,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
       { workspace, rolledBack: true },
     );
   } finally {
-    // The listener goes even when the copy cannot be removed (Windows keeps a file a process still has open); the
-    // copy then stays registered for removal at exit.
-    try {
-      removeWorkspace(workspace);
-    } finally {
-      process.removeListener('SIGUSR1', ignoreSigusr1);
-    }
+    process.removeListener('SIGUSR1', ignoreSigusr1);
+    removeWorkspaceAfterApply(workspace);
   }
 }

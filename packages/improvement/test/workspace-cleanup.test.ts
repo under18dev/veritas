@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { type LogEvent, withRunContext } from '@under18dev/veritas-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createWorkspace, removeWorkspace, workspaceBase } from '../src/index.js';
+import { createWorkspace, removeWorkspace, removeWorkspaceAfterApply, workspaceBase } from '../src/index.js';
 import { project } from './helpers.js';
 
 const state = vi.hoisted(() => ({
@@ -87,5 +88,47 @@ describe('exit cleanup of the isolated copy', () => {
 
     expect(() => createWorkspace(root)).toThrow(/links outside the project/);
     expect(state).toMatchObject({ registered: 1, unregistered: 0 });
+  });
+});
+
+describe('removing the isolated copy after an apply', () => {
+  it('warns instead of throwing when the copy cannot be removed, keeping it registered for exit', async () => {
+    const ws = createWorkspace(project({ 'src/a.ts': 'x' }));
+    state.failBelow = cache;
+    const events: LogEvent[] = [];
+
+    await withRunContext({ sinks: [(event) => events.push(event)] }, async () => {
+      expect(() => removeWorkspaceAfterApply(ws)).not.toThrow();
+    });
+    expect(events.find((event) => event.level === 'warn')?.message).toContain('could not be removed: EBUSY');
+    expect(state).toMatchObject({ registered: 1, unregistered: 0 });
+  });
+
+  it('keeps the result of an apply whose copy cannot be removed, and its original error', async () => {
+    const failing = () => {
+      throw new Error('EBUSY');
+    };
+    const apply = async (outcome: () => string) => {
+      try {
+        return outcome();
+      } finally {
+        removeWorkspaceAfterApply('copy', failing);
+      }
+    };
+
+    await expect(apply(() => 'applied')).resolves.toBe('applied');
+    await expect(
+      apply(() => {
+        throw new Error('the patch failed');
+      }),
+    ).rejects.toThrow('the patch failed');
+  });
+
+  it('removes the copy and unregisters it when it can', () => {
+    const ws = createWorkspace(project({ 'src/a.ts': 'x' }));
+
+    removeWorkspaceAfterApply(ws);
+    expect(existsSync(ws)).toBe(false);
+    expect(state).toMatchObject({ registered: 1, unregistered: 1 });
   });
 });
