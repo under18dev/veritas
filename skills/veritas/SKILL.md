@@ -1,12 +1,12 @@
 ---
 
 name: veritas
-description: Check what a TypeScript/JavaScript project's Vitest or Jest tests actually guarantee against its documented specification, with evidence: specification mismatches, weak or tautological tests, surviving mutants, bounded SMT counterexamples, and safe test-only improvements. Use when asked whether tests are meaningful, to find untested boundaries, to verify a documented rule against the code, or to strengthen tests without changing production code.
+description: Check what a TypeScript/JavaScript project's Vitest, Jest or Node.js test runner (node:test) tests actually guarantee against its documented specification, with evidence: specification mismatches, weak or tautological tests, surviving mutants, bounded SMT counterexamples, and safe test-only improvements. Use when asked whether tests are meaningful, to find untested boundaries, to verify a documented rule against the code, or to strengthen tests without changing production code.
 ---
 
 # Veritas
 
-Veritas relates a project's documented rules (README, docs, JSDoc, schemas, exported issues) to its code and Vitest or Jest tests, runs mutation testing and bounded formal checks, and reports findings with an evidence chain. This skill drives the `veritas` CLI. It works the same with any agent.
+Veritas relates a project's documented rules (README, docs, JSDoc, schemas, exported issues) to its code and Vitest, Jest or Node.js test runner (`node:test`) tests, runs mutation testing and bounded formal checks, and reports findings with an evidence chain. This skill drives the `veritas` CLI. It works the same with any agent.
 
 ## When to use
 
@@ -15,7 +15,7 @@ Veritas relates a project's documented rules (README, docs, JSDoc, schemas, expo
 - "Which boundary or branch is untested?"
 - "Add tests for the gaps" (test files only, after approval).
 
-Do not use it to prove a program correct in general, or for projects tested with neither Vitest nor Jest.
+Do not use it to prove a program correct in general, or for projects tested with none of Vitest, Jest and the Node.js test runner.
 
 ## Install
 
@@ -28,14 +28,14 @@ If the package is not available from the registry, ask the user how they install
 
 ## Before you start
 
-1. Confirm the project uses Node.js 24+ and Vitest or Jest, and that its dependencies are installed.
+1. Confirm the project uses Node.js 24+ and Vitest, Jest or the Node.js test runner (`node:test`), and that its dependencies are installed.
 2. Ask before running anything that executes project code: `mutate`, `run --profile standard|deep`, `prove` and `improve` run the project's tests or functions (in temporary copies and restricted processes, but with the trust of the project's own tests). For a repository the user does not trust, propose running Veritas in a container without network access instead (see the user guide).
 3. Network sources are off by default. Do not enable `sources.web` or `sources.github` in `.veritas/config.json` unless the user asks; never add domains on your own.
 
 ## Workflow
 
 ```bash
-npx veritas init --yes                 # writes .veritas/config.json and picks Vitest or Jest; fails clearly with neither
+npx veritas init --yes                 # writes .veritas/config.json and picks Vitest, Jest or node:test; fails clearly with none
 npx veritas doctor                     # which features are enabled, degraded or disabled, and why
 npx veritas run --profile deep --offline --include-proposed --json > veritas-run.json
 npx veritas report                     # text summary of the latest run
@@ -81,6 +81,7 @@ Use what `doctor` reports instead of retrying:
 
 - mutation testing `disabled` (no mutator or test runner): run `--profile quick`, or `mutate --import` an existing report, and say mutation evidence is missing;
 - `mutator` `degraded` with Jest: mutation testing is experimental there; keep its warning next to any mutation result you report, and treat `unsupported` (not native ESM) as missing evidence;
+- `mutator` `unavailable` with the Node.js test runner (`node_test`): mutator cannot run `node:test` tests, so there is no mutation evidence at all; no test can be `meaningful_with_evidence`, `inconclusive` tests stay unmeasured, and `improve --apply` stops with `error` (exit 3) after the baseline run, so offer the `--dry-run` plan for the user to add by hand;
 - `sandbox` unavailable (Node.js below 25): property tests and counterexample replay are not run; report the affected results as inconclusive, or ask the user for Node.js 25+ (`VERITAS_SANDBOX_NODE`);
 - `lean` unavailable: pass `--engine z3` to `prove` (the configuration may say `lean` or `both`); do not install Lean unless asked;
 - no LLM configured: rule-based extraction still works; statements it cannot read stay unmapped, which is reported, not guessed;

@@ -8,12 +8,12 @@ Install Veritas in your project, check the environment and run the pipeline once
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Node.js                       | 24 or later                                                                                                                           |
 | Node.js for your project code | 25 or later (26 recommended) for property-based tests and counterexample replay, which run your functions with network access blocked |
-| Test runner                   | Vitest or Jest, installed in the project                                                                                              |
+| Test runner                   | Vitest or Jest installed in the project, or the Node.js test runner (`node --test`)                                                   |
 | Language                      | TypeScript or JavaScript (ESM)                                                                                                        |
 | OS                            | Linux, macOS or Windows                                                                                                               |
 | Optional                      | git, for `--since` and commit metadata; Lean 4 and Lake through [elan](https://github.com/leanprover/elan), for `prove --engine lean` |
 
-Z3, `@mizchi/mutator` and fast-check come with the package.
+Z3, `@mizchi/mutator` and fast-check come with the package. `@mizchi/mutator` cannot run tests written for the Node.js test runner, so a project that uses it gets no mutation evidence; see the [support matrix](/concepts/support-matrix#test-runners).
 
 For property-based tests and counterexample replay, Veritas uses the Node.js it runs on, then `VERITAS_SANDBOX_NODE`, then `node` on `PATH`. If none of them is 25 or later, those checks do not run and their results are reported as inconclusive.
 
@@ -71,7 +71,7 @@ next:
 | `--force`   | Overwrite an existing `.veritas/config.json` |
 | `--dry-run` | Print the configuration without writing it   |
 
-`init` finds the project's test runner and writes it to `analysis.testFramework`: Vitest or Jest, from their config files, package.json and the `test` script. It prints which one it chose and why. An installed runner wins over one that is only configured. If both are installed and the `test` script runs only one of them, that one is chosen; otherwise `init` chooses Vitest and asks you to check the setting (in a terminal it asks which one to use, and the TUI shows its choice and the reason). The rules are in the [support matrix](/concepts/support-matrix#test-runners). It stops with `VITEST_NOT_FOUND` when it finds neither, and with `JEST_NOT_FOUND` when the configuration you give names Jest but the project does not have it. The default configuration turns network sources and LLMs off and uses the integer domain `[-10000, 10000]` for formal checks. Every setting is listed in the [configuration reference](/reference/configuration).
+`init` finds the project's test runner and writes it to `analysis.testFramework`: Vitest or Jest, from their config files, package.json and the `test` script, or the Node.js test runner (`node_test`), from a script that runs `node --test` or from test files that import `node:test`. It prints which one it chose and why. An installed runner wins over one that is only configured. The Node.js test runner is built into Node.js, so it is never chosen just for being available. If both are installed and the `test` script runs only one of them, that one is chosen; otherwise `init` chooses Vitest and asks you to check the setting (in a terminal it asks which one to use, and the TUI shows its choice and the reason). The rules are in the [support matrix](/concepts/support-matrix#test-runners). It stops with `VITEST_NOT_FOUND` when it finds none of them, and with `JEST_NOT_FOUND` when the configuration you give names Jest but the project does not have it. The default configuration turns network sources and LLMs off and uses the integer domain `[-10000, 10000]` for formal checks. Every setting is listed in the [configuration reference](/reference/configuration).
 
 ### Answer the questions in a terminal
 

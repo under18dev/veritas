@@ -111,7 +111,7 @@ veritas test generate --property <id>   # one property
 veritas test generate --dry-run         # print instead of writing
 ```
 
-`test generate` writes fast-check tests to `.veritas/generated-tests/<property-id>.test.ts`. Each file starts with a comment stating its domains, seed and number of runs; tests for properties that are not accepted are marked `[experimental]`. Veritas does not run these files; run them with Vitest like your own tests. `--force` replaces generated files you have edited.
+`test generate` writes fast-check tests to `.veritas/generated-tests/<property-id>.test.ts`. Each file starts with a comment stating its domains, seed and number of runs; tests for properties that are not accepted are marked `[experimental]`. The files use the project's test runner (with the Node.js test runner they import `describe` and `it` from `node:test`). Veritas does not run these files; run them with your test runner like your own tests. `--force` replaces generated files you have edited.
 
 ## Prove properties with Lean 4
 

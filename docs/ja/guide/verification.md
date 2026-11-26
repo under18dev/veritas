@@ -111,7 +111,7 @@ veritas test generate --property <id>   # 一つの Property
 veritas test generate --dry-run         # 書き出さずに表示
 ```
 
-`test generate` は fast-check のテストを `.veritas/generated-tests/<property-id>.test.ts` に書き出します。各ファイルの先頭のコメントに、値の範囲、シード、実行回数が書かれ、accepted でない Property のテストには `[experimental]` が付きます。Veritas はこのファイルを実行しないので、自分のテストと同じように Vitest で実行してください。編集したファイルは、`--force` を付けたときだけ置き換えます。
+`test generate` は fast-check のテストを `.veritas/generated-tests/<property-id>.test.ts` に書き出します。各ファイルの先頭のコメントに、値の範囲、シード、実行回数が書かれ、accepted でない Property のテストには `[experimental]` が付きます。ファイルはプロジェクトのテストランナーの書き方に従います（Node.js のテストランナーでは `node:test` から `describe` と `it` を import します）。Veritas はこのファイルを実行しないので、自分のテストと同じようにテストランナーで実行してください。編集したファイルは、`--force` を付けたときだけ置き換えます。
 
 ## Lean 4 で証明する
 
