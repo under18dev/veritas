@@ -1208,6 +1208,65 @@ describe('Node.js test runner tests', () => {
     expect(byName(vitestTests, 'vitest implementation').suspicions).toEqual([]);
   });
 
+  it('mocks the original of a mock.fn wrapper only where the wrapper is called', () => {
+    const SERVICE = `${VALUE}export const service = { fetch: (id: number) => id };\n`;
+    const root = tempProject({
+      'src/value.ts': SERVICE,
+      'test/wrapper.test.ts': `
+        import { mock, test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { service, value } from '../src/value.ts';
+        test('configured later', () => {
+          const fn = mock.fn(value);
+          fn.mock.mockImplementation(() => 999);
+          assert.equal(fn(1), 999);
+        });
+        test('configured once', () => {
+          const fn = mock.fn(value);
+          fn.mock.mockImplementationOnce(() => 999);
+          assert.equal(fn(1), 999);
+        });
+        test('chained configuration of a wrapper never called', () => {
+          mock.fn(value).mock.mockImplementation(() => 999);
+          assert.equal(value(1), 2);
+        });
+        test('direct call beside a replacing wrapper', () => {
+          mock.fn(value, () => 10);
+          assert.equal(value(1), 2);
+        });
+        test('direct call beside a configured wrapper', () => {
+          const fn = mock.fn(value);
+          fn.mock.mockImplementation(() => 10);
+          assert.equal(value(1), 2);
+        });
+        test('direct call of a method mock.method replaced', () => {
+          mock.method(service, 'fetch', () => 10);
+          assert.equal(service.fetch(1), 10);
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of [
+      'configured later',
+      'configured once',
+      'direct call of a method mock.method replaced',
+    ])
+      expect(byName(tests, name).suspicions, name).toContain('unconditional_mock');
+
+    for (const name of [
+      'chained configuration of a wrapper never called',
+      'direct call beside a replacing wrapper',
+      'direct call beside a configured wrapper',
+    ]) {
+      expect(byName(tests, name).suspicions, name).not.toContain('unconditional_mock');
+      expect(
+        byName(tests, name).targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(true);
+    }
+  });
+
   it('recognises the context of a test function passed by name', () => {
     const SERVICE = `${VALUE}export const service = { fetch: (id: number) => id };\n`;
     const root = tempProject({

@@ -7398,7 +7398,13 @@ function analyzeTest(
   const applicableMocks = mocks.filter((mock) => mockApplies(mock, registrationCall, callback));
   const usesMocks = applicableMocks.length > 0;
   const mockedTarget = applicableMocks.some((mock) =>
-    mock.targets.some((target) => calledSymbols.includes(target)),
+    mock.through === undefined
+      ? mock.targets.some((target) => calledSymbols.includes(target))
+      : // A wrapper (`mock.fn(original)`) mocks its original only where the test calls the wrapper.
+        wrapperCalled(mock.through, nodes, checker) &&
+        (analysis?.calls ?? []).some(
+          (call) => call.node === mock.through && mock.targets.includes(call.target.symbol),
+        ),
   );
   const usesSnapshots = nodes.some(
     (node) =>
@@ -7575,6 +7581,33 @@ function passedProjectFunctions(node: Invocation, ctx: Ctx, projectReceives: boo
     }
 
   return found;
+}
+
+/**
+ * Whether the function a call makes (Node's `mock.fn(original)`) is called in `nodes`: directly
+ * (`mock.fn(value)(1)`), or through the constant it is stored in (`const fn = mock.fn(value); fn(1)`).
+ */
+function wrapperCalled(made: ts.CallExpression, nodes: readonly ts.Node[], checker: ts.TypeChecker): boolean {
+  let current: ts.Node = made;
+
+  while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
+
+  if (ts.isCallExpression(current.parent) && current.parent.expression === current) return true;
+  const holder = current.parent;
+
+  if (!ts.isVariableDeclaration(holder) || !ts.isIdentifier(holder.name) || holder.initializer !== current)
+    return false;
+  const symbol = checker.getSymbolAtLocation(holder.name);
+
+  return (
+    symbol !== undefined &&
+    nodes.some(
+      (node) =>
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(skipParens(node.expression)) &&
+        checker.getSymbolAtLocation(skipParens(node.expression)) === symbol,
+    )
+  );
 }
 
 /**
@@ -9125,6 +9158,12 @@ interface MockRecord {
   /** A hoisted module mock (`vi.mock`) applies to every test in the file wherever it is written. */
   fileWide: boolean;
   targets: string[];
+  /**
+   * A mock that only stands for its targets when called itself, never replacing them (Node's `mock.fn(original)`,
+   * a new function): the call that made it. Its targets count as mocked only for what the test reaches through it,
+   * not for direct calls of the original.
+   */
+  through?: ts.CallExpression;
 }
 
 /**
@@ -9420,15 +9459,22 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
 
     return id ? [id] : [];
   };
-  const spyVariable = (identifier: ts.Identifier): string[] | undefined => {
+  /** What configuring a mock made by `made` mocks: its targets, and for Node's `mock.fn(original)` the wrapper call. */
+  const configured = (made: ts.Expression): Omit<MockRecord, 'node' | 'fileWide'> | undefined => {
+    const call = skipParens(made);
+    const role = mockCall(call, checker);
+
+    if (role === 'create' && runner.mockController !== undefined && ts.isCallExpression(call))
+      return { targets: replacedTarget(call), through: call };
+
+    return role === 'spy' || role === 'wrap' || role === 'create' ? { targets: spyTargets(call) } : undefined;
+  };
+  const spyVariable = (identifier: ts.Identifier): Omit<MockRecord, 'node' | 'fileWide'> | undefined => {
     const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
 
     if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer) return undefined;
-    const role = mockCall(skipParens(declaration.initializer), checker);
 
-    return role === 'spy' || role === 'wrap' || role === 'create'
-      ? spyTargets(declaration.initializer)
-      : undefined;
+    return configured(declaration.initializer);
   };
 
   for (const node of descendants(source)) {
@@ -9443,11 +9489,16 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
           : // A spy given its implementation when made (Node's `mock.method(object, 'name', () => 1)`) is configured.
             role === 'spy' && implementation !== undefined && suppliesImplementation(implementation, checker)
             ? spyTargets(node)
-            : // Node's `mock.fn(original, implementation)` stands for the original, configured.
+            : // Node's `mock.fn(original, implementation)` stands for the original, configured, where it is called.
               replacedByMock(node, checker)
               ? replacedTarget(node)
               : [];
-      records.push({ node, fileWide: role === 'module_hoisted', targets });
+      records.push({
+        node,
+        fileWide: role === 'module_hoisted',
+        targets,
+        ...(replacedByMock(node, checker) ? { through: node } : {}),
+      });
       continue;
     }
     // `<spy>.mockReturnValue(...)` and friends, only on real spies of the test runner.
@@ -9472,13 +9523,14 @@ function collectMocks(source: ts.SourceFile, ctx: Ctx): MockRecord[] {
     }
     const receiverRole = mockCall(receiver, checker);
 
-    if (receiverRole === 'spy' || receiverRole === 'wrap' || receiverRole === 'create')
-      records.push({ node, fileWide: false, targets: spyTargets(receiver) });
-    else if (ts.isIdentifier(receiver)) {
-      const targets = spyVariable(receiver);
+    const made =
+      receiverRole === 'spy' || receiverRole === 'wrap' || receiverRole === 'create'
+        ? configured(receiver)
+        : ts.isIdentifier(receiver)
+          ? spyVariable(receiver)
+          : undefined;
 
-      if (targets) records.push({ node, fileWide: false, targets });
-    }
+    if (made) records.push({ node, fileWide: false, ...made });
   }
 
   return records;
