@@ -1827,7 +1827,7 @@ export function mutationStageStatus(
  * the runner collects them is open (a call, a loop), comes from another module, or reaches code static analysis does
  * not follow (a dynamic import, a `require` it cannot read, a file that does not parse), or runs any code when it
  * loads. A file is left out only when it is shown to register nothing: neither it nor a local module it loads runs
- * code when it loads (`loadsCode`), it does not use the runner, and no module it imports registers tests. A file that
+ * code when it loads (`loadsCode`) and no module it imports registers tests. A file that
  * uses another runner's API (`bun:test`, `Deno.test`) always is listed. Each says why.
  */
 export function unreadTestFiles(inventory: TestInventory): string[] {
@@ -1850,14 +1850,10 @@ export function unreadTestFiles(inventory: TestInventory): string[] {
       if (file.loadsCode !== true && file.inexactNames === undefined && !file.unseenReach) return [];
 
       // Left out only when it is shown to register nothing: neither it nor a local module it loads runs any code when
-      // it loads (no call, `new` or tagged template but a few inert builtins, no package loaded; `loadsCode`), it does
-      // not use the runner, and no module it imports registers tests. Anything short of that keeps it listed.
-      if (
-        file.loadsCode === false &&
-        file.usesRunner === false &&
-        file.inexactNames !== 'imported_registrations'
-      )
-        return [];
+      // it loads (no call, `new` or tagged template but a few inert builtins, no package loaded for its side effects or
+      // re-exported whole; `loadsCode`), and no module it imports registers tests. A file that runs no code registers no
+      // test, whatever it imports. Anything short of that keeps it listed.
+      if (file.loadsCode === false && file.inexactNames !== 'imported_registrations') return [];
 
       // A call into a package (`suite()` from `some-lib`) may register tests through it.
       if (file.packageCall !== undefined)

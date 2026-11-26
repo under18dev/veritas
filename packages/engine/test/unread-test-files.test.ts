@@ -94,7 +94,14 @@ describe('unreadTestFiles', () => {
       'test/iife.test.mjs': '(() => {})();\n',
       'test/through-helper.test.mjs': "import './helpers/boot.mjs';\n",
       'test/helpers/boot.mjs': 'export const app = createApp();\nfunction createApp() { return {}; }\n',
-      'test/package.test.mjs': "import { z } from 'zod';\nexport const schema = z;\n",
+      'test/side-effect.test.mjs': "import 'shared-tests/register';\n",
+      'test/side-effect-require.test.cjs': "require('shared-tests/register');\n",
+      'test/star.test.mjs': "export * from 'shared-tests';\n",
+      // Bindings of a package used only inside functions run nothing when the file loads.
+      'test/lodash.test.mjs':
+        "import { pick } from 'lodash';\nimport zod from 'zod';\nexport function select(o) { return pick(o, zod.keys); }\n",
+      'test/lodash-require.test.cjs':
+        "const { omit } = require('lodash');\nmodule.exports = { drop: (o) => omit(o, 'x') };\n",
       // Shown to register nothing.
       'test/barrel.test.mjs': "export { test } from 'node:test';\nexport * from './helpers/pure.mjs';\n",
       'test/helpers/pure.mjs':
@@ -111,7 +118,7 @@ describe('unreadTestFiles', () => {
       recognition: nodeTestRunner.recognitionFor(root),
       root,
       config: VeritasConfig.parse({
-        analysis: { testFramework: 'node_test', testInclude: ['test/*.test.mjs'] },
+        analysis: { testFramework: 'node_test', testInclude: ['test/*.test.{mjs,cjs}'] },
       }),
     });
 
@@ -119,8 +126,10 @@ describe('unreadTestFiles', () => {
       'test/iife.test.mjs (it runs code while its tests are collected that may register tests)',
       // Static analysis took this one for closed: only the new rule lists it.
       'test/local-call.test.mjs (it runs code when it loads and may register tests)',
-      'test/package.test.mjs (it runs code when it loads and may register tests)',
       'test/register.test.mjs (it runs code while its tests are collected that may register tests)',
+      'test/side-effect-require.test.cjs (it runs code while its tests are collected that may register tests)',
+      'test/side-effect.test.mjs (it runs code while its tests are collected that may register tests)',
+      'test/star.test.mjs (it runs code when it loads and may register tests)',
       'test/through-helper.test.mjs (it runs code while its tests are collected that may register tests)',
     ]);
   });
