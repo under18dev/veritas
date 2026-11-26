@@ -101,25 +101,51 @@ const INEXACT_BECAUSE: Record<Extract<WithheldReason, { kind: 'inexact_file' }>[
   imported_open_module: 'a local module it imports runs code when loaded that may register tests',
 };
 
-/** The line mutator 0.4.5 prints to stderr whenever it adopts verdicts from its resume database. */
-const RESUMED_LINE = /^resumed (\d+)\/(\d+) mutants from checkpoint/m;
+/**
+ * What mutator 0.4.5 prints to stderr whenever it adopts verdicts from its resume database. Not anchored to a line
+ * start: code under test shares the stream and may leave a line unfinished just before it.
+ */
+const RESUMED = /resumed (\d+)\/(\d+) mutants from checkpoint/g;
+/** Characters kept from the end of one piece of output, so the message split between two pieces is still seen. */
+const RESUMED_CARRY = 200;
+
+export interface ResumeScan {
+  /** The largest number of verdicts mutator said it adopted, and of how many; null when it said nothing. */
+  adopted: { count: number; of: number } | null;
+}
+
+/**
+ * Watch mutator's output as it streams (see `RunCommandOptions.onOutput`) for verdicts adopted from its resume
+ * database. Reading the stream, not the captured stderr, means no amount of output can push the message out of view.
+ */
+export function resumeScanner(): { feed(text: string): void; result(): ResumeScan } {
+  let carry = '';
+  let adopted: ResumeScan['adopted'] = null;
+
+  return {
+    feed(text) {
+      const window = carry + text;
+
+      for (const m of window.matchAll(RESUMED)) {
+        const count = Number(m[1]);
+
+        if (adopted === null || count > adopted.count) adopted = { count, of: Number(m[2]) };
+      }
+      carry = window.slice(-RESUMED_CARRY);
+    },
+    result: () => ({ adopted }),
+  };
+}
 
 /**
  * Why the verdicts of a mutator run in an isolated copy cannot be trusted because of its resume database, or null.
  * The copy's `.mutator` is removed before mutator starts, but mutator opens the database only after its dry run,
- * which runs the tests: a test can write verdicts there that mutator then adopts without running anything. It says
- * so on stderr; when stderr was cut short, that line may be lost, so the run cannot be checked either.
+ * which runs the tests: a test can write verdicts there that mutator then adopts without running anything.
  */
-export function checkpointRestore(run: { stderr: string; stderrTail?: string }): string | null {
-  const resumed = RESUMED_LINE.exec(run.stderr) ?? RESUMED_LINE.exec(run.stderrTail ?? '');
+export function checkpointRestore(scan: ResumeScan): string | null {
+  if (scan.adopted === null || scan.adopted.count === 0) return null;
 
-  if (resumed && Number(resumed[1]) > 0)
-    return `mutator adopted ${resumed[1]} of ${resumed[2]} verdicts from a resume database in the isolated copy, which was removed before the run: something written during the run (such as a test) planted them, so the run's results are not trustworthy`;
-
-  if (run.stderrTail !== undefined)
-    return "mutator's output was too long to check whether it adopted verdicts from a resume database planted during the run, so the run's results are not trusted";
-
-  return null;
+  return `mutator adopted ${scan.adopted.count} of ${scan.adopted.of} verdicts from a resume database in the isolated copy, which was removed before the run: something written during the run (such as a test) planted them, so the run's results are not trustworthy`;
 }
 
 /** One warning for each reason names in mutator's report were credited to no test (see `TestNameIndex`). */
@@ -474,6 +500,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     rmSync(reportPath, { force: true });
 
     if (options.isolatedCopy) rmSync(path.join(options.root, '.mutator'), { recursive: true, force: true });
+    const scanner = resumeScanner();
 
     return runProjectTests(process.execPath, [binPath, ...argv], {
       cwd: options.root,
@@ -484,8 +511,11 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
       // A mutation run takes minutes; its progress lines show that it is working.
       logOutput: true,
       label: 'mutator',
+      onOutput: (stream, text) => {
+        if (stream === 'stderr') scanner.feed(text);
+      },
       ...(options.signal === undefined ? {} : { signal: options.signal }),
-    });
+    }).then((run) => ({ ...run, resumed: scanner.result() }));
   };
   const ran = (run: Awaited<ReturnType<typeof spawn>>, argv: string[], durationMs: number) => ({
     backend,
@@ -573,7 +603,7 @@ export async function runMutation(options: RunMutationOptions): Promise<Mutation
     return result('error', { ...common, detail: `could not start mutator: ${run.spawnError}` });
 
   if (options.isolatedCopy) {
-    const restored = checkpointRestore(run);
+    const restored = checkpointRestore(run.resumed);
 
     if (restored !== null) return result('error', { ...common, detail: restored });
   }

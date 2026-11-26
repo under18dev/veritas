@@ -10,6 +10,7 @@ import {
   detectMutator,
   MutationRunResult,
   PINNED_MUTATOR_VERSION,
+  resumeScanner,
   runMutation,
   shellQuote,
   timeBudgetSeconds,
@@ -289,7 +290,8 @@ describe('runMutation failures', () => {
   it('in an isolated copy, is an error when mutator adopted verdicts planted during the run', async () => {
     // mutator opens its resume database after the dry run, which runs the tests: a test can plant verdicts there.
     const { root, bin } = stubCli(
-      "console.error('dry run finished in 0.1s'); console.error('resumed 3/5 mutants from checkpoint, 2 left to run'); console.log('{}');",
+      // More output than is kept (10 MB) before the line, which must not hide it.
+      "process.stderr.write('y'.repeat(11 * 1024 * 1024)); console.error('resumed 3/5 mutants from checkpoint, 2 left to run'); console.log('{}');",
     );
     const r = await runMutation({
       testRunner: vitest,
@@ -311,12 +313,17 @@ describe('runMutation failures', () => {
     );
     const printed = `log(\`resumed \${resumed}/\${jobs.length} mutants from checkpoint, \${remaining.length} left to run\`)`;
     expect(readFileSync(runJs, 'utf8')).toContain(printed);
-    expect(checkpointRestore({ stderr: 'x\nresumed 2/9 mutants from checkpoint, 7 left to run\n' })).toMatch(
-      /adopted 2 of 9/,
-    );
-    expect(checkpointRestore({ stderr: '12 mutants, 12 to run\n' })).toBeNull();
-    // A line printed by a test is no different, and a cut output cannot be checked.
-    expect(checkpointRestore({ stderr: 'a'.repeat(10), stderrTail: 'done' })).toMatch(/too long to check/);
+    const scan = (...pieces: string[]) => {
+      const scanner = resumeScanner();
+      for (const piece of pieces) scanner.feed(piece);
+      return checkpointRestore(scanner.result());
+    };
+    expect(scan('x\nresumed 2/9 mutants from checkpoint, 7 left to run\n')).toMatch(/adopted 2 of 9/);
+    expect(scan('12 mutants, 12 to run\n')).toBeNull();
+    // Split between two pieces of output, after an unfinished line and a flood of output from a test.
+    expect(
+      scan('x'.repeat(20_000_000), 'no newline here, resumed 4/4 mutants from ch', 'eckpoint, 0 left'),
+    ).toMatch(/adopted 4 of 4/);
   });
 
   it('in an isolated copy, starts without mutator state or an old report left in the root', async () => {
