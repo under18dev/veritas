@@ -6403,12 +6403,41 @@ function optionsFirst(node: ts.CallExpression): boolean {
 function registrationTitle(node: ts.CallExpression): string | undefined {
   const literal = literalString(node.arguments[0]);
 
-  if (literal !== undefined || !runner.functionTitles) return literal;
-  const fn = node.arguments[optionsFirst(node) ? 1 : 0];
-  const value = fn && skipParens(fn);
+  if (!runner.functionTitles) return literal;
 
-  if (value === undefined) return undefined;
+  if (literal !== undefined && literal !== '') return literal;
+  const first = node.arguments[0] && skipParens(node.arguments[0]);
 
+  if (first === undefined) return undefined;
+
+  // Node titles by the function when the title is not a non-empty string: `test(fn)`, `test({ skip }, fn)`,
+  // `test('', fn)`, `test(undefined, fn)`, `test(1, fn)`.
+  const firstIsFunction = functionName(first) !== undefined || isFunction(first);
+  const notATitle =
+    literal === '' ||
+    ts.isObjectLiteralExpression(first) ||
+    ts.isNumericLiteral(first) ||
+    first.kind === ts.SyntaxKind.NullKeyword ||
+    first.kind === ts.SyntaxKind.TrueKeyword ||
+    first.kind === ts.SyntaxKind.FalseKeyword ||
+    (ts.isIdentifier(first) && first.text === 'undefined');
+
+  if (firstIsFunction) return functionName(first);
+
+  if (!notATitle) return undefined;
+  const fn = node.arguments
+    .slice(1)
+    .find((argument) => functionName(skipParens(argument)) !== undefined || isFunction(skipParens(argument)));
+
+  return fn === undefined ? undefined : functionName(skipParens(fn));
+}
+
+/**
+ * The name JavaScript gives a function an expression evaluates to: a named function expression, a function
+ * declaration, or a constant holding a function (named after the constant unless it has its own name); undefined for
+ * an anonymous function or anything else (`obj.method`).
+ */
+function functionName(value: ts.Expression): string | undefined {
   if (ts.isFunctionExpression(value)) return value.name?.text;
 
   if (!ts.isIdentifier(value) || runnerChecker === undefined) return undefined;
@@ -6431,6 +6460,55 @@ function registrationTitle(node: ts.CallExpression): string | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * The function a registration runs as its test: written inline, or a function of the same file passed by name (a
+ * declaration, or a constant holding a function or arrow).
+ */
+function testFunction(
+  callback: ts.Expression | undefined,
+  checker: ts.TypeChecker,
+): ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | undefined {
+  const value = callback && skipParens(callback);
+
+  if (value === undefined) return undefined;
+
+  if (isFunction(value)) return value;
+
+  if (!ts.isIdentifier(value)) return undefined;
+  const declaration = checker.getSymbolAtLocation(value)?.valueDeclaration;
+
+  if (!declaration || declaration.getSourceFile() !== value.getSourceFile()) return undefined;
+
+  if (ts.isFunctionDeclaration(declaration) && declaration.body) return declaration;
+
+  if (
+    ts.isVariableDeclaration(declaration) &&
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 &&
+    declaration.initializer &&
+    isFunction(skipParens(declaration.initializer))
+  )
+    return skipParens(declaration.initializer) as ts.ArrowFunction | ts.FunctionExpression;
+
+  return undefined;
+}
+
+/**
+ * Whether a registration's last argument is a callback static analysis cannot read (an imported function, a member,
+ * the result of a call), rather than none at all (`it.todo('x')`, whose last argument is its title).
+ */
+function opaqueCallback(callback: ts.Expression | undefined): boolean {
+  const value = callback && skipParens(callback);
+
+  return (
+    value !== undefined &&
+    (ts.isIdentifier(value) ||
+      ts.isPropertyAccessExpression(value) ||
+      ts.isElementAccessExpression(value) ||
+      ts.isCallExpression(value)) &&
+    !(ts.isIdentifier(value) && value.text === 'undefined')
+  );
 }
 
 /** A registration with the modifiers its options object sets added. */
@@ -7031,13 +7109,18 @@ function analyzeTest(
 ): TestCaseType {
   const { checker, root } = ctx;
   const source = registrationCall.getSourceFile();
-  const callback = info.callback;
+  // The test's function: written inline, or a local function passed by name (`it('x', check)`), read as its body.
+  const testFn = testFunction(info.callback, checker);
+  const callback = testFn ?? info.callback;
   const name = info.name ?? '<dynamic test>';
-  const body = callback && isFunction(callback) ? callback.body : undefined;
+  const body = testFn?.body;
+  // A callback passed some other way (an imported function, a call's result) cannot be read: the test is not
+  // judged empty for it.
+  const unreadCallback = testFn === undefined && opaqueCallback(info.callback);
   const nodes = body ? descendants(body) : [];
   const contextParameter =
-    callback && isFunction(callback) && callback.parameters[0] && ts.isIdentifier(callback.parameters[0].name)
-      ? checker.getSymbolAtLocation(callback.parameters[0].name)
+    testFn?.parameters[0] && ts.isIdentifier(testFn.parameters[0].name)
+      ? checker.getSymbolAtLocation(testFn.parameters[0].name)
       : undefined;
   const contextParameters = contextParameter
     ? subtestContexts(contextParameter, nodes, checker)
@@ -7152,6 +7235,7 @@ function analyzeTest(
   if (
     assertions.length === 0 &&
     !typeLevel &&
+    !unreadCallback &&
     !analysis?.helperAsserts &&
     !callsHelperWithAssertion(body, source)
   )
@@ -7161,7 +7245,7 @@ function analyzeTest(
   // Code that runs when the file loads (outside any function), its own or that of the local modules it imports,
   // runs before every test in it.
   const loading = fileLoadReach(source, ctx);
-  const opaque = analysis?.opaque === true || loading.opaque;
+  const opaque = analysis?.opaque === true || loading.opaque || unreadCallback;
   const unresolved = unresolvedImports.size > 0 || loading.unresolved;
 
   // An unresolved import, a child process or a dynamic import may well reach project code: absence is not proven.
@@ -9990,9 +10074,22 @@ function comparedValues(assertion: ts.CallExpression): ts.Expression[] {
   const values = [...assertion.arguments];
 
   if (!isExpectCall(assertion)) {
-    const name = nodeAssertName(assertion);
+    const resolved = nodeAssertCall(assertion);
 
-    return name === undefined ? values : nodeAssertCompared(name, values);
+    if (resolved === undefined) return values;
+
+    if (resolved.via === 'call') return nodeAssertCompared(resolved.name, values.slice(1));
+
+    if (resolved.via === 'apply') {
+      // `.apply(thisArg, [a, b, message])`: the elements of a literal array; any other value hides the positions.
+      const list = values[1] && skipParens(values[1]);
+
+      return list !== undefined && ts.isArrayLiteralExpression(list)
+        ? nodeAssertCompared(resolved.name, [...list.elements])
+        : values;
+    }
+
+    return nodeAssertCompared(resolved.name, values);
   }
   let current: ts.Node = assertion;
 
@@ -10004,30 +10101,6 @@ function comparedValues(assertion: ts.CallExpression): ts.Expression[] {
 
   return values;
 }
-
-/** The functions of node:assert (and of the test context's `assert`) that assert when called. */
-const NODE_ASSERT_FUNCTIONS = new Set([
-  'ok',
-  'equal',
-  'notEqual',
-  'strictEqual',
-  'notStrictEqual',
-  'deepEqual',
-  'notDeepEqual',
-  'deepStrictEqual',
-  'notDeepStrictEqual',
-  'partialDeepStrictEqual',
-  'throws',
-  'doesNotThrow',
-  'rejects',
-  'doesNotReject',
-  'match',
-  'doesNotMatch',
-  'ifError',
-  'fail',
-  'snapshot',
-  'fileSnapshot',
-]);
 
 /** node:assert functions that compare their first two arguments and take a message third. */
 const NODE_ASSERT_PAIRS = new Set([
@@ -10053,56 +10126,68 @@ const NODE_ASSERT_RUNNING = new Set(['throws', 'rejects', 'doesNotThrow', 'doesN
  * the module itself or its `strict`), also through the test context (`t.assert.equal`); undefined for any other call.
  */
 function nodeAssertName(call: ts.CallExpression): string | undefined {
+  return nodeAssertCall(call)?.name;
+}
+
+/** Members of node:assert (and of a test context's `assert`) that are not assertions: classes, and `bind`. */
+const NODE_ASSERT_NON_ASSERTIONS = new Set(['AssertionError', 'Assert', 'CallTracker', 'bind']);
+
+/**
+ * The node:assert assertion a call runs and how its arguments are passed: `direct`, through `.call(thisArg, ...)`
+ * or through `.apply(thisArg, args)`. Undefined for a call that runs none: a class (`AssertionError`), a function
+ * made by `.bind`, or anything not bound to node:assert or a test context's `assert`. A member that is not known
+ * (a newer assertion, `t.assert.called`) counts, with all its arguments compared: wrongly calling a test empty is
+ * worse than leaving it unmeasured.
+ */
+function nodeAssertCall(
+  call: ts.CallExpression,
+): { name: string; via: 'direct' | 'call' | 'apply' } | undefined {
   // Only for a runner whose assertions are node:assert; chai's `assert` (Vitest) keeps all its arguments.
   if (runner.assertModules.size === 0) return undefined;
   const callee = skipParens(call.expression);
-
-  if (ts.isIdentifier(callee)) {
-    const binding = assertModuleBinding(callee);
-
-    if (binding === undefined) return undefined;
-
-    // The module itself is `assert(value, message)`; a function keeps its name; a binding whose export cannot be
-    // read stays unknown (all its arguments compared); any other export (`AssertionError`) asserts nothing.
-    if (MODULE_ITSELF.has(binding.exported)) return 'ok';
-
-    return binding.exported === UNKNOWN_EXPORT || NODE_ASSERT_FUNCTIONS.has(binding.exported)
-      ? binding.exported
-      : undefined;
-  }
-
-  if (!ts.isPropertyAccessExpression(callee)) return undefined;
   const root = rootIdentifierNode(callee);
-  const rootBinding = root === undefined ? undefined : assertModuleBinding(root);
 
-  if (rootBinding !== undefined) {
-    // Only a function read on the module runs an assertion (`assert.equal`, `assert.strict.equal`,
-    // `nodeAssert.default.ok`): `strictEqual.bind(...)` makes a function and asserts nothing, and `.call`,
-    // `.apply` or any other member read on a function or an unknown member are not followed.
-    if (!MODULE_ITSELF.has(rootBinding.exported)) return undefined;
-    const path: string[] = [];
+  if (root === undefined) return undefined;
+  const path: string[] = [];
 
-    for (let current: ts.Expression = callee; ts.isPropertyAccessExpression(current); ) {
-      path.unshift(current.name.text);
-      current = skipParens(current.expression);
-    }
-    const rest = moduleMembers(path);
-
-    if (rest.length === 0) return 'ok';
-
-    return rest.length === 1 && NODE_ASSERT_FUNCTIONS.has(rest[0] as string) ? rest[0] : undefined;
+  for (let current: ts.Expression = callee; ts.isPropertyAccessExpression(current); ) {
+    path.unshift(current.name.text);
+    current = skipParens(current.expression);
   }
-  const holder = skipParens(callee.expression);
+  let base: string;
+  let extra: string[];
+  const binding = assertModuleBinding(root);
 
-  // `t.assert.equal(...)` on the test context; `t.assert.equal.bind(...)` is not an assertion.
-  return runnerChecker !== undefined &&
-    NODE_ASSERT_FUNCTIONS.has(callee.name.text) &&
-    ts.isPropertyAccessExpression(holder) &&
-    holder.name.text === 'assert' &&
-    ts.isIdentifier(holder.expression) &&
-    isTestContext(holder.expression, runnerChecker)
-    ? callee.name.text
-    : undefined;
+  if (binding !== undefined) {
+    if (MODULE_ITSELF.has(binding.exported)) {
+      const members = moduleMembers(path);
+      base = members[0] ?? 'ok';
+      extra = members.slice(1);
+    } else {
+      base = binding.exported;
+      extra = path;
+    }
+  } else if (
+    runnerChecker !== undefined &&
+    path[0] === 'assert' &&
+    path[1] !== undefined &&
+    isTestContext(root, runnerChecker)
+  ) {
+    // `t.assert.equal(...)`, `t.assert.called(fn)`: the test context's assertions.
+    base = path[1];
+    extra = path.slice(2);
+  } else return undefined;
+
+  if (NODE_ASSERT_NON_ASSERTIONS.has(base)) return undefined;
+
+  if (extra.length === 0) return { name: base, via: 'direct' };
+  const last = extra.at(-1) as string;
+
+  if (last === 'bind') return undefined;
+
+  if (extra.length === 1 && (last === 'call' || last === 'apply')) return { name: base, via: last };
+
+  return { name: UNKNOWN_EXPORT, via: 'direct' };
 }
 
 /**
@@ -10443,9 +10528,9 @@ function isContextAssertion(
 
   if (ts.isIdentifier(holder)) return CONTEXT_ASSERTIONS.has(callee.name.text) && isContext(holder);
 
-  // `t.assert.equal(...)`; only a function that asserts, never `t.assert.equal.bind` or another member.
+  // `t.assert.equal(...)`, `t.assert.called(fn)` and members not known yet; never `t.assert.bind`.
   return (
-    NODE_ASSERT_FUNCTIONS.has(callee.name.text) &&
+    !NODE_ASSERT_NON_ASSERTIONS.has(callee.name.text) &&
     ts.isPropertyAccessExpression(holder) &&
     holder.name.text === 'assert' &&
     ts.isIdentifier(holder.expression) &&

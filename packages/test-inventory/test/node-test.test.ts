@@ -272,14 +272,15 @@ describe('Node.js test runner tests', () => {
     expect(byName(tests, 'member message').suspicions).toContain('tautological_assertion');
   });
 
-  it('counts only a call that runs a node:assert function, never one that binds or reads it', () => {
+  it('counts calls that run node:assert, also through .call and .apply, never one that binds it', () => {
     const root = tempProject({
       'src/value.ts': VALUE,
       'test/bound.test.ts': `
         import { test } from 'node:test';
-        import assert, { strictEqual } from 'node:assert/strict';
+        import assert, { AssertionError, strictEqual } from 'node:assert/strict';
         import * as nodeAssert from 'node:assert';
         import { value } from '../src/value.ts';
+        const args = [value(1), 2];
         test('bound, never called', () => {
           const check = assert.strictEqual.bind(null, value(1), 2);
           void check;
@@ -288,15 +289,34 @@ describe('Node.js test runner tests', () => {
           const check = strictEqual.bind(null, value(1), 2);
           void check;
         });
-        test('call member', () => {
-          strictEqual.call(null, value(1), 2);
-        });
-        test('unknown member of the module', () => {
-          assert.notAFunction(value(1), 2);
-        });
         test('context bind', (t) => {
           const check = t.assert.equal.bind(null, value(1), 2);
           void check;
+        });
+        test('error class', () => {
+          new AssertionError({ message: String(value(1)) });
+          const made = assert.AssertionError;
+          void made;
+        });
+        test('call', () => {
+          strictEqual.call(null, value(1), 2, 'message');
+        });
+        test('call with a constant and a message', () => {
+          strictEqual.call(null, 1, 1, String(value(1)));
+        });
+        test('apply with a literal array', () => {
+          assert.strictEqual.apply(null, [value(1), 2, 'message']);
+        });
+        test('apply with a constant array and a message', () => {
+          strictEqual.apply(null, [1, 1, String(value(1))]);
+        });
+        test('apply with another array', () => {
+          strictEqual.apply(null, args as [number, number]);
+          value(1);
+        });
+        test('unknown member of the module', () => {
+          // @ts-expect-error: an assertion a newer Node.js may add.
+          assert.newAssertion(value(1), 2);
         });
         test('default member', () => {
           nodeAssert.default.equal(value(1), 2);
@@ -309,22 +329,96 @@ describe('Node.js test runner tests', () => {
     const { tests } = inventory(root);
     const asserted = (name: string) => byName(tests, name).targetCalls.some((call) => call.asserted);
 
-    for (const name of [
-      'bound, never called',
-      'bound named import',
-      'call member',
-      'unknown member of the module',
-      'context bind',
-    ]) {
+    for (const name of ['bound, never called', 'bound named import', 'context bind', 'error class']) {
       expect(byName(tests, name).assertionCount, name).toBe(0);
       expect(byName(tests, name).suspicions, name).toContain('no_assertion');
       expect(asserted(name), name).toBe(false);
     }
 
-    for (const name of ['default member', 'strict member']) {
+    for (const name of [
+      'call',
+      'apply with a literal array',
+      'unknown member of the module',
+      'default member',
+      'strict member',
+    ]) {
       expect(byName(tests, name), name).toMatchObject({ assertionCount: 1, suspicions: [] });
       expect(asserted(name), name).toBe(true);
     }
+
+    // `.call` and `.apply` skip `this` and leave the message out, as a direct call does.
+    for (const name of ['call with a constant and a message', 'apply with a constant array and a message']) {
+      expect(asserted(name), name).toBe(false);
+      expect(byName(tests, name).suspicions, name).toContain('tautological_assertion');
+    }
+    // An array that is not written out hides the positions: an assertion, never judged empty or tautological.
+    expect(byName(tests, 'apply with another array').assertionCount).toBe(1);
+    expect(byName(tests, 'apply with another array').suspicions).not.toContain('tautological_assertion');
+  });
+
+  it("counts the test context's mock assertions and members not known yet", () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/context.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/value.ts';
+        test('called', (t) => {
+          const fn = t.mock.fn(value);
+          fn(1);
+          t.assert.called(fn);
+        });
+        test('call count', (t) => {
+          const fn = t.mock.fn(value);
+          fn(1);
+          t.assert.callCount(fn, 1);
+        });
+        test('a newer assertion', (t) => {
+          // @ts-expect-error: an assertion a newer Node.js may add.
+          t.assert.future(value(1));
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of ['called', 'call count', 'a newer assertion']) {
+      expect(byName(tests, name).assertionCount, name).toBe(1);
+      expect(byName(tests, name).suspicions, name).not.toContain('no_assertion');
+      expect(byName(tests, name).suspicions, name).not.toContain('tautological_assertion');
+    }
+  });
+
+  it('reads a test function passed by name as the test body, and does not judge an unreadable one empty', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/helpers.ts':
+        "import assert from 'node:assert/strict';\nimport { value } from '../src/value.ts';\nexport function imported() { assert.equal(value(1), 2); }\n",
+      'test/reference.test.ts': `
+        import { it, test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { value } from '../src/value.ts';
+        import { imported } from './helpers.ts';
+        function declared() { assert.equal(value(1), 2); }
+        const arrowConst = () => assert.equal(value(2), 3);
+        function empty() { value(1); }
+        test('by declaration', declared);
+        it('by constant', arrowConst);
+        test(declared);
+        test('asserting nothing', empty);
+        test('imported', imported);
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of ['by declaration', 'by constant', 'declared']) {
+      expect(byName(tests, name), name).toMatchObject({ assertionCount: 1, suspicions: [] });
+      expect(
+        byName(tests, name).targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(true);
+    }
+    expect(byName(tests, 'asserting nothing').suspicions).toContain('no_assertion');
+    // The body of an imported function is not read: the test is not empty, its link is unknown.
+    expect(byName(tests, 'imported').suspicions).toEqual(['opaque_call']);
   });
 
   it('titles a registration without a title by the name of its function, as Node does', () => {
@@ -346,6 +440,11 @@ describe('Node.js test runner tests', () => {
           it(function inner() { assert.equal(value(1), 2); });
         });
         test(() => assert.equal(value(1), 2));
+        test('', function emptyTitle() { assert.equal(value(1), 2); });
+        test(undefined, function undefinedTitle() { assert.equal(value(1), 2); });
+        test(1 as unknown as string, function numberTitle() { assert.equal(value(1), 2); });
+        const holder = { method() { assert.equal(value(1), 2); } };
+        test(holder.method);
       `,
     });
     const { tests } = inventory(root);
@@ -358,9 +457,16 @@ describe('Node.js test runner tests', () => {
       ['optioned', [], ['skip']],
       ['inner', ['suiteName'], []],
       ['<dynamic test>', [], []],
+      ['emptyTitle', [], []],
+      ['undefinedTitle', [], []],
+      ['numberTitle', [], []],
+      ['<dynamic test>', [], []],
     ]);
     expect(byName(tests, 'addsOne')).toMatchObject({ assertionCount: 1, suspicions: [] });
-    expect(byName(tests, '<dynamic test>').inexactName).toBe('dynamic_title');
+    expect(tests.filter((test) => test.name === '<dynamic test>').map((test) => test.inexactName)).toEqual([
+      'dynamic_title',
+      'dynamic_title',
+    ]);
   });
 
   it('never takes the message of a node:assert call for what it checks', () => {
@@ -804,6 +910,23 @@ describe('Node.js test runner tests', () => {
 
     expect(file).toMatchObject({ unseenReach: false });
     expect(file?.inexactNames).toBeUndefined();
+  });
+
+  it('reads a test function passed by name with Vitest too (shared by every runner)', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/vitest.test.ts': `
+        import { expect, it } from 'vitest';
+        import { value } from '../src/value.ts';
+        function check() { expect(value(1)).toBe(2); }
+        it('by name', check);
+      `,
+    });
+
+    expect(byName(inventory(root, vitest.recognition).tests, 'by name')).toMatchObject({
+      assertionCount: 1,
+      suspicions: [],
+    });
   });
 
   it('does not read node:test files with the Vitest API', () => {
