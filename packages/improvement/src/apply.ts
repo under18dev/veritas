@@ -369,15 +369,6 @@ export function dependencyChangeReason(paths: string[]): string {
 }
 
 /**
- * Apply an approved plan: measure it in an isolated copy (baseline tests + mutation, patched tests + mutation)
- * and copy the new test files into the repository only when both mutation runs are complete, the killed-mutant count
- * increases, an added test kills a mutant the baseline left alive, and no previously passing test fails. Any failure leaves the repository unchanged.
- *
- * The runs must leave the copy as it was made, apart from the plan's files with exactly the plan's content, and must
- * not change the installed dependencies the copy links to. These checks catch an added test that tampers with its
- * own measurement or writes through the links; they are a safety net, not a security boundary.
- */
-/**
  * Remove the isolated copy once an apply has its result. A removal that fails (EBUSY or EPERM on Windows while a
  * process still holds a file of the copy) is logged as a warning and never replaces the result or the error the apply
  * ended with: the copy stays registered for removal when the process exits.
@@ -397,6 +388,15 @@ export function removeWorkspaceAfterApply(
   }
 }
 
+/**
+ * Apply an approved plan: measure it in an isolated copy (baseline tests + mutation, patched tests + mutation)
+ * and copy the new test files into the repository only when both mutation runs are complete, the killed-mutant count
+ * increases, an added test kills a mutant the baseline left alive, and no previously passing test fails. Any failure leaves the repository unchanged.
+ *
+ * The runs must leave the copy as it was made, apart from the plan's files with exactly the plan's content, and must
+ * not change the installed dependencies the copy links to. These checks catch an added test that tampers with its
+ * own measurement or writes through the links; they are a safety net, not a security boundary.
+ */
 export async function applyImprovement(options: ApplyOptions): Promise<PatchAttempt> {
   const { root, planId } = options;
   assertPlanId(planId);
