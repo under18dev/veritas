@@ -71,11 +71,14 @@ export const TestInventory = z.object({
       /** The local module (POSIX, from the root) that makes `packageCall`, when the file reaches it through its imports. */
       packageCallVia: z.string().optional(),
       /**
-       * The file runs code while it loads that may register tests, itself or through a local module it loads: a call,
-       * `new` or tagged template its module scope evaluates (other than a few inert builtins such as `Symbol()` and
-       * path helpers), a package it loads for its side effects or re-exports whole, or a local module that does not
-       * resolve. A test file with no recorded test is left out of the unread files only when this is false. Absent in
-       * inventories written before it was recorded.
+       * The file may run code while it loads that could register tests, itself or through a local module it loads: false
+       * only when every statement of each of those modules is known to run none (imports and exports of modules that
+       * pass the package rule, declarations of functions, types, inert classes and enums, variables initialised with
+       * inert expressions, CommonJS exports of inert values, the runner's hooks and mock configuration). A package
+       * loaded for its side effects, re-exported whole or imported dynamically always counts; for a file of the
+       * runner's own test file pattern (`*.test.*`) a package imported by name does too. A local module that does not
+       * resolve counts. A test file with no recorded test is left out of the unread files only when this is false.
+       * Absent in inventories written before it was recorded.
        */
       loadsCode: z.boolean().optional(),
     }),
@@ -556,15 +559,42 @@ function loadsPackageCode(specifier: string): boolean {
 }
 
 /**
- * Whether a call a module makes while it loads is known to do nothing that could register tests: `Symbol(…)`,
- * `Object.freeze(…)`, `new URL(…)`, a function of Node's path or URL helpers, Node's `createRequire(…)`, and a
- * `require` or dynamic `import()` of a literal local module (followed on its own) or Node.js builtin. Its arguments are
- * read too.
+ * Whether a test file's name is one of the runner's own test file patterns (`*.test.*`, `*.spec.*`, Node's
+ * `*-test.*`, `*_test.*`, `test-*`, `test.*`), as opposed to a file matched only by a directory glob (`**\/test/**`),
+ * which may well be a helper.
  */
-function inertCall(node: ts.CallExpression | ts.NewExpression | ts.TaggedTemplateExpression): boolean {
-  if (ts.isTaggedTemplateExpression(node)) return false;
+function primaryTestFile(file: string): boolean {
+  const name = path.basename(file);
+
+  return (
+    /\.(?:test|spec)\.[^.]+$/.test(name) ||
+    /[-_]test\.[^.]+$/.test(name) ||
+    /^test(?:-.+|\.[^.]+)$/.test(name)
+  );
+}
+
+/**
+ * How a module loads a package by its specifier: `none` for a relative module (followed on its own), a Node.js builtin,
+ * the runner's own modules and packages that only assert or mock; `package` otherwise.
+ */
+function packageLoad(specifier: string): 'none' | 'package' {
+  return loadsPackageCode(specifier) ? 'package' : 'none';
+}
+
+/** Members of the runner's mock object that run a function they are given right away (`vi.hoisted(fn)`). */
+const RUNS_ARGUMENT_NOW = new Set(['hoisted', 'isolateModules', 'isolateModulesAsync']);
+
+/**
+ * Whether a call a module makes while it loads is known to register no test: `Symbol(…)`, `Object.freeze(…)`,
+ * `new URL(…)`, a function of Node's path or URL helpers, Node's `createRequire(…)`, a `require` of a literal local
+ * module, builtin or (in `loose` mode, as a binding) package, and the runner's hook and configuration API
+ * (`beforeAll(fn)`, `vi.mock(path, factory)`, `jest.setTimeout(n)`, `mock.timers.enable()`), whose callbacks run later.
+ * Its arguments must be inert too (`inertExpression`).
+ */
+function inertCall(node: ts.CallExpression | ts.NewExpression, strict: boolean, statement: boolean): boolean {
   const callee = skipParens(node.expression);
-  const first = node.arguments?.[0] && skipParens(node.arguments[0]);
+  const args = node.arguments ?? [];
+  const first = args[0] && skipParens(args[0]);
   const literal = first !== undefined && ts.isStringLiteralLike(first) ? first.text : undefined;
   const global = (identifier: ts.Expression, name: string) =>
     ts.isIdentifier(identifier) &&
@@ -572,104 +602,355 @@ function inertCall(node: ts.CallExpression | ts.NewExpression | ts.TaggedTemplat
     (runnerChecker?.getSymbolAtLocation(identifier)?.declarations ?? []).every((declaration) =>
       ambientDeclaration(declaration),
     );
+  const inertArguments = () => args.every((argument) => inertExpression(argument, strict));
 
-  // A dynamic import of a package may run anything; a `require` of one only binds it (`const { pick } =
-  // require('lodash')`), unless it is a bare statement, loaded for its side effects (`require('shared-tests/register')`).
+  // A dynamic import runs the module when it settles: only a local module (followed) or a builtin.
   if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
-    return literal !== undefined && !loadsPackageCode(literal);
+    return literal !== undefined && packageLoad(literal) === 'none';
 
-  if (ts.isCallExpression(node) && requireFunction(callee)) {
-    let use: ts.Node = node;
+  // `require('pkg')` as a statement loads it for its side effects; bound, it counts as an import does.
+  if (ts.isCallExpression(node) && requireFunction(callee))
+    return literal !== undefined && (packageLoad(literal) === 'none' || (!strict && !statement));
 
-    while (ts.isParenthesizedExpression(use.parent)) use = use.parent;
+  if (ts.isNewExpression(node)) return global(callee, 'URL') && inertArguments();
 
-    return literal !== undefined && (!loadsPackageCode(literal) || !ts.isExpressionStatement(use.parent));
-  }
-
-  if (ts.isNewExpression(node)) return global(callee, 'URL');
-
-  if (global(callee, 'Symbol')) return true;
+  if (global(callee, 'Symbol')) return inertArguments();
 
   if (ts.isPropertyAccessExpression(callee) && global(skipParens(callee.expression), 'Object'))
-    return callee.name.text === 'freeze';
+    return callee.name.text === 'freeze' && inertArguments();
 
-  if (nodeCreateRequire(callee)) return true;
+  if (nodeCreateRequire(callee)) return inertArguments();
   let root: ts.Expression = callee;
+  const members: string[] = [];
 
-  while (ts.isPropertyAccessExpression(root)) root = skipParens(root.expression);
+  while (ts.isPropertyAccessExpression(root)) {
+    members.unshift(root.name.text);
+    root = skipParens(root.expression);
+  }
 
-  return ts.isIdentifier(root) && boundSpecifiers(root).some((specifier) => INERT_MODULES.has(specifier));
+  if (!ts.isIdentifier(root)) return false;
+
+  if (boundSpecifiers(root).some((specifier) => INERT_MODULES.has(specifier))) return inertArguments();
+  const resolved = runnerExport(callee);
+
+  // The runner's hooks (`beforeAll(fn)`, `before(fn)`): their callbacks run around tests, which they cannot register.
+  if (resolved !== undefined && runner.hooks.has(resolved.name)) return inertArguments();
+  const name = runnerName(root);
+
+  // The runner's mock and expectation objects (`vi.mock`, `jest.setTimeout`, `mock.timers.enable`, `expect.extend`),
+  // other than the members that run a function right away.
+  return (
+    name !== NOT_RUNNER &&
+    (runner.mockObjects.has(name) || runner.expect.has(name)) &&
+    !members.some((member) => RUNS_ARGUMENT_NOW.has(member)) &&
+    inertArguments()
+  );
 }
 
-const moduleRunsCodeCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; value: boolean }>();
+/**
+ * Whether evaluating an expression at module scope can run no code: literals, templates without substitutions,
+ * function, arrow and inert class expressions, object and array literals of inert members (no spread; methods,
+ * getters and setters are only defined; computed keys only as literals), names declared in the file or imported, an
+ * `import.meta` read, and type assertions, `satisfies`, non-null assertions and parentheses around one of these; and
+ * the calls `inertCall` allows. Anything else (a member read of another value, which may be a getter, `await`,
+ * spread, assignment, a template with substitutions, other calls and `new`) may run code.
+ */
+function inertExpression(expression: ts.Expression, strict: boolean): boolean {
+  const value = skipValueWrappers(expression);
+
+  if (
+    ts.isStringLiteralLike(value) ||
+    ts.isNumericLiteral(value) ||
+    ts.isBigIntLiteral(value) ||
+    ts.isRegularExpressionLiteral(value) ||
+    value.kind === ts.SyntaxKind.TrueKeyword ||
+    value.kind === ts.SyntaxKind.FalseKeyword ||
+    value.kind === ts.SyntaxKind.NullKeyword ||
+    ts.isFunctionExpression(value) ||
+    ts.isArrowFunction(value) ||
+    ts.isMetaProperty(value)
+  )
+    return true;
+
+  if (ts.isClassExpression(value)) return inertClass(value, strict);
+
+  // `-1`, `!true`, `void 0`, `typeof x` of an inert operand.
+  if (ts.isPrefixUnaryExpression(value)) return inertExpression(value.operand, strict);
+
+  if (ts.isVoidExpression(value) || ts.isTypeOfExpression(value))
+    return inertExpression(value.expression, strict);
+
+  // `import.meta.url`: a read of the module's own metadata.
+  if (ts.isPropertyAccessExpression(value) && ts.isMetaProperty(skipParens(value.expression))) return true;
+
+  if (ts.isIdentifier(value)) {
+    if (value.text === 'undefined') return true;
+    const declarations = runnerChecker?.getSymbolAtLocation(value)?.declarations ?? [];
+
+    return (
+      declarations.length > 0 &&
+      declarations.every((declaration) => declaration.getSourceFile() === value.getSourceFile())
+    );
+  }
+
+  if (ts.isArrayLiteralExpression(value))
+    return value.elements.every(
+      (element) =>
+        ts.isOmittedExpression(element) || (!ts.isSpreadElement(element) && inertExpression(element, strict)),
+    );
+
+  if (ts.isObjectLiteralExpression(value))
+    return value.properties.every((property) => {
+      if (ts.isSpreadAssignment(property)) return false;
+
+      if (property.name && ts.isComputedPropertyName(property.name)) {
+        const key = skipParens(property.name.expression);
+
+        if (!ts.isStringLiteralLike(key) && !ts.isNumericLiteral(key)) return false;
+      }
+
+      if (ts.isPropertyAssignment(property)) return inertExpression(property.initializer, strict);
+
+      if (ts.isShorthandPropertyAssignment(property)) return inertExpression(property.name, strict);
+
+      // Methods, getters and setters are only defined.
+      return true;
+    });
+
+  if (ts.isCallExpression(value) || ts.isNewExpression(value)) return inertCall(value, strict, false);
+
+  return false;
+}
 
 /**
- * Whether a module runs code while it loads that may register tests: any call, `new` or tagged template its module
- * scope evaluates (in control flow, arguments, class static blocks and field initialisers, functions called where they
- * are written, local functions it calls), other than `inertCall`s, or a package (`loadsPackageCode`) it loads for its
- * side effects (`import 'pkg'`, `require('pkg')` as a statement) or re-exports whole (`export * from 'pkg'`). The bodies of functions only defined are not read: their call sites count.
+ * Whether defining a class runs no code: no decorators, no static block, no computed member name but a literal, no
+ * static field initialised with anything but an inert expression, and a base class that is inert to evaluate.
  */
-function moduleRunsCode(source: ts.SourceFile): boolean {
-  const cached = moduleRunsCodeCache.get(source);
+function inertClass(node: ts.ClassLikeDeclaration, strict: boolean): boolean {
+  if (ts.canHaveDecorators(node) && (ts.getDecorators(node)?.length ?? 0) > 0) return false;
 
-  if (cached && cached.runner === runner) return cached.value;
-  let found = false;
-  const visit = (node: ts.Node): void => {
-    if (found) return;
-
+  for (const clause of node.heritageClauses ?? [])
     if (
-      (ts.isFunctionDeclaration(node) ||
-        ts.isFunctionExpression(node) ||
-        ts.isArrowFunction(node) ||
-        ts.isMethodDeclaration(node) ||
-        ts.isGetAccessorDeclaration(node) ||
-        ts.isSetAccessorDeclaration(node) ||
-        ts.isConstructorDeclaration(node)) &&
-      !immediatelyInvoked(node)
+      clause.token === ts.SyntaxKind.ExtendsKeyword &&
+      !clause.types.every((type) => inertExpression(type.expression, strict))
     )
-      return;
-    // A package loaded for its side effects (`import 'shared-tests/register'`) or re-exported whole (`export * from
-    // 'pkg'`) may register tests. A package whose bindings are only imported (`import { pick } from 'lodash'`) runs
-    // nothing that counts unless one of them is called while the module loads, which is a call like any other.
-    const specifier =
-      (ts.isImportDeclaration(node) && node.importClause === undefined) ||
-      (ts.isExportDeclaration(node) && !node.isTypeOnly && node.exportClause === undefined)
-        ? node.moduleSpecifier
-        : undefined;
+      return false;
 
-    if (specifier !== undefined && ts.isStringLiteralLike(specifier) && loadsPackageCode(specifier.text)) {
-      found = true;
+  return node.members.every((member) => {
+    if (ts.isClassStaticBlockDeclaration(member)) return false;
 
-      return;
+    if (ts.canHaveDecorators(member) && (ts.getDecorators(member)?.length ?? 0) > 0) return false;
+
+    for (const parameter of ts.isConstructorDeclaration(member) ? member.parameters : [])
+      if ((ts.getDecorators(parameter)?.length ?? 0) > 0) return false;
+
+    if (member.name && ts.isComputedPropertyName(member.name)) {
+      const key = skipParens(member.name.expression);
+
+      if (!ts.isStringLiteralLike(key) && !ts.isNumericLiteral(key)) return false;
     }
 
+    return (
+      !ts.isPropertyDeclaration(member) ||
+      !member.initializer ||
+      !(ts.getCombinedModifierFlags(member) & ts.ModifierFlags.Static) ||
+      inertExpression(member.initializer, strict)
+    );
+  });
+}
+
+/** `module.exports`, `module.exports.name` or `exports.name`, with `module` and `exports` CommonJS's own. */
+function commonJsExportsTarget(target: ts.Expression): boolean {
+  const value = skipParens(target);
+  const own = (identifier: ts.Expression, name: string) =>
+    ts.isIdentifier(identifier) &&
+    identifier.text === name &&
+    // In a JavaScript file TypeScript records the export assignments themselves as declarations of `module`: only a
+    // name the code declares (a variable, parameter, function, class or import) is not CommonJS's.
+    (runnerChecker?.getSymbolAtLocation(identifier)?.declarations ?? []).every(
+      (declaration) =>
+        ambientDeclaration(declaration) ||
+        !(
+          ts.isVariableDeclaration(declaration) ||
+          ts.isParameter(declaration) ||
+          ts.isBindingElement(declaration) ||
+          ts.isFunctionDeclaration(declaration) ||
+          ts.isClassDeclaration(declaration) ||
+          ts.isImportSpecifier(declaration) ||
+          ts.isImportClause(declaration) ||
+          ts.isNamespaceImport(declaration) ||
+          ts.isImportEqualsDeclaration(declaration)
+        ),
+    );
+  const moduleExports = (node: ts.Expression) =>
+    ts.isPropertyAccessExpression(node) &&
+    node.name.text === 'exports' &&
+    own(skipParens(node.expression), 'module');
+
+  if (moduleExports(value)) return true;
+
+  return (
+    ts.isPropertyAccessExpression(value) &&
+    (moduleExports(skipParens(value.expression)) || own(skipParens(value.expression), 'exports'))
+  );
+}
+
+/** Whether a node carries the `declare` modifier. */
+function declaredAmbient(node: ts.Node): boolean {
+  return (
+    ts.canHaveModifiers(node) &&
+    (ts.getModifiers(node) ?? []).some((m) => m.kind === ts.SyntaxKind.DeclareKeyword)
+  );
+}
+
+/**
+ * Whether a module statement runs no code that could register tests when the module loads (see `moduleRunsCode`).
+ * `strict`: a package imported by name counts as running code (a test file of the runner's own pattern, whose
+ * imports may well register tests); otherwise only a package loaded for its side effects or re-exported whole does.
+ */
+function inertStatement(statement: ts.Statement, strict: boolean): boolean {
+  if (ts.isEmptyStatement(statement) || declaredAmbient(statement)) return true;
+
+  if (
+    ts.isInterfaceDeclaration(statement) ||
+    ts.isTypeAliasDeclaration(statement) ||
+    ts.isFunctionDeclaration(statement)
+  )
+    return true;
+
+  if (ts.isImportDeclaration(statement)) {
+    const clause = statement.importClause;
+
+    if (clause?.isTypeOnly || !ts.isStringLiteralLike(statement.moduleSpecifier)) return true;
+
+    if (packageLoad(statement.moduleSpecifier.text) === 'none') return true;
+    const bindings = clause?.namedBindings;
+    // Only types imported (`import { type X } from 'pkg'`) bind nothing that runs.
+    const typesOnly =
+      clause !== undefined &&
+      clause.name === undefined &&
+      bindings !== undefined &&
+      ts.isNamedImports(bindings) &&
+      bindings.elements.length > 0 &&
+      bindings.elements.every((element) => element.isTypeOnly);
+
+    return typesOnly || (clause !== undefined && !strict);
+  }
+
+  if (ts.isImportEqualsDeclaration(statement)) {
+    if (statement.isTypeOnly || !ts.isExternalModuleReference(statement.moduleReference)) return true;
+    const specifier = statement.moduleReference.expression;
+
+    return ts.isStringLiteralLike(specifier) && (packageLoad(specifier.text) === 'none' || !strict);
+  }
+
+  if (ts.isExportDeclaration(statement)) {
+    if (statement.isTypeOnly || !statement.moduleSpecifier) return true;
+
+    if (!ts.isStringLiteralLike(statement.moduleSpecifier)) return false;
+
+    if (packageLoad(statement.moduleSpecifier.text) === 'none') return true;
+    // `export * from 'pkg'` re-exports it whole; `export { x } from 'pkg'` binds as an import does.
+    const clause = statement.exportClause;
+
+    return clause !== undefined && ts.isNamedExports(clause) && !strict;
+  }
+
+  if (ts.isExportAssignment(statement)) return inertExpression(statement.expression, strict);
+
+  if (ts.isClassDeclaration(statement)) return inertClass(statement, strict);
+
+  if (ts.isEnumDeclaration(statement))
+    return (
+      (ts.getCombinedModifierFlags(statement) & ts.ModifierFlags.Const) !== 0 ||
+      statement.members.every((member) => !member.initializer || inertExpression(member.initializer, strict))
+    );
+
+  if (ts.isVariableStatement(statement))
+    return statement.declarationList.declarations.every((declaration) => {
+      if (!declaration.initializer) return true;
+
+      if (!inertExpression(declaration.initializer, strict)) return false;
+
+      if (ts.isIdentifier(declaration.name)) return true;
+
+      // Destructuring iterates an array pattern; an object pattern reads members, which is inert only on what is
+      // known not to have getters: an object literal, or a module bound by `require`.
+      if (!ts.isObjectBindingPattern(declaration.name)) return false;
+      const value = skipValueWrappers(declaration.initializer);
+
+      return (
+        (ts.isObjectLiteralExpression(value) ||
+          (ts.isCallExpression(value) && requireFunction(value.expression))) &&
+        declaration.name.elements.every(
+          (element) =>
+            !element.dotDotDotToken &&
+            ts.isIdentifier(element.name) &&
+            (!element.initializer || inertExpression(element.initializer, strict)),
+        )
+      );
+    });
+
+  // A call on its own: only one `inertCall` allows (the runner's hooks, `vi.mock`, a `require` of a local module).
+  if (ts.isExpressionStatement(statement)) {
+    const value = skipValueWrappers(statement.expression);
+
+    if (ts.isCallExpression(value)) return inertCall(value, strict, true);
+
+    // CommonJS exports (`module.exports = { … }`, `exports.drop = function () {}`): a plain object with no setters.
     if (
-      (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node)) &&
-      !inertCall(node)
-    ) {
-      found = true;
+      ts.isBinaryExpression(value) &&
+      value.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      commonJsExportsTarget(value.left)
+    )
+      return inertExpression(value.right, strict);
 
-      return;
-    }
-    ts.forEachChild(node, visit);
-  };
-  ts.forEachChild(source, visit);
-  moduleRunsCodeCache.set(source, { runner, value: found });
+    // A directive (`'use strict'`) or another literal.
+    return ts.isStringLiteralLike(value);
+  }
 
-  return found;
+  return false;
+}
+
+const moduleRunsCodeCache = new WeakMap<
+  ts.SourceFile,
+  { runner: RunnerApi; strict: boolean; value: boolean }[]
+>();
+
+/**
+ * Whether a module may run code while it loads that could register tests. Decided by what is known to run none: the
+ * module is inert only when every one of its statements is (`inertStatement`): imports and exports of modules that
+ * pass the package rule, declarations of functions, types, inert classes and enums, and variables initialised with
+ * inert expressions. Anything else (a call other than an inert one, `await`, a loop, spread, assignment, a member read
+ * that may be a getter, a decorator) may run code.
+ */
+function moduleRunsCode(source: ts.SourceFile, strict: boolean): boolean {
+  const cached = moduleRunsCodeCache
+    .get(source)
+    ?.find((entry) => entry.runner === runner && entry.strict === strict);
+
+  if (cached) return cached.value;
+  const value = !source.statements.every((statement) => inertStatement(statement, strict));
+  const entries = (moduleRunsCodeCache.get(source) ?? []).filter((entry) => entry.runner === runner);
+  entries.push({ runner, strict, value });
+  moduleRunsCodeCache.set(source, entries);
+
+  return value;
 }
 
 /**
  * Whether a file, or a local module it loads (statically, by `require` or by a literal relative dynamic import, at any
- * depth, cycles ending), runs code while it loads that may register tests (`moduleRunsCode`), or loads a local module
- * that does not resolve.
+ * depth, cycles ending), may run code while it loads that could register tests (`moduleRunsCode`), or loads a local
+ * module that does not resolve. For a file of the runner's own test file pattern (`primaryTestFile`) a package imported
+ * by name anywhere in that graph counts too.
  */
 function loadsCode(source: ts.SourceFile): boolean {
+  const strict = primaryTestFile(source.fileName);
   const seen = new Set<ts.SourceFile>([source]);
   const queue = [source];
 
   for (let current = queue.shift(); current; current = queue.shift()) {
-    if (moduleRunsCode(current)) return true;
+    if (moduleRunsCode(current, strict)) return true;
 
     for (const specifier of localSpecifiers(current)) {
       const declaration = runnerChecker?.getSymbolAtLocation(specifier)?.valueDeclaration;
