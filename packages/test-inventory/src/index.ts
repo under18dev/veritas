@@ -653,6 +653,12 @@ interface CallInfo {
   helperAsserts: boolean;
   /** The call runs code static analysis cannot follow: a child process or a dynamic import. */
   opaque: boolean;
+  /**
+   * The call hands a test context to a local function that is also a test callback and is called elsewhere with
+   * something that is not a context: its assertions on the context are not counted where it is followed from, so
+   * whether this call asserts is not known (never read as no assertion).
+   */
+  assertionsUnknown?: boolean;
   /** The call runs a helper that asserts on a Testing Library query of the document (`screen.getByText(...)`). */
   observesDocument?: boolean;
 }
@@ -665,6 +671,8 @@ interface BodyAnalysis {
   unresolvedImports: Set<string>;
   helperAsserts: boolean;
   opaque: boolean;
+  /** A call runs a helper whose assertions may or may not count (see `CallInfo.assertionsUnknown`). */
+  assertionsUnknown: boolean;
   /** A subtest the body registers may or may not run (its options cannot be read): its body is not counted. */
   unreadSubtests: boolean;
   /** Calls whose result flows into what the body returns. */
@@ -726,6 +734,7 @@ function analyzeBody(
   const unresolvedImports = new Set<string>();
   let helperAsserts = false;
   let opaque = false;
+  let assertionsUnknown = false;
   // Where a helper that asserts on a Testing Library query of the document is called.
   const documentChecks: number[] = [];
   const handed: BodyAnalysis['handed'] = new Map();
@@ -742,6 +751,7 @@ function analyzeBody(
       for (const target of info.targets) if (keepDeferred || !target.deferred) calls.push({ node, target });
       helperAsserts ||= info.helperAsserts;
       opaque ||= info.opaque;
+      assertionsUnknown ||= info.assertionsUnknown === true;
 
       // A helper that asserts on the page observes what rendered before it was called; what it renders itself is
       // judged inside it, in its own order (`const before = screen.queryByText(…); render(…); expect(before)…`).
@@ -1569,6 +1579,7 @@ function analyzeBody(
     unresolvedImports,
     helperAsserts,
     opaque,
+    assertionsUnknown,
     unreadSubtests: subtests.unread,
     returned,
     progressOnly,
@@ -2728,6 +2739,11 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
     if (helper) {
       info = helperInfo(helper, ctx);
 
+      // `check(t)` with a real context, while another call hands `check` a plain object: its assertions are not
+      // counted where it is followed from, so whether this call asserts is unknown, never "no assertion".
+      if (handsContextToMixedCallback(node, helper, ctx.checker))
+        info = { ...info, opaque: true, assertionsUnknown: true };
+
       // What a local component renders is what it returns: calls whose result does not reach that are not shown.
       if (mount)
         info = {
@@ -3688,6 +3704,7 @@ function helperInfo(body: ts.Node, ctx: Ctx): CallInfo {
     targets: [...bySymbol.values()],
     helperAsserts: analysis.assertions.length > 0 || analysis.helperAsserts,
     opaque: analysis.opaque,
+    ...(analysis.assertionsUnknown ? { assertionsUnknown: true } : {}),
     observesDocument: analysis.observesDocument,
   };
   ctx.helperInfo.set(body, info);
@@ -7667,6 +7684,7 @@ function readTest(
     !typeLevel &&
     !unreadCallback &&
     !analysis?.helperAsserts &&
+    !analysis?.assertionsUnknown &&
     !callsHelperWithAssertion(body, source)
   )
     suspicions.push('no_assertion');
@@ -9636,41 +9654,67 @@ function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth
 /** The function passed by name (`test('x', check)`) that `analyzeTest` is reading as the test's callback, if any. */
 let contextCallback: ts.Node | undefined;
 
-const calledWithContextsCache = new WeakMap<ts.Node, { runner: RunnerApi; value: boolean }>();
-/** Functions `calledOnlyWithContexts` is deciding, so that a function calling itself ends. */
+const calledWithContextsCache = new WeakMap<ts.Node, { runner: RunnerApi; value: ContextCalls }>();
+/** Functions `contextCalls` is deciding, so that a function calling itself ends. */
 const decidingCallers = new Set<ts.Node>();
 
 /**
- * Whether every use of a local function other than as a test, suite or hook callback calls it with a test context
- * first (`check(t)` with `t` a test's context), so that its first parameter is a context wherever it is followed from.
- * A call with anything else (`check({ assert })`, `check()`), or a use static analysis does not follow (`check.call(…)`,
- * `rows.map(check)`), makes it not one.
+ * How the uses of a local function other than as a test, suite or hook callback hand it a test context: `all` when
+ * every one calls it with a test context first (`check(t)` with `t` a test's context), so that its first parameter is
+ * a context wherever it is followed from; `some` when at least one does. A call with anything else
+ * (`check({ assert })`, `check()`), or a use static analysis does not follow (`check.call(…)`, `rows.map(check)`),
+ * makes it not `all`.
  */
+interface ContextCalls {
+  all: boolean;
+  some: boolean;
+}
+
+/**
+ * Whether a call hands a test context first to a local function that is a test, suite or hook callback and that some
+ * other use calls with something that is not a context (see `contextCalls`).
+ */
+function handsContextToMixedCallback(node: Invocation, body: ts.Node, checker: ts.TypeChecker): boolean {
+  const fn = body.parent;
+
+  if (!ts.isCallExpression(node) || !fn || !isFunctionLike(fn)) return false;
+
+  if (!referencedCallbacks(fn.getSourceFile(), checker).has(fn)) return false;
+  const first = node.arguments[0] && skipParens(node.arguments[0]);
+
+  if (first === undefined || !ts.isIdentifier(first) || !isTestContext(first, checker)) return false;
+  const calls = contextCalls(fn as ts.SignatureDeclaration, checker, 0);
+
+  return calls.some && !calls.all;
+}
+
 function calledOnlyWithContexts(
   fn: ts.SignatureDeclaration,
   checker: ts.TypeChecker,
   depth: number,
 ): boolean {
+  return contextCalls(fn, checker, depth).all;
+}
+
+function contextCalls(fn: ts.SignatureDeclaration, checker: ts.TypeChecker, depth: number): ContextCalls {
   const cached = calledWithContextsCache.get(fn);
 
   if (cached && cached.runner === runner) return cached.value;
 
-  if (decidingCallers.has(fn)) return false;
+  if (decidingCallers.has(fn)) return { all: false, some: false };
   const declared = ts.isFunctionDeclaration(fn)
     ? fn.name
     : ts.isVariableDeclaration(fn.parent) && ts.isIdentifier(fn.parent.name)
       ? fn.parent.name
       : undefined;
 
-  if (declared === undefined) return false;
+  if (declared === undefined) return { all: false, some: false };
   const symbol = checker.getSymbolAtLocation(declared);
   decidingCallers.add(fn);
-  let value = symbol !== undefined;
+  const value: ContextCalls = { all: symbol !== undefined, some: false };
 
   try {
-    for (const node of descendants(fn.getSourceFile())) {
-      if (!value) break;
-
+    for (const node of symbol === undefined ? [] : descendants(fn.getSourceFile())) {
       if (!ts.isIdentifier(node) || node === declared || node.text !== declared.text) continue;
 
       if (checker.getSymbolAtLocation(node) !== symbol) continue;
@@ -9681,7 +9725,10 @@ function calledOnlyWithContexts(
 
       if (ts.isCallExpression(parent) && skipParens(parent.expression) === node) {
         const first = parent.arguments[0] && skipParens(parent.arguments[0]);
-        value = first !== undefined && ts.isIdentifier(first) && isTestContext(first, checker, depth + 1);
+        const context =
+          first !== undefined && ts.isIdentifier(first) && isTestContext(first, checker, depth + 1);
+        value.all &&= context;
+        value.some ||= context;
       } else if (
         ts.isCallExpression(parent) &&
         parent.arguments.some((argument) => skipParens(argument) === node)
@@ -9692,8 +9739,8 @@ function calledOnlyWithContexts(
           : runner.hooks.has(runnerExport(skipParens(parent.expression))?.name ?? '')
             ? parent.arguments.at(-1)
             : undefined;
-        value = callback !== undefined && skipParens(callback) === node;
-      } else value = false;
+        value.all &&= callback !== undefined && skipParens(callback) === node;
+      } else value.all = false;
     }
   } finally {
     decidingCallers.delete(fn);

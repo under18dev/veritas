@@ -180,6 +180,35 @@ describe('node:test bindings', () => {
     expect(byName(tests, 'handing its own context').suspicions).not.toContain('no_assertion');
   });
 
+  it('leaves a test that hands a real context to a helper also called with a plain object inconclusive', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/mixed.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/value.ts';
+        function helper(t) { t.assert.equal(value(1), 2); }
+        test('by reference', helper);
+        test('real context', (t) => {
+          helper(t);
+        });
+        test('plain object', () => {
+          helper({ assert: { equal() {} } });
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    // Not "no assertion": whether its call of the helper asserts is not known.
+    expect(byName(tests, 'real context').suspicions).not.toContain('no_assertion');
+    expect(byName(tests, 'real context').suspicions).toContain('opaque_call');
+    expect(byName(tests, 'real context').targetCalls.some((call) => call.asserted)).toBe(false);
+    // The plain object still asserts nothing, and the test that runs the helper itself still asserts.
+    expect(byName(tests, 'plain object').suspicions).toContain('no_assertion');
+    expect(byName(tests, 'plain object').suspicions).not.toContain('opaque_call');
+    expect(byName(tests, 'by reference').suspicions).not.toContain('no_assertion');
+    expect(byName(tests, 'by reference').suspicions).not.toContain('opaque_call');
+  });
+
   it('takes require for the module loader only when the file does not declare its own', () => {
     const root = tempProject({
       'src/value.ts': VALUE,
