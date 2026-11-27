@@ -206,6 +206,8 @@ export type WithheldReason =
   | { kind: 'exact_and_template' }
   /** The only test with the name is skipped or a todo, so it cannot have run under it. */
   | { kind: 'skipped_exact' }
+  /** More than one test has the name as its full name (the same title twice): which of them ran is not known. */
+  | { kind: 'same_name' }
   | { kind: 'inexact_file'; because: InexactReason };
 
 /** mutator's suffix for the second and later tests of a run with one full name (`case 1#2`). */
@@ -371,6 +373,26 @@ export class TestNameIndex implements TestNameLookup {
 
     for (const [id, mayNotRun] of mayNotRunById) if (mayNotRun) this.mayNotRun.add(id);
 
+    // Registrations with one full name have ids of their own (`T-…`, `T-…#2`), and the runner reports them all under
+    // that name: which of them ran is not known, so the name is credited to none of them. Unless all but one are known
+    // not to run (`it('works'); it.skip('works')`): then the name is the one left's.
+    const sharing = new Map<string, Set<string>>();
+
+    for (const test of tests) {
+      const key = `${test.file}#${[...test.suitePath, test.name].join(separator)}`;
+
+      if (this.exact.get(key) !== null) continue;
+      const ids = sharing.get(key) ?? new Set<string>();
+      ids.add(test.id);
+      sharing.set(key, ids);
+    }
+
+    for (const [key, ids] of sharing) {
+      const running = [...ids].filter((id) => !this.skipped.has(id));
+
+      if (running.length === 1) this.exact.set(key, running[0] as string);
+    }
+
     for (const file of files)
       if (file.inexactNames !== undefined && !this.inexact.has(file.path))
         this.inexact.set(file.path, file.inexactNames);
@@ -473,7 +495,11 @@ export class TestNameIndex implements TestNameLookup {
             return null;
           }
         } else {
-          if (baseExact === null) return null;
+          if (baseExact === null) {
+            this.withheld.set(name, { kind: 'same_name' });
+
+            return null;
+          }
 
           if (baseExact !== undefined) viaBase.delete(baseExact);
           exact = baseExact;
@@ -485,7 +511,11 @@ export class TestNameIndex implements TestNameLookup {
       }
     }
 
-    if (exact === null) return null;
+    if (exact === null) {
+      this.withheld.set(name, { kind: 'same_name' });
+
+      return null;
+    }
 
     // A skipped test did not run: a name it has exactly that a running template fits is the template's, and one no
     // running template fits came from a test static analysis did not see.

@@ -775,7 +775,7 @@ async function runInContext(
           `${inventory.tests.length} test registration(s) (a loop or .each counts once), ${inventory.edges.length} symbol edge(s)`,
           ...(unread.length > 0
             ? [
-                `${unread.length} test file(s) match analysis.testInclude, but static analysis read no test registration from them, so their tests are not assessed: ${unread.join('; ')}`,
+                `${unread.length} test file(s) match analysis.testInclude, but static analysis read no test registration from them, so their tests are not assessed: ${listUnreadTestFiles(unread)}`,
               ]
             : []),
         ],
@@ -1825,7 +1825,10 @@ export function mutationStageStatus(
 /**
  * Test files the inventory recorded no test for although it could not read all they run: what they register while
  * the runner collects them is open (a call, a loop), comes from another module, or reaches code static analysis does
- * not follow (a dynamic import, a `require` it cannot read, a file that does not parse). Each with why.
+ * not follow (a dynamic import, a `require` it cannot read, a file that does not parse), or runs any code when it
+ * loads. A file is left out only when it is shown to register nothing: neither it nor a local module it loads runs
+ * code when it loads (`loadsCode`) and no module it imports registers tests. A file that
+ * uses another runner's API (`bun:test`, `Deno.test`) always is listed. Each says why.
  */
 export function unreadTestFiles(inventory: TestInventory): string[] {
   const withTests = new Set(inventory.tests.map((test) => test.file));
@@ -1836,9 +1839,56 @@ export function unreadTestFiles(inventory: TestInventory): string[] {
   };
 
   return inventory.files
-    .filter((file) => !withTests.has(file.path) && (file.inexactNames !== undefined || file.unseenReach))
-    .map(
-      (file) =>
-        `${file.path} (${file.inexactNames !== undefined ? why[file.inexactNames] : 'it reaches code static analysis does not follow'})`,
-    );
+    .filter((file) => !withTests.has(file.path))
+    .flatMap((file) => {
+      // Another runner's test file the glob matched (Bun, Deno): the project's runner does not run its tests.
+      if (file.foreignRunner !== undefined)
+        return [
+          `${file.path} (it uses ${file.foreignRunner}, the API of a test runner the project's test runner does not run)`,
+        ];
+
+      if (file.loadsCode !== true && file.inexactNames === undefined && !file.unseenReach) return [];
+
+      // Left out only when it is shown to register nothing: neither it nor a local module it loads runs any code when
+      // it loads (every statement of each is known to run none; `loadsCode`), no module it imports registers tests, and
+      // static analysis did not find it open on its own (`open_collection`) or reaching code it does not follow
+      // (`unseenReach`): those signals are never overridden. Anything short of that keeps it listed.
+      if (
+        file.loadsCode === false &&
+        file.inexactNames !== 'imported_registrations' &&
+        file.inexactNames !== 'open_collection' &&
+        !file.unseenReach
+      )
+        return [];
+
+      // A call into a package (`suite()` from `some-lib`) may register tests through it.
+      if (file.packageCall !== undefined)
+        return [
+          file.packageCallVia === undefined
+            ? `${file.path} (it calls into package ${file.packageCall} when it loads and may register tests through it)`
+            : `${file.path} (it loads ${file.packageCallVia}, which calls into package ${file.packageCall} when it loads and may register tests through it)`,
+        ];
+
+      return [
+        `${file.path} (${
+          file.inexactNames !== undefined
+            ? why[file.inexactNames]
+            : file.unseenReach
+              ? 'it reaches code static analysis does not follow'
+              : 'it runs code when it loads and may register tests'
+        })`,
+      ];
+    });
+}
+
+/** At most this many unread test files are named in a stage message; the rest are counted. */
+export const MAX_LISTED_UNREAD = 10;
+
+/** The unread test files for a message: the first `MAX_LISTED_UNREAD`, and how many more there are. */
+export function listUnreadTestFiles(unread: readonly string[]): string {
+  const shown = unread.slice(0, MAX_LISTED_UNREAD).join('; ');
+
+  return unread.length > MAX_LISTED_UNREAD
+    ? `${shown}; and ${unread.length - MAX_LISTED_UNREAD} more`
+    : shown;
 }

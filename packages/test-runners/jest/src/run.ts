@@ -89,7 +89,8 @@ export function parseJestReport(cwd: string, report: unknown): Extract<TestRunRe
       const key = `${rel}::${name}`;
       const status: TestRunStatus =
         a.status === 'passed' ? 'passed' : a.status === 'failed' ? 'failed' : 'skipped';
-      tests.set(key, status);
+      // Tests sharing a full name share a key: a failure of one is never turned into a pass by another.
+      if (tests.get(key) !== 'failed') tests.set(key, status);
 
       if (status === 'failed') failures.push(`${key}: ${short(a.failureMessages?.[0] ?? 'failed')}`);
     }

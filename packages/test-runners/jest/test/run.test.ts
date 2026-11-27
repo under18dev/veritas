@@ -24,6 +24,33 @@ function recordedReport(root: string): unknown {
 }
 
 describe('parseJestReport', () => {
+  it('keeps a failure of one of two tests sharing a full name, in either order', () => {
+    const root = realpathSync(tmpdir());
+    const file = path.join(root, 'twice.test.js');
+    const report = (statuses: string[]) => ({
+      success: !statuses.includes('failed'),
+      testResults: [
+        {
+          name: file,
+          status: statuses.includes('failed') ? 'failed' : 'passed',
+          assertionResults: statuses.map((status) => ({ fullName: 'works', status })),
+        },
+      ],
+    });
+
+    for (const statuses of [
+      ['failed', 'passed'],
+      ['passed', 'failed'],
+    ])
+      expect(Object.fromEntries(parseJestReport(root, report(statuses)).tests)).toEqual({
+        'twice.test.js::works': 'failed',
+      });
+    // Two passes stay a pass.
+    expect(Object.fromEntries(parseJestReport(root, report(['passed', 'passed'])).tests)).toEqual({
+      'twice.test.js::works': 'passed',
+    });
+  });
+
   it('names tests <file>::<fullName> and maps Jest statuses', () => {
     const root = realpathSync(tmpdir());
     const run = parseJestReport(root, recordedReport(root));

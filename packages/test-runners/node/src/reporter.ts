@@ -42,8 +42,22 @@ interface EventData {
   skip?: unknown;
   todo?: unknown;
   success?: boolean;
+  /** What a test file wrote, for `test:stderr`. */
+  message?: unknown;
   details?: { type?: string; error?: { failureType?: string; message?: string; cause?: unknown } };
 }
+
+/**
+ * What Node.js says of a file's process that failed outside its tests (`cause` of the file's own event): the
+ * exception is not in the event, only in what the process wrote to stderr.
+ */
+const GENERIC_FILE_FAILURE = 'test failed';
+
+/** The first line of an uncaught exception as Node.js prints it (`Error: boom`, `Error [ERR_X]: …`, `SyntaxError: …`). */
+const EXCEPTION_LINE = /^(?:[A-Za-z_$][\w$]*)?(?:Error|Exception)(?: \[[A-Z0-9_]+\])?: \S/;
+
+/** At most this many characters of an exception line are kept. */
+const MAX_EXCEPTION = 500;
 
 function errorMessage(error: NonNullable<EventData['details']>['error']): string | null {
   if (!error) return null;
@@ -54,6 +68,18 @@ function errorMessage(error: NonNullable<EventData['details']>['error']): string
   if (cause && typeof cause.message === 'string') return cause.message;
 
   return typeof error.message === 'string' ? error.message : null;
+}
+
+/** The event's error message, or for a file that failed as a whole with only Node's generic one, its exception. */
+function failureMessage(
+  error: NonNullable<EventData['details']>['error'],
+  exception: string | undefined,
+): string | null {
+  const message = errorMessage(error);
+
+  if (exception === undefined || (message !== null && message !== GENERIC_FILE_FAILURE)) return message;
+
+  return `${exception} (${message ?? GENERIC_FILE_FAILURE})`;
 }
 
 function where(data: EventData): string {
@@ -71,12 +97,23 @@ export default async function* nodeTestReporter(
   const stack: string[] = [];
   let root: string | null = null;
   const started = new Map<string, { ancestors: string[]; file: string | null }[]>();
+  // The first exception line each test file's process wrote to stderr, by the file (absolute): what a file that
+  // failed outside its tests threw, which its own event does not carry.
+  const exceptions = new Map<string, string>();
 
   for await (const event of source) {
     const data = event.data ?? {};
     const nesting = data.nesting ?? 0;
 
-    if (event.type === 'test:start') {
+    if (event.type === 'test:stderr') {
+      const file = data.entryFile ?? data.file;
+      const text = data.message;
+
+      if (file === undefined || exceptions.has(file) || typeof text !== 'string') continue;
+      const line = text.split('\n').find((candidate) => EXCEPTION_LINE.test(candidate));
+
+      if (line !== undefined) exceptions.set(file, line.trim().slice(0, MAX_EXCEPTION));
+    } else if (event.type === 'test:start') {
       if (nesting === 0) root = data.file ?? null;
       stack.length = Math.min(stack.length, nesting);
       const queue = started.get(where(data)) ?? [];
@@ -89,6 +126,16 @@ export default async function* nodeTestReporter(
       const file = start?.file ?? (nesting === 0 ? (data.file ?? null) : (root ?? data.file ?? null));
       const failed = event.type === 'test:fail';
       const error = data.details?.error;
+      const fileLevel =
+        nesting === 0 && data.entryFile === undefined && (data.line ?? 1) === 1 && (data.column ?? 1) === 1;
+      // Before Node.js 24 the stderr events name the file relative to the working directory only.
+      const exception =
+        fileLevel && failed && data.file !== undefined
+          ? (exceptions.get(data.file) ??
+            [...exceptions].find(([written]) =>
+              [`/${written}`, `\\${written}`].some((tail) => data.file?.endsWith(tail)),
+            )?.[1])
+          : undefined;
 
       report.tests.push({
         file,
@@ -105,9 +152,8 @@ export default async function* nodeTestReporter(
                 ? 'failed'
                 : 'passed',
         failureType: failed ? (error?.failureType ?? null) : null,
-        message: failed ? errorMessage(error) : null,
-        fileLevel:
-          nesting === 0 && data.entryFile === undefined && (data.line ?? 1) === 1 && (data.column ?? 1) === 1,
+        message: failed ? failureMessage(error, exception) : null,
+        fileLevel,
       });
     } else if (event.type === 'test:summary' && data.file === undefined) {
       // The summary of the whole run comes last; one per file comes before it.

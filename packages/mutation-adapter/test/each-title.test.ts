@@ -611,6 +611,24 @@ describe('resolving mutator names of table-driven tests to inventoried tests', (
     expect(mutatorTestId(`${FILE}#works`, ' > ', onlySkipped)).not.toBe(running.id);
   });
 
+  it('credits a name two registrations with ids of their own share to neither, unless only one may run', () => {
+    // `it('works', fn); it('works', fn)`: the inventory gives the second `#2`; the runner reports both as `works`.
+    const first = entry([], 'works', []);
+    const second = { ...first, id: `${first.id}#2` };
+    const both = new TestNameIndex([first, second], ' > ');
+
+    expect([first.id, second.id]).not.toContain(mutatorTestId(`${FILE}#works`, ' > ', both));
+    expect(both.withheld.get(`${FILE}#works`)).toEqual({ kind: 'same_name' });
+    // mutator's numbered copy of the shared name is credited to neither either.
+    both.observe([`${FILE}#works`, `${FILE}#works#2`]);
+    expect([first.id, second.id]).not.toContain(mutatorTestId(`${FILE}#works#2`, ' > ', both));
+    // `it('works', fn); it.skip('works', fn)`: only the first runs, so the name is its.
+    const skipped = { ...second, modifiers: ['skip'] };
+    const one = new TestNameIndex([first, skipped], ' > ');
+    expect(mutatorTestId(`${FILE}#works`, ' > ', one)).toBe(first.id);
+    expect(one.withheld.size).toBe(0);
+  });
+
   it('takes a registration with a table empty as written as registering no test', () => {
     // `it.each([])('case %s'); it('case 1')`.
     const empty = { ...entry([], 'case %s'), conditional: true as const, emptyTable: true as const };

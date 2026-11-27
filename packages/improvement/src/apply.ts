@@ -6,6 +6,7 @@ import {
   gitOutput,
   type ImprovementOutcome,
   loadConfig,
+  logEvent,
   type MeasurementSnapshot,
   PatchAttempt,
   type Property,
@@ -365,6 +366,26 @@ export function dependencyChangeReason(paths: string[]): string {
   ];
 
   return `code run in the isolated copy changed ${paths.length} path(s) of the dependencies it shares with the project: ${listPaths(paths)}. Veritas cannot undo this: ${fixes.join(', and ')} before running the tests or Veritas again`;
+}
+
+/**
+ * Remove the isolated copy once an apply has its result. A removal that fails (EBUSY or EPERM on Windows while a
+ * process still holds a file of the copy) is logged as a warning and never replaces the result or the error the apply
+ * ended with: the copy stays registered for removal when the process exits.
+ */
+export function removeWorkspaceAfterApply(
+  workspace: string,
+  remove: (dir: string) => void = removeWorkspace,
+): void {
+  try {
+    remove(workspace);
+  } catch (error) {
+    logEvent(
+      'warn',
+      `the isolated copy ${workspace} could not be removed: ${(error as Error).message}; it is removed again when this process exits`,
+      { event: 'workspace-not-removed' },
+    );
+  }
 }
 
 /**
@@ -888,7 +909,7 @@ export async function applyImprovement(options: ApplyOptions): Promise<PatchAtte
       { workspace, rolledBack: true },
     );
   } finally {
-    removeWorkspace(workspace);
     process.removeListener('SIGUSR1', ignoreSigusr1);
+    removeWorkspaceAfterApply(workspace);
   }
 }

@@ -456,7 +456,11 @@ export function createWorkspace(root: string): string {
     return dir;
   } catch (error) {
     // A partial copy holds project files (possibly secrets such as .env): never leave one behind.
-    removeWorkspace(dir);
+    try {
+      removeWorkspace(dir);
+    } catch {
+      // The exit cleanup stays registered and tries again at exit; the error that ended the copy is the one shown.
+    }
     throw error;
   }
 }
@@ -489,6 +493,9 @@ const exitCleanups = new Map<string, () => void>();
 export function removeWorkspace(dir: string): void {
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   rmSync(dir + OWNER_SUFFIX, { force: true });
+  // Only once the copy is gone. When removing fails (on Windows a file a process the run started still has open is
+  // EBUSY or EPERM), the exit cleanup stays registered and tries again when the process exits: the copy holds project
+  // files, `.env` included, which should not wait for the next run's sweep of stale copies.
   exitCleanups.get(dir)?.();
   exitCleanups.delete(dir);
 }

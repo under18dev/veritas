@@ -46,6 +46,41 @@ export const TestInventory = z.object({
        * name (`eval`, `globalThis[key]`), which may register tests under this file.
        */
       inexactNames: z.enum(['open_collection', 'imported_registrations', 'imported_open_module']).optional(),
+      /**
+       * The file uses the project's test runner, itself or through a local module it loads (a shared suite it
+       * calls): it imports or requires one of the runner's modules (not only re-exports it, not only its types), or
+       * calls a name of the runner's API (its globals, or a name a local module hands out). False for a helper that
+       * only re-exports the runner (`export { test } from 'node:test'`) or never touches it, and only when that is
+       * shown: a file that loads code at run time (a dynamic `import()` of a package or a name, `require` of a name,
+       * `createRequire`, `eval`) or reaches code static analysis does not follow may use it, while a local module
+       * imported on demand (`await import('./suite.mjs')`) is followed. Absent in inventories written before it was
+       * recorded, which is read as true.
+       */
+      usesRunner: z.boolean().optional(),
+      /**
+       * The API of another test runner the file uses (`bun:test`, `Deno.test`), which the project's runner does not
+       * run; absent when it uses none.
+       */
+      foreignRunner: z.string().optional(),
+      /**
+       * A package the file calls into at its top level (`import { suite } from 'some-lib'; suite()`), other than the
+       * runner's own and packages that only assert or mock: it may register tests through it. Absent when it calls
+       * none.
+       */
+      packageCall: z.string().optional(),
+      /** The local module (POSIX, from the root) that makes `packageCall`, when the file reaches it through its imports. */
+      packageCallVia: z.string().optional(),
+      /**
+       * The file may run code while it loads that could register tests, itself or through a local module it loads: false
+       * only when every statement of each of those modules is known to run none (imports and exports of modules that
+       * pass the package rule, declarations of functions, types, inert classes and enums, variables initialised with
+       * inert expressions, CommonJS exports of inert values, the runner's hooks and mock configuration). A package
+       * loaded for its side effects, re-exported whole or imported dynamically always counts; for a file of the
+       * runner's own test file pattern (`*.test.*`) a package imported by name does too. A local module that does not
+       * resolve counts. A test file with no recorded test is left out of the unread files only when this is false.
+       * Absent in inventories written before it was recorded.
+       */
+      loadsCode: z.boolean().optional(),
     }),
   ),
   diagnostics: z.array(z.object({ file: z.string(), message: z.string() })),
@@ -148,8 +183,1047 @@ let runner: RunnerApi = runnerApi({
   mocks: { objects: [], calls: {}, configureMethod: '(?!)' },
 });
 
+/**
+ * The id of the test registered in `file` under `suitePath` and `name`. Registrations that share all three (the same
+ * literal title twice, two `<dynamic test>`s, two anonymous callbacks) are told apart by `disambiguateTestIds`.
+ */
 export function testId(file: string, suitePath: string[], name: string): string {
   return stableId('T', { file: file.split('\\').join('/'), suitePath, name });
+}
+
+/**
+ * Give every registration an id of its own. The first registration (in source order) of a file, suite path and name
+ * keeps `testId`, so the id of a test that shares them with no other is unchanged; each later one gets the ordinal of
+ * its place among them as a suffix (`T-…#2`, `T-…#3`). The runner still reports them all under one full name, so
+ * whatever is matched by that name (run results, mutator kills) cannot tell them apart and is credited to none of
+ * them (see `TestNameIndex`).
+ */
+export function disambiguateTestIds(tests: TestCaseType[]): void {
+  const groups = new Map<string, TestCaseType[]>();
+
+  for (const test of tests) {
+    const group = groups.get(test.id);
+
+    if (group) group.push(test);
+    else groups.set(test.id, [test]);
+  }
+
+  for (const [id, group] of groups) {
+    if (group.length < 2) continue;
+    // In source order: by line, then by the order the inventory met them (`sort` is stable).
+    const ordered = [...group].sort(
+      (a, b) => (a.location.range?.start ?? 0) - (b.location.range?.start ?? 0),
+    );
+
+    ordered.forEach((test, index) => {
+      if (index > 0) test.id = `${id}#${index + 1}`;
+    });
+  }
+}
+
+/**
+ * Whether a file uses the project's test runner (see `TestInventory`'s `usesRunner`): a value import or an
+ * `import x = require(…)` of one of the runner's modules, a `require` of one anywhere in the file, or a call of a name
+ * of the runner's API (`describe(…)`, `test[key](…)`, a global or a name a local module hands out). A re-export
+ * (`export { test } from 'node:test'`) and a type import use nothing.
+ */
+function usesRunner(source: ts.SourceFile): boolean {
+  const cached = usesRunnerCache.get(source);
+
+  if (cached && cached.runner === runner) return cached.value;
+  // A module loading itself back (`a` imports `b` on demand, `b` imports `a`): its own code decides it.
+  usesRunnerCache.set(source, { runner, value: false });
+  const value = readsRunner(source);
+  usesRunnerCache.set(source, { runner, value });
+
+  return value;
+}
+
+/**
+ * Whether a module uses the runner, itself or through the local modules it imports statically (as `usesRunner` is
+ * extended by the inventory's local dependencies); a relative import that does not resolve may load anything.
+ */
+function usesRunnerThrough(source: ts.SourceFile, seen = new Set<ts.SourceFile>()): boolean {
+  if (seen.has(source)) return false;
+  seen.add(source);
+
+  if (usesRunner(source)) return true;
+
+  return source.statements.some((statement) => {
+    // Loaded at run time, a module that hands out the runner's API (`export { test } from 'node:test'`) may be used
+    // for it in ways the loading file's names do not show (`const { test } = await import('./support.mjs')`).
+    if (
+      ts.isExportDeclaration(statement) &&
+      !statement.isTypeOnly &&
+      statement.moduleSpecifier &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      runner.modules.has(statement.moduleSpecifier.text)
+    )
+      return true;
+    const specifier =
+      (ts.isImportDeclaration(statement) && !statement.importClause?.isTypeOnly) ||
+      (ts.isExportDeclaration(statement) && !statement.isTypeOnly)
+        ? statement.moduleSpecifier
+        : undefined;
+
+    if (specifier === undefined || !ts.isStringLiteral(specifier) || !/^\.\.?\//.test(specifier.text))
+      return false;
+    const declaration = runnerChecker?.getSymbolAtLocation(specifier)?.valueDeclaration;
+
+    return !declaration || !ts.isSourceFile(declaration) || usesRunnerThrough(declaration, seen);
+  });
+}
+
+/**
+ * The local module a literal relative dynamic import loads (`await import('./suite.mjs')`), resolved as the
+ * importing file's static imports are; undefined when it does not resolve to a source file of the program.
+ */
+function dynamicallyImportedSource(node: ts.CallExpression): ts.SourceFile | undefined {
+  const argument = node.arguments[0] && skipParens(node.arguments[0]);
+
+  if (argument === undefined || !ts.isStringLiteralLike(argument)) return undefined;
+  const declaration = runnerChecker?.getSymbolAtLocation(argument)?.valueDeclaration;
+
+  return declaration && ts.isSourceFile(declaration) ? declaration : undefined;
+}
+
+const usesRunnerCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; value: boolean }>();
+
+function readsRunner(source: ts.SourceFile): boolean {
+  const apiNames = new Set([
+    ...runner.tests,
+    ...runner.suites,
+    ...runner.hooks,
+    ...runner.shorthands.keys(),
+    ...runner.mockObjects,
+    ...runner.expect,
+  ]);
+
+  for (const statement of source.statements) {
+    if (
+      ts.isImportDeclaration(statement) &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      runner.modules.has(statement.moduleSpecifier.text)
+    ) {
+      const clause = statement.importClause;
+      const bindings = clause?.namedBindings;
+
+      if (
+        clause &&
+        !clause.isTypeOnly &&
+        (clause.name !== undefined ||
+          (bindings !== undefined &&
+            (ts.isNamespaceImport(bindings) || bindings.elements.some((element) => !element.isTypeOnly))))
+      )
+        return true;
+    }
+
+    if (
+      ts.isImportEqualsDeclaration(statement) &&
+      !statement.isTypeOnly &&
+      ts.isExternalModuleReference(statement.moduleReference) &&
+      ts.isStringLiteralLike(statement.moduleReference.expression) &&
+      runner.modules.has(statement.moduleReference.expression.text)
+    )
+      return true;
+  }
+
+  return descendants(source).some((node) => {
+    // `const load = require; load('node:test')`: CommonJS's `require` used as a value, not called, may load anything.
+    if (ts.isIdentifier(node) && node.text === 'require' && isCommonJsRequire(node)) {
+      let use: ts.Node = node;
+
+      while (ts.isParenthesizedExpression(use.parent)) use = use.parent;
+      const parent = use.parent;
+      const called = ts.isCallExpression(parent) && parent.expression === use;
+      const declared =
+        (ts.isVariableDeclaration(parent) || ts.isFunctionDeclaration(parent) || ts.isParameter(parent)) &&
+        parent.name === node;
+
+      if (!called && !declared) return true;
+    }
+
+    // `globalThis[key]`, `globalThis.describe`: a global reached by a name not read, or the runner's own.
+    if (
+      (ts.isElementAccessExpression(node) || ts.isPropertyAccessExpression(node)) &&
+      ts.isIdentifier(skipParens(node.expression)) &&
+      GLOBAL_OBJECTS.has((skipParens(node.expression) as ts.Identifier).text)
+    ) {
+      const member = memberName(node);
+
+      return member === undefined || apiNames.has(member);
+    }
+
+    if (!ts.isCallExpression(node) && !ts.isNewExpression(node)) return false;
+
+    if (loadsUnreadCode(node)) return true;
+
+    if (!ts.isCallExpression(node)) return false;
+
+    if (runner.modules.has(requiredModule(node) ?? '')) return true;
+    const root = rootIdentifierNode(skipParens(node.expression));
+
+    if (root === undefined) return false;
+    const name = runnerName(root);
+
+    return name !== NOT_RUNNER && (name === NAMESPACE || apiNames.has(name.split('.')[0] ?? ''));
+  });
+}
+
+/**
+ * Whether a call loads or runs code at run time that may be the runner, which static analysis cannot rule out: a
+ * dynamic `import()` other than of a Node.js builtin that is not the runner (`import('node:test')`, `import(name)`,
+ * `import('./suite.mjs')`), a `require` of a name that is not a literal, `createRequire` and the function it makes,
+ * `process.getBuiltinModule`, `eval` and `Function`.
+ */
+function loadsUnreadCode(node: ts.CallExpression | ts.NewExpression): boolean {
+  const callee = skipParens(node.expression);
+  const first = node.arguments?.[0] && skipParens(node.arguments[0]);
+  const literal = first !== undefined && ts.isStringLiteralLike(first) ? first.text : undefined;
+  const plainBuiltin = (name: string) =>
+    !runner.modules.has(name) &&
+    (name.startsWith('node:') || builtinModules.includes(name.split('/')[0] ?? ''));
+
+  if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+    // `await import('./suite.mjs')` is followed as a static import is: it loads the runner when that module does.
+    if (literal !== undefined && (literal.startsWith('./') || literal.startsWith('../'))) {
+      const loaded = dynamicallyImportedSource(node);
+
+      return loaded === undefined || usesRunnerThrough(loaded);
+    }
+
+    return literal === undefined || !plainBuiltin(literal);
+  }
+
+  // `createRequire(import.meta.url)('node:test')`: the function a call returns, called.
+  if (ts.isCallExpression(callee)) return loadsUnreadCode(callee);
+  const name = ts.isIdentifier(callee)
+    ? callee.text
+    : ts.isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : undefined;
+
+  if (name === 'createRequire' || name === 'eval' || name === 'Function') return true;
+
+  if (name === 'getBuiltinModule') return literal === undefined || !plainBuiltin(literal);
+
+  // `module.require(name)`.
+  if (name === 'require' && ts.isPropertyAccessExpression(callee))
+    return literal === undefined || runner.modules.has(literal);
+
+  return requireFunction(callee) && literal === undefined;
+}
+
+/** Modules of test runners, any of which may be another runner than the project's. */
+const RUNNER_MODULES = new Set([
+  'bun:test',
+  'vitest',
+  '@jest/globals',
+  'node:test',
+  'mocha',
+  'ava',
+  'tap',
+  'tape',
+  'uvu',
+]);
+/** Deno's test modules: `@std/testing/bdd`, `jsr:@std/testing/bdd`, `https://deno.land/std@0.224.0/testing/bdd.ts`. */
+const DENO_TESTING =
+  /^(?:jsr:)?@std\/testing(?:@[^/]*)?(?:\/|$)|^https:\/\/deno\.land\/std(?:@[^/]*)?\/testing\//;
+
+/**
+ * The API of another test runner a file uses, as it names it (`bun:test`, `Deno.test`): a module of one imported or
+ * required (other than the project runner's own modules), or Deno's global `Deno.test`.
+ */
+function foreignRunner(source: ts.SourceFile): { foreignRunner?: string } {
+  const other = (name: string) =>
+    !runner.modules.has(name) && (RUNNER_MODULES.has(name) || DENO_TESTING.test(name));
+
+  for (const node of descendants(source)) {
+    let loaded: string | undefined;
+
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      // Types only (`import type { TestContext } from 'vitest'`, `import { type TestContext } from 'vitest'`) use no API.
+      const clause = node.importClause;
+      const bindings = clause?.namedBindings;
+      const typesOnly =
+        clause !== undefined &&
+        (clause.isTypeOnly ||
+          (clause.name === undefined &&
+            bindings !== undefined &&
+            ts.isNamedImports(bindings) &&
+            bindings.elements.length > 0 &&
+            bindings.elements.every((element) => element.isTypeOnly)));
+
+      if (!typesOnly) loaded = node.moduleSpecifier.text;
+    } else if (
+      ts.isExportDeclaration(node) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      // A re-export of the API (`export { test } from 'bun:test'`), not of types only.
+      const clause = node.exportClause;
+      const typesOnly =
+        node.isTypeOnly ||
+        (clause !== undefined &&
+          ts.isNamedExports(clause) &&
+          clause.elements.length > 0 &&
+          clause.elements.every((element) => element.isTypeOnly));
+
+      if (!typesOnly) loaded = node.moduleSpecifier.text;
+    } else if (ts.isCallExpression(node)) {
+      loaded = requiredModule(node);
+      const callee = skipParens(node.expression);
+
+      if (
+        loaded === undefined &&
+        ts.isPropertyAccessExpression(callee) &&
+        ts.isIdentifier(callee.expression) &&
+        callee.expression.text === 'Deno' &&
+        callee.name.text === 'test'
+      )
+        return { foreignRunner: 'Deno.test' };
+    }
+
+    if (loaded !== undefined && other(loaded)) return { foreignRunner: loaded };
+  }
+
+  return {};
+}
+
+/** Packages that assert or mock and register no tests, called at the top level of a test file for setup. */
+const ASSERTION_OR_MOCK_PACKAGES = new Set([
+  'chai',
+  'expect',
+  'power-assert',
+  'should',
+  'sinon',
+  'testdouble',
+  'jest-mock',
+  'nock',
+  'msw',
+  'fetch-mock',
+  'mockdate',
+  'timekeeper',
+]);
+/** Scopes of such packages. */
+const ASSERTION_OR_MOCK_SCOPES = ['@testing-library/', '@sinonjs/', '@vitest/', '@jest/', '@mswjs/'];
+
+/** The package a bare module specifier names (`lodash/fp` is `lodash`, `@scope/pkg/x` is `@scope/pkg`). */
+function packageName(specifier: string): string {
+  const parts = specifier.split('/');
+
+  return specifier.startsWith('@') ? parts.slice(0, 2).join('/') : (parts[0] ?? specifier);
+}
+
+/** The package a name is bound to by an import or a `require` of a bare specifier, if any. */
+function boundPackage(identifier: ts.Identifier): string | undefined {
+  for (const specifier of boundSpecifiers(identifier)) {
+    if (specifier.startsWith('.') || specifier.startsWith('/') || builtinSpecifier(specifier)) continue;
+
+    if (/^[a-z][a-z0-9+.-]*:/i.test(specifier)) continue;
+
+    return packageName(specifier);
+  }
+
+  return undefined;
+}
+
+/** Whether a module specifier names a Node.js builtin (`node:path`, `path`, `fs/promises`). */
+function builtinSpecifier(specifier: string): boolean {
+  return specifier.startsWith('node:') || builtinModules.includes(specifier.split('/')[0] ?? '');
+}
+
+/** The module specifiers of the imports or `require`s that bind a name (`import { join } from 'node:path'`). */
+function boundSpecifiers(identifier: ts.Identifier): string[] {
+  const specifiers: string[] = [];
+
+  for (const declaration of runnerChecker?.getSymbolAtLocation(identifier)?.declarations ?? []) {
+    let node: ts.Node = declaration;
+
+    if (ts.isImportSpecifier(node) || ts.isImportClause(node) || ts.isNamespaceImport(node)) {
+      while (!ts.isImportDeclaration(node) && node.parent) node = node.parent;
+
+      if (
+        ts.isImportDeclaration(node) &&
+        !node.importClause?.isTypeOnly &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      )
+        specifiers.push(node.moduleSpecifier.text);
+    } else {
+      while (ts.isBindingElement(node)) node = node.parent.parent;
+      const loaded =
+        ts.isVariableDeclaration(node) && node.initializer ? requiredModule(node.initializer) : undefined;
+
+      if (loaded !== undefined) specifiers.push(loaded);
+    }
+  }
+
+  return specifiers;
+}
+
+/** Path and URL helpers of Node.js, which compute values and load nothing. */
+const INERT_MODULES = new Set(['path', 'node:path', 'path/posix', 'node:path/posix', 'url', 'node:url']);
+
+/**
+ * Whether a package or module a file loads by its specifier may run code that registers tests: any bare package,
+ * other than the runner's own modules and packages that only assert or mock. Relative modules are followed instead,
+ * and Node.js builtins register nothing (the runner's `node:test` is the runner's API, read as such).
+ */
+function loadsPackageCode(specifier: string): boolean {
+  if (/^\.\.?(?:\/|$)/.test(specifier) || builtinSpecifier(specifier) || runner.modules.has(specifier))
+    return false;
+  const name = packageName(specifier);
+
+  return !(
+    runner.modules.has(name) ||
+    ASSERTION_OR_MOCK_PACKAGES.has(name) ||
+    ASSERTION_OR_MOCK_SCOPES.some((scope) => name.startsWith(scope))
+  );
+}
+
+/**
+ * Whether a test file's name is one of the runner's own test file patterns (`*.test.*`, `*.spec.*`, Node's
+ * `*-test.*`, `*_test.*`, `test-*`, `test.*`), as opposed to a file matched only by a directory glob (`**\/test/**`),
+ * which may well be a helper.
+ */
+function primaryTestFile(file: string): boolean {
+  const name = path.basename(file);
+
+  return (
+    /\.(?:test|spec)\.[^.]+$/.test(name) ||
+    /[-_]test\.[^.]+$/.test(name) ||
+    /^test(?:-.+|\.[^.]+)$/.test(name)
+  );
+}
+
+/**
+ * How a module loads a package by its specifier: `none` for a relative module (followed on its own), a Node.js builtin,
+ * the runner's own modules and packages that only assert or mock; `package` otherwise.
+ */
+function packageLoad(specifier: string): 'none' | 'package' {
+  return loadsPackageCode(specifier) ? 'package' : 'none';
+}
+
+/** Members of the runner's mock object that run a function they are given right away (`vi.hoisted(fn)`). */
+const RUNS_ARGUMENT_NOW = new Set(['hoisted', 'isolateModules', 'isolateModulesAsync']);
+
+/**
+ * Whether a call a module makes while it loads is known to register no test: `Symbol(…)`, `Object.freeze(…)`,
+ * `new URL(…)`, a function of Node's path or URL helpers, Node's `createRequire(…)`, a `require` of a literal local
+ * module, builtin or (in `loose` mode, as a binding) package, and the runner's hook and configuration API
+ * (`beforeAll(fn)`, `vi.mock(path, factory)`, `jest.setTimeout(n)`, `mock.timers.enable()`), whose callbacks run later.
+ * Its arguments must be inert too (`inertExpression`).
+ */
+function inertCall(node: ts.CallExpression | ts.NewExpression, strict: boolean, statement: boolean): boolean {
+  const callee = skipParens(node.expression);
+  const args = node.arguments ?? [];
+  const first = args[0] && skipParens(args[0]);
+  const literal = first !== undefined && ts.isStringLiteralLike(first) ? first.text : undefined;
+  const global = (identifier: ts.Expression, name: string) =>
+    ts.isIdentifier(identifier) &&
+    identifier.text === name &&
+    (runnerChecker?.getSymbolAtLocation(identifier)?.declarations ?? []).every((declaration) =>
+      ambientDeclaration(declaration),
+    );
+  const inertArguments = () => args.every((argument) => inertExpression(argument, strict));
+
+  // A dynamic import runs the module when it settles: only a local module (followed) or a builtin.
+  if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
+    return literal !== undefined && packageLoad(literal) === 'none';
+
+  // `require('pkg')` as a statement loads it for its side effects; bound, it counts as an import does.
+  if (ts.isCallExpression(node) && requireFunction(callee))
+    return literal !== undefined && (packageLoad(literal) === 'none' || (!strict && !statement));
+
+  if (ts.isNewExpression(node)) return global(callee, 'URL') && inertArguments();
+
+  if (global(callee, 'Symbol')) return inertArguments();
+
+  if (ts.isPropertyAccessExpression(callee) && global(skipParens(callee.expression), 'Object'))
+    return callee.name.text === 'freeze' && inertArguments();
+
+  if (nodeCreateRequire(callee)) return inertArguments();
+  let root: ts.Expression = callee;
+  const members: string[] = [];
+
+  while (ts.isPropertyAccessExpression(root)) {
+    members.unshift(root.name.text);
+    root = skipParens(root.expression);
+  }
+
+  if (!ts.isIdentifier(root)) return false;
+
+  if (boundSpecifiers(root).some((specifier) => INERT_MODULES.has(specifier))) return inertArguments();
+  const resolved = runnerExport(callee);
+
+  // The runner's hooks (`beforeAll(fn)`, `before(fn)`): their callbacks run around tests, which they cannot register.
+  if (resolved !== undefined && runner.hooks.has(resolved.name)) return inertArguments();
+  const name = runnerName(root);
+
+  // The runner's mock and expectation objects (`vi.mock`, `jest.setTimeout`, `mock.timers.enable`, `expect.extend`),
+  // other than the members that run a function right away.
+  return (
+    name !== NOT_RUNNER &&
+    (runner.mockObjects.has(name) || runner.expect.has(name)) &&
+    !members.some((member) => RUNS_ARGUMENT_NOW.has(member)) &&
+    inertArguments()
+  );
+}
+
+/**
+ * Whether evaluating an expression at module scope can run no code: literals, templates without substitutions,
+ * function, arrow and inert class expressions, object and array literals of inert members (no spread; methods,
+ * getters and setters are only defined; computed keys only as literals), names declared in the file or imported, an
+ * `import.meta` read, and type assertions, `satisfies`, non-null assertions and parentheses around one of these; and
+ * the calls `inertCall` allows. Anything else (a member read of another value, which may be a getter, `await`,
+ * spread, assignment, a template with substitutions, other calls and `new`) may run code.
+ */
+function inertExpression(expression: ts.Expression, strict: boolean): boolean {
+  const value = skipValueWrappers(expression);
+
+  if (
+    ts.isStringLiteralLike(value) ||
+    ts.isNumericLiteral(value) ||
+    ts.isBigIntLiteral(value) ||
+    ts.isRegularExpressionLiteral(value) ||
+    value.kind === ts.SyntaxKind.TrueKeyword ||
+    value.kind === ts.SyntaxKind.FalseKeyword ||
+    value.kind === ts.SyntaxKind.NullKeyword ||
+    ts.isFunctionExpression(value) ||
+    ts.isArrowFunction(value) ||
+    ts.isMetaProperty(value)
+  )
+    return true;
+
+  if (ts.isClassExpression(value)) return inertClass(value, strict);
+
+  // `-1`, `!true`, `void 0`, `typeof x` of an inert operand.
+  if (ts.isPrefixUnaryExpression(value)) return inertExpression(value.operand, strict);
+
+  if (ts.isVoidExpression(value) || ts.isTypeOfExpression(value))
+    return inertExpression(value.expression, strict);
+
+  // `import.meta.url`: a read of the module's own metadata.
+  if (ts.isPropertyAccessExpression(value) && ts.isMetaProperty(skipParens(value.expression))) return true;
+
+  if (ts.isIdentifier(value)) {
+    if (value.text === 'undefined') return true;
+    const declarations = runnerChecker?.getSymbolAtLocation(value)?.declarations ?? [];
+
+    return (
+      declarations.length > 0 &&
+      declarations.every((declaration) => declaration.getSourceFile() === value.getSourceFile())
+    );
+  }
+
+  if (ts.isArrayLiteralExpression(value))
+    return value.elements.every(
+      (element) =>
+        ts.isOmittedExpression(element) || (!ts.isSpreadElement(element) && inertExpression(element, strict)),
+    );
+
+  if (ts.isObjectLiteralExpression(value))
+    return value.properties.every((property) => {
+      if (ts.isSpreadAssignment(property)) return false;
+
+      if (property.name && ts.isComputedPropertyName(property.name)) {
+        const key = skipParens(property.name.expression);
+
+        if (!ts.isStringLiteralLike(key) && !ts.isNumericLiteral(key)) return false;
+      }
+
+      if (ts.isPropertyAssignment(property)) return inertExpression(property.initializer, strict);
+
+      if (ts.isShorthandPropertyAssignment(property)) return inertExpression(property.name, strict);
+
+      // Methods are only defined. A getter or setter runs when the object is read, destructured or spread, which may
+      // happen anywhere: an object literal with one is not inert.
+      return !ts.isGetAccessorDeclaration(property) && !ts.isSetAccessorDeclaration(property);
+    });
+
+  if (ts.isCallExpression(value) || ts.isNewExpression(value)) return inertCall(value, strict, false);
+
+  return false;
+}
+
+/**
+ * Whether defining a class runs no code: no decorators, no static block, no computed member name but a literal, no
+ * static field initialised with anything but an inert expression, and a base class that is inert to evaluate.
+ */
+function inertClass(node: ts.ClassLikeDeclaration, strict: boolean): boolean {
+  if (ts.canHaveDecorators(node) && (ts.getDecorators(node)?.length ?? 0) > 0) return false;
+
+  for (const clause of node.heritageClauses ?? [])
+    if (
+      clause.token === ts.SyntaxKind.ExtendsKeyword &&
+      !clause.types.every((type) => inertExpression(type.expression, strict))
+    )
+      return false;
+
+  return node.members.every((member) => {
+    if (ts.isClassStaticBlockDeclaration(member)) return false;
+
+    if (ts.canHaveDecorators(member) && (ts.getDecorators(member)?.length ?? 0) > 0) return false;
+
+    for (const parameter of ts.isConstructorDeclaration(member) ? member.parameters : [])
+      if ((ts.getDecorators(parameter)?.length ?? 0) > 0) return false;
+
+    if (member.name && ts.isComputedPropertyName(member.name)) {
+      const key = skipParens(member.name.expression);
+
+      if (!ts.isStringLiteralLike(key) && !ts.isNumericLiteral(key)) return false;
+    }
+
+    return (
+      !ts.isPropertyDeclaration(member) ||
+      !member.initializer ||
+      !(ts.getCombinedModifierFlags(member) & ts.ModifierFlags.Static) ||
+      inertExpression(member.initializer, strict)
+    );
+  });
+}
+
+/** `module.exports`, `module.exports.name` or `exports.name`, with `module` and `exports` CommonJS's own. */
+function commonJsExportsTarget(target: ts.Expression): boolean {
+  const value = skipParens(target);
+  const own = (identifier: ts.Expression, name: string) =>
+    ts.isIdentifier(identifier) &&
+    identifier.text === name &&
+    // In a JavaScript file TypeScript records the export assignments themselves as declarations of `module`: only a
+    // name the code declares (a variable, parameter, function, class or import) is not CommonJS's.
+    (runnerChecker?.getSymbolAtLocation(identifier)?.declarations ?? []).every(
+      (declaration) =>
+        ambientDeclaration(declaration) ||
+        !(
+          ts.isVariableDeclaration(declaration) ||
+          ts.isParameter(declaration) ||
+          ts.isBindingElement(declaration) ||
+          ts.isFunctionDeclaration(declaration) ||
+          ts.isClassDeclaration(declaration) ||
+          ts.isImportSpecifier(declaration) ||
+          ts.isImportClause(declaration) ||
+          ts.isNamespaceImport(declaration) ||
+          ts.isImportEqualsDeclaration(declaration)
+        ),
+    );
+  const moduleExports = (node: ts.Expression) =>
+    ts.isPropertyAccessExpression(node) &&
+    node.name.text === 'exports' &&
+    own(skipParens(node.expression), 'module');
+
+  if (moduleExports(value)) return true;
+
+  return (
+    ts.isPropertyAccessExpression(value) &&
+    (moduleExports(skipParens(value.expression)) || own(skipParens(value.expression), 'exports'))
+  );
+}
+
+/** Whether a node carries the `declare` modifier. */
+function declaredAmbient(node: ts.Node): boolean {
+  return (
+    ts.canHaveModifiers(node) &&
+    (ts.getModifiers(node) ?? []).some((m) => m.kind === ts.SyntaxKind.DeclareKeyword)
+  );
+}
+
+/**
+ * Whether a module statement runs no code that could register tests when the module loads (see `moduleRunsCode`).
+ * `strict`: a package imported by name counts as running code (a test file of the runner's own pattern, whose
+ * imports may well register tests); otherwise only a package loaded for its side effects or re-exported whole does.
+ */
+function inertStatement(statement: ts.Statement, strict: boolean): boolean {
+  if (ts.isEmptyStatement(statement) || declaredAmbient(statement)) return true;
+
+  if (
+    ts.isInterfaceDeclaration(statement) ||
+    ts.isTypeAliasDeclaration(statement) ||
+    ts.isFunctionDeclaration(statement)
+  )
+    return true;
+
+  if (ts.isImportDeclaration(statement)) {
+    const clause = statement.importClause;
+
+    if (clause?.isTypeOnly || !ts.isStringLiteralLike(statement.moduleSpecifier)) return true;
+
+    if (packageLoad(statement.moduleSpecifier.text) === 'none') return true;
+    const bindings = clause?.namedBindings;
+    // Only types imported (`import { type X } from 'pkg'`) bind nothing that runs.
+    const typesOnly =
+      clause !== undefined &&
+      clause.name === undefined &&
+      bindings !== undefined &&
+      ts.isNamedImports(bindings) &&
+      bindings.elements.length > 0 &&
+      bindings.elements.every((element) => element.isTypeOnly);
+
+    return typesOnly || (clause !== undefined && !strict);
+  }
+
+  if (ts.isImportEqualsDeclaration(statement)) {
+    if (statement.isTypeOnly || !ts.isExternalModuleReference(statement.moduleReference)) return true;
+    const specifier = statement.moduleReference.expression;
+
+    return ts.isStringLiteralLike(specifier) && (packageLoad(specifier.text) === 'none' || !strict);
+  }
+
+  if (ts.isExportDeclaration(statement)) {
+    if (statement.isTypeOnly || !statement.moduleSpecifier) return true;
+
+    if (!ts.isStringLiteralLike(statement.moduleSpecifier)) return false;
+
+    if (packageLoad(statement.moduleSpecifier.text) === 'none') return true;
+    // `export * from 'pkg'` re-exports it whole; `export { x } from 'pkg'` binds as an import does.
+    const clause = statement.exportClause;
+
+    return clause !== undefined && ts.isNamedExports(clause) && !strict;
+  }
+
+  if (ts.isExportAssignment(statement)) return inertExpression(statement.expression, strict);
+
+  if (ts.isClassDeclaration(statement)) return inertClass(statement, strict);
+
+  if (ts.isEnumDeclaration(statement))
+    return (
+      (ts.getCombinedModifierFlags(statement) & ts.ModifierFlags.Const) !== 0 ||
+      statement.members.every((member) => !member.initializer || inertExpression(member.initializer, strict))
+    );
+
+  if (ts.isVariableStatement(statement))
+    return statement.declarationList.declarations.every((declaration) => {
+      if (!declaration.initializer) return true;
+
+      if (!inertExpression(declaration.initializer, strict)) return false;
+
+      if (ts.isIdentifier(declaration.name)) return true;
+
+      // Destructuring iterates an array pattern; an object pattern reads members, which is inert only on what is
+      // known not to have getters: an object literal, or a module bound by `require`.
+      if (!ts.isObjectBindingPattern(declaration.name)) return false;
+      const value = skipValueWrappers(declaration.initializer);
+
+      return (
+        (ts.isObjectLiteralExpression(value) ||
+          (ts.isCallExpression(value) && requireFunction(value.expression))) &&
+        declaration.name.elements.every(
+          (element) =>
+            !element.dotDotDotToken &&
+            ts.isIdentifier(element.name) &&
+            // A computed key runs its expression: only a literal one is inert.
+            (!element.propertyName ||
+              !ts.isComputedPropertyName(element.propertyName) ||
+              ts.isStringLiteralLike(skipParens(element.propertyName.expression)) ||
+              ts.isNumericLiteral(skipParens(element.propertyName.expression))) &&
+            (!element.initializer || inertExpression(element.initializer, strict)),
+        )
+      );
+    });
+
+  // A call on its own: only one `inertCall` allows (the runner's hooks, `vi.mock`, a `require` of a local module).
+  if (ts.isExpressionStatement(statement)) {
+    const value = skipValueWrappers(statement.expression);
+
+    if (ts.isCallExpression(value)) return inertCall(value, strict, true);
+
+    // CommonJS exports (`module.exports = { … }`, `exports.drop = function () {}`): a plain object with no setters.
+    if (
+      ts.isBinaryExpression(value) &&
+      value.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      commonJsExportsTarget(value.left)
+    )
+      return inertExpression(value.right, strict);
+
+    // A directive (`'use strict'`) or another literal.
+    return ts.isStringLiteralLike(value);
+  }
+
+  return false;
+}
+
+const moduleRunsCodeCache = new WeakMap<
+  ts.SourceFile,
+  { runner: RunnerApi; strict: boolean; value: boolean }[]
+>();
+
+/**
+ * Whether a module may run code while it loads that could register tests. Decided by what is known to run none: the
+ * module is inert only when every one of its statements is (`inertStatement`): imports and exports of modules that
+ * pass the package rule, declarations of functions, types, inert classes and enums, and variables initialised with
+ * inert expressions. Anything else (a call other than an inert one, `await`, a loop, spread, assignment, a member read
+ * that may be a getter, a decorator) may run code.
+ */
+function moduleRunsCode(source: ts.SourceFile, strict: boolean): boolean {
+  const cached = moduleRunsCodeCache
+    .get(source)
+    ?.find((entry) => entry.runner === runner && entry.strict === strict);
+
+  if (cached) return cached.value;
+  const value = !source.statements.every((statement) => inertStatement(statement, strict));
+  const entries = (moduleRunsCodeCache.get(source) ?? []).filter((entry) => entry.runner === runner);
+  entries.push({ runner, strict, value });
+  moduleRunsCodeCache.set(source, entries);
+
+  return value;
+}
+
+/** `require('./data.json')` or `import('./data.json', …)` of a local JSON file that exists: data, no code. */
+function loadsLocalJson(node: ts.CallExpression): boolean {
+  const first = node.arguments[0] && skipParens(node.arguments[0]);
+
+  return (
+    first !== undefined &&
+    ts.isStringLiteralLike(first) &&
+    (node.expression.kind === ts.SyntaxKind.ImportKeyword || requireFunction(node.expression)) &&
+    localJsonModule(first)
+  );
+}
+
+/**
+ * A top-level `const x = require('pkg')` or `const { a, b: c } = require('pkg')` of a bare package whose bindings are
+ * used only inside function bodies, as an ES module's named import of it (`import { a } from 'pkg'`) would be: it
+ * binds the package and runs nothing of it at the file's top level.
+ */
+function boundPackageRequire(declaration: ts.VariableDeclaration): boolean {
+  const value = declaration.initializer && skipParens(declaration.initializer);
+
+  if (
+    !value ||
+    !ts.isCallExpression(value) ||
+    !requireFunction(value.expression) ||
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0
+  )
+    return false;
+  const first = value.arguments[0] && skipParens(value.arguments[0]);
+
+  if (
+    first === undefined ||
+    !ts.isStringLiteralLike(first) ||
+    /^\.\.?(?:\/|$)/.test(first.text) ||
+    runner.modules.has(first.text)
+  )
+    return false;
+  const names: ts.Identifier[] = [];
+
+  if (ts.isIdentifier(declaration.name)) names.push(declaration.name);
+  else if (ts.isObjectBindingPattern(declaration.name)) {
+    for (const element of declaration.name.elements) {
+      if (
+        element.dotDotDotToken ||
+        element.initializer ||
+        !ts.isIdentifier(element.name) ||
+        (element.propertyName && !ts.isIdentifier(element.propertyName))
+      )
+        return false;
+      names.push(element.name);
+    }
+  } else return false;
+  const symbols = new Set(names.map((name) => runnerChecker?.getSymbolAtLocation(name)));
+  const insideFunction = (node: ts.Node): boolean => {
+    for (let current = node.parent; current && !ts.isSourceFile(current); current = current.parent)
+      if (isFunctionLike(current) || ts.isConstructorDeclaration(current) || ts.isAccessor(current))
+        return true;
+
+    return false;
+  };
+
+  return descendants(declaration.getSourceFile()).every(
+    (node) =>
+      !ts.isIdentifier(node) ||
+      names.includes(node) ||
+      !symbols.has(runnerChecker?.getSymbolAtLocation(node)) ||
+      insideFunction(node),
+  );
+}
+
+/**
+ * Whether a relative specifier names a JSON file that exists (`import data from './d.json' with { type: 'json' }`,
+ * `require('./d.json')`): loading it parses data and runs no code.
+ */
+function localJsonModule(specifier: ts.StringLiteralLike): boolean {
+  if (!/\.json$/i.test(specifier.text)) return false;
+
+  return ts.sys.fileExists(path.resolve(path.dirname(specifier.getSourceFile().fileName), specifier.text));
+}
+
+/**
+ * Whether a file, or a local module it loads (statically, by `require` or by a literal relative dynamic import, at any
+ * depth, cycles ending), may run code while it loads that could register tests (`moduleRunsCode`), or loads a local
+ * module that does not resolve. For a file of the runner's own test file pattern (`primaryTestFile`) a package imported
+ * by name anywhere in that graph counts too.
+ */
+function loadsCode(source: ts.SourceFile): boolean {
+  const strict = primaryTestFile(source.fileName);
+  const seen = new Set<ts.SourceFile>([source]);
+  const queue = [source];
+
+  for (let current = queue.shift(); current; current = queue.shift()) {
+    if (moduleRunsCode(current, strict)) return true;
+
+    for (const specifier of localSpecifiers(current)) {
+      if (localJsonModule(specifier)) continue;
+      const declaration = runnerChecker?.getSymbolAtLocation(specifier)?.valueDeclaration;
+
+      if (!declaration || !ts.isSourceFile(declaration)) return true;
+
+      if (seen.has(declaration) || declaration.isDeclarationFile) continue;
+      seen.add(declaration);
+      queue.push(declaration);
+    }
+  }
+
+  return false;
+}
+
+/** Whether a function is called where it is written (`(() => suite())()`, `(function () { … }).call(this)`). */
+function immediatelyInvoked(fn: ts.Node): boolean {
+  let use: ts.Node = fn;
+
+  while (ts.isParenthesizedExpression(use.parent)) use = use.parent;
+  const parent = use.parent;
+
+  if (ts.isCallExpression(parent) && parent.expression === use) return true;
+
+  // `fn.call(…)`, `fn.apply(…)`.
+  return (
+    ts.isPropertyAccessExpression(parent) &&
+    parent.expression === use &&
+    ['call', 'apply'].includes(parent.name.text) &&
+    ts.isCallExpression(parent.parent) &&
+    parent.parent.expression === parent
+  );
+}
+
+/**
+ * The package a test file calls into while it loads (`import { suite } from 'some-lib'; suite()`), which may register
+ * tests the runner reports under the file. Everything the module scope evaluates is read: blocks, `if`, loops, `try`,
+ * `switch`, conditional, logical and comma expressions, call arguments, template literals, class static blocks and
+ * field initialisers, and functions called where they are written (IIFEs); not the bodies of functions only defined.
+ * A call counts when its callee starts from a name bound to a bare package, other than the runner's own modules,
+ * Node.js builtins and packages that only assert or mock. Whether the call really runs is not decided: listing the
+ * file is the safe side.
+ */
+function packageCall(source: ts.SourceFile): { packageCall?: string } {
+  const cached = packageCallCache.get(source);
+
+  if (cached && cached.runner === runner) return cached.value;
+  const value = readPackageCall(source);
+  packageCallCache.set(source, { runner, value });
+
+  return value;
+}
+
+const packageCallCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; value: { packageCall?: string } }>();
+
+/** The relative module specifiers a file loads: static imports and re-exports, `require`, literal dynamic imports. */
+function localSpecifiers(source: ts.SourceFile): ts.StringLiteralLike[] {
+  const specifiers: ts.StringLiteralLike[] = [];
+  const relative = (node: ts.Node | undefined): node is ts.StringLiteralLike =>
+    node !== undefined && ts.isStringLiteralLike(node) && /^\.\.?(?:\/|$)/.test(node.text);
+
+  for (const node of descendants(source)) {
+    let specifier: ts.Node | undefined;
+
+    if (ts.isImportDeclaration(node) && !node.importClause?.isTypeOnly) specifier = node.moduleSpecifier;
+    else if (ts.isExportDeclaration(node) && !node.isTypeOnly) specifier = node.moduleSpecifier;
+    else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference))
+      specifier = node.moduleReference.expression;
+    else if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword || requiredModule(node) !== undefined)
+    )
+      specifier = node.arguments[0] && skipParens(node.arguments[0]);
+
+    if (relative(specifier)) specifiers.push(specifier);
+  }
+
+  return specifiers;
+}
+
+/**
+ * The package call of a file or of a local module it loads, directly or through others (cycles end), with the module
+ * that makes it when that is not the file itself; `unresolved` when a local module it loads does not resolve, which
+ * may make any call.
+ */
+function reachedPackageCall(
+  source: ts.SourceFile,
+  root: string,
+): { packageCall?: string; packageCallVia?: string; unresolved?: true } {
+  const seen = new Set<ts.SourceFile>([source]);
+  const queue = [source];
+
+  for (let current = queue.shift(); current; current = queue.shift()) {
+    const own = packageCall(current).packageCall;
+
+    if (own !== undefined)
+      return current === source
+        ? { packageCall: own }
+        : { packageCall: own, packageCallVia: toPosixRelative(root, current.fileName) };
+
+    for (const specifier of localSpecifiers(current)) {
+      if (localJsonModule(specifier)) continue;
+      const declaration = runnerChecker?.getSymbolAtLocation(specifier)?.valueDeclaration;
+
+      if (!declaration || !ts.isSourceFile(declaration)) return { unresolved: true };
+
+      if (seen.has(declaration) || declaration.isDeclarationFile) continue;
+      seen.add(declaration);
+      queue.push(declaration);
+    }
+  }
+
+  return {};
+}
+
+function readPackageCall(source: ts.SourceFile): { packageCall?: string } {
+  let found: string | undefined;
+  const visit = (node: ts.Node): void => {
+    if (found !== undefined) return;
+
+    // A function only defined runs nothing while the file loads; one called where it is written does.
+    if (
+      (ts.isFunctionDeclaration(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isArrowFunction(node) ||
+        ts.isMethodDeclaration(node) ||
+        ts.isGetAccessorDeclaration(node) ||
+        ts.isSetAccessorDeclaration(node) ||
+        ts.isConstructorDeclaration(node)) &&
+      !immediatelyInvoked(node)
+    )
+      return;
+
+    if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node)) {
+      let callee: ts.Expression = skipParens(
+        ts.isTaggedTemplateExpression(node) ? node.tag : node.expression,
+      );
+
+      // `suite().run()`, `lib.suite()`: the name the call chain starts from.
+      while (
+        ts.isPropertyAccessExpression(callee) ||
+        ts.isElementAccessExpression(callee) ||
+        ts.isCallExpression(callee)
+      )
+        callee = skipParens(callee.expression);
+      const bound = ts.isIdentifier(callee) ? boundPackage(callee) : undefined;
+
+      if (
+        bound !== undefined &&
+        !runner.modules.has(bound) &&
+        !RUNNER_MODULES.has(bound) &&
+        !ASSERTION_OR_MOCK_PACKAGES.has(bound) &&
+        !ASSERTION_OR_MOCK_SCOPES.some((scope) => bound.startsWith(scope))
+      ) {
+        found = bound;
+
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(source, visit);
+
+  return found === undefined ? {} : { packageCall: found };
 }
 
 /**
@@ -245,6 +1319,7 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
     const mocks = collectMocks(source, ctx);
     visitTests(source, [], [], file, mocks, ctx, tests);
   }
+  disambiguateTestIds(tests);
 
   const edges: TestPropertyEdgeType[] = [];
 
@@ -285,7 +1360,11 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
   const safety = moduleSafety(root, checker, resolveModule);
   /** Why the runner may report tests under a file that static analysis did not see (see `inexactNames`). */
   const inexactFile = (source: ts.SourceFile | undefined) => {
-    if (!source || !closedCollection(source, safety.local) || safety.imports(source).unknown)
+    if (
+      !source ||
+      !closedCollection(source, safety.local, !primaryTestFile(source.fileName)) ||
+      safety.imports(source).unknown
+    )
       return { inexactNames: 'open_collection' as const };
     // Modules the runner loads for a mock (`vi.mock(path)`, `vi.importActual(path)`) run their code too.
     const mocked = mockedModules(source);
@@ -313,6 +1392,10 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
     // Every file the test loads, which is what decides whether something it reaches is unseen.
     const loaded = source ? localDependencies(source, checker, root) : [];
     const reached = [source, ...loaded.map((dependency) => sourceFiles.get(path.resolve(root, dependency)))];
+    // A package called by the file or by a local module it loads, which may register tests under the file.
+    const reachedCall = source ? reachedPackageCall(source, root) : {};
+    // An unparsed file may run anything.
+    const runsCode = !source || loadsCode(source);
 
     return {
       path: toPosixRelative(root, file),
@@ -321,8 +1404,32 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
       dependencies: source ? usedDependencies(source, checker, root, usedCache, resolveModule) : [],
       // An unparsed file is unknown too.
       unseenReach:
-        !source || reached.some((reachedFile) => reachedFile && hasUnseenReach(reachedFile, checker)),
+        !source ||
+        reached.some(
+          (reachedFile) => reachedFile && hasUnseenReach(reachedFile, checker, !primaryTestFile(file)),
+        ),
       ...inexactFile(source),
+      // An unparsed file may use anything, and so may one that loads a local module the program did not parse.
+      loadsCode: runsCode,
+      usesRunner:
+        !source ||
+        reachedCall.unresolved === true ||
+        usesRunner(source) ||
+        loaded.some((dependency) => {
+          const loadedSource = sourceFiles.get(path.resolve(root, dependency));
+
+          return !loadedSource || usesRunner(loadedSource);
+        }) ||
+        reached.some((reachedFile) => reachedFile !== undefined && reachesUnfollowed(reachedFile, checker)),
+      ...(source ? foreignRunner(source) : {}),
+      ...(reachedCall.packageCall === undefined
+        ? {}
+        : {
+            packageCall: reachedCall.packageCall,
+            ...(reachedCall.packageCallVia === undefined
+              ? {}
+              : { packageCallVia: reachedCall.packageCallVia }),
+          }),
     };
   });
 
@@ -472,6 +1579,12 @@ interface CallInfo {
   helperAsserts: boolean;
   /** The call runs code static analysis cannot follow: a child process or a dynamic import. */
   opaque: boolean;
+  /**
+   * The call hands a test context to a local function that is also a test callback and is called elsewhere with
+   * something that is not a context: its assertions on the context are not counted where it is followed from, so
+   * whether this call asserts is not known (never read as no assertion).
+   */
+  assertionsUnknown?: boolean;
   /** The call runs a helper that asserts on a Testing Library query of the document (`screen.getByText(...)`). */
   observesDocument?: boolean;
 }
@@ -484,6 +1597,8 @@ interface BodyAnalysis {
   unresolvedImports: Set<string>;
   helperAsserts: boolean;
   opaque: boolean;
+  /** A call runs a helper whose assertions may or may not count (see `CallInfo.assertionsUnknown`). */
+  assertionsUnknown: boolean;
   /** A subtest the body registers may or may not run (its options cannot be read): its body is not counted. */
   unreadSubtests: boolean;
   /** Calls whose result flows into what the body returns. */
@@ -545,6 +1660,7 @@ function analyzeBody(
   const unresolvedImports = new Set<string>();
   let helperAsserts = false;
   let opaque = false;
+  let assertionsUnknown = false;
   // Where a helper that asserts on a Testing Library query of the document is called.
   const documentChecks: number[] = [];
   const handed: BodyAnalysis['handed'] = new Map();
@@ -561,6 +1677,7 @@ function analyzeBody(
       for (const target of info.targets) if (keepDeferred || !target.deferred) calls.push({ node, target });
       helperAsserts ||= info.helperAsserts;
       opaque ||= info.opaque;
+      assertionsUnknown ||= info.assertionsUnknown === true;
 
       // A helper that asserts on the page observes what rendered before it was called; what it renders itself is
       // judged inside it, in its own order (`const before = screen.queryByText(…); render(…); expect(before)…`).
@@ -1388,6 +2505,7 @@ function analyzeBody(
     unresolvedImports,
     helperAsserts,
     opaque,
+    assertionsUnknown,
     unreadSubtests: subtests.unread,
     returned,
     progressOnly,
@@ -2547,6 +3665,11 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
     if (helper) {
       info = helperInfo(helper, ctx);
 
+      // `check(t)` with a real context, while another call hands `check` a plain object: its assertions are not
+      // counted where it is followed from, so whether this call asserts is unknown, never "no assertion".
+      if (handsContextToMixedCallback(node, helper, ctx.checker))
+        info = { ...info, opaque: true, assertionsUnknown: true };
+
       // What a local component renders is what it returns: calls whose result does not reach that are not shown.
       if (mount)
         info = {
@@ -3407,6 +4530,9 @@ function nameText(name: ts.Node): string | undefined {
  * `createRequire`: modules loaded at run time.
  */
 function isRuntimeLoad(node: ts.CallExpression, checker: ts.TypeChecker): boolean {
+  // Local JSON data (`require('./data.json')`) loads no code.
+  if (loadsLocalJson(node)) return false;
+
   if (node.expression.kind === ts.SyntaxKind.ImportKeyword || getsBuiltinModule(node.expression)) return true;
   // `require(...)` and `createRequire(...)` load modules at run time, which static imports do not show.
   if (ts.isIdentifier(node.expression) && ['require', 'createRequire'].includes(node.expression.text))
@@ -3433,7 +4559,16 @@ function helperInfo(body: ts.Node, ctx: Ctx): CallInfo {
   if (cached) return cached;
   // Recursive helpers see themselves as reaching nothing while they are being analysed.
   ctx.helperInfo.set(body, { targets: [], helperAsserts: false, opaque: false });
-  const analysis = analyzeBody(body, ctx);
+  // Followed from a call, a function is not the callback of the test being read, even when it calls itself.
+  const callback = contextCallback;
+  contextCallback = undefined;
+  let analysis: ReturnType<typeof analyzeBody>;
+
+  try {
+    analysis = analyzeBody(body, ctx);
+  } finally {
+    contextCallback = callback;
+  }
   const bySymbol = new Map<string, Target>();
   // Calls the helper handed mocks to that it also returns (`return props;`).
   const returnedMocks = new Set<Invocation>();
@@ -3498,6 +4633,7 @@ function helperInfo(body: ts.Node, ctx: Ctx): CallInfo {
     targets: [...bySymbol.values()],
     helperAsserts: analysis.assertions.length > 0 || analysis.helperAsserts,
     opaque: analysis.opaque,
+    ...(analysis.assertionsUnknown ? { assertionsUnknown: true } : {}),
     observesDocument: analysis.observesDocument,
   };
   ctx.helperInfo.set(body, info);
@@ -5177,7 +6313,7 @@ function registersTests(source: ts.SourceFile): boolean {
  * Anything else (a call such as `runTests()`, `new`, `await`, a dynamic import, `if`, `for`, `try`) makes the file
  * open.
  */
-function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
+function closedCollection(source: ts.SourceFile, local?: LocalCalls, looseRequires = false): boolean {
   const runnerOwn = (name: string) =>
     runner.tests.has(name) ||
     runner.suites.has(name) ||
@@ -5568,6 +6704,9 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
     if (ts.isClassExpression(node)) return inertClass(node);
 
+    // `require('./data.json')`, `import('./data.json', { with: { type: 'json' } })`: data, no code.
+    if (ts.isCallExpression(node) && loadsLocalJson(node)) return true;
+
     if (ts.isAwaitExpression(node)) return inFactory && inert(node.expression);
 
     if (ts.isCallExpression(node)) {
@@ -5725,10 +6864,22 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
         // Defaults in a destructuring pattern (`const { a = setup() } = {}`) run too.
         (declaration) =>
           staticRunnerRequire(declaration) !== undefined ||
+          (looseRequires && ts.isSourceFile(node.parent) && boundPackageRequire(declaration)) ||
           ((!declaration.initializer || inert(declaration.initializer)) &&
             inertBinding(declaration.name) &&
             destructurable(declaration)),
       );
+
+    // CommonJS exports of a value that runs nothing (`module.exports = { … }`, `exports.drop = function () {}`).
+    if (
+      ts.isExpressionStatement(node) &&
+      ts.isSourceFile(node.parent) &&
+      ts.isBinaryExpression(skipParens(node.expression)) &&
+      (skipParens(node.expression) as ts.BinaryExpression).operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      commonJsExportsTarget((skipParens(node.expression) as ts.BinaryExpression).left) &&
+      inert((skipParens(node.expression) as ts.BinaryExpression).right)
+    )
+      return true;
 
     return (
       ts.isExpressionStatement(node) &&
@@ -6911,7 +8062,7 @@ function runnerName(identifier: ts.Identifier): string {
           for (const element of declaration.name.elements)
             aliases.set(
               (element.name as ts.Identifier).text,
-              exportName(((element.propertyName ?? element.name) as ts.Identifier).text),
+              requiredExportName(((element.propertyName ?? element.name) as ts.Identifier).text),
             );
       }
     }
@@ -7076,7 +8227,7 @@ function resolveBindingElement(element: ts.BindingElement): string {
       skipParens((holder as ts.VariableDeclaration).initializer as ts.Expression),
     )
   )
-    return exportName(key.text);
+    return requiredExportName(key.text);
 
   if (ts.isBindingElement(holder)) source = resolveBindingElement(holder);
   else if (
@@ -7180,24 +8331,60 @@ function resolveDeclaration(declaration: ts.Declaration): string {
 
 /**
  * What `require('node:test')` or a member of it stands for: the module's default export (or its namespace), the
- * member read (`.describe`, `['describe']`), or nothing of the runner's for a deeper or computed member.
+ * member read (`.describe`, `['describe']`), a test or suite registration with modifiers read on it
+ * (`['describe']['skip']`, `.it.only`, written `describe.skip` as `runnerExport` reads it), or nothing of the
+ * runner's for anything else. `default` is no member of a required module: CommonJS has no default export, and
+ * `require('node:test').default` is undefined. A computed member is not read (see `computedRunnerMember`).
  */
 function requiredRunnerMember(initializer: ts.Expression): string {
   const members = readMembers(initializer);
 
   if (members.length === 0) return runner.defaultExport ?? NAMESPACE;
+  const [first, ...rest] = members as [string, ...string[]];
 
-  return members.length === 1 && members[0] !== COMPUTED_MEMBER
-    ? exportName(members[0] as string)
-    : NOT_RUNNER;
+  if (first === COMPUTED_MEMBER || first === 'default' || rest.includes(COMPUTED_MEMBER)) return NOT_RUNNER;
+
+  return rest.length === 0 ? first : withModifiers(first, rest);
 }
 
 /**
- * An export of the runner's module by the name it is read under: `default` (`import { default as check }`,
- * `nt.default`, `require('node:test').default`) is the export the default stands for (Node's `test`).
+ * `name` with the members `modifiers` read on it (`describe` with `skip` is `describe.skip`), when `name` registers a
+ * test or a suite and every member is one of its modifiers; `NOT_RUNNER` otherwise (a factory such as `it.each`, an
+ * unknown member).
+ */
+function withModifiers(name: string, modifiers: readonly string[]): string {
+  const root = name.split('.')[0] ?? '';
+
+  if (
+    !(runner.tests.has(root) || runner.suites.has(root)) ||
+    modifiers.some(
+      (member) =>
+        (!runner.modifiers.has(member) && !runner.expectedFailure.has(member)) ||
+        runner.registrationFactories.has(member) ||
+        runner.tableFactories.has(member),
+    )
+  )
+    return NOT_RUNNER;
+
+  return [name, ...modifiers].join('.');
+}
+
+/**
+ * An export of the runner's module by the name an ES module import reads it under: `default` (`import { default as
+ * check }`, `nt.default` with `nt` a namespace import) is the export the default stands for (Node's `test`). Not for
+ * a `require`, see `requiredExportName`.
  */
 function exportName(name: string): string {
   return name === 'default' && runner.defaultExport !== undefined ? runner.defaultExport : name;
+}
+
+/**
+ * A member of the runner's module by the name a CommonJS `require` reads it under (`const { describe } =
+ * require('node:test')`). `default` is nothing: CommonJS has no default export, so `require('node:test').default`
+ * and `const { default: check } = require('node:test')` are undefined, and calling them registers nothing.
+ */
+function requiredExportName(name: string): string {
+  return name === 'default' ? NOT_RUNNER : name;
 }
 
 /** What `runnerName` returns for a name the file binds to something other than the runner's API. */
@@ -7215,8 +8402,12 @@ function runnerExport(expression: ts.Expression): { name: string; chain: string[
   const chain: string[] = [];
   let current = expression;
 
-  while (ts.isPropertyAccessExpression(current)) {
-    chain.push(current.name.text);
+  // `test.skip` and `test['skip']` alike; a member read by a key that is not a literal is not known.
+  while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
+    const member = memberName(current);
+
+    if (member === undefined) return undefined;
+    chain.push(member);
     current = current.expression;
   }
 
@@ -7274,7 +8465,22 @@ function registration(node: ts.CallExpression, names: Set<string>): TestCaseType
   return implied !== undefined && !found.includes(implied) ? [implied, ...found] : found;
 }
 
-function analyzeTest(
+/** `readTest`, with a function the test's callback names (`it('x', check)`) read as that callback. */
+function analyzeTest(...args: Parameters<typeof readTest>): TestCaseType {
+  const previous = contextCallback;
+  const [, info, , , , ctx] = args;
+  const callback = info.callback && skipParens(info.callback);
+  contextCallback =
+    callback !== undefined && !isFunction(callback) ? testFunction(callback, ctx.checker) : undefined;
+
+  try {
+    return readTest(...args);
+  } finally {
+    contextCallback = previous;
+  }
+}
+
+function readTest(
   registrationCall: ts.CallExpression,
   info: Registration,
   suitePath: string[],
@@ -7422,6 +8628,7 @@ function analyzeTest(
     !typeLevel &&
     !unreadCallback &&
     !analysis?.helperAsserts &&
+    !analysis?.assertionsUnknown &&
     !callsHelperWithAssertion(body, source)
   )
     suspicions.push('no_assertion');
@@ -7828,6 +9035,11 @@ interface RuntimeImports {
    * (`import(name)`, `require(name)`, `eval`, `Function`, `globalThis[key]`, `globalThis.it`).
    */
   unknown: boolean;
+  /**
+   * It re-exports the runner's API (`export { test } from 'node:test'`, `export * from 'vitest'`): it registers nothing
+   * itself, but a module importing from it may register tests under names it hands out, so it is open to them.
+   */
+  handsOutRunner: boolean;
 }
 
 const BUILTINS = new Set(builtinModules);
@@ -7915,7 +9127,7 @@ function moduleSafety(
     const cached = importsOf.get(source);
 
     if (cached) return cached;
-    const found: RuntimeImports = { locals: [], external: false, unknown: false };
+    const found: RuntimeImports = { locals: [], external: false, unknown: false, handsOutRunner: false };
     const add = (name: string) => {
       const target = resolve(name, source.fileName);
       const bare = name.startsWith('node:') ? name.slice('node:'.length) : name;
@@ -7924,7 +9136,14 @@ function moduleSafety(
 
       if (target && local(target)) {
         if (!found.locals.includes(target)) found.locals.push(target);
-      } else if (name.startsWith('.') || path.isAbsolute(name)) found.unknown = true;
+      } else if (
+        /\.json$/i.test(name) &&
+        name.startsWith('.') &&
+        ts.sys.fileExists(path.resolve(path.dirname(source.fileName), name))
+      )
+        // Local JSON data loads no code.
+        return;
+      else if (name.startsWith('.') || path.isAbsolute(name)) found.unknown = true;
       // The runner's own module, also when it is a builtin (`node:test`).
       else if (runner.modules.has(name)) return;
       // A builtin that may run source text or load modules (`node:vm`, `node:inspector`'s `Runtime.evaluate`,
@@ -7955,7 +9174,8 @@ function moduleSafety(
       } else if (ts.isExportDeclaration(node)) {
         if (node.moduleSpecifier && !node.isTypeOnly && ts.isStringLiteralLike(node.moduleSpecifier)) {
           // A barrel of the runner (`export * from 'vitest'`) hands its registration API out under other names.
-          if (runner.modules.has(node.moduleSpecifier.text)) found.unknown = true;
+          // It registers nothing itself, but code that imports from it may: an open module for its importers.
+          if (runner.modules.has(node.moduleSpecifier.text)) found.handsOutRunner = true;
           add(node.moduleSpecifier.text);
         }
       } else if (ts.isImportEqualsDeclaration(node)) {
@@ -8580,7 +9800,9 @@ function moduleSafety(
     let result = pure.get(file);
 
     if (result === undefined) {
-      result = closure([file]).every((loaded) => !imports(loaded).external && !imports(loaded).unknown);
+      result = closure([file]).every(
+        (loaded) => !imports(loaded).external && !imports(loaded).unknown && !imports(loaded).handsOutRunner,
+      );
       pure.set(file, result);
     }
 
@@ -8635,7 +9857,7 @@ function moduleSafety(
     // its top level may only declare and call the runner's API or local functions that reach nothing unseen.
     found = registersTests(source)
       ? 'registers'
-      : imports(source).unknown
+      : imports(source).unknown || imports(source).handsOutRunner
         ? 'open'
         : reachesNothingUnseen(source) || closedCollection(source, calls)
           ? 'safe'
@@ -9103,10 +10325,69 @@ function moduleLoadReach(
 
 /**
  * Whether a file runs code out of process, loads modules at run time (dynamic import, `require`, `createRequire`),
- * or imports a relative module that does not resolve.
+ * or imports a relative module that does not resolve. With `looseRequires` (a file matched only by a directory glob,
+ * see `primaryTestFile`), a top-level `const … = require('pkg')` whose bindings are used only inside functions binds
+ * the package as a named import would, which is not a load static analysis misses.
  */
-function hasUnseenReach(source: ts.SourceFile, checker: ts.TypeChecker): boolean {
+function hasUnseenReach(source: ts.SourceFile, checker: ts.TypeChecker, looseRequires = false): boolean {
   return descendants(source).some((node) => {
+    if (
+      looseRequires &&
+      ts.isCallExpression(node) &&
+      ts.isVariableDeclaration(node.parent) &&
+      node.parent.initializer === node &&
+      ts.isVariableStatement(node.parent.parent.parent) &&
+      ts.isSourceFile(node.parent.parent.parent.parent) &&
+      boundPackageRequire(node.parent)
+    )
+      return false;
+
+    if (ts.isCallExpression(node) || ts.isNewExpression(node)) return isOpaqueCall(node, checker);
+    const specifier =
+      ts.isImportDeclaration(node) || ts.isExportDeclaration(node) ? node.moduleSpecifier : undefined;
+
+    return (
+      specifier !== undefined &&
+      ts.isStringLiteral(specifier) &&
+      specifier.text.startsWith('.') &&
+      !checker.getSymbolAtLocation(specifier)
+    );
+  });
+}
+
+/**
+ * `hasUnseenReach` for deciding whether a file may use the runner: a literal relative dynamic import that resolves
+ * (`await import('./suite.mjs')`) is followed as a static import is, into what that module reaches in turn. Anything
+ * else static analysis does not follow (a dynamic import of a package or of a name, a child process) counts.
+ */
+function reachesUnfollowed(
+  source: ts.SourceFile,
+  checker: ts.TypeChecker,
+  seen = new Set<ts.SourceFile>(),
+): boolean {
+  if (seen.has(source)) return false;
+  seen.add(source);
+
+  return descendants(source).some((node) => {
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const argument = node.arguments[0] && skipParens(node.arguments[0]);
+      const loaded =
+        argument && ts.isStringLiteralLike(argument) && /^\.\.?\//.test(argument.text)
+          ? dynamicallyImportedSource(node)
+          : undefined;
+
+      if (loaded !== undefined) return reachesUnfollowed(loaded, checker, seen);
+
+      // A Node.js builtin other than the runner (`await import('node:path')`) loads no test code.
+      if (
+        argument &&
+        ts.isStringLiteralLike(argument) &&
+        !runner.modules.has(argument.text) &&
+        (argument.text.startsWith('node:') || builtinModules.includes(argument.text.split('/')[0] ?? ''))
+      )
+        return false;
+    }
+
     if (ts.isCallExpression(node) || ts.isNewExpression(node)) return isOpaqueCall(node, checker);
     const specifier =
       ts.isImportDeclaration(node) || ts.isExportDeclaration(node) ? node.moduleSpecifier : undefined;
@@ -9220,15 +10501,35 @@ function mockCall(node: ts.Expression, checker: ts.TypeChecker): MockCallRole | 
   )
     return runner.mockCalls.get(name);
 
+  // The same, destructured from the context (`({ mock }) => mock.method(…)`).
+  if (runner.mockContextMember !== undefined && ts.isIdentifier(holder)) {
+    const destructured = contextMemberPath(holder, checker);
+
+    if (destructured?.length === 1 && destructured[0] === runner.mockContextMember)
+      return runner.mockCalls.get(name);
+  }
+
   return runnerMockObject(holder, checker) ? runner.mockCalls.get(name) : undefined;
+}
+
+/**
+ * Whether a declaration is a `const` that binds one of the runner's modules (or members of it) with a plain
+ * `require`, at the top level or inside a function (`const { mock } = require('node:test')` in a test).
+ */
+function requiresRunnerConst(node: ts.Node): node is ts.VariableDeclaration {
+  return (
+    ts.isVariableDeclaration(node) &&
+    node.initializer !== undefined &&
+    (ts.getCombinedNodeFlags(node) & ts.NodeFlags.Const) !== 0 &&
+    runner.modules.has(requiredModule(node.initializer) ?? '')
+  );
 }
 
 /** Whether a `require(...)` call loads one of the runner's modules. */
 function requiresRunnerModule(node: ts.Expression): boolean {
   return (
     ts.isCallExpression(node) &&
-    ts.isIdentifier(node.expression) &&
-    node.expression.text === 'require' &&
+    requireFunction(node.expression) &&
     node.arguments.length === 1 &&
     ts.isStringLiteralLike(node.arguments[0] as ts.Expression) &&
     runner.modules.has((node.arguments[0] as ts.StringLiteralLike).text)
@@ -9245,15 +10546,20 @@ function runnerMockObject(expression: ts.Expression, checker: ts.TypeChecker): b
   if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
     if (!runner.mockObjects.has(memberName(expression) ?? '')) return false;
     let base = skipParens(expression.expression);
+    let throughDefault = false;
 
-    // `nt.default.mock`: the module's default export holds the same mock object.
+    // `nt.default.mock` with `nt` a namespace import: the module's default export holds the same mock object. Only a
+    // namespace has `default`: the default import and a `require` of the module (CommonJS) are the `test` function,
+    // whose `default` is undefined.
     if (
       (ts.isPropertyAccessExpression(base) || ts.isElementAccessExpression(base)) &&
       memberName(base) === 'default'
-    )
+    ) {
       base = skipParens(base.expression);
+      throughDefault = true;
+    }
 
-    if (requiresRunnerModule(base)) return true;
+    if (requiresRunnerModule(base)) return !throughDefault;
 
     if (!ts.isIdentifier(base)) return false;
     const declarations = checker.getSymbolAtLocation(base)?.declarations ?? [];
@@ -9262,10 +10568,11 @@ function runnerMockObject(expression: ts.Expression, checker: ts.TypeChecker): b
       declarations.length > 0 &&
       declarations.every(
         (declaration) =>
-          ((ts.isImportClause(declaration) || ts.isNamespaceImport(declaration)) &&
+          ((ts.isNamespaceImport(declaration) || (ts.isImportClause(declaration) && !throughDefault)) &&
             importsRunnerModule(declaration)) ||
-          (ts.isVariableDeclaration(declaration) &&
-            runner.modules.has(staticRunnerRequire(declaration) ?? '') &&
+          (!throughDefault &&
+            ts.isVariableDeclaration(declaration) &&
+            requiresRunnerConst(declaration) &&
             requiresRunnerModule(skipParens(declaration.initializer as ts.Expression))),
       )
     );
@@ -9290,7 +10597,7 @@ function runnerMockObject(expression: ts.Expression, checker: ts.TypeChecker): b
 
       return (
         ts.isVariableDeclaration(holder) &&
-        runner.modules.has(staticRunnerRequire(holder) ?? '') &&
+        requiresRunnerConst(holder) &&
         requiresRunnerModule(skipParens(holder.initializer as ts.Expression)) &&
         ts.isIdentifier(key) &&
         runner.mockObjects.has(key.text)
@@ -9301,7 +10608,7 @@ function runnerMockObject(expression: ts.Expression, checker: ts.TypeChecker): b
       const value = declaration.initializer && skipParens(declaration.initializer);
 
       return (
-        runner.modules.has(staticRunnerRequire(declaration) ?? '') &&
+        requiresRunnerConst(declaration) &&
         value !== undefined &&
         ts.isPropertyAccessExpression(value) &&
         runner.mockObjects.has(value.name.text) &&
@@ -9337,13 +10644,71 @@ function importsRunnerModule(
 function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth = 0): boolean {
   const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
 
-  if (!declaration || !ts.isParameter(declaration) || depth > 20) return false;
+  if (depth > 20) return false;
+
+  // `const context = t`: an alias of a context is one.
+  if (
+    declaration &&
+    ts.isVariableDeclaration(declaration) &&
+    ts.isIdentifier(declaration.name) &&
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 &&
+    declaration.initializer
+  ) {
+    const value = skipValueWrappers(declaration.initializer);
+
+    return ts.isIdentifier(value) && isTestContext(value, checker, depth + 1);
+  }
+
+  if (!declaration || !ts.isParameter(declaration)) return false;
+
+  return isContextParameter(declaration, checker, depth);
+}
+
+/**
+ * The members of a test context a name destructured from one stands for (`({ assert }) => …` binds `assert` to
+ * `t.assert`, `({ assert: { equal } }) => …` binds `equal` to `t.assert.equal`), outermost first; undefined for a
+ * name not destructured from a context parameter (a rest element, a computed key, any other pattern).
+ */
+function contextMemberPath(identifier: ts.Identifier, checker: ts.TypeChecker): string[] | undefined {
+  const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
+
+  if (!declaration || !ts.isBindingElement(declaration)) return undefined;
+  const path: string[] = [];
+  let node: ts.Node = declaration;
+
+  while (ts.isBindingElement(node)) {
+    const key = node.propertyName ?? node.name;
+
+    if (node.dotDotDotToken || !ts.isObjectBindingPattern(node.parent)) return undefined;
+
+    if (!(ts.isIdentifier(key) || ts.isStringLiteralLike(key))) return undefined;
+    path.unshift(key.text);
+    node = node.parent.parent;
+  }
+
+  return ts.isParameter(node) && isContextParameter(node, checker, 0) ? path : undefined;
+}
+
+/** Whether a function's parameter is the context its runner hands it (see `isTestContext`), under any name or pattern. */
+function isContextParameter(
+  declaration: ts.ParameterDeclaration,
+  checker: ts.TypeChecker,
+  depth: number,
+): boolean {
   const fn = declaration.parent;
 
   if (!isFunctionLike(fn) || fn.parameters[0] !== declaration) return false;
 
-  // A function passed by name as a test, suite or hook callback (`test('x', check)`), wherever else it is used.
-  if (referencedCallbacks(fn.getSourceFile(), checker).has(fn)) return true;
+  // A function passed by name as a test, suite or hook callback (`test('x', check)`), read as that callback: its first
+  // parameter is the context the runner hands it.
+  if (contextCallback === fn && referencedCallbacks(fn.getSourceFile(), checker).has(fn)) return true;
+  // A local function followed from its calls: a context only when every path to it hands it one (see `contextReach`);
+  // one also reached with a plain object (`check({ assert: { equal() {} } })`) is not, and the calls that may hand it a
+  // real context are opaque instead (`handsContextToMixedCallback`).
+  const reach = contextReach(fn.getSourceFile(), checker);
+
+  if (reach.real.has(fn) || reach.fake.has(fn) || reach.unknown.has(fn))
+    return reach.real.has(fn) && !reach.fake.has(fn) && !reach.unknown.has(fn);
 
   if (!isFunction(fn)) return false;
   const call = fn.parent;
@@ -9351,19 +10716,386 @@ function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth
   if (!ts.isCallExpression(call) || !call.arguments.includes(fn)) return false;
   const callee = skipParens(call.expression);
 
+  // A registration of the runner first (`nt.test(…)` with `nt` its namespace is one); `t.test(…)` on a context is a
+  // subtest.
   if (
-    ts.isPropertyAccessExpression(callee) &&
-    callee.name.text === 'test' &&
-    ts.isIdentifier(callee.expression) &&
-    isTestContext(callee.expression, checker, depth + 1)
+    testRegistration(call) !== undefined ||
+    describeRegistration(call) !== undefined ||
+    runner.hooks.has(runnerExport(callee)?.name ?? '')
   )
     return true;
 
   return (
-    testRegistration(call) !== undefined ||
-    describeRegistration(call) !== undefined ||
-    runner.hooks.has(runnerExport(callee)?.name ?? '')
+    ts.isPropertyAccessExpression(callee) &&
+    callee.name.text === 'test' &&
+    ts.isIdentifier(callee.expression) &&
+    isTestContext(callee.expression, checker, depth + 1)
   );
+}
+
+/** The function passed by name (`test('x', check)`) that `analyzeTest` is reading as the test's callback, if any. */
+let contextCallback: ts.Node | undefined;
+
+/**
+ * Whether a call may hand a test context first to a local function whose first parameter receives a context on some
+ * paths and something else on others (in both sets of `contextReach`): its first argument is a parameter, so the call
+ * may come from a test with a real context, where the function's assertions are not counted. Decided from the file's
+ * structure alone, never from which test is being read, so it does not depend on the order tests are analysed in.
+ */
+function handsContextToMixedCallback(node: Invocation, body: ts.Node, checker: ts.TypeChecker): boolean {
+  const fn = body.parent;
+
+  if (!ts.isCallExpression(node) || !fn || !isFunctionLike(fn)) return false;
+  const reach = contextReach(fn.getSourceFile(), checker);
+
+  if (!reach.contextual.has(fn)) return false;
+
+  // A function reading `arguments` uses what it is handed in ways no context is traced through.
+  if (!reach.unknown.has(fn) && !(reach.real.has(fn) && reach.fake.has(fn)) && !readsArguments(fn))
+    return false;
+
+  // Opaque unless what the call hands it is plainly not a context (a literal, an object written there).
+  return traceArgument(node.arguments[0], checker) !== 'value';
+}
+
+/**
+ * Where a value handed to a function comes from, through `const` aliases (`const context = t`) and type assertions:
+ * a parameter, a value plainly not a context (a literal, an object, array, function or class written there, a
+ * `const` holding one), or `unknown` (a `let`, a destructured name, a member, a call's result, an import).
+ */
+function traceArgument(
+  argument: ts.Expression | undefined,
+  checker: ts.TypeChecker,
+  depth = 0,
+): ts.ParameterDeclaration | 'value' | 'unknown' {
+  if (argument === undefined) return 'value';
+  const value = skipValueWrappers(argument);
+
+  if (depth > 20) return 'unknown';
+
+  if (ts.isIdentifier(value)) {
+    if (value.text === 'undefined') return 'value';
+    const declaration = checker.getSymbolAtLocation(value)?.valueDeclaration;
+
+    if (declaration && ts.isParameter(declaration)) return declaration;
+
+    if (
+      declaration &&
+      ts.isVariableDeclaration(declaration) &&
+      ts.isIdentifier(declaration.name) &&
+      (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 &&
+      declaration.initializer
+    )
+      return traceArgument(declaration.initializer, checker, depth + 1);
+
+    return declaration && (ts.isFunctionDeclaration(declaration) || ts.isClassDeclaration(declaration))
+      ? 'value'
+      : 'unknown';
+  }
+
+  return ts.isStringLiteralLike(value) ||
+    ts.isNumericLiteral(value) ||
+    ts.isBigIntLiteral(value) ||
+    ts.isTemplateExpression(value) ||
+    ts.isObjectLiteralExpression(value) ||
+    ts.isArrayLiteralExpression(value) ||
+    ts.isFunctionExpression(value) ||
+    ts.isArrowFunction(value) ||
+    ts.isClassExpression(value) ||
+    value.kind === ts.SyntaxKind.TrueKeyword ||
+    value.kind === ts.SyntaxKind.FalseKeyword ||
+    value.kind === ts.SyntaxKind.NullKeyword
+    ? 'value'
+    : 'unknown';
+}
+
+/** Operators whose result is a fresh primitive: comparisons, arithmetic, bitwise, `in`, `instanceof`. */
+const PRIMITIVE_OPERATORS = new Set<ts.SyntaxKind>([
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.LessThanToken,
+  ts.SyntaxKind.LessThanEqualsToken,
+  ts.SyntaxKind.GreaterThanToken,
+  ts.SyntaxKind.GreaterThanEqualsToken,
+  ts.SyntaxKind.PlusToken,
+  ts.SyntaxKind.MinusToken,
+  ts.SyntaxKind.AsteriskToken,
+  ts.SyntaxKind.AsteriskAsteriskToken,
+  ts.SyntaxKind.SlashToken,
+  ts.SyntaxKind.PercentToken,
+  ts.SyntaxKind.AmpersandToken,
+  ts.SyntaxKind.BarToken,
+  ts.SyntaxKind.CaretToken,
+  ts.SyntaxKind.LessThanLessThanToken,
+  ts.SyntaxKind.GreaterThanGreaterThanToken,
+  ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken,
+  ts.SyntaxKind.InstanceOfKeyword,
+  ts.SyntaxKind.InKeyword,
+]);
+const LOGICAL_OPERATORS = new Set<ts.SyntaxKind>([
+  ts.SyntaxKind.AmpersandAmpersandToken,
+  ts.SyntaxKind.BarBarToken,
+  ts.SyntaxKind.QuestionQuestionToken,
+]);
+
+/**
+ * Whether an expression holding a value is used only in a way that can neither read a member of it nor hand it on:
+ * as an operand of a comparison or arithmetic, `!`, `typeof` or `void`, in a template substitution, as a condition,
+ * or as an operand of `&&`, `||` or `??` whose own value is used that way.
+ */
+function primitiveUse(node: ts.Node): boolean {
+  const parent = node.parent;
+
+  if (ts.isParenthesizedExpression(parent)) return primitiveUse(parent);
+
+  if (ts.isBinaryExpression(parent)) {
+    if (PRIMITIVE_OPERATORS.has(parent.operatorToken.kind)) return true;
+
+    return LOGICAL_OPERATORS.has(parent.operatorToken.kind) && primitiveUse(parent);
+  }
+
+  if (ts.isPrefixUnaryExpression(parent) || ts.isTypeOfExpression(parent) || ts.isVoidExpression(parent))
+    return true;
+
+  if (ts.isTemplateSpan(parent) || ts.isExpressionStatement(parent)) return true;
+
+  if (
+    (ts.isIfStatement(parent) || ts.isWhileStatement(parent) || ts.isDoStatement(parent)) &&
+    parent.expression === node
+  )
+    return true;
+
+  return ts.isConditionalExpression(parent) && parent.condition === node;
+}
+
+/**
+ * Whether a function's first parameter is shown to be unrelated to a test context: never used (and `arguments` never
+ * read), or used only where a member of it cannot be read nor the value handed on (`primitiveUse`, as in
+ * `(a, b) => a === b`). A destructured parameter, a member read, passing it to a call, storing, returning, spreading or
+ * assigning it, and any use of `arguments` all may use it as a context.
+ */
+function unrelatedFirstParameter(fn: ts.SignatureDeclaration, checker: ts.TypeChecker): boolean {
+  const parameter = fn.parameters[0];
+  const body = (fn as ts.FunctionLikeDeclaration).body;
+
+  if (readsArguments(fn)) return false;
+
+  if (!parameter) return true;
+
+  if (!ts.isIdentifier(parameter.name) || !body) return false;
+  const symbol = checker.getSymbolAtLocation(parameter.name);
+
+  return descendants(body).every((node) => {
+    if (!ts.isIdentifier(node)) return true;
+
+    // `{ t }` stores it: the name of a shorthand property refers to the property, its value to the parameter.
+    if (ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node)
+      return checker.getShorthandAssignmentValueSymbol(node.parent) !== symbol;
+
+    return checker.getSymbolAtLocation(node) !== symbol || primitiveUse(node);
+  });
+}
+
+/** Whether a function's body reads `arguments` (also in an arrow function inside it, which shares it). */
+function readsArguments(fn: ts.Node): boolean {
+  const body = (fn as ts.FunctionLikeDeclaration).body;
+
+  return (
+    body !== undefined &&
+    descendants(body).some(
+      (node) =>
+        ts.isIdentifier(node) &&
+        node.text === 'arguments' &&
+        !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
+        !(ts.isPropertyAssignment(node.parent) && node.parent.name === node),
+    )
+  );
+}
+
+interface ContextReach {
+  /** Local functions whose first parameter can receive a real test context. */
+  real: Set<ts.Node>;
+  /** Local functions whose first parameter can receive something plainly not a context. */
+  fake: Set<ts.Node>;
+  /** Local functions whose first parameter can receive a value not traced (a `let`, a member, a call's result). */
+  unknown: Set<ts.Node>;
+  /**
+   * Local functions that use their first parameter as a context may be used: they read a member of it
+   * (`t.assert.equal`, `t.mock.fn`, `t.test`), or hand it to one that does. Only for these does what they receive
+   * decide anything.
+   */
+  contextual: Set<ts.Node>;
+}
+
+const contextReachCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; reach: ContextReach }>();
+/** Files whose `contextReach` is being computed: reads of it meanwhile see nothing. */
+const computingReach = new Set<ts.SourceFile>();
+
+/**
+ * What the first parameter of each local function of a file can receive, computed once per file as a fixpoint over
+ * how functions forward their first parameter (`outer(t) { helper(t) }`, also to themselves). A function receives a
+ * real context when it is passed by name as a test, suite or hook callback, or called with the context of an inline
+ * test, hook or subtest callback; something else when called with any other value, or used in a way static analysis
+ * does not follow (`rows.map(check)`, `check.call(…)`). Deterministic and independent of the order tests are read in.
+ */
+function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextReach {
+  const cached = contextReachCache.get(source);
+
+  if (cached && cached.runner === runner) return cached.reach;
+
+  if (computingReach.has(source))
+    return { real: new Set(), fake: new Set(), unknown: new Set(), contextual: new Set() };
+  computingReach.add(source);
+
+  try {
+    const functions = new Map<ts.Symbol, ts.SignatureDeclaration>();
+
+    for (const node of descendants(source)) {
+      const name = ts.isFunctionDeclaration(node)
+        ? node.name
+        : (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
+            ts.isVariableDeclaration(node.parent) &&
+            ts.isIdentifier(node.parent.name)
+          ? node.parent.name
+          : undefined;
+      const symbol = name && checker.getSymbolAtLocation(name);
+
+      // A function with no parameter may still read what it is handed through `arguments`.
+      if (symbol && ((node as ts.SignatureDeclaration).parameters.length > 0 || readsArguments(node)))
+        functions.set(symbol, node as ts.SignatureDeclaration);
+    }
+    const named = new Set<ts.Node>(functions.values());
+    const callbacks = referencedCallbacks(source, checker);
+    const real = new Set<ts.Node>(callbacks);
+    const fake = new Set<ts.Node>();
+    const unknown = new Set<ts.Node>();
+    /** `from` hands its first parameter to `to`. */
+    const forwards: [ts.Node, ts.Node][] = [];
+    /** Where a value handed first to a function comes from: a local function's first parameter, a real context, or neither. */
+    const origin = (
+      argument: ts.Expression | undefined,
+      depth = 0,
+    ): ts.Node | 'real' | 'fake' | 'unknown' => {
+      const traced = traceArgument(argument, checker);
+
+      if (traced === 'value') return 'fake';
+
+      if (traced === 'unknown' || depth > 20) return 'unknown';
+      const owner = traced.parent;
+
+      // A parameter other than a function's first, or of a function static analysis does not follow (a `forEach`
+      // callback's row): not known.
+      if (!isFunctionLike(owner) || owner.parameters[0] !== traced) return 'unknown';
+
+      if (callbacks.has(owner) || named.has(owner)) return owner;
+
+      if (!isFunction(owner)) return 'unknown';
+      const call = owner.parent;
+
+      if (!ts.isCallExpression(call) || !call.arguments.includes(owner)) return 'unknown';
+      const callee = skipParens(call.expression);
+
+      // A registration of the runner first: `nt.test(…)` with `nt` its namespace or default import registers a test.
+      if (
+        testRegistration(call) !== undefined ||
+        describeRegistration(call) !== undefined ||
+        runner.hooks.has(runnerExport(callee)?.name ?? '')
+      )
+        return 'real';
+
+      // `t.test('child', (child) => …)` on a context: the child's context comes from wherever `t` does.
+      if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'test') {
+        const receiver = traceArgument(callee.expression, checker);
+
+        return receiver === 'value' || receiver === 'unknown'
+          ? 'unknown'
+          : origin(callee.expression, depth + 1);
+      }
+
+      return 'unknown';
+    };
+
+    for (const node of descendants(source)) {
+      if (!ts.isIdentifier(node)) continue;
+      const symbol = checker.getSymbolAtLocation(node);
+      const fn = symbol && functions.get(symbol);
+
+      if (!fn) continue;
+      const declared = ts.isFunctionDeclaration(fn) ? fn.name : (fn.parent as ts.VariableDeclaration).name;
+
+      if (node === declared) continue;
+      let use: ts.Node = node;
+
+      while (ts.isParenthesizedExpression(use.parent)) use = use.parent;
+      const parent = use.parent;
+
+      if (ts.isCallExpression(parent) && parent.expression === use) {
+        const from = origin(parent.arguments[0]);
+
+        if (from === 'real') real.add(fn);
+        else if (from === 'fake') fake.add(fn);
+        else if (from === 'unknown') unknown.add(fn);
+        else forwards.push([from, fn]);
+      } else if (
+        ts.isCallExpression(parent) &&
+        parent.arguments.some((argument) => skipParens(argument) === node)
+      ) {
+        // Passed by name as a callback was seeded above; passed to anything else, it may receive anything.
+        const registration = testRegistration(parent) ?? describeRegistration(parent);
+        const callback = registration
+          ? registration.callback
+          : runner.hooks.has(runnerExport(skipParens(parent.expression))?.name ?? '')
+            ? parent.arguments.at(-1)
+            : undefined;
+
+        if (!callbacks.has(fn) || callback === undefined || skipParens(callback) !== node) fake.add(fn);
+      } else fake.add(fn);
+    }
+
+    for (let changed = true; changed; ) {
+      changed = false;
+
+      for (const [from, to] of forwards) {
+        if (real.has(from) && !real.has(to)) {
+          real.add(to);
+          changed = true;
+        }
+
+        if (fake.has(from) && !fake.has(to)) {
+          fake.add(to);
+          changed = true;
+        }
+
+        if (unknown.has(from) && !unknown.has(to)) {
+          unknown.add(to);
+          changed = true;
+        }
+      }
+    }
+    // Functions reading a member of their first parameter, and those handing it to one (a fixpoint the other way).
+    const contextual = new Set<ts.Node>();
+
+    for (const fn of new Set<ts.Node>([...named, ...callbacks]))
+      if (!unrelatedFirstParameter(fn as ts.SignatureDeclaration, checker)) contextual.add(fn);
+
+    for (let changed = true; changed; ) {
+      changed = false;
+
+      for (const [from, to] of forwards)
+        if (contextual.has(to) && !contextual.has(from)) {
+          contextual.add(from);
+          changed = true;
+        }
+    }
+    const reach = { real, fake, unknown, contextual };
+    contextReachCache.set(source, { runner, reach });
+
+    return reach;
+  } finally {
+    computingReach.delete(source);
+  }
 }
 
 const referencedCallbackCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; callbacks: Set<ts.Node> }>();
@@ -10405,8 +12137,9 @@ function comparedValues(assertion: ts.CallExpression): ts.Expression[] {
     if (resolved.via === 'call') return nodeAssertCompared(resolved.name, values.slice(1));
 
     if (resolved.via === 'apply') {
-      // `.apply(thisArg, [a, b, message])`: the elements of a literal array; any other value hides the positions.
-      const list = values[1] && skipParens(values[1]);
+      // `.apply(thisArg, [a, b, message])`: the elements of a literal array, also through a `const` holding one
+      // (`const args = [a, b]; equal.apply(null, args)`); any other value hides the positions.
+      const list = values[1] && constArrayLiteral(values[1]);
 
       return list !== undefined && ts.isArrayLiteralExpression(list)
         ? nodeAssertCompared(resolved.name, [...list.elements])
@@ -10424,6 +12157,83 @@ function comparedValues(assertion: ts.CallExpression): ts.Expression[] {
     values.push(...current.parent.arguments);
 
   return values;
+}
+
+/** Whether a node only wraps an expression without changing its value: parentheses and type assertions. */
+function valueWrapper(
+  node: ts.Node,
+): node is
+  | ts.ParenthesizedExpression
+  | ts.AsExpression
+  | ts.SatisfiesExpression
+  | ts.NonNullExpression
+  | ts.TypeAssertion {
+  return (
+    ts.isParenthesizedExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isTypeAssertionExpression(node)
+  );
+}
+
+/** An expression without the parentheses and type assertions around it (`(args as [number, number])`). */
+function skipValueWrappers(expression: ts.Expression): ts.Expression {
+  let current = expression;
+
+  while (valueWrapper(current)) current = current.expression;
+
+  return current;
+}
+
+/**
+ * An expression as an array literal: itself when it is one, or the array literal a `const` it names holds when the
+ * array is not changed anywhere (every use of the name is `.apply`'s arguments, which only reads them). Otherwise the
+ * expression as it is. Parentheses and type assertions are seen through.
+ */
+function constArrayLiteral(expression: ts.Expression): ts.Expression {
+  const value = skipValueWrappers(expression);
+
+  if (!ts.isIdentifier(value) || runnerChecker === undefined) return value;
+  const symbol = runnerChecker.getSymbolAtLocation(value);
+  const declaration = symbol?.valueDeclaration;
+  const initializer =
+    declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+      ? skipValueWrappers(declaration.initializer)
+      : undefined;
+
+  if (
+    declaration === undefined ||
+    !ts.isVariableDeclaration(declaration) ||
+    !ts.isIdentifier(declaration.name) ||
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0 ||
+    initializer === undefined ||
+    !ts.isArrayLiteralExpression(initializer)
+  )
+    return value;
+  const checker = runnerChecker;
+  // Every other use only reads it as `.apply`'s arguments: a call, a member write or a method could change it.
+  const readOnly = descendants(declaration.getSourceFile()).every((node) => {
+    if (!ts.isIdentifier(node) || node === declaration.name || node.text !== value.text) return true;
+
+    if (checker.getSymbolAtLocation(node) !== symbol) return true;
+    let use: ts.Node = node;
+
+    while (valueWrapper(use.parent)) use = use.parent;
+    const parent = use.parent;
+
+    // Only the `args` of `Function.prototype.apply` on a node:assert function, which reads them: any other call
+    // (`Reflect.apply(fn, args, [])`, which takes the array as `this`, another function's `.apply`) may change it.
+    return (
+      ts.isCallExpression(parent) &&
+      parent.arguments[1] === use &&
+      ts.isPropertyAccessExpression(skipParens(parent.expression)) &&
+      (skipParens(parent.expression) as ts.PropertyAccessExpression).name.text === 'apply' &&
+      nodeAssertCall(parent)?.via === 'apply'
+    );
+  });
+
+  return readOnly ? initializer : value;
 }
 
 /** node:assert functions that compare their first two arguments and take a message third. */
@@ -10470,12 +12280,21 @@ function nodeAssertCall(
   if (runner.assertModules.size === 0) return undefined;
   const callee = skipParens(call.expression);
   const root = rootIdentifierNode(callee);
+  // `require('node:assert').equal(a, b)`, `require('node:assert')(x)`: the module required where it is called.
+  let start: ts.Expression = callee;
 
-  if (root === undefined) return undefined;
+  while (ts.isPropertyAccessExpression(start) || ts.isElementAccessExpression(start))
+    start = skipParens(start.expression);
+  const inline =
+    ts.isCallExpression(start) && runner.assertModules.has(requiredModule(start) ?? '')
+      ? { declaration: start, exported: '*' }
+      : undefined;
+
+  if (root === undefined && inline === undefined) return undefined;
   const path = readMembers(callee);
   let base: string;
   let extra: string[];
-  const binding = assertModuleBinding(root);
+  const binding = inline ?? (root ? assertModuleBinding(root) : undefined);
 
   if (binding !== undefined) {
     if (MODULE_ITSELF.has(binding.exported)) {
@@ -10488,6 +12307,7 @@ function nodeAssertCall(
     }
   } else if (
     runnerChecker !== undefined &&
+    root !== undefined &&
     path[0] === 'assert' &&
     path[1] !== undefined &&
     isTestContext(root, runnerChecker)
@@ -10495,7 +12315,17 @@ function nodeAssertCall(
     // `t.assert.equal(...)`, `t.assert.called(fn)`: the test context's assertions.
     base = path[1];
     extra = path.slice(2);
-  } else return undefined;
+  } else {
+    // A member destructured from the context (`({ assert }) => assert.equal(…)`, `({ assert: { equal } })`): read as
+    // `t.assert.equal(…)`.
+    const destructured =
+      runnerChecker !== undefined && root !== undefined ? contextMemberPath(root, runnerChecker) : undefined;
+    const full = destructured ? [...destructured, ...path] : undefined;
+
+    if (full?.[0] !== 'assert' || full[1] === undefined) return undefined;
+    base = full[1];
+    extra = full.slice(2);
+  }
 
   // A member read by a computed key (`assert[name](...)`) may be any assertion: all its arguments are compared.
   if (base === COMPUTED_MEMBER || extra.includes(COMPUTED_MEMBER))
@@ -11101,10 +12931,37 @@ const assertBindings = new WeakMap<
 function assertModuleBinding(identifier: ts.Identifier): AssertBinding | undefined {
   const binding = assertModuleBindings(identifier.getSourceFile()).get(identifier.text);
 
-  if (binding === undefined || runnerChecker === undefined) return binding;
+  if (runnerChecker === undefined || runner.assertModules.size === 0) return binding;
   const symbol = runnerChecker.getSymbolAtLocation(identifier);
 
-  return symbol?.declarations?.includes(binding.declaration as ts.Declaration) ? binding : undefined;
+  if (binding !== undefined && symbol?.declarations?.includes(binding.declaration as ts.Declaration))
+    return binding;
+
+  // Bound inside a function (`const assert = require('node:assert')` in a test): the `const` declaring the name.
+  // In a JavaScript file a `require` binds an alias, which has declarations but no value declaration.
+  const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+
+  if (
+    declaration === undefined ||
+    (!ts.isVariableDeclaration(declaration) && !ts.isBindingElement(declaration))
+  )
+    return undefined;
+  let holder: ts.Node = declaration;
+
+  while (ts.isBindingElement(holder)) holder = holder.parent.parent;
+
+  if (
+    !ts.isVariableDeclaration(holder) ||
+    ts.isSourceFile(holder.parent.parent.parent) ||
+    (ts.getCombinedNodeFlags(holder) & ts.NodeFlags.Const) === 0 ||
+    !holder.initializer ||
+    !runner.assertModules.has(requiredModule(holder.initializer) ?? '')
+  )
+    return undefined;
+  const local = new Map<string, AssertBinding>();
+  bindAssertNames(local, holder.name, holder, requiredExport(holder.initializer));
+
+  return local.get(identifier.text);
 }
 
 /** The module a `require('…')` call loads, through member accesses on its result (`require('node:assert').strict`). */
@@ -11156,6 +13013,136 @@ function requiredExport(expression: ts.Expression): string {
   return rest.length === 0 ? '*' : rest.length === 1 ? (rest[0] as string) : UNKNOWN_EXPORT;
 }
 
+/**
+ * Whether an identifier is a `require` function: `require` that is CommonJS's own (no declaration of the file's code
+ * binds it, such as `function require() {}`, `const require = createFake()` or a parameter; only an ambient one, from
+ * Node's types, or none at all), or a name bound to `createRequire(…)` (`const load = createRequire(import.meta.url)`).
+ */
+function isCommonJsRequire(identifier: ts.Identifier): boolean {
+  const declarations = runnerChecker?.getSymbolAtLocation(identifier)?.declarations ?? [];
+
+  // `const load = createRequire(import.meta.url)`, under any name, at the top level or in a function.
+  if (identifier.text !== 'require')
+    return declarations.length > 0 && declarations.every((declaration) => createdRequire(declaration));
+
+  return declarations.every((declaration) => ambientDeclaration(declaration) || createdRequire(declaration));
+}
+
+/** `const require = createRequire(import.meta.url)` (`node:module`), the `require` of an ES module. */
+function createdRequire(declaration: ts.Declaration): boolean {
+  if (
+    !ts.isVariableDeclaration(declaration) ||
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0 ||
+    !declaration.initializer
+  )
+    return false;
+  const value = skipParens(declaration.initializer);
+
+  return ts.isCallExpression(value) && nodeCreateRequire(value.expression);
+}
+
+/** Whether a callee is a `require` function: a name `isCommonJsRequire` accepts, or `createRequire(…)` called inline. */
+function requireFunction(callee: ts.Expression): boolean {
+  const value = skipParens(callee);
+
+  if (ts.isIdentifier(value)) return isCommonJsRequire(value);
+
+  return ts.isCallExpression(value) && nodeCreateRequire(value.expression);
+}
+
+/** The modules `createRequire` comes from. */
+const MODULE_MODULES = new Set(['node:module', 'module']);
+/** Expressions `nodeCreateRequire` is deciding, so that names defined in terms of each other end. */
+const decidingCreateRequire = new Set<ts.Node>();
+
+/**
+ * Whether an expression is Node's own `createRequire`, with no local shadow: a name imported from `node:module` or
+ * `module` (`import { createRequire as make } from 'node:module'`), a member of that module's namespace or default
+ * import (`mod.createRequire`), or of the module required (`require('node:module').createRequire`, also through a
+ * `const` holding it or destructured from it). A `createRequire` from anywhere else may load nothing real.
+ */
+function nodeCreateRequire(expression: ts.Expression): boolean {
+  const value = skipParens(expression);
+
+  if (decidingCreateRequire.has(value)) return false;
+  decidingCreateRequire.add(value);
+
+  try {
+    if (ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) {
+      if (memberName(value) !== 'createRequire') return false;
+      const holder = skipParens(value.expression);
+
+      if (MODULE_MODULES.has(requiredModule(holder) ?? '')) return true;
+
+      return ts.isIdentifier(holder) && boundToModule(holder, true);
+    }
+
+    return ts.isIdentifier(value) && boundToModule(value, false);
+  } finally {
+    decidingCreateRequire.delete(value);
+  }
+}
+
+/**
+ * Whether a name is bound to `node:module` itself (`whole`: a namespace or default import, `const mod =
+ * require('node:module')`) or to its `createRequire` (an import specifier, `const { createRequire } =
+ * require('node:module')`, `const make = require('node:module').createRequire`).
+ */
+function boundToModule(identifier: ts.Identifier, whole: boolean): boolean {
+  const declarations = runnerChecker?.getSymbolAtLocation(identifier)?.declarations ?? [];
+
+  return (
+    declarations.length > 0 &&
+    declarations.every((declaration) => {
+      let node: ts.Node = declaration;
+
+      if (ts.isImportSpecifier(node) || ts.isImportClause(node) || ts.isNamespaceImport(node)) {
+        const named = ts.isImportSpecifier(node);
+        const exported = ts.isImportSpecifier(node) ? (node.propertyName ?? node.name).text : undefined;
+
+        while (!ts.isImportDeclaration(node) && node.parent) node = node.parent;
+
+        return (
+          ts.isImportDeclaration(node) &&
+          !node.importClause?.isTypeOnly &&
+          ts.isStringLiteral(node.moduleSpecifier) &&
+          MODULE_MODULES.has(node.moduleSpecifier.text) &&
+          (whole ? !named : exported === 'createRequire')
+        );
+      }
+
+      if (ts.isBindingElement(node)) {
+        const key = node.propertyName ?? node.name;
+        const holder = node.parent.parent;
+
+        return (
+          !whole &&
+          ts.isIdentifier(key) &&
+          key.text === 'createRequire' &&
+          ts.isObjectBindingPattern(node.parent) &&
+          ts.isVariableDeclaration(holder) &&
+          (ts.getCombinedNodeFlags(holder) & ts.NodeFlags.Const) !== 0 &&
+          holder.initializer !== undefined &&
+          MODULE_MODULES.has(requiredModule(holder.initializer) ?? '') &&
+          readMembers(holder.initializer).length === 0
+        );
+      }
+
+      if (
+        !ts.isVariableDeclaration(node) ||
+        (ts.getCombinedNodeFlags(node) & ts.NodeFlags.Const) === 0 ||
+        !node.initializer
+      )
+        return false;
+      const initializer = skipParens(node.initializer);
+
+      return whole
+        ? MODULE_MODULES.has(requiredModule(initializer) ?? '') && readMembers(initializer).length === 0
+        : nodeCreateRequire(initializer);
+    })
+  );
+}
+
 function requiredModule(expression: ts.Expression): string | undefined {
   let current = skipParens(expression);
 
@@ -11163,8 +13150,7 @@ function requiredModule(expression: ts.Expression): string | undefined {
     current = skipParens(current.expression);
 
   return ts.isCallExpression(current) &&
-    ts.isIdentifier(current.expression) &&
-    current.expression.text === 'require' &&
+    requireFunction(current.expression) &&
     current.arguments.length === 1 &&
     ts.isStringLiteralLike(current.arguments[0] as ts.Expression)
     ? (current.arguments[0] as ts.StringLiteralLike).text
@@ -11181,27 +13167,8 @@ function assertModuleBindings(source: ts.SourceFile): Map<string, AssertBinding>
 
   if (cached && cached.modules === runner.assertModules) return cached.names;
   const names = new Map<string, AssertBinding>();
-  const bind = (name: ts.BindingName, declaration: ts.Node, exported: string): void => {
-    if (ts.isIdentifier(name)) {
-      names.set(name.text, { declaration, exported });
-
-      return;
-    }
-
-    for (const element of name.elements) {
-      if (ts.isOmittedExpression(element)) continue;
-      const key = element.propertyName ?? element.name;
-      // `const { throws: mustThrow } = require('node:assert')` binds `throws`, also below `strict` (the module
-      // itself); a member of anything else, a computed key or an array pattern is unknown.
-      const member =
-        ts.isObjectBindingPattern(name) && !element.dotDotDotToken && MODULE_ITSELF.has(exported)
-          ? ts.isIdentifier(key) || ts.isStringLiteralLike(key)
-            ? key.text
-            : UNKNOWN_EXPORT
-          : UNKNOWN_EXPORT;
-      bind(element.name, element, member);
-    }
-  };
+  const bind = (name: ts.BindingName, declaration: ts.Node, exported: string): void =>
+    bindAssertNames(names, name, declaration, exported);
 
   if (runner.assertModules.size > 0)
     for (const statement of source.statements) {
@@ -11247,6 +13214,37 @@ function assertModuleBindings(source: ts.SourceFile): Map<string, AssertBinding>
   assertBindings.set(source, { modules: runner.assertModules, names });
 
   return names;
+}
+
+/**
+ * Record the names a binding of an assertion module's value binds (`exported`: what the whole value is), into
+ * `names`: a plain name the value, a destructured one the member its key names.
+ */
+function bindAssertNames(
+  names: Map<string, AssertBinding>,
+  name: ts.BindingName,
+  declaration: ts.Node,
+  exported: string,
+): void {
+  if (ts.isIdentifier(name)) {
+    names.set(name.text, { declaration, exported });
+
+    return;
+  }
+
+  for (const element of name.elements) {
+    if (ts.isOmittedExpression(element)) continue;
+    const key = element.propertyName ?? element.name;
+    // `const { throws: mustThrow } = require('node:assert')` binds `throws`, also below `strict` (the module
+    // itself); a member of anything else, a computed key or an array pattern is unknown.
+    const member =
+      ts.isObjectBindingPattern(name) && !element.dotDotDotToken && MODULE_ITSELF.has(exported)
+        ? ts.isIdentifier(key) || ts.isStringLiteralLike(key)
+          ? key.text
+          : UNKNOWN_EXPORT
+        : UNKNOWN_EXPORT;
+    bindAssertNames(names, element.name, element, member);
+  }
 }
 
 /** The identifier an expression starts from (`assert` in `assert.strict.equal`), if any. */
