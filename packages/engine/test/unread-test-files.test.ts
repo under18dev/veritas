@@ -87,10 +87,9 @@ describe('unreadTestFiles', () => {
     });
 
     expect(inventory.tests).toEqual([]);
-    // The barrel is listed too: static analysis takes a re-export of the runner's API for open collection code.
+    // The barrel re-exporting the runner registers nothing and is not open on its own.
     expect(unreadTestFiles(inventory).map((line) => line.slice(0, line.indexOf(' (')))).toEqual([
       'test/dynamic.test.mjs',
-      'test/support.mjs',
     ]);
   });
 
@@ -145,6 +144,18 @@ describe('unreadTestFiles', () => {
         "import data from './helpers/data.json' assert { type: 'json' };\nexport { data };\n",
       'test/json-require.test.cjs':
         "const data = require('./helpers/data.json');\nmodule.exports = { data };\n",
+      'test/json-dynamic.test.mjs':
+        "export const loading = import('./helpers/data.json', { with: { type: 'json' } });\n",
+      // CommonJS exports of inert values.
+      'test/cjs-exports.test.cjs':
+        "module.exports = { limit: 1 };\nmodule.exports.names = ['a'];\nexports.drop = function drop(o) { return o; };\n",
+      // A strict-pattern test file binding a package by require: may register through it.
+      'test/required-lodash.test.cjs':
+        "const { omit } = require('lodash');\nmodule.exports.drop = function drop(o) { return omit(o, 'x'); };\n",
+      // Genuinely open: a dynamic import of a computed name, a computed member of the runner.
+      'test/open-dynamic.test.mjs': "const name = './x.mjs';\nexport const loading = import(name);\n",
+      'test/open-computed.test.cjs':
+        "const key = 'te' + 'st';\nconst register = require('node:test')[key];\nmodule.exports = { register };\n",
       // A helper matched only by the directory glob: a package imported by name and used inside functions.
       'test/helpers/lodash.mjs':
         "import { pick } from 'lodash';\nexport function select(o) { return pick(o, 'a'); }\n",
@@ -174,23 +185,21 @@ describe('unreadTestFiles', () => {
 
     expect(listed.sort()).toEqual([
       'test/await.test.mjs',
-      // Open collection or unseen reach as static analysis reads them (a re-export of the runner's API, a `require`
-      // of a package or a JSON file): never overridden by the inert-syntax rule.
-      'test/barrel.test.mjs',
       'test/decorator.test.ts',
       'test/default.test.mjs',
       'test/for-of.test.mjs',
       'test/getter-destructure.test.mjs',
       'test/getter.test.mjs',
-      'test/helpers/lodash-require.cjs',
       'test/iife.test.mjs',
-      'test/json-require.test.cjs',
       'test/local-call.test.mjs',
       'test/module-exports.test.cjs',
       'test/named-lodash.test.mjs',
       'test/named.test.mjs',
+      'test/open-computed.test.cjs',
+      'test/open-dynamic.test.mjs',
       'test/reexport.test.mjs',
       'test/register.test.mjs',
+      'test/required-lodash.test.cjs',
       'test/setter.test.mjs',
       'test/side-effect-require.test.cjs',
       'test/side-effect.test.mjs',
@@ -213,6 +222,7 @@ describe('unreadTestFiles', () => {
       path.join(root, 'test/hoisted.test.ts'),
       "import { vi } from 'vitest';\nconst h = vi.hoisted(() => ({ n: 1 }));\nexport { h };\n",
     );
+    writeFileSync(path.join(root, 'test/barrel.test.ts'), "export * from 'vitest';\n");
     writeFileSync(
       path.join(root, 'test/users.test.ts'),
       'const users = makeUsers(3);\nfunction makeUsers(n: number) { return n; }\nexport { users };\n',
