@@ -7693,9 +7693,11 @@ function functionName(value: ts.Expression): string | undefined {
 function skippedSubtestBodies(
   body: ts.Node,
   checker: ts.TypeChecker,
-): { skipped: ts.Node[]; unread: boolean } {
-  if (!runner.testOptions) return { skipped: [], unread: false };
+): { skipped: ts.Node[]; unread: boolean; definite: ts.Node[] } {
+  if (!runner.testOptions) return { skipped: [], unread: false, definite: [] };
   const skipped: ts.Node[] = [];
+  // Those known not to run (skipped or todo), not those whose options cannot be read.
+  const definite: ts.Node[] = [];
   let unread = false;
 
   for (const node of descendants(body)) {
@@ -7721,9 +7723,10 @@ function skippedSubtestBodies(
     skipped.push(skipParens(fn));
 
     if (state === 'unknown') unread = true;
+    else definite.push(skipParens(fn));
   }
 
-  return { skipped, unread };
+  return { skipped, unread, definite };
 }
 
 /**
@@ -10968,7 +10971,9 @@ function contextUseUnfollowed(
   };
 
   if (!bind(parameter.name)) return true;
-  const nodes = [body, ...descendants(body)];
+  // Not what subtests known not to run hold (`t.test(name, { skip: true }, fn)`); those whose options cannot be read count.
+  const notRun = skippedSubtestBodies(body, checker).definite;
+  const nodes = [body, ...descendants(body)].filter((node) => !notRun.some((fn) => contains(fn, node)));
   const resolve = (node: ts.Identifier) =>
     ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
       ? checker.getShorthandAssignmentValueSymbol(node.parent)
@@ -11213,7 +11218,11 @@ function assertionReadsProjectSideEffect(
    * Whether code at a node can run for the analysed test: not inside another test's callback, nor inside a hook of a
    * suite that does not enclose the test; in the test itself, its suites' hooks, or at module or suite level.
    */
+  // Subtests of the test known not to run (`t.test(name, { skip: true }, fn)`) write nothing for it.
+  const notRun = skippedSubtestBodies(body, checker).definite;
   const runsForTest = (node: ts.Node): boolean => {
+    if (notRun.some((fn) => contains(fn, node))) return false;
+
     for (let current: ts.Node = node.parent; current && !ts.isSourceFile(current); current = current.parent) {
       if (current === body.parent) return true;
 

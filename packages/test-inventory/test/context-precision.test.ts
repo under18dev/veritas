@@ -592,4 +592,34 @@ describe('test contexts and ordinary helpers', () => {
       restore();
     }
   });
+
+  it('leaves out subtests known not to run, and keeps those whose options cannot be read', () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/sub.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/svc';
+        const options = (globalThis as any).options;
+        test('skipped subtest', (t) => {
+          value(1);
+          t.test('child', { skip: true }, () => (globalThis as any).sink(t));
+        });
+        test('todo subtest', (t) => {
+          value(1);
+          t.test.todo('child', () => (globalThis as any).sink(t));
+        });
+        test('options not read', (t) => {
+          value(1);
+          t.test('child', options, () => (globalThis as any).sink(t));
+        });
+      `,
+    });
+    const { tests } = inventory(root, node.recognition);
+
+    for (const name of ['skipped subtest', 'todo subtest']) {
+      expect(byName(tests, name).suspicions, name).not.toContain('opaque_call');
+      expect(byName(tests, name).suspicions, name).toContain('no_assertion');
+    }
+    expect(byName(tests, 'options not read').suspicions).not.toContain('no_assertion');
+  });
 });
