@@ -1071,4 +1071,40 @@ describe('test contexts and ordinary helpers', () => {
       expect(byName(tests, 'compares it directly').calledSymbols, runner).toEqual([]);
       expect(byName(tests, 'helper compares it').suspicions, runner).not.toContain('opaque_call');
     });
+
+  it('takes a project object called through a helper parameter for unknown even when the helper calls project code', () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/mixed.test.ts': `
+        import { expect, test } from 'vitest';
+        import { svc, value } from '../src/svc';
+        function check(o) { value(1); expect(o.price(1)).toBe(2); }
+        test('both', () => { check(svc); });
+      `,
+    });
+    const { tests } = inventory(root, vitest.recognition);
+
+    expect(byName(tests, 'both').suspicions).toContain('opaque_call');
+  });
+
+  it('counts no side-effect writer inside a function nothing references', () => {
+    const root = tempProject({
+      'src/app.ts': 'export class App { on(handler: () => void) { handler(); } }\n',
+      'test/dead.test.ts': `
+        import { expect, it } from 'vitest';
+        import { App } from '../src/app';
+        let dead = false;
+        let live = false;
+        function neverCalled() { new App().on(() => { dead = true; }); }
+        function setUp() { new App().on(() => { live = true; }); }
+        setUp();
+        it('dead writer', () => { expect(dead).toBe(false); });
+        it('live writer', () => { expect(live).toBe(true); });
+      `,
+    });
+    const { tests } = inventory(root, vitest.recognition);
+
+    expect(byName(tests, 'dead writer').suspicions).not.toContain('opaque_call');
+    expect(byName(tests, 'live writer').suspicions).toContain('opaque_call');
+  });
 });

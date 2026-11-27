@@ -3747,8 +3747,7 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
         info = { ...info, opaque: true, assertionsUnknown: true };
       // `checkObj(svc)` with the helper calling `o.price(1)`: calls of project code made through its parameter, which
       // the helper's own analysis cannot resolve. What they reach is unknown, not absent.
-      else if (info.targets.length === 0 && projectValueCalledThroughParameter(node, helper, ctx))
-        info = { ...info, opaque: true };
+      else if (projectValueCalledThroughParameter(node, helper, ctx)) info = { ...info, opaque: true };
 
       // What a local component renders is what it returns: calls whose result does not reach that are not shown.
       if (mount)
@@ -11374,11 +11373,44 @@ function assertionReadsProjectSideEffect(
    */
   // Subtests of the test known not to run (`t.test(name, { skip: true }, fn)`) write nothing for it.
   const notRun = skippedSubtestBodies(body, checker).definite;
+  /**
+   * Whether a function is shown never to run: declared by name (a function declaration, or a `const` holding a
+   * function) that is neither exported nor referenced anywhere in the file. Anything else may run.
+   */
+  const unreferencedFunction = (fn: ts.Node): boolean => {
+    const name = nameOf(fn);
+    const declaration = ts.isFunctionDeclaration(fn) ? fn : fn.parent;
+
+    if (!name || !ts.isIdentifier(name)) return false;
+    const holder = ts.isVariableDeclaration(declaration) ? declaration.parent.parent : declaration;
+
+    if (
+      ts.canHaveModifiers(holder) &&
+      (ts.getModifiers(holder) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+    )
+      return false;
+    const symbol = checker.getSymbolAtLocation(name);
+
+    return (
+      symbol !== undefined &&
+      !descendants(source).some(
+        (node) =>
+          ts.isIdentifier(node) &&
+          node !== name &&
+          (ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
+            ? checker.getShorthandAssignmentValueSymbol(node.parent)
+            : checker.getSymbolAtLocation(node)) === symbol,
+      )
+    );
+  };
   const runsForTest = (node: ts.Node): boolean => {
     if (notRun.some((fn) => contains(fn, node))) return false;
 
     for (let current: ts.Node = node.parent; current && !ts.isSourceFile(current); current = current.parent) {
       if (current === body.parent) return true;
+
+      // A named function nothing references or exports never runs: what it writes cannot decide the assertion.
+      if (isFunctionLike(current) && unreferencedFunction(current)) return false;
 
       if (!isFunction(current) || !ts.isCallExpression(current.parent)) continue;
       const call = current.parent;
