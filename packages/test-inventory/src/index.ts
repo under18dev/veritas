@@ -112,6 +112,8 @@ interface RunnerApi {
   /** The export a default import of the runner's module stands for (`import test from 'node:test'`), if any. */
   defaultExport: string | undefined;
   beforeEach: Set<string>;
+  /** Hooks that run after each test (`afterEach`). */
+  afterEach: Set<string>;
   /** Hooks that run before a test: `beforeEach` and `beforeAll`. */
   setup: Set<string>;
   hooks: Set<string>;
@@ -151,6 +153,7 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
     optionsSetUnlessFalse: recognition.optionsSetUnlessFalse === true,
     defaultExport: recognition.defaultExport,
     beforeEach: new Set(hooks.beforeEach),
+    afterEach: new Set(hooks.afterEach),
     setup: new Set([...hooks.beforeEach, ...hooks.beforeAll]),
     hooks: new Set([...hooks.beforeEach, ...hooks.beforeAll, ...hooks.afterEach, ...hooks.afterAll]),
     runtimeExports: new Set(recognition.runtimeExports),
@@ -11246,10 +11249,11 @@ function assertionReadsProjectSideEffect(
   if (assertions.length === 0) return false;
   const read = new Set<ts.Symbol>();
 
+  // Only what an assertion evaluates: `expect(() => hit)` never reads `hit`.
   for (const assertion of assertions)
     for (const value of comparedValues(assertion))
       for (const node of [value, ...descendants(value)])
-        if (ts.isIdentifier(node)) {
+        if (ts.isIdentifier(node) && runsWithin(node, value, assertion)) {
           const symbol = checker.getSymbolAtLocation(node);
 
           if (symbol) read.add(symbol);
@@ -11359,10 +11363,7 @@ function assertionReadsProjectSideEffect(
 
       const hook = runnerExport(skipParens(call.expression))?.name ?? '';
 
-      // A teardown hook (`afterEach`, `afterAll`) runs after the assertion: nothing it writes can decide it.
-      if (runner.hooks.has(hook) && !runner.setup.has(hook)) return false;
-
-      if (runner.setup.has(hook)) {
+      if (runner.hooks.has(hook)) {
         let suite: ts.Node | undefined = call.parent;
 
         while (
@@ -11371,8 +11372,22 @@ function assertionReadsProjectSideEffect(
           !(isFunction(suite) && ts.isCallExpression(suite.parent) && describeRegistration(suite.parent))
         )
           suite = suite.parent;
+        const scope = suite ?? source;
+        const encloses = ts.isSourceFile(scope) || contains(scope, body);
 
-        return suite === undefined || ts.isSourceFile(suite) || contains(suite, body);
+        if (runner.setup.has(hook)) return encloses;
+        const start = body.parent.getStart();
+        // A test registered in the scope before the analysed one.
+        const earlierTest = descendants(scope).some(
+          (each) =>
+            ts.isCallExpression(each) && each.getEnd() < start && testRegistration(each) !== undefined,
+        );
+
+        // A teardown hook runs after a test: before the analysed one only when another test of its scope ran first
+        // (`afterEach` of an enclosing suite), or when its suite ended before (an earlier sibling suite's `afterAll`).
+        return runner.afterEach.has(hook)
+          ? encloses && earlierTest
+          : !encloses && scope.getEnd() < start && earlierTest;
       }
     }
 
@@ -11401,15 +11416,11 @@ function assertionReadsProjectSideEffect(
   return false;
 }
 
-/** Builtin constructors whose instances made there have only the standard library's methods. */
-const BUILTIN_CONSTRUCTORS = new Set(['Array', 'Map', 'Set', 'WeakMap', 'WeakSet', 'Date', 'RegExp']);
-
 /**
- * Whether a value handed to a helper is shown to have only the standard library's methods: a primitive (number,
- * string, boolean, bigint, symbol or a literal of one), which no class can extend; or a `const` initialised, there and
- * directly, with an array of literals, a regular expression, a builtin constructor (`new Map()`, `new Date(0)`)
- * or `Promise.resolve(…)`. A value only declared with a builtin type (`const lazy: Promise<number> = new Lazy()`, a
- * project subclass) is not, nor `any`, `unknown` or anything else.
+ * Whether a value handed to a helper is a primitive (number, string, boolean, bigint, symbol or a literal of one),
+ * whose methods are the standard library's: no class extends it, and no property of it can be replaced. An object,
+ * builtin or not, may have its methods replaced or be an instance of a project subclass; `any` and `unknown` may be
+ * anything.
  */
 function builtinValue(argument: ts.Expression, checker: ts.TypeChecker): boolean {
   const primitive =
@@ -11422,67 +11433,7 @@ function builtinValue(argument: ts.Expression, checker: ts.TypeChecker): boolean
   const primitiveType = (each: ts.Type): boolean =>
     each.isUnion() ? each.types.every(primitiveType) : (each.flags & primitive) !== 0;
 
-  if (!(type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) && primitiveType(type)) return true;
-  const value = skipValueWrappers(argument);
-
-  if (!ts.isIdentifier(value)) return false;
-  let symbol = checker.getSymbolAtLocation(value);
-
-  try {
-    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
-  } catch {
-    return false;
-  }
-  const declaration = symbol?.valueDeclaration;
-
-  if (
-    !declaration ||
-    !ts.isVariableDeclaration(declaration) ||
-    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0 ||
-    !declaration.initializer
-  )
-    return false;
-  const initializer = skipValueWrappers(declaration.initializer);
-  const lib = (identifier: ts.Expression) =>
-    ts.isIdentifier(identifier) &&
-    (checker.getSymbolAtLocation(identifier)?.declarations ?? []).every(
-      (each) => each.getSourceFile().isDeclarationFile,
-    );
-
-  // An array of literals (whose elements are no project functions either), a regular expression.
-  if (
-    (ts.isArrayLiteralExpression(initializer) &&
-      initializer.elements.every(
-        (element) =>
-          ts.isStringLiteralLike(element) ||
-          ts.isNumericLiteral(element) ||
-          element.kind === ts.SyntaxKind.TrueKeyword ||
-          element.kind === ts.SyntaxKind.FalseKeyword ||
-          element.kind === ts.SyntaxKind.NullKeyword,
-      )) ||
-    ts.isRegularExpressionLiteral(initializer)
-  )
-    return true;
-
-  if (ts.isNewExpression(initializer)) {
-    const callee = skipParens(initializer.expression);
-
-    return ts.isIdentifier(callee) && BUILTIN_CONSTRUCTORS.has(callee.text) && lib(callee);
-  }
-
-  if (ts.isCallExpression(initializer)) {
-    const callee = skipParens(initializer.expression);
-
-    return (
-      ts.isPropertyAccessExpression(callee) &&
-      callee.name.text === 'resolve' &&
-      ts.isIdentifier(skipParens(callee.expression)) &&
-      (skipParens(callee.expression) as ts.Identifier).text === 'Promise' &&
-      lib(skipParens(callee.expression))
-    );
-  }
-
-  return false;
+  return !(type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) && primitiveType(type);
 }
 
 /**
@@ -11519,16 +11470,24 @@ function projectValueCalledThroughParameter(node: Invocation, body: ts.Node, ctx
     if (!parameter || !ts.isIdentifier(parameter.name) || !projectValue(argument)) return false;
     const symbol = checker.getSymbolAtLocation(parameter.name);
 
-    // A primitive (`const two = 2`) or a well-known builtin (an array, a map, a date) has only the methods of the
-    // standard library, which run no project code; anything typed by project declarations, `any` or `unknown` may.
+    // A primitive (`const two = 2`) has only the methods of the standard library, which run no project code.
     if (builtinValue(argument, checker)) return false;
+    const isParameter = (expression: ts.Expression | undefined) => {
+      const root = expression && rootIdentifierNode(skipValueWrappers(expression));
 
+      return root !== undefined && checker.getSymbolAtLocation(root) === symbol;
+    };
+
+    // Any invocation of it or a member: a call, `new`, a tagged template; or it handed to a call or `new`, which may
+    // invoke it (`Reflect.construct(Ctor, [])`, `Reflect.apply(fn, null, [])`).
     return descendants(body).some(
       (child) =>
-        ts.isCallExpression(child) &&
-        rootIdentifierNode(skipParens(child.expression)) !== undefined &&
-        checker.getSymbolAtLocation(rootIdentifierNode(skipParens(child.expression)) as ts.Identifier) ===
-          symbol,
+        ((ts.isCallExpression(child) || ts.isNewExpression(child)) &&
+          (isParameter(child.expression) ||
+            // An assertion only reads what it is given.
+            (!(ts.isCallExpression(child) && (isExpectCall(child) || isAssertCall(child))) &&
+              (child.arguments ?? []).some((each) => isParameter(each))))) ||
+        (ts.isTaggedTemplateExpression(child) && isParameter(child.tag)),
     );
   });
 }

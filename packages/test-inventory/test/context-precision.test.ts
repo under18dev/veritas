@@ -793,9 +793,11 @@ describe('test contexts and ordinary helpers', () => {
     });
     const { tests } = inventory(root, vitest.recognition);
 
-    for (const name of ['primitive', 'array', 'date'])
-      expect(byName(tests, name).suspicions, name).not.toContain('opaque_call');
-    expect(byName(tests, 'project object').suspicions).toContain('opaque_call');
+    expect(byName(tests, 'primitive').suspicions).not.toContain('opaque_call');
+
+    // An object, builtin or not, may have its methods replaced (`names.at = …`): opaque.
+    for (const name of ['array', 'date', 'project object'])
+      expect(byName(tests, name).suspicions, name).toContain('opaque_call');
   });
 
   it('runs nothing under a skipped subtest at any depth, whatever todo marks sit around it', () => {
@@ -858,7 +860,7 @@ describe('test contexts and ordinary helpers', () => {
     expect(byName(tests, 'helper in the test').suspicions).not.toContain('no_assertion');
   });
 
-  it('counts no side-effect writer in a teardown hook', () => {
+  it('counts a teardown hook writer only once an earlier test of its scope ran', () => {
     const root = tempProject({
       'src/app.ts': 'export class App { on(handler: () => void) { handler(); } }\n',
       'test/teardown.test.ts': `
@@ -869,15 +871,18 @@ describe('test contexts and ordinary helpers', () => {
         describe('suite', () => {
           beforeEach(() => { new App().on(() => { set = true; }); });
           afterEach(() => { new App().on(() => { torn = true; }); });
+          it('teardown first', () => { expect(torn).toBe(false); });
           it('setup writes', () => { expect(set).toBe(true); });
-          it('teardown writes', () => { expect(torn).toBe(false); });
+          it('teardown after a test', () => { expect(torn).toBe(true); });
         });
       `,
     });
     const { tests } = inventory(root, vitest.recognition);
 
     expect(byName(tests, 'setup writes').suspicions).toContain('opaque_call');
-    expect(byName(tests, 'teardown writes').suspicions).not.toContain('opaque_call');
+    // `afterEach` runs before a test only after an earlier one.
+    expect(byName(tests, 'teardown first').suspicions).not.toContain('opaque_call');
+    expect(byName(tests, 'teardown after a test').suspicions).toContain('opaque_call');
   });
 
   it('reads arguments only within the function and the arrows that share it', () => {
@@ -931,6 +936,82 @@ describe('test contexts and ordinary helpers', () => {
 
     expect(byName(tests, 'project subclass').suspicions).toContain('opaque_call');
     expect(byName(tests, 'project subclass').suspicions).not.toContain('target_not_called');
-    expect(byName(tests, 'Promise.resolve').suspicions).not.toContain('opaque_call');
+    // A promise is an object too, whose `then` may be replaced: opaque.
+    expect(byName(tests, 'Promise.resolve').suspicions).toContain('opaque_call');
+  });
+
+  it('reads no variable an assertion only names inside a function it never runs', () => {
+    const root = tempProject({
+      'src/app.ts': 'export class App { on(handler: () => void) { handler(); } }\n',
+      'test/closure.test.ts': `
+        import { expect, it } from 'vitest';
+        import { App } from '../src/app';
+        it('closure only', () => {
+          let hit = 0;
+          new App().on(() => { hit++; });
+          expect(() => hit).toBeDefined();
+        });
+        it('read', () => {
+          let hit = 0;
+          new App().on(() => { hit++; });
+          expect(hit).toBe(1);
+        });
+      `,
+    });
+    const { tests } = inventory(root, vitest.recognition);
+
+    expect(byName(tests, 'closure only').suspicions).not.toContain('opaque_call');
+    expect(byName(tests, 'closure only').targetCalls.some((call) => call.asserted)).toBe(false);
+    // Read: linked to the project call that runs the closure, or inconclusive.
+    expect(
+      byName(tests, 'read').suspicions.includes('opaque_call') ||
+        byName(tests, 'read').targetCalls.some((call) => call.asserted),
+    ).toBe(true);
+  });
+
+  it('takes any invocation of a project value through a helper parameter for a possible project call', () => {
+    const root = tempProject({
+      'src/svc.ts': `${SERVICE}export class Thing { value = 1; }\nexport const tag = (parts: TemplateStringsArray) => parts.join('');\n`,
+      'test/invoke.test.ts': `
+        import { expect, test } from 'vitest';
+        import { Thing, tag } from '../src/svc';
+        function make(Ctor) { expect(new Ctor().value).toBe(1); }
+        function viaReflect(Ctor) { expect(Reflect.construct(Ctor, []).value).toBe(1); }
+        function tagged(fn) { expect(fn\`x\`).toBe('x'); }
+        function asserted(value) { expect(value).toBeDefined(); }
+        test('new', () => { make(Thing); });
+        test('Reflect.construct', () => { viaReflect(Thing); });
+        test('tagged template', () => { tagged(tag); });
+        test('only asserted on', () => { asserted(Thing); });
+      `,
+    });
+    const { tests } = inventory(root, vitest.recognition);
+
+    for (const name of ['new', 'Reflect.construct', 'tagged template'])
+      expect(byName(tests, name).suspicions, name).toContain('opaque_call');
+    // Handed only to an assertion, which reads it: no project call.
+    expect(byName(tests, 'only asserted on').suspicions).not.toContain('opaque_call');
+  });
+
+  it("counts an earlier sibling suite's afterAll writer, and not its own suite's", () => {
+    const root = tempProject({
+      'src/app.ts': 'export class App { on(handler: () => void) { handler(); } }\n',
+      'test/after-all.test.ts': `
+        import { afterAll, describe, expect, it } from 'vitest';
+        import { App } from '../src/app';
+        let done = false;
+        describe('first', () => {
+          afterAll(() => { new App().on(() => { done = true; }); });
+          it('inside', () => { expect(done).toBe(false); });
+        });
+        describe('second', () => {
+          it('after the first suite', () => { expect(done).toBe(true); });
+        });
+      `,
+    });
+    const { tests } = inventory(root, vitest.recognition);
+
+    expect(byName(tests, 'inside').suspicions).not.toContain('opaque_call');
+    expect(byName(tests, 'after the first suite').suspicions).toContain('opaque_call');
   });
 });
