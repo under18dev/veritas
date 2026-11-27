@@ -1014,4 +1014,61 @@ describe('test contexts and ordinary helpers', () => {
     expect(byName(tests, 'inside').suspicions).not.toContain('opaque_call');
     expect(byName(tests, 'after the first suite').suspicions).toContain('opaque_call');
   });
+
+  for (const [runner, recognition, header, runs, compares] of [
+    [
+      'Vitest',
+      vitest.recognition,
+      "import { expect, test } from 'vitest';",
+      (f: string) => `expect(${f}).toThrow();`,
+      (f: string) => `expect(${f}).toBeDefined();`,
+    ],
+    [
+      'Jest',
+      jest.recognition,
+      '',
+      (f: string) => `expect(${f}).toThrow();`,
+      (f: string) => `expect(${f}).toBeDefined();`,
+    ],
+    [
+      'node:test',
+      node.recognition,
+      "import { test } from 'node:test';\nimport assert from 'node:assert/strict';",
+      (f: string) => `assert.throws(${f});`,
+      (f: string) => `assert.ok(${f});`,
+    ],
+  ] as const)
+    it(`takes an assertion that runs a project function for a call of it (${runner})`, () => {
+      const root = tempProject({
+        'src/explode.ts': "export function explode(): never { throw new Error('boom'); }\n",
+        'test/runs.test.ts': `
+          ${header}
+          import { explode } from '../src/explode';
+          function check(f) { ${runs('f')} }
+          function look(f) { ${compares('f')} }
+          test('helper runs it', () => { check(explode); });
+          test('inline helper runs it', () => {
+            const g = (f) => { ${runs('f')} };
+            g(explode);
+          });
+          test('runs it directly', () => { ${runs('explode')} });
+          test('helper compares it', () => { look(explode); });
+          test('compares it directly', () => { ${compares('explode')} });
+        `,
+      });
+      const { tests } = inventory(root, recognition);
+
+      for (const name of ['helper runs it', 'inline helper runs it'])
+        expect(byName(tests, name).suspicions, `${runner} ${name}`).toContain('opaque_call');
+      // Run directly by the assertion: a call of it, asserted.
+      const direct = byName(tests, 'runs it directly');
+      expect(direct.calledSymbols, runner).toEqual(['src/explode.ts#explode']);
+      expect(
+        direct.targetCalls.some((call) => call.asserted),
+        runner,
+      ).toBe(true);
+      // Only compared as a value: no call.
+      expect(byName(tests, 'compares it directly').calledSymbols, runner).toEqual([]);
+      expect(byName(tests, 'helper compares it').suspicions, runner).not.toContain('opaque_call');
+    });
 });

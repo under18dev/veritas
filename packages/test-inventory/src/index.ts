@@ -3822,6 +3822,30 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
         ...passed.map((symbol) => ({ symbol, ownArgs: false, assertedInside: false, flowsToResult: true })),
       ],
     };
+  // `assert.throws(explode)`, `expect(explode).toThrow()`: an assertion that runs the project function it is given
+  // calls it and checks how it behaves, as `() => explode()` would. Other matchers only compare it as a value.
+  const run =
+    ts.isCallExpression(node) && (isExpectCall(node) || isAssertCall(node)) && runsCallback(node)
+      ? node.arguments.flatMap((argument) => {
+          const value = skipParens(argument);
+
+          if (!ts.isIdentifier(value) && !ts.isPropertyAccessExpression(value)) return [];
+
+          if (ctx.checker.getTypeAtLocation(value).getCallSignatures().length === 0) return [];
+          const id = projectSymbolId(aliasTarget(value, ctx.checker), ctx.checker, ctx.projectSet, ctx.root);
+
+          return id && !known.has(id) ? [id] : [];
+        })
+      : [];
+
+  if (run.length > 0)
+    info = {
+      ...info,
+      targets: [
+        ...info.targets,
+        ...run.map((symbol) => ({ symbol, ownArgs: false, assertedInside: true, flowsToResult: true })),
+      ],
+    };
   ctx.callInfo.set(node, info);
 
   return info;
@@ -11484,8 +11508,9 @@ function projectValueCalledThroughParameter(node: Invocation, body: ts.Node, ctx
       (child) =>
         ((ts.isCallExpression(child) || ts.isNewExpression(child)) &&
           (isParameter(child.expression) ||
-            // An assertion only reads what it is given.
-            (!(ts.isCallExpression(child) && (isExpectCall(child) || isAssertCall(child))) &&
+            // An assertion only reads what it is given, unless it runs it (`expect(f).toThrow()`, `assert.throws(f)`).
+            ((!(ts.isCallExpression(child) && (isExpectCall(child) || isAssertCall(child))) ||
+              (ts.isCallExpression(child) && runsCallback(child))) &&
               (child.arguments ?? []).some((each) => isParameter(each))))) ||
         (ts.isTaggedTemplateExpression(child) && isParameter(child.tag)),
     );
