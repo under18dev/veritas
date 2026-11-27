@@ -3,7 +3,7 @@ import { jestTestRunner as jest } from '@under18dev/veritas-test-runner-jest';
 import { nodeTestRunner as node } from '@under18dev/veritas-test-runner-node';
 import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
-import { inventoryTests, setInventoryIterationLimit } from '../src/index.js';
+import { inventoryTests } from '../src/index.js';
 import { tempProject } from './helpers.js';
 
 const SERVICE = `export const svc = { price: (n: number) => n + 1 };\nexport const value = (n: number) => n + 1;\nexport const two = 2;\n`;
@@ -579,21 +579,25 @@ describe('test contexts and ordinary helpers', () => {
     expect(byName(inventory(root, node.recognition).tests, 'const assert').suspicions).toContain(
       'tautological_assertion',
     );
-    const restore = setInventoryIterationLimit(0);
+    const capped = inventoryTests({
+      recognition: node.recognition,
+      root,
+      config: VeritasConfig.parse({ analysis: { testInclude: ['test/*.test.ts'] } }),
+      iterationLimit: 0,
+    });
+    const test = byName(capped.tests, 'const assert');
 
-    try {
-      const test = byName(inventory(root, node.recognition).tests, 'const assert');
-
-      // Stopped at the cap: what the context leads to is unknown, never judged tautological or empty.
-      expect(test.suspicions).toContain('opaque_call');
-      expect(test.suspicions).not.toContain('tautological_assertion');
-      expect(test.suspicions).not.toContain('no_assertion');
-    } finally {
-      restore();
-    }
+    // Stopped at the cap: what the context leads to is unknown, never judged tautological or empty.
+    expect(test.suspicions).toContain('opaque_call');
+    expect(test.suspicions).not.toContain('tautological_assertion');
+    expect(test.suspicions).not.toContain('no_assertion');
+    // The limit holds for that call only.
+    expect(byName(inventory(root, node.recognition).tests, 'const assert').suspicions).toContain(
+      'tautological_assertion',
+    );
   });
 
-  it('leaves out subtests known not to run, and keeps those whose options cannot be read', () => {
+  it('leaves out skipped subtests, and scans todo ones and those whose options cannot be read', () => {
     const root = tempProject({
       'src/svc.ts': SERVICE,
       'test/sub.test.ts': `
@@ -603,6 +607,10 @@ describe('test contexts and ordinary helpers', () => {
         test('skipped subtest', (t) => {
           value(1);
           t.test('child', { skip: true }, () => (globalThis as any).sink(t));
+        });
+        test('chained skip', (t) => {
+          value(1);
+          t.test.skip('child', () => (globalThis as any).sink(t));
         });
         test('todo subtest', (t) => {
           value(1);
@@ -616,10 +624,98 @@ describe('test contexts and ordinary helpers', () => {
     });
     const { tests } = inventory(root, node.recognition);
 
-    for (const name of ['skipped subtest', 'todo subtest']) {
+    for (const name of ['skipped subtest', 'chained skip']) {
       expect(byName(tests, name).suspicions, name).not.toContain('opaque_call');
       expect(byName(tests, name).suspicions, name).toContain('no_assertion');
     }
-    expect(byName(tests, 'options not read').suspicions).not.toContain('no_assertion');
+
+    // A todo subtest runs: what it does with the context counts.
+    for (const name of ['todo subtest', 'options not read'])
+      expect(byName(tests, name).suspicions, name).not.toContain('no_assertion');
+  });
+
+  it('takes what a todo subtest writes through project code as run, and what a skipped one writes as not', () => {
+    const root = tempProject({
+      'src/run.ts': 'export const run = (fn: () => void) => fn();\n',
+      'test/todo.test.ts': `
+        import { test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { run } from '../src/run';
+        test('todo writer', async (t) => {
+          let hit = 0;
+          await t.test('w', { todo: true }, () => { run(() => { hit++; }); });
+          assert.equal(hit, 1);
+        });
+        test('skipped writer', async (t) => {
+          let hit = 0;
+          await t.test('w', { skip: true }, () => { run(() => { hit++; }); });
+          assert.equal(hit, 1);
+        });
+      `,
+    });
+    const { tests } = inventory(root, node.recognition);
+
+    // The todo subtest's project call runs and writes what the test asserts: linked, never disconnected.
+    expect(byName(tests, 'todo writer').suspicions).not.toContain('target_not_called');
+    expect(
+      byName(tests, 'todo writer').suspicions.includes('opaque_call') ||
+        byName(tests, 'todo writer').targetCalls.some((call) => call.asserted),
+    ).toBe(true);
+    // The skipped one never runs.
+    expect(byName(tests, 'skipped writer').suspicions).not.toContain('opaque_call');
+  });
+
+  it("applies the safety net to a running subtest's own context", () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/subctx.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/svc';
+        function check(s) { s.assert.equal(value(1), 2); }
+        const options = { timeout: 1000 };
+        test('skip false', async (t) => {
+          await t.test('child', { skip: false }, (s) => { Reflect.apply(check, null, [s]); });
+        });
+        test('const-held options', async (t) => {
+          await t.test('child', options, (s) => { Reflect.apply(check, null, [s]); });
+        });
+        test('skipped child', async (t) => {
+          value(1);
+          await t.test('child', { skip: true }, (s) => { Reflect.apply(check, null, [s]); });
+        });
+      `,
+    });
+    const { tests } = inventory(root, node.recognition);
+
+    for (const name of ['skip false', 'const-held options']) {
+      expect(byName(tests, name).suspicions, name).not.toContain('no_assertion');
+      expect(byName(tests, name).suspicions, name).toContain('opaque_call');
+    }
+    expect(byName(tests, 'skipped child').suspicions).toContain('no_assertion');
+  });
+
+  it('takes a use past the alias depth assertion counting follows as unfollowed', () => {
+    const aliases = Array.from({ length: 22 }, (_, index) => `const a${index + 1} = a${index};`).join('\n');
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/deep.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/svc';
+        test('deep aliases', (a0) => {
+          ${aliases}
+          a22.assert.equal(value(1), 2);
+        });
+        test('shallow aliases', (a0) => {
+          const a1 = a0;
+          const a2 = a1;
+          a2.assert.equal(value(1), 2);
+        });
+      `,
+    });
+    const { tests } = inventory(root, node.recognition);
+
+    expect(byName(tests, 'deep aliases').suspicions).not.toContain('no_assertion');
+    expect(byName(tests, 'shallow aliases').suspicions).not.toContain('no_assertion');
+    expect(byName(tests, 'shallow aliases').suspicions).not.toContain('opaque_call');
   });
 });

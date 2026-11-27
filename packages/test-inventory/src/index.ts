@@ -191,21 +191,15 @@ let runner: RunnerApi = runnerApi({
  * The id of the test registered in `file` under `suitePath` and `name`. Registrations that share all three (the same
  * literal title twice, two `<dynamic test>`s, two anonymous callbacks) are told apart by `disambiguateTestIds`.
  */
-/** At most this many rounds for each fixpoint or worklist of the inventory; past it, what it decides is unknown. */
-let iterationLimit = 10_000;
-
+/** How many `const` aliases of a test context (`const c = t; const d = c`) assertion counting follows. */
+const ALIAS_DEPTH = 20;
+/** Rounds a fixpoint or worklist of the inventory runs by default; past them, what it decides is unknown. */
+const DEFAULT_ITERATION_LIMIT = 10_000;
 /**
- * Set the iteration limit of the inventory's fixpoints and worklists (for tests of the fail-safe path); returns a
- * function that restores the previous limit.
+ * At most this many rounds for each fixpoint or worklist of the inventory; past it, what it decides is unknown. Set
+ * for the duration of one `inventoryTests` call from its `iterationLimit` option (calls are synchronous).
  */
-export function setInventoryIterationLimit(limit: number): () => void {
-  const previous = iterationLimit;
-  iterationLimit = limit;
-
-  return () => {
-    iterationLimit = previous;
-  };
-}
+let iterationLimit = DEFAULT_ITERATION_LIMIT;
 
 /** Record that a fixpoint or worklist stopped at the iteration limit; its result is then read as unknown. */
 function iterationCapHit(where: string): void {
@@ -1278,16 +1272,24 @@ export function inventoryTests(options: {
   config: VeritasConfig;
   recognition: TestRunnerRecognition;
   files?: string[];
+  /**
+   * Rounds each fixpoint or worklist of the analysis may run (default 10,000); past them, what it decides is read as
+   * unknown (fail-safe), never looped on.
+   */
+  iterationLimit?: number;
 }): TestInventory {
   const previous = runner;
   const previousChecker = runnerChecker;
+  const previousLimit = iterationLimit;
   runner = runnerApi(options.recognition);
+  iterationLimit = options.iterationLimit ?? DEFAULT_ITERATION_LIMIT;
 
   try {
     return inventory(options);
   } finally {
     runner = previous;
     runnerChecker = previousChecker;
+    iterationLimit = previousLimit;
   }
 }
 
@@ -1975,9 +1977,11 @@ function analyzeBody(
   // Subtests that are skipped or todo (`t.test('x', { skip: true }, fn)`) never run: nothing in them counts.
   const subtests = skippedSubtestBodies(body, checker);
   const notRun = (node: ts.Node) => subtests.skipped.some((fn) => contains(fn, node));
+  // A todo subtest runs (Node reports it `# TODO`): its calls run, though its assertions gate nothing.
+  const todo = (node: ts.Node) => subtests.todo.some((fn) => contains(fn, node));
 
   for (const node of descendants(body)) {
-    if (notRun(node)) continue;
+    if (notRun(node) && !todo(node)) continue;
 
     if (ts.isTryStatement(node) && node.catchClause?.variableDeclaration)
       bind(
@@ -2082,7 +2086,11 @@ function analyzeBody(
       if (specifier !== undefined) unresolvedImports.add(specifier);
     }
 
-    if (ts.isCallExpression(node) && (isExpectCall(node) || isAssertCall(node) || contextAssertion(node)))
+    if (
+      !todo(node) &&
+      ts.isCallExpression(node) &&
+      (isExpectCall(node) || isAssertCall(node) || contextAssertion(node))
+    )
       assertions.push(node);
   }
   // What a helper returns may come from enclosing variables, e.g. `const of = (n) => candidates.filter(...)`.
@@ -7693,10 +7701,12 @@ function functionName(value: ts.Expression): string | undefined {
 function skippedSubtestBodies(
   body: ts.Node,
   checker: ts.TypeChecker,
-): { skipped: ts.Node[]; unread: boolean; definite: ts.Node[] } {
-  if (!runner.testOptions) return { skipped: [], unread: false, definite: [] };
+): { skipped: ts.Node[]; unread: boolean; definite: ts.Node[]; todo: ts.Node[] } {
+  if (!runner.testOptions) return { skipped: [], unread: false, definite: [], todo: [] };
+  // Those that run though they gate nothing: todo, and not skipped.
+  const todo: ts.Node[] = [];
   const skipped: ts.Node[] = [];
-  // Those known not to run (skipped or todo), not those whose options cannot be read.
+  // Those known not to run: skipped, not todo (which runs) nor those whose options cannot be read.
   const definite: ts.Node[] = [];
   let unread = false;
 
@@ -7723,10 +7733,57 @@ function skippedSubtestBodies(
     skipped.push(skipParens(fn));
 
     if (state === 'unknown') unread = true;
-    else definite.push(skipParens(fn));
+
+    // A todo subtest still runs (Node reports it `# TODO`), its side effects included: only a skipped one does not.
+    const skip = chained
+      ? outer.name.text === 'skip'
+        ? 'skipped'
+        : 'runs'
+      : subtestState(node, checker, ['skip']);
+
+    if (skip === 'skipped') definite.push(skipParens(fn));
+    else if (skip === 'runs' && state === 'skipped') todo.push(skipParens(fn));
   }
 
-  return { skipped, unread, definite };
+  return { skipped, unread, definite, todo };
+}
+
+/**
+ * The inline callbacks of the subtests a test body registers through a context (`t.test('x', (s) => …)`, nested
+ * ones too) that may run: all but those known to be skipped (a todo runs, and options that cannot be read may let it).
+ */
+function runningSubtestCallbacks(
+  body: ts.Node | undefined,
+  checker: ts.TypeChecker,
+): (ts.ArrowFunction | ts.FunctionExpression)[] {
+  if (body === undefined) return [];
+  const notRun = skippedSubtestBodies(body, checker).definite;
+  const callbacks: (ts.ArrowFunction | ts.FunctionExpression)[] = [];
+
+  for (const node of descendants(body)) {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) continue;
+    const outer = node.expression;
+    const callee =
+      (outer.name.text === 'skip' || outer.name.text === 'todo') &&
+      ts.isPropertyAccessExpression(outer.expression)
+        ? outer.expression
+        : outer;
+
+    if (
+      !ts.isPropertyAccessExpression(callee) ||
+      callee.name.text !== 'test' ||
+      !ts.isIdentifier(callee.expression) ||
+      !isTestContext(callee.expression, checker)
+    )
+      continue;
+    const fn = node.arguments.findLast((argument) => isFunction(skipParens(argument)));
+    const callback = fn && skipParens(fn);
+
+    if (callback && isFunction(callback) && !notRun.some((skipped) => contains(skipped, callback)))
+      callbacks.push(callback);
+  }
+
+  return callbacks;
 }
 
 /**
@@ -7734,7 +7791,11 @@ function skippedSubtestBodies(
  * to anything but `false` or `undefined`, also through a constant holding the object literal (`const o = { skip:
  * true }`); unknown when an option or the options object cannot be read.
  */
-function subtestState(call: ts.CallExpression, checker: ts.TypeChecker): 'runs' | 'skipped' | 'unknown' {
+function subtestState(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+  options: readonly string[] = ['skip', 'todo'],
+): 'runs' | 'skipped' | 'unknown' {
   const resolve = (expression: ts.Expression): ts.Expression => {
     let value = skipParens(expression);
 
@@ -7781,7 +7842,7 @@ function subtestState(call: ts.CallExpression, checker: ts.TypeChecker): 'runs' 
         continue;
       }
 
-      if (name !== 'skip' && name !== 'todo') continue;
+      if (!options.includes(name)) continue;
       const option = skipParens(property.initializer);
 
       if (
@@ -8563,7 +8624,15 @@ function readTest(
   const escapedContext =
     testFn !== undefined &&
     contextIndex !== undefined &&
-    (contextNode !== undefined ? contextUseUnfollowed(testFn, contextNode, checker) : readsArguments(testFn));
+    ((contextNode !== undefined
+      ? contextUseUnfollowed(testFn, contextNode, checker)
+      : readsArguments(testFn)) ||
+      // The subtests it runs are part of it: each one's own context counts too (`t.test('x', (s) => fn.call(s))`).
+      runningSubtestCallbacks(body, checker).some((callback) =>
+        callback.parameters[0] !== undefined
+          ? contextUseUnfollowed(callback, callback.parameters[0], checker)
+          : readsArguments(callback),
+      ));
   const nodes = body ? descendants(body) : [];
   const contextParameter =
     contextNode && ts.isIdentifier(contextNode.name)
@@ -10721,7 +10790,7 @@ function importsRunnerModule(
 function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth = 0): boolean {
   const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
 
-  if (depth > 20) return false;
+  if (depth > ALIAS_DEPTH) return false;
 
   // `const context = t`: an alias of a context is one.
   if (
@@ -10774,7 +10843,7 @@ function contextMemberPath(
     ts.isVariableDeclaration(node) &&
     node.initializer &&
     (ts.getCombinedNodeFlags(node) & ts.NodeFlags.Const) !== 0 &&
-    depth < 20
+    depth < ALIAS_DEPTH
   ) {
     const value = skipValueWrappers(node.initializer);
 
@@ -10948,12 +11017,17 @@ function contextUseUnfollowed(
 
   if (readsArguments(fn) || parameter.dotDotDotToken) return true;
   const symbols = new Set<ts.Symbol>();
+  // How many aliases away from the parameter each name is: counting assertions follows no more than `ALIAS_DEPTH`.
+  const depths = new Map<ts.Symbol, number>();
   const declarations = new Set<ts.Node>();
-  const bind = (name: ts.BindingName): boolean => {
+  const bind = (name: ts.BindingName, depth: number): boolean => {
     if (ts.isIdentifier(name)) {
       const symbol = checker.getSymbolAtLocation(name);
 
-      if (symbol) symbols.add(symbol);
+      if (symbol) {
+        symbols.add(symbol);
+        depths.set(symbol, depth);
+      }
       declarations.add(name);
 
       return true;
@@ -10966,11 +11040,11 @@ function contextUseUnfollowed(
           (!element.propertyName ||
             !ts.isComputedPropertyName(element.propertyName) ||
             ts.isStringLiteralLike(skipParens(element.propertyName.expression))) &&
-          bind(element.name)),
+          bind(element.name, depth)),
     );
   };
 
-  if (!bind(parameter.name)) return true;
+  if (!bind(parameter.name, 0)) return true;
   // Not what subtests known not to run hold (`t.test(name, { skip: true }, fn)`); those whose options cannot be read count.
   const notRun = skippedSubtestBodies(body, checker).definite;
   const nodes = [body, ...descendants(body)].filter((node) => !notRun.some((fn) => contains(fn, node)));
@@ -11003,8 +11077,10 @@ function contextUseUnfollowed(
 
         if (symbol && symbols.has(symbol)) {
           aliases.add(node);
+          const depth = (depths.get(symbol) ?? 0) + 1;
 
-          if (!bind(node.name)) return true;
+          // Past the depth assertion counting follows, a use through it would not be credited: unfollowed.
+          if (depth >= ALIAS_DEPTH || !bind(node.name, depth)) return true;
           added = true;
         }
       }
