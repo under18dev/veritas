@@ -57,6 +57,8 @@ export const nodeTestRunner: TestRunnerProvider = {
     chainedModifiersWin: true,
     // `test(function addsOne() {})` is titled `addsOne`.
     functionTitles: true,
+    // `test(name, (t) => …)`: the test context.
+    testContext: true,
     // Node checks `skip !== undefined && skip !== false`: an empty reason, 0 or null still skips.
     optionsSetUnlessFalse: true,
     hooks: {

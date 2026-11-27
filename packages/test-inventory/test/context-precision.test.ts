@@ -356,4 +356,167 @@ describe('test contexts and ordinary helpers', () => {
     expect(byName(tests, 'Should call onAbort').suspicions).toContain('opaque_call');
     expect(byName(tests, 'written by the test itself').suspicions).not.toContain('opaque_call');
   });
+
+  it('never judges a test whose context goes where it is not followed as asserting nothing (safety net)', () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/net.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/svc';
+        test('handed to an unknown function', (t) => { (globalThis as any).run(t); });
+        test('destructured and handed on', ({ assert }) => { (globalThis as any).run(assert); });
+        test('aliased and returned', (t) => { const c = t as unknown; return c; });
+        test('cast and stored', (t) => { const box = { c: t as unknown }; void box; });
+        test('spread', (t) => { const copy = { ...t }; void copy; });
+        test('tautological with an escaping context', (t) => {
+          (globalThis as any).run(t);
+          t.assert.equal(1, 1);
+        });
+        test('direct member calls only', (t) => { t.diagnostic(String(value(1))); t.assert.equal(value(1), 2); });
+        test('reads a member in a template', (t) => { void \`\${t.name}\`; });
+      `,
+    });
+    const { tests } = inventory(root, node.recognition);
+
+    for (const name of [
+      'handed to an unknown function',
+      'destructured and handed on',
+      'aliased and returned',
+      'cast and stored',
+      'spread',
+      'tautological with an escaping context',
+    ]) {
+      const test = byName(tests, name);
+
+      expect(test.suspicions, name).not.toContain('no_assertion');
+      expect(test.suspicions, name).not.toContain('tautological_assertion');
+      expect(test.suspicions, name).toContain('opaque_call');
+    }
+    expect(byName(tests, 'direct member calls only').suspicions).not.toContain('opaque_call');
+    // Nothing escapes and nothing asserts: judged as before.
+    expect(byName(tests, 'reads a member in a template').suspicions).toContain('no_assertion');
+  });
+
+  it("never reads Jest's done as a context", () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/done.test.ts': `
+        import { value } from '../src/svc';
+        function finish(done: () => void) { done(); }
+        test('hands done on', (done) => { value(1); finish(done); });
+        test('by reference', finish);
+      `,
+    });
+    const { tests } = inventory(root, jest.recognition);
+
+    for (const name of ['hands done on', 'by reference']) {
+      expect(byName(tests, name).suspicions, name).not.toContain('opaque_call');
+      expect(byName(tests, name).suspicions, name).toContain('no_assertion');
+    }
+  });
+
+  it('follows a destructured member of the context handed to a helper', () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/member.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/svc';
+        function check(assert) { assert.equal(value(1), 2); }
+        test('destructured member', ({ assert }) => { check(assert); });
+      `,
+    });
+    const { tests } = inventory(root, node.recognition);
+
+    expect(byName(tests, 'destructured member').suspicions).not.toContain('no_assertion');
+    expect(byName(tests, 'destructured member').suspicions).toContain('opaque_call');
+  });
+
+  it("reads Vitest's test.for context at its position: ctx.expect, a renamed expect and a named helper", () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/for.test.ts': `
+        import { test } from 'vitest';
+        import { value } from '../src/svc';
+        function check(ctx) { ctx.expect(value(1)).toBe(2); }
+        function forHelper([n]: [number], ctx) { ctx.expect(value(n)).toBe(2); }
+        test.for([[1]])('ctx.expect %s', ([n], ctx) => { ctx.expect(value(n)).toBe(2); });
+        test.for([[1]])('renamed %s', ([n], { expect: e }) => { e(value(n)).toBe(2); });
+        test.for([[1]])('named %s', forHelper);
+        test.for([[1]])('handed on %s', ([n], ctx) => { void n; check(ctx); });
+      `,
+    });
+    const { tests } = inventory(root, vitest.recognition);
+
+    for (const name of ['ctx.expect %s', 'renamed %s', 'named %s']) {
+      expect(byName(tests, name).suspicions, name).not.toContain('no_assertion');
+      expect(
+        byName(tests, name).targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(true);
+    }
+    expect(byName(tests, 'handed on %s').suspicions).not.toContain('no_assertion');
+  });
+
+  it('counts only side-effect writers that can run for the test', () => {
+    const root = tempProject({
+      'src/app.ts': `
+        export class App {
+          handlers: (() => void)[] = [];
+          on(handler: () => void) { this.handlers.push(handler); }
+        }
+      `,
+      'test/scope.test.ts': `
+        import { beforeEach, describe, expect, it } from 'vitest';
+        import { App } from '../src/app';
+        let flag = false;
+        describe('other suite', () => {
+          beforeEach(() => { new App().on(() => { flag = true; }); });
+          it('writes in its own hook', () => { expect(flag).toBe(true); });
+        });
+        describe('suite', () => {
+          it('another test writes', () => { new App().on(() => { flag = true; }); });
+          it.skip('a skipped test writes', () => { new App().on(() => { flag = true; }); });
+          it('only reads', () => { expect(flag).toBe(true); });
+        });
+      `,
+    });
+    const { tests } = inventory(root, vitest.recognition);
+
+    // Its own suite's hook writes: linked, inconclusive.
+    expect(byName(tests, 'writes in its own hook').suspicions).toContain('opaque_call');
+    // Only other tests and another suite's hook write: not linked.
+    expect(byName(tests, 'only reads').suspicions).not.toContain('opaque_call');
+  });
+
+  it('takes a write through a cast for a reassignment', () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/cast.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/svc';
+        function check(t) { t.assert.equal(value(1), 2); }
+        const fake = { assert: { equal() {} } };
+        test('by reference', check);
+        test('cast write', (t) => {
+          let context = t;
+          (context as any) = fake;
+          check(context);
+        });
+        test('non-null write', (t) => {
+          let context: typeof t | undefined = t;
+          context! = fake as never;
+          check(context);
+        });
+      `,
+    });
+    const { tests } = inventory(root, node.recognition);
+
+    for (const name of ['cast write', 'non-null write']) {
+      expect(
+        byName(tests, name).targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(false);
+      expect(byName(tests, name).suspicions, name).not.toContain('no_assertion');
+    }
+  });
 });
