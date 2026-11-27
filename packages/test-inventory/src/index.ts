@@ -967,6 +967,75 @@ function moduleRunsCode(source: ts.SourceFile, strict: boolean): boolean {
   return value;
 }
 
+/** `require('./data.json')` or `import('./data.json', …)` of a local JSON file that exists: data, no code. */
+function loadsLocalJson(node: ts.CallExpression): boolean {
+  const first = node.arguments[0] && skipParens(node.arguments[0]);
+
+  return (
+    first !== undefined &&
+    ts.isStringLiteralLike(first) &&
+    (node.expression.kind === ts.SyntaxKind.ImportKeyword || requireFunction(node.expression)) &&
+    localJsonModule(first)
+  );
+}
+
+/**
+ * A top-level `const x = require('pkg')` or `const { a, b: c } = require('pkg')` of a bare package whose bindings are
+ * used only inside function bodies, as an ES module's named import of it (`import { a } from 'pkg'`) would be: it
+ * binds the package and runs nothing of it at the file's top level.
+ */
+function boundPackageRequire(declaration: ts.VariableDeclaration): boolean {
+  const value = declaration.initializer && skipParens(declaration.initializer);
+
+  if (
+    !value ||
+    !ts.isCallExpression(value) ||
+    !requireFunction(value.expression) ||
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0
+  )
+    return false;
+  const first = value.arguments[0] && skipParens(value.arguments[0]);
+
+  if (
+    first === undefined ||
+    !ts.isStringLiteralLike(first) ||
+    /^\.\.?(?:\/|$)/.test(first.text) ||
+    runner.modules.has(first.text)
+  )
+    return false;
+  const names: ts.Identifier[] = [];
+
+  if (ts.isIdentifier(declaration.name)) names.push(declaration.name);
+  else if (ts.isObjectBindingPattern(declaration.name)) {
+    for (const element of declaration.name.elements) {
+      if (
+        element.dotDotDotToken ||
+        element.initializer ||
+        !ts.isIdentifier(element.name) ||
+        (element.propertyName && !ts.isIdentifier(element.propertyName))
+      )
+        return false;
+      names.push(element.name);
+    }
+  } else return false;
+  const symbols = new Set(names.map((name) => runnerChecker?.getSymbolAtLocation(name)));
+  const insideFunction = (node: ts.Node): boolean => {
+    for (let current = node.parent; current && !ts.isSourceFile(current); current = current.parent)
+      if (isFunctionLike(current) || ts.isConstructorDeclaration(current) || ts.isAccessor(current))
+        return true;
+
+    return false;
+  };
+
+  return descendants(declaration.getSourceFile()).every(
+    (node) =>
+      !ts.isIdentifier(node) ||
+      names.includes(node) ||
+      !symbols.has(runnerChecker?.getSymbolAtLocation(node)) ||
+      insideFunction(node),
+  );
+}
+
 /**
  * Whether a relative specifier names a JSON file that exists (`import data from './d.json' with { type: 'json' }`,
  * `require('./d.json')`): loading it parses data and runs no code.
@@ -1291,7 +1360,11 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
   const safety = moduleSafety(root, checker, resolveModule);
   /** Why the runner may report tests under a file that static analysis did not see (see `inexactNames`). */
   const inexactFile = (source: ts.SourceFile | undefined) => {
-    if (!source || !closedCollection(source, safety.local) || safety.imports(source).unknown)
+    if (
+      !source ||
+      !closedCollection(source, safety.local, !primaryTestFile(source.fileName)) ||
+      safety.imports(source).unknown
+    )
       return { inexactNames: 'open_collection' as const };
     // Modules the runner loads for a mock (`vi.mock(path)`, `vi.importActual(path)`) run their code too.
     const mocked = mockedModules(source);
@@ -1331,7 +1404,10 @@ function inventory(options: { root: string; config: VeritasConfig; files?: strin
       dependencies: source ? usedDependencies(source, checker, root, usedCache, resolveModule) : [],
       // An unparsed file is unknown too.
       unseenReach:
-        !source || reached.some((reachedFile) => reachedFile && hasUnseenReach(reachedFile, checker)),
+        !source ||
+        reached.some(
+          (reachedFile) => reachedFile && hasUnseenReach(reachedFile, checker, !primaryTestFile(file)),
+        ),
       ...inexactFile(source),
       // An unparsed file may use anything, and so may one that loads a local module the program did not parse.
       loadsCode: runsCode,
@@ -4454,6 +4530,9 @@ function nameText(name: ts.Node): string | undefined {
  * `createRequire`: modules loaded at run time.
  */
 function isRuntimeLoad(node: ts.CallExpression, checker: ts.TypeChecker): boolean {
+  // Local JSON data (`require('./data.json')`) loads no code.
+  if (loadsLocalJson(node)) return false;
+
   if (node.expression.kind === ts.SyntaxKind.ImportKeyword || getsBuiltinModule(node.expression)) return true;
   // `require(...)` and `createRequire(...)` load modules at run time, which static imports do not show.
   if (ts.isIdentifier(node.expression) && ['require', 'createRequire'].includes(node.expression.text))
@@ -6234,7 +6313,7 @@ function registersTests(source: ts.SourceFile): boolean {
  * Anything else (a call such as `runTests()`, `new`, `await`, a dynamic import, `if`, `for`, `try`) makes the file
  * open.
  */
-function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
+function closedCollection(source: ts.SourceFile, local?: LocalCalls, looseRequires = false): boolean {
   const runnerOwn = (name: string) =>
     runner.tests.has(name) ||
     runner.suites.has(name) ||
@@ -6625,6 +6704,9 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
 
     if (ts.isClassExpression(node)) return inertClass(node);
 
+    // `require('./data.json')`, `import('./data.json', { with: { type: 'json' } })`: data, no code.
+    if (ts.isCallExpression(node) && loadsLocalJson(node)) return true;
+
     if (ts.isAwaitExpression(node)) return inFactory && inert(node.expression);
 
     if (ts.isCallExpression(node)) {
@@ -6782,10 +6864,22 @@ function closedCollection(source: ts.SourceFile, local?: LocalCalls): boolean {
         // Defaults in a destructuring pattern (`const { a = setup() } = {}`) run too.
         (declaration) =>
           staticRunnerRequire(declaration) !== undefined ||
+          (looseRequires && ts.isSourceFile(node.parent) && boundPackageRequire(declaration)) ||
           ((!declaration.initializer || inert(declaration.initializer)) &&
             inertBinding(declaration.name) &&
             destructurable(declaration)),
       );
+
+    // CommonJS exports of a value that runs nothing (`module.exports = { … }`, `exports.drop = function () {}`).
+    if (
+      ts.isExpressionStatement(node) &&
+      ts.isSourceFile(node.parent) &&
+      ts.isBinaryExpression(skipParens(node.expression)) &&
+      (skipParens(node.expression) as ts.BinaryExpression).operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      commonJsExportsTarget((skipParens(node.expression) as ts.BinaryExpression).left) &&
+      inert((skipParens(node.expression) as ts.BinaryExpression).right)
+    )
+      return true;
 
     return (
       ts.isExpressionStatement(node) &&
@@ -8941,6 +9035,11 @@ interface RuntimeImports {
    * (`import(name)`, `require(name)`, `eval`, `Function`, `globalThis[key]`, `globalThis.it`).
    */
   unknown: boolean;
+  /**
+   * It re-exports the runner's API (`export { test } from 'node:test'`, `export * from 'vitest'`): it registers nothing
+   * itself, but a module importing from it may register tests under names it hands out, so it is open to them.
+   */
+  handsOutRunner: boolean;
 }
 
 const BUILTINS = new Set(builtinModules);
@@ -9028,7 +9127,7 @@ function moduleSafety(
     const cached = importsOf.get(source);
 
     if (cached) return cached;
-    const found: RuntimeImports = { locals: [], external: false, unknown: false };
+    const found: RuntimeImports = { locals: [], external: false, unknown: false, handsOutRunner: false };
     const add = (name: string) => {
       const target = resolve(name, source.fileName);
       const bare = name.startsWith('node:') ? name.slice('node:'.length) : name;
@@ -9037,7 +9136,14 @@ function moduleSafety(
 
       if (target && local(target)) {
         if (!found.locals.includes(target)) found.locals.push(target);
-      } else if (name.startsWith('.') || path.isAbsolute(name)) found.unknown = true;
+      } else if (
+        /\.json$/i.test(name) &&
+        name.startsWith('.') &&
+        ts.sys.fileExists(path.resolve(path.dirname(source.fileName), name))
+      )
+        // Local JSON data loads no code.
+        return;
+      else if (name.startsWith('.') || path.isAbsolute(name)) found.unknown = true;
       // The runner's own module, also when it is a builtin (`node:test`).
       else if (runner.modules.has(name)) return;
       // A builtin that may run source text or load modules (`node:vm`, `node:inspector`'s `Runtime.evaluate`,
@@ -9068,7 +9174,8 @@ function moduleSafety(
       } else if (ts.isExportDeclaration(node)) {
         if (node.moduleSpecifier && !node.isTypeOnly && ts.isStringLiteralLike(node.moduleSpecifier)) {
           // A barrel of the runner (`export * from 'vitest'`) hands its registration API out under other names.
-          if (runner.modules.has(node.moduleSpecifier.text)) found.unknown = true;
+          // It registers nothing itself, but code that imports from it may: an open module for its importers.
+          if (runner.modules.has(node.moduleSpecifier.text)) found.handsOutRunner = true;
           add(node.moduleSpecifier.text);
         }
       } else if (ts.isImportEqualsDeclaration(node)) {
@@ -9693,7 +9800,9 @@ function moduleSafety(
     let result = pure.get(file);
 
     if (result === undefined) {
-      result = closure([file]).every((loaded) => !imports(loaded).external && !imports(loaded).unknown);
+      result = closure([file]).every(
+        (loaded) => !imports(loaded).external && !imports(loaded).unknown && !imports(loaded).handsOutRunner,
+      );
       pure.set(file, result);
     }
 
@@ -9748,7 +9857,7 @@ function moduleSafety(
     // its top level may only declare and call the runner's API or local functions that reach nothing unseen.
     found = registersTests(source)
       ? 'registers'
-      : imports(source).unknown
+      : imports(source).unknown || imports(source).handsOutRunner
         ? 'open'
         : reachesNothingUnseen(source) || closedCollection(source, calls)
           ? 'safe'
@@ -10216,10 +10325,23 @@ function moduleLoadReach(
 
 /**
  * Whether a file runs code out of process, loads modules at run time (dynamic import, `require`, `createRequire`),
- * or imports a relative module that does not resolve.
+ * or imports a relative module that does not resolve. With `looseRequires` (a file matched only by a directory glob,
+ * see `primaryTestFile`), a top-level `const … = require('pkg')` whose bindings are used only inside functions binds
+ * the package as a named import would, which is not a load static analysis misses.
  */
-function hasUnseenReach(source: ts.SourceFile, checker: ts.TypeChecker): boolean {
+function hasUnseenReach(source: ts.SourceFile, checker: ts.TypeChecker, looseRequires = false): boolean {
   return descendants(source).some((node) => {
+    if (
+      looseRequires &&
+      ts.isCallExpression(node) &&
+      ts.isVariableDeclaration(node.parent) &&
+      node.parent.initializer === node &&
+      ts.isVariableStatement(node.parent.parent.parent) &&
+      ts.isSourceFile(node.parent.parent.parent.parent) &&
+      boundPackageRequire(node.parent)
+    )
+      return false;
+
     if (ts.isCallExpression(node) || ts.isNewExpression(node)) return isOpaqueCall(node, checker);
     const specifier =
       ts.isImportDeclaration(node) || ts.isExportDeclaration(node) ? node.moduleSpecifier : undefined;
