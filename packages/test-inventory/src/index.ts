@@ -8579,15 +8579,23 @@ function registration(node: ts.CallExpression, names: Set<string>): TestCaseType
 /** `readTest`, with a function the test's callback names (`it('x', check)`) read as that callback. */
 function analyzeTest(...args: Parameters<typeof readTest>): TestCaseType {
   const previous = contextCallback;
-  const [, info, , , , ctx] = args;
+  const previousIndex = contextCallbackIndex;
+  const [registrationCall, info, , , , ctx] = args;
   const callback = info.callback && skipParens(info.callback);
-  contextCallback =
+  const fn =
     callback !== undefined && !isFunction(callback) ? testFunction(callback, ctx.checker) : undefined;
+  const index = runner.testContext ? registrationContextIndex(registrationCall) : undefined;
+  // Read as this registration hands it: the context at its position, none for a table row. A function registered
+  // both ways is not read as having a context (`readTest` leaves the registration that hands one inconclusive).
+  contextCallback =
+    fn !== undefined && index !== undefined && !contextIndexConflict(fn, ctx.checker) ? fn : undefined;
+  contextCallbackIndex = index;
 
   try {
     return readTest(...args);
   } finally {
     contextCallback = previous;
+    contextCallbackIndex = previousIndex;
   }
 }
 
@@ -8617,16 +8625,22 @@ function readTest(
   // The test's context, for a runner that hands one (Node's `t`, Vitest's `ctx`; not Jest's `done`), at the position
   // its callback takes it: a table row comes first with `each`, before the context with Vitest's `test.for`.
   const contextIndex = runner.testContext ? registrationContextIndex(registrationCall) : undefined;
-  const contextNode = contextIndex !== undefined ? testFn?.parameters[contextIndex] : undefined;
+  // A function registered elsewhere with a table row (or the context elsewhere) has no known context here.
+  const contextNode =
+    contextIndex !== undefined && !(testFn !== undefined && contextIndexConflict(testFn, checker))
+      ? testFn?.parameters[contextIndex]
+      : undefined;
   // Safety net: the context (or a member destructured from it, an alias, a cast) used in any way but a direct member
   // call the inventory reads (`t.assert.equal(…)`, `t.mock.fn()`, `t.test(…)`, `ctx.expect(…)`) may hold assertions
   // the inventory does not see, whatever is known of where it goes.
   const escapedContext =
     testFn !== undefined &&
     contextIndex !== undefined &&
-    ((contextNode !== undefined
-      ? contextUseUnfollowed(testFn, contextNode, checker)
-      : readsArguments(testFn)) ||
+    // Registered elsewhere with a table row or the context elsewhere: not known which it gets here.
+    (contextIndexConflict(testFn, checker) ||
+      (contextNode !== undefined
+        ? contextUseUnfollowed(testFn, contextNode, checker)
+        : readsArguments(testFn)) ||
       // The subtests it runs are part of it: each one's own context counts too (`t.test('x', (s) => fn.call(s))`).
       runningSubtestCallbacks(body, checker).some((callback) =>
         callback.parameters[0] !== undefined
@@ -10869,13 +10883,14 @@ function isContextParameter(
   // Only for a runner that hands one (not Jest, whose first argument is `done`), at the position the callback takes
   // it: a table row comes first with `each`, before the context with `for`.
   if (!runner.testContext || !isFunctionLike(fn)) return false;
+
+  // A function passed by name as a test, suite or hook callback (`test('x', check)`), read as the callback of the
+  // registration being analysed: the context is the parameter at the position that registration hands it.
+  if (contextCallback === fn)
+    return contextCallbackIndex !== undefined && fn.parameters[contextCallbackIndex] === declaration;
   const index = contextIndexOf(fn, checker);
 
   if (index === undefined || fn.parameters[index] !== declaration) return false;
-
-  // A function passed by name as a test, suite or hook callback (`test('x', check)`), read as that callback: its first
-  // parameter is the context the runner hands it.
-  if (contextCallback === fn) return true;
   // A local function followed from its calls: a context only when every path to it hands it one (see `contextReach`);
   // one also reached with a plain object (`check({ assert: { equal() {} } })`) is not, and the calls that may hand it a
   // real context are opaque instead (`handsContextToMixedCallback`).
@@ -10909,6 +10924,8 @@ function isContextParameter(
 
 /** The function passed by name (`test('x', check)`) that `analyzeTest` is reading as the test's callback, if any. */
 let contextCallback: ts.Node | undefined;
+/** Where the registration `analyzeTest` is reading hands `contextCallback` the context. */
+let contextCallbackIndex: number | undefined;
 
 /**
  * Whether a variable is never written after its declaration. Every write form counts: `x = …` and compound
@@ -10996,6 +11013,17 @@ function neverReassigned(declaration: ts.VariableDeclaration, checker: ts.TypeCh
       return resolved !== symbol || !assigned(node);
     })
   );
+}
+
+/** Whether a name is written in a type (`typeof t`, an annotation, the type of `satisfies`), which runs nothing. */
+function inTypePosition(node: ts.Node): boolean {
+  for (let current = node.parent; current && !ts.isSourceFile(current); current = current.parent) {
+    if (ts.isTypeNode(current)) return true;
+
+    if (ts.isStatement(current) || ts.isExpressionStatement(current) || isFunctionLike(current)) return false;
+  }
+
+  return false;
 }
 
 /**
@@ -11087,7 +11115,7 @@ function contextUseUnfollowed(
   }
 
   return nodes.some((node) => {
-    if (!ts.isIdentifier(node) || declarations.has(node)) return false;
+    if (!ts.isIdentifier(node) || declarations.has(node) || inTypePosition(node)) return false;
     const symbol = resolve(node);
 
     if (!symbol || !symbols.has(symbol)) return false;
@@ -11346,6 +11374,52 @@ function assertionReadsProjectSideEffect(
   return false;
 }
 
+/** Builtins whose methods are the standard library's. */
+const BUILTIN_TYPES = new Set([
+  'Array',
+  'ReadonlyArray',
+  'Map',
+  'Set',
+  'WeakMap',
+  'WeakSet',
+  'Date',
+  'RegExp',
+  'Promise',
+]);
+
+/**
+ * Whether a type is a primitive (or a literal of one) or a well-known builtin declared by the standard library:
+ * calling its methods runs no project code. `any`, `unknown` and anything else are not.
+ */
+function builtinValue(type: ts.Type): boolean {
+  const primitive =
+    ts.TypeFlags.NumberLike |
+    ts.TypeFlags.StringLike |
+    ts.TypeFlags.BooleanLike |
+    ts.TypeFlags.BigIntLike |
+    ts.TypeFlags.ESSymbolLike |
+    ts.TypeFlags.Null |
+    ts.TypeFlags.Undefined;
+
+  if (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return false;
+
+  if (type.isUnion()) return type.types.every((each) => builtinValue(each));
+
+  if (type.flags & primitive) return true;
+  const symbol = type.getSymbol();
+
+  return (
+    symbol !== undefined &&
+    BUILTIN_TYPES.has(symbol.name) &&
+    (symbol.declarations ?? []).length > 0 &&
+    (symbol.declarations ?? []).every((declaration) => {
+      const file = declaration.getSourceFile();
+
+      return file.isDeclarationFile && /[\\/]typescript[\\/]lib[\\/]lib\.[^\\/]*\.d\.ts$/.test(file.fileName);
+    })
+  );
+}
+
 /**
  * Whether a call hands a local helper a project value (an import of project code, or an instance of a project class
  * made there) as an argument whose parameter the helper calls or calls a method of (`function checkObj(o) {
@@ -11379,6 +11453,10 @@ function projectValueCalledThroughParameter(node: Invocation, body: ts.Node, ctx
 
     if (!parameter || !ts.isIdentifier(parameter.name) || !projectValue(argument)) return false;
     const symbol = checker.getSymbolAtLocation(parameter.name);
+
+    // A primitive (`const two = 2`) or a well-known builtin (an array, a map, a date) has only the methods of the
+    // standard library, which run no project code; anything typed by project declarations, `any` or `unknown` may.
+    if (builtinValue(checker.getTypeAtLocation(argument))) return false;
 
     return descendants(body).some(
       (child) =>
@@ -11956,19 +12034,19 @@ function registrationContextIndex(call: ts.CallExpression): number | undefined {
 
 const callbackIndexCache = new WeakMap<
   ts.SourceFile,
-  { runner: RunnerApi; indexes: Map<ts.Node, number | undefined> }
+  { runner: RunnerApi; indexes: Map<ts.Node, Set<number | undefined>> }
 >();
 
 /**
  * Where a function takes the test context: for one a registration takes as its callback, inline or by name, the
  * position `registrationContextIndex` gives; for any other function its first parameter.
  */
-function contextIndexOf(fn: ts.Node, checker: ts.TypeChecker): number | undefined {
+function registeredContextIndexes(fn: ts.Node, checker: ts.TypeChecker): Set<number | undefined> | undefined {
   const source = fn.getSourceFile();
   let cached = callbackIndexCache.get(source);
 
   if (!cached || cached.runner !== runner) {
-    const indexes = new Map<ts.Node, number | undefined>();
+    const indexes = new Map<ts.Node, Set<number | undefined>>();
 
     for (const node of descendants(source)) {
       if (!ts.isCallExpression(node)) continue;
@@ -11977,13 +12055,31 @@ function contextIndexOf(fn: ts.Node, checker: ts.TypeChecker): number | undefine
       if (!registration?.callback) continue;
       const callback = testFunction(registration.callback, checker);
 
-      if (callback) indexes.set(callback, registrationContextIndex(node));
+      if (callback)
+        indexes.set(callback, (indexes.get(callback) ?? new Set()).add(registrationContextIndex(node)));
     }
     cached = { runner, indexes };
     callbackIndexCache.set(source, cached);
   }
 
-  return cached.indexes.has(fn) ? cached.indexes.get(fn) : 0;
+  return cached.indexes.get(fn);
+}
+
+/**
+ * Whether a function is registered in ways that hand it the context at different positions, or a context in one and a
+ * table row in another (`test.each(rows)('row', check)` and `test('normal', check)`): which one its parameter is depends on
+ * the registration, so outside one it is no context, and in the one that hands a context it is not known either.
+ */
+function contextIndexConflict(fn: ts.Node, checker: ts.TypeChecker): boolean {
+  return (registeredContextIndexes(fn, checker)?.size ?? 0) > 1;
+}
+
+function contextIndexOf(fn: ts.Node, checker: ts.TypeChecker): number | undefined {
+  const indexes = registeredContextIndexes(fn, checker);
+
+  if (indexes === undefined) return 0;
+
+  return indexes.size === 1 ? [...indexes][0] : undefined;
 }
 
 const referencedCallbackCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; callbacks: Set<ts.Node> }>();

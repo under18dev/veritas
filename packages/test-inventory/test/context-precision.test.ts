@@ -718,4 +718,83 @@ describe('test contexts and ordinary helpers', () => {
     expect(byName(tests, 'shallow aliases').suspicions).not.toContain('no_assertion');
     expect(byName(tests, 'shallow aliases').suspicions).not.toContain('opaque_call');
   });
+
+  for (const order of ['row first', 'normal first'] as const)
+    it(`gives a function registered both with table rows and a context no credit from a row (${order})`, () => {
+      const registrations =
+        order === 'row first'
+          ? "test.each([[{ equal() {} }]])('row %#', check);\ntest('normal', check);"
+          : "test('normal', check);\ntest.each([[{ equal() {} }]])('row %#', check);";
+      const root = tempProject({
+        'src/svc.ts': SERVICE,
+        'test/shared.test.ts': `
+          import { test } from 'vitest';
+          import { value } from '../src/svc';
+          function check(e) { e.equal(value(1), 2); }
+          ${registrations}
+        `,
+      });
+      const { tests } = inventory(root, vitest.recognition);
+      const row = byName(tests, 'row %#');
+      const normal = byName(tests, 'normal');
+
+      // A row's fake object never counts as an assertion.
+      expect(row.assertionCount, order).toBe(0);
+      expect(
+        row.targetCalls.some((call) => call.asserted),
+        order,
+      ).toBe(false);
+      // Which the parameter is here is not known: inconclusive, never credited from the row either.
+      expect(normal.suspicions, order).toContain('opaque_call');
+      expect(normal.suspicions, order).not.toContain('no_assertion');
+    });
+
+  it('takes a context named only in a type for no use of it', () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/types.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/svc';
+        test('typeof in an annotation', (t) => {
+          const copy: typeof t | undefined = undefined;
+          void copy;
+          value(1);
+        });
+        test('satisfies a type of it', (t) => {
+          const options = {} satisfies Partial<typeof t>;
+          void options;
+          value(1);
+        });
+      `,
+    });
+    const { tests } = inventory(root, node.recognition);
+
+    for (const name of ['typeof in an annotation', 'satisfies a type of it']) {
+      expect(byName(tests, name).suspicions, name).not.toContain('opaque_call');
+      expect(byName(tests, name).suspicions, name).toContain('no_assertion');
+    }
+  });
+
+  it('takes builtin methods of a project primitive or builtin for no project call, and project objects for one', () => {
+    const root = tempProject({
+      'src/svc.ts': `${SERVICE}export const names = ['a'];\nexport const when = new Date(0);\n`,
+      'test/builtins.test.ts': `
+        import { expect, test } from 'vitest';
+        import { names, svc, two, when } from '../src/svc';
+        function asText(n) { expect(n.toString()).toBe('2'); }
+        function first(list) { expect(list.at(0)).toBe('a'); }
+        function year(d) { expect(d.getUTCFullYear()).toBe(1970); }
+        function price(o) { expect(o.price(1)).toBe(2); }
+        test('primitive', () => { asText(two); });
+        test('array', () => { first(names); });
+        test('date', () => { year(when); });
+        test('project object', () => { price(svc); });
+      `,
+    });
+    const { tests } = inventory(root, vitest.recognition);
+
+    for (const name of ['primitive', 'array', 'date'])
+      expect(byName(tests, name).suspicions, name).not.toContain('opaque_call');
+    expect(byName(tests, 'project object').suspicions).toContain('opaque_call');
+  });
 });
