@@ -49,8 +49,11 @@ describe('unreadTestFiles', () => {
 
   it('leaves out only helpers shown not to use the runner', () => {
     const unread = unreadOf([
-      // `export { test } from 'node:test'`, or a helper with no runner call at all.
-      file('test/support.ts', { inexactNames: 'open_collection', usesRunner: false, loadsCode: false }),
+      // A helper with no signal of its own that runs no code when it loads.
+      file('test/support.ts', { usesRunner: false, loadsCode: false }),
+      // Open on its own (a real `export { test } from 'node:test'` barrel is): listed whatever `loadsCode` says.
+      file('test/open.ts', { inexactNames: 'open_collection', usesRunner: false, loadsCode: false }),
+      file('test/unseen.ts', { unseenReach: true, usesRunner: false, loadsCode: false }),
       // Reaching code static analysis does not follow, it is not shown not to use the runner.
       file('test/fixtures.ts', { unseenReach: true, usesRunner: true }),
       file('test/shared.test.ts', { inexactNames: 'imported_registrations', usesRunner: false }),
@@ -59,6 +62,8 @@ describe('unreadTestFiles', () => {
     ]);
 
     expect(unread).toEqual([
+      'test/open.ts (it runs code while its tests are collected that may register tests)',
+      'test/unseen.ts (it reaches code static analysis does not follow)',
       'test/fixtures.ts (it reaches code static analysis does not follow)',
       'test/shared.test.ts (a module it imports registers its tests)',
       'test/computed.test.ts (it runs code while its tests are collected that may register tests)',
@@ -82,7 +87,11 @@ describe('unreadTestFiles', () => {
     });
 
     expect(inventory.tests).toEqual([]);
-    expect(unreadTestFiles(inventory)).toEqual([expect.stringMatching(/^test\/dynamic\.test\.mjs \(/)]);
+    // The barrel is listed too: static analysis takes a re-export of the runner's API for open collection code.
+    expect(unreadTestFiles(inventory).map((line) => line.slice(0, line.indexOf(' (')))).toEqual([
+      'test/dynamic.test.mjs',
+      'test/support.mjs',
+    ]);
   });
 
   it('leaves out a zero-test file only when neither it nor what it loads is shown to run no code', () => {
@@ -128,7 +137,10 @@ describe('unreadTestFiles', () => {
       // Local JSON data runs no code when it loads.
       'test/helpers/data.json': '{ "n": 1 }\n',
       'test/json.test.mjs':
-        "import data from './helpers/data.json' with { type: 'json' };\nexport const loading = import('./helpers/data.json', { with: { type: 'json' } });\nexport { data };\n",
+        "import data from './helpers/data.json' with { type: 'json' };\nexport { data };\n",
+      // The review's repro: destructuring an object literal runs its getter.
+      'test/getter-destructure.test.mjs':
+        "const { x } = { get x() { return require('node:test')['te' + 'st']('hidden', () => {}); } };\nexport { x };\n",
       'test/json-assert.test.mjs':
         "import data from './helpers/data.json' assert { type: 'json' };\nexport { data };\n",
       'test/json-require.test.cjs':
@@ -154,15 +166,25 @@ describe('unreadTestFiles', () => {
         },
       }),
     });
+    // The getter itself makes the object literal run code, not only the guard.
+    expect(inventory.files.find((file) => file.path === 'test/getter-destructure.test.mjs')?.loadsCode).toBe(
+      true,
+    );
     const listed = unreadTestFiles(inventory).map((line) => line.slice(0, line.indexOf(' (')));
 
     expect(listed.sort()).toEqual([
       'test/await.test.mjs',
+      // Open collection or unseen reach as static analysis reads them (a re-export of the runner's API, a `require`
+      // of a package or a JSON file): never overridden by the inert-syntax rule.
+      'test/barrel.test.mjs',
       'test/decorator.test.ts',
       'test/default.test.mjs',
       'test/for-of.test.mjs',
+      'test/getter-destructure.test.mjs',
       'test/getter.test.mjs',
+      'test/helpers/lodash-require.cjs',
       'test/iife.test.mjs',
+      'test/json-require.test.cjs',
       'test/local-call.test.mjs',
       'test/module-exports.test.cjs',
       'test/named-lodash.test.mjs',
@@ -181,6 +203,8 @@ describe('unreadTestFiles', () => {
   it("takes the runner's hooks and mock configuration for code that registers no test", () => {
     const root = mkdtempSync(path.join(tmpdir(), 'veritas-unread-'));
     mkdirSync(path.join(root, 'test'));
+    mkdirSync(path.join(root, 'src'));
+    writeFileSync(path.join(root, 'src/api.ts'), 'export const get = () => 1;\n');
     writeFileSync(
       path.join(root, 'test/setup.test.ts'),
       "import { beforeAll, afterEach, vi } from 'vitest';\nvi.mock('../src/api', () => ({ get: vi.fn() }));\nbeforeAll(() => {});\nafterEach(() => vi.restoreAllMocks());\n",
@@ -236,7 +260,7 @@ describe('unreadTestFiles', () => {
         loadsCode: true,
       }),
       // A barrel or helper calling nothing at its top level stays out.
-      file('test/barrel.test.ts', { inexactNames: 'open_collection', usesRunner: false, loadsCode: false }),
+      file('test/barrel.test.ts', { usesRunner: false, loadsCode: false }),
     ]);
 
     expect(unread).toEqual([

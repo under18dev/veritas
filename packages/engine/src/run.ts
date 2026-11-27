@@ -1850,8 +1850,16 @@ export function unreadTestFiles(inventory: TestInventory): string[] {
       if (file.loadsCode !== true && file.inexactNames === undefined && !file.unseenReach) return [];
 
       // Left out only when it is shown to register nothing: neither it nor a local module it loads runs any code when
-      // it loads (every statement of each is known to run none; `loadsCode`), and no module it imports registers tests. Anything short of that keeps it listed.
-      if (file.loadsCode === false && file.inexactNames !== 'imported_registrations') return [];
+      // it loads (every statement of each is known to run none; `loadsCode`), no module it imports registers tests, and
+      // static analysis did not find it open on its own (`open_collection`) or reaching code it does not follow
+      // (`unseenReach`): those signals are never overridden. Anything short of that keeps it listed.
+      if (
+        file.loadsCode === false &&
+        file.inexactNames !== 'imported_registrations' &&
+        file.inexactNames !== 'open_collection' &&
+        !file.unseenReach
+      )
+        return [];
 
       // A call into a package (`suite()` from `some-lib`) may register tests through it.
       if (file.packageCall !== undefined)
