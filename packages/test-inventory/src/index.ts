@@ -3669,6 +3669,10 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
       // counted where it is followed from, so whether this call asserts is unknown, never "no assertion".
       if (handsContextToMixedCallback(node, helper, ctx.checker))
         info = { ...info, opaque: true, assertionsUnknown: true };
+      // `checkObj(svc)` with the helper calling `o.price(1)`: calls of project code made through its parameter, which
+      // the helper's own analysis cannot resolve. What they reach is unknown, not absent.
+      else if (info.targets.length === 0 && projectValueCalledThroughParameter(node, helper, ctx))
+        info = { ...info, opaque: true };
 
       // What a local component renders is what it returns: calls whose result does not reach that are not shown.
       if (mount)
@@ -8505,8 +8509,17 @@ function readTest(
   const unreadCallbackArgument = testFn === undefined && opaqueCallback(info.callback);
   // A function passed by name that uses its context in ways not followed (`runner.run(t)`, `{ t }`, `arguments`,
   // a rest parameter): what it asserts through the context is unknown, as when a test hands it its context.
+  // The same for the test's own callback, inline or passed by name, whose context goes where it is not followed
+  // (`second(1, t)`, `fn.call(t)`, `Reflect.apply(fn, null, [t])`, `[t]`). A table-driven test's callback takes a row
+  // first; with Vitest's `test.for` the context comes second.
+  const factory = registrationFactory(registrationCall);
+  const contextIndex = info.modifiers.includes('each')
+    ? factory !== undefined && propertyChain(factory).includes('for')
+      ? 1
+      : undefined
+    : 0;
   const escapedContext =
-    testFn !== undefined && contextCallback === testFn && contextEscapes(testFn, checker);
+    testFn !== undefined && contextIndex !== undefined && contextEscapes(testFn, checker, contextIndex);
   const nodes = body ? descendants(body) : [];
   const contextParameter =
     testFn?.parameters[0] && ts.isIdentifier(testFn.parameters[0].name)
@@ -8626,6 +8639,20 @@ function readTest(
   );
   const nondeterminism = [...new Set(nodes.flatMap((node) => nondeterminismFor(node, fakeTimers)))];
   const suspicions: TestCaseType['suspicions'] = [];
+  // Where the context went may hold assertions: inconclusive, unless the test asserts on its own anyway.
+  const contextHidesAssertions = escapedContext && assertions.length === 0 && !analysis?.helperAsserts;
+  // An assertion on what a closure handed to project code writes (`compose([mw])(ctx)` with `mw` setting `called`):
+  // the project call may well decide it, though the link is not shown. Inconclusive, never disconnected.
+  const sideEffectLink =
+    body !== undefined &&
+    !targetCalls.some((call) => call.asserted) &&
+    assertionReadsProjectSideEffect(
+      assertions,
+      (analysis?.calls ?? []).map((entry) => entry.node),
+      body,
+      checker,
+      (call) => resolveProjectCall(call, checker, ctx.projectSet, root) !== undefined,
+    );
 
   if (
     assertions.length === 0 &&
@@ -8633,7 +8660,7 @@ function readTest(
     !unreadCallback &&
     !analysis?.helperAsserts &&
     !analysis?.assertionsUnknown &&
-    !escapedContext &&
+    !contextHidesAssertions &&
     !callsHelperWithAssertion(body, source)
   )
     suspicions.push('no_assertion');
@@ -8642,7 +8669,8 @@ function readTest(
   // Code that runs when the file loads (outside any function), its own or that of the local modules it imports,
   // runs before every test in it.
   const loading = fileLoadReach(source, ctx);
-  const opaque = analysis?.opaque === true || loading.opaque || unreadCallback || escapedContext;
+  const opaque =
+    analysis?.opaque === true || loading.opaque || unreadCallback || contextHidesAssertions || sideEffectLink;
   const unresolved = unresolvedImports.size > 0 || loading.unresolved;
 
   // An unresolved import, a child process or a dynamic import may well reach project code: absence is not proven.
@@ -10742,49 +10770,90 @@ function isContextParameter(
 let contextCallback: ts.Node | undefined;
 
 /**
- * Whether a call may hand a test context first to a local function whose first parameter receives a context on some
- * paths and something else on others (in both sets of `contextReach`): its first argument is a parameter, so the call
- * may come from a test with a real context, where the function's assertions are not counted. Decided from the file's
- * structure alone, never from which test is being read, so it does not depend on the order tests are analysed in.
+ * Whether a variable is never written after its declaration. Every write form counts: `x = …` and compound
+ * assignments, `x++` and `x--`, a target of a destructuring assignment at any depth (`[x] = …`, `({ x } = …)`,
+ * `({ a: x } = …)`, `({ a: [x] } = …)`, with or without defaults), and `for (x of …)` / `for (x in …)`. A name in an
+ * object or array literal whose role cannot be told is taken as written.
  */
-/** Whether a variable is never assigned after its declaration (`x = …`, `x += …`, `x++`, a destructuring target). */
 function neverReassigned(declaration: ts.VariableDeclaration, checker: ts.TypeChecker): boolean {
   const symbol = checker.getSymbolAtLocation(declaration.name);
+  /** Whether a literal (or a name in one) is the target of a destructuring assignment or a `for…in/of` head. */
+  const writtenPattern = (node: ts.Node): boolean => {
+    let target: ts.Node = node;
+
+    for (;;) {
+      const parent: ts.Node = target.parent;
+
+      if (
+        ts.isParenthesizedExpression(parent) ||
+        ts.isArrayLiteralExpression(parent) ||
+        ts.isObjectLiteralExpression(parent) ||
+        ts.isSpreadElement(parent) ||
+        ts.isSpreadAssignment(parent) ||
+        (ts.isShorthandPropertyAssignment(parent) && parent.name === target) ||
+        (ts.isPropertyAssignment(parent) && parent.initializer === target) ||
+        // A default in a pattern (`[x = 1] = …`): `x` is the target.
+        (ts.isBinaryExpression(parent) &&
+          parent.left === target &&
+          parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          (ts.isArrayLiteralExpression(parent.parent) ||
+            ts.isPropertyAssignment(parent.parent) ||
+            ts.isSpreadElement(parent.parent)))
+      ) {
+        target = parent;
+        continue;
+      }
+
+      if (target === node) return false;
+
+      return (
+        (ts.isBinaryExpression(parent) &&
+          parent.left === target &&
+          parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) ||
+        ((ts.isForOfStatement(parent) || ts.isForInStatement(parent)) && parent.initializer === target) ||
+        // Inside a literal whose use is not one of the above: cannot be told, so taken as written.
+        !(ts.isCallExpression(parent) || ts.isVariableDeclaration(parent) || ts.isReturnStatement(parent))
+      );
+    }
+  };
   const assigned = (node: ts.Identifier): boolean => {
     let target: ts.Node = node;
 
-    while (
-      ts.isParenthesizedExpression(target.parent) ||
-      ts.isShorthandPropertyAssignment(target.parent) ||
-      ts.isPropertyAssignment(target.parent) ||
-      ts.isArrayLiteralExpression(target.parent) ||
-      ts.isObjectLiteralExpression(target.parent)
-    )
-      target = target.parent;
+    while (ts.isParenthesizedExpression(target.parent)) target = target.parent;
     const parent = target.parent;
 
-    return (
-      (ts.isBinaryExpression(parent) &&
-        parent.left === target &&
-        parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
-        parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) ||
-      ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
-        (parent.operator === ts.SyntaxKind.PlusPlusToken ||
-          parent.operator === ts.SyntaxKind.MinusMinusToken)) ||
-      ts.isForInStatement(parent) ||
-      ts.isForOfStatement(parent)
-    );
+    if (
+      ts.isBinaryExpression(parent) &&
+      parent.left === target &&
+      parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    )
+      return true;
+
+    if (
+      (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
+      (parent.operator === ts.SyntaxKind.PlusPlusToken || parent.operator === ts.SyntaxKind.MinusMinusToken)
+    )
+      return true;
+
+    if ((ts.isForOfStatement(parent) || ts.isForInStatement(parent)) && parent.initializer === target)
+      return true;
+
+    return writtenPattern(node);
   };
 
   return (
     symbol !== undefined &&
-    descendants(declaration.getSourceFile()).every(
-      (node) =>
-        !ts.isIdentifier(node) ||
-        node === declaration.name ||
-        checker.getSymbolAtLocation(node) !== symbol ||
-        !assigned(node),
-    )
+    descendants(declaration.getSourceFile()).every((node) => {
+      if (!ts.isIdentifier(node) || node === declaration.name) return true;
+      // The name of a shorthand property stands for the variable (`({ x } = …)`, `{ x }`).
+      const resolved =
+        ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
+          ? checker.getShorthandAssignmentValueSymbol(node.parent)
+          : checker.getSymbolAtLocation(node);
+
+      return resolved !== symbol || !assigned(node);
+    })
   );
 }
 
@@ -10794,15 +10863,16 @@ function neverReassigned(declaration: ts.VariableDeclaration, checker: ts.TypeCh
  * but a local function's first argument, stored, returned, spread or assigned. Member reads (`t.assert.equal`), uses
  * that read nothing (`primitiveUse`) and forwarding to a local function (followed by `contextReach`) are followed.
  */
-function contextEscapes(fn: ts.SignatureDeclaration, checker: ts.TypeChecker): boolean {
-  const parameter = fn.parameters[0];
+function contextEscapes(fn: ts.SignatureDeclaration, checker: ts.TypeChecker, index = 0): boolean {
+  const parameter = fn.parameters[index];
   const body = (fn as ts.FunctionLikeDeclaration).body;
 
   if (readsArguments(fn)) return true;
 
-  if (!parameter || !body) return false;
+  // A rest parameter at or before it takes the context with whatever else is handed.
+  if (fn.parameters.slice(0, index + 1).some((each) => each.dotDotDotToken)) return true;
 
-  if (parameter.dotDotDotToken) return true;
+  if (!parameter || !body) return false;
   const names: ts.Identifier[] = [];
   const collect = (name: ts.BindingName): boolean => {
     if (ts.isIdentifier(name)) {
@@ -10856,27 +10926,300 @@ function contextEscapes(fn: ts.SignatureDeclaration, checker: ts.TypeChecker): b
   });
 }
 
+/**
+ * Whether an assertion reads a variable that a closure handed to project code writes: the closure (or a local
+ * function, constant or array/object holding it, up to two names away) appears in the arguments of a project call
+ * of the test, and assigns the variable, updates it (`n++`), writes a member of it (`state.called = true`) or calls a
+ * method of it (`calls.push(x)`). The project call may run the closure (`compose([mw])(ctx)`), which links the
+ * assertion to it in a way not shown.
+ */
+function assertionReadsProjectSideEffect(
+  assertions: readonly ts.CallExpression[],
+  projectCalls: readonly Invocation[],
+  body: ts.Node,
+  checker: ts.TypeChecker,
+  isProjectCall: (call: ts.CallExpression) => boolean,
+): boolean {
+  if (assertions.length === 0) return false;
+  const read = new Set<ts.Symbol>();
+
+  for (const assertion of assertions)
+    for (const value of comparedValues(assertion))
+      for (const node of [value, ...descendants(value)])
+        if (ts.isIdentifier(node)) {
+          const symbol = checker.getSymbolAtLocation(node);
+
+          if (symbol) read.add(symbol);
+        }
+
+  if (read.size === 0) return false;
+  const calls = new Set<ts.Node>(projectCalls);
+  /**
+   * Whether a node is inside what a project call is handed: a call of the test, or one anywhere in the file
+   * (`app.get('/stream', (c) => streamSSE(c, …))` in a `describe`, `stream.onAbort(() => …)`).
+   */
+  const insideHanded = (node: ts.Node): boolean => {
+    for (
+      let current: ts.Node = node;
+      current.parent && !ts.isSourceFile(current.parent);
+      current = current.parent
+    ) {
+      const parent = current.parent;
+
+      if (
+        ts.isCallExpression(parent) &&
+        parent.arguments.includes(current as ts.Expression) &&
+        (calls.has(parent) || isProjectCall(parent))
+      )
+        return true;
+    }
+
+    return false;
+  };
+  const source = body.getSourceFile();
+  const nameOf = (fn: ts.Node): ts.Identifier | undefined =>
+    ts.isFunctionDeclaration(fn) && fn.name
+      ? fn.name
+      : ts.isVariableDeclaration(fn.parent) && ts.isIdentifier(fn.parent.name)
+        ? fn.parent.name
+        : undefined;
+  /** Whether a name is used in what project calls are handed, directly or through a constant that holds it. */
+  const handedByName = (name: ts.Identifier, depth: number): boolean => {
+    const symbol = checker.getSymbolAtLocation(name);
+
+    if (!symbol) return false;
+
+    for (const node of descendants(source)) {
+      if (!ts.isIdentifier(node) || node === name || checker.getSymbolAtLocation(node) !== symbol) continue;
+
+      if (insideHanded(node)) return true;
+
+      // `const middleware = [first, second]`, `const app = { onAbort: handler }`.
+      if (depth < 2)
+        for (
+          let current: ts.Node = node.parent;
+          current && !ts.isSourceFile(current);
+          current = current.parent
+        )
+          if (ts.isVariableDeclaration(current)) {
+            if (ts.isIdentifier(current.name) && handedByName(current.name, depth + 1)) return true;
+            break;
+          }
+    }
+
+    return false;
+  };
+  /** The variable a node writes: an assignment's or update's target, a member written, or a method called on it. */
+  const written = (node: ts.Node): ts.Identifier | undefined => {
+    let target: ts.Expression | undefined;
+
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    )
+      target = node.left;
+    else if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
+    )
+      target = node.operand;
+    else if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(skipParens(node.expression)))
+      target = (skipParens(node.expression) as ts.PropertyAccessExpression).expression;
+
+    return target === undefined ? undefined : rootIdentifierNode(skipParens(target));
+  };
+
+  for (const node of descendants(source)) {
+    const target = written(node);
+    const symbol = target && checker.getSymbolAtLocation(target);
+
+    if (!symbol || !read.has(symbol)) continue;
+
+    for (let current: ts.Node = node.parent; current && !ts.isSourceFile(current); current = current.parent) {
+      if (!isFunctionLike(current)) continue;
+
+      // Written by the test itself, not by a closure it hands on.
+      if (current === body.parent) break;
+
+      if (insideHanded(current)) return true;
+      const name = nameOf(current);
+
+      if (name && handedByName(name, 0)) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Whether a call hands a local helper a project value (an import of project code, or an instance of a project class
+ * made there) as an argument whose parameter the helper calls or calls a method of (`function checkObj(o) {
+ * o.price(1) }` called as `checkObj(svc)`): those calls run project code the helper's analysis does not resolve.
+ */
+function projectValueCalledThroughParameter(node: Invocation, body: ts.Node, ctx: Ctx): boolean {
+  const fn = body.parent;
+
+  if (!ts.isCallExpression(node) || !fn || !isFunctionLike(fn)) return false;
+  const { checker } = ctx;
+  const fromProject = (declaration: ts.Declaration) =>
+    ctx.projectSet.has(path.resolve(declaration.getSourceFile().fileName));
+  const projectValue = (argument: ts.Expression): boolean => {
+    const value = skipValueWrappers(argument);
+    const name = ts.isNewExpression(value) ? skipParens(value.expression) : value;
+
+    if (!ts.isIdentifier(name)) return false;
+    let symbol = checker.getSymbolAtLocation(name);
+
+    try {
+      if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    } catch {
+      return false;
+    }
+
+    return (symbol?.declarations ?? []).some(fromProject);
+  };
+
+  return node.arguments.some((argument, index) => {
+    const parameter = fn.parameters[index];
+
+    if (!parameter || !ts.isIdentifier(parameter.name) || !projectValue(argument)) return false;
+    const symbol = checker.getSymbolAtLocation(parameter.name);
+
+    return descendants(body).some(
+      (child) =>
+        ts.isCallExpression(child) &&
+        rootIdentifierNode(skipParens(child.expression)) !== undefined &&
+        checker.getSymbolAtLocation(rootIdentifierNode(skipParens(child.expression)) as ts.Identifier) ===
+          symbol,
+    );
+  });
+}
+
+/**
+ * Whether a call may hand a test context to a local function that can receive one and also receives something else,
+ * or uses it in ways not followed (see `contextReach`, `contextEscapes`): its first argument is not plainly a value,
+ * so the call may come from a test with a real context, where the function's assertions are not counted. Decided
+ * from the file's structure alone, never from which test is being read, so it does not depend on the order tests are
+ * analysed in.
+ */
 function handsContextToMixedCallback(node: Invocation, body: ts.Node, checker: ts.TypeChecker): boolean {
   const fn = body.parent;
 
   if (!ts.isCallExpression(node) || !fn || !isFunctionLike(fn)) return false;
   const reach = contextReach(fn.getSourceFile(), checker);
 
-  // Only a function that can really receive a context (one passed by name to the runner, or reached from one with a
-  // test's context): an ordinary helper (`check(x) { expect(x).toBe(2) }`) is judged as any other call.
-  if (!reach.contextual.has(fn) || !reach.real.has(fn)) return false;
+  // Only a function that can really receive a context: one passed by name to the runner, reached from one with a
+  // test's context, or handed a value derived from a context that is not traced (`let c; c = t; check(c)`). An
+  // ordinary helper (`check(x) { expect(x).toBe(2) }`) is judged as any other call.
+  if (!reach.contextual.has(fn) || !(reach.real.has(fn) || reach.unknownContext.has(fn))) return false;
 
-  // Reached also with something else, or using its context in ways no context is traced through (handing it to a
-  // call, storing it, `arguments`, a rest parameter).
+  // Reached also with something else or with an untraced context, or using its context in ways no context is traced
+  // through (handing it to a call, storing it, `arguments`, a rest parameter).
   if (
     !reach.unknown.has(fn) &&
     !reach.fake.has(fn) &&
+    !reach.unknownContext.has(fn) &&
     !contextEscapes(fn as ts.SignatureDeclaration, checker)
   )
     return false;
 
-  // Opaque unless what the call hands it is plainly not a context (a literal, an object written there).
-  return traceArgument(node.arguments[0], checker) !== 'value';
+  // Opaque only when what the call hands it may be a context: a parameter, or an untraced value derived from one
+  // (`let c; c = t`). A literal, an object written there or an ordinary value (`svc.price(1)`) is not.
+  const traced = traceArgument(node.arguments[0], checker);
+
+  if (traced === 'value') return false;
+
+  if (traced !== 'unknown') return true;
+
+  return derivedParameters(node.arguments[0] as ts.Expression, checker).some((parameter) => {
+    const owner = parameter.parent;
+
+    return (
+      isFunctionLike(owner) &&
+      owner.parameters[0] === parameter &&
+      (reach.real.has(owner) || reach.unknownContext.has(owner) || isContextParameter(parameter, checker, 0))
+    );
+  });
+}
+
+const assignedValuesCache = new WeakMap<ts.SourceFile, Map<ts.Symbol, ts.Expression[]>>();
+
+/**
+ * What each variable of a file is assigned anywhere (`x = …`, `x += …`, and the whole value of a destructuring
+ * assignment it is a target of), for following an untraced value back to the parameters it may come from.
+ */
+function assignedValuesOf(source: ts.SourceFile, checker: ts.TypeChecker): Map<ts.Symbol, ts.Expression[]> {
+  const cached = assignedValuesCache.get(source);
+
+  if (cached) return cached;
+  const values = new Map<ts.Symbol, ts.Expression[]>();
+  const add = (symbol: ts.Symbol | undefined, value: ts.Expression) => {
+    if (symbol) values.set(symbol, [...(values.get(symbol) ?? []), value]);
+  };
+
+  for (const node of descendants(source)) {
+    if (
+      !ts.isBinaryExpression(node) ||
+      node.operatorToken.kind < ts.SyntaxKind.FirstAssignment ||
+      node.operatorToken.kind > ts.SyntaxKind.LastAssignment
+    )
+      continue;
+    const target = skipParens(node.left);
+
+    if (ts.isIdentifier(target)) add(checker.getSymbolAtLocation(target), node.right);
+    else if (ts.isObjectLiteralExpression(target) || ts.isArrayLiteralExpression(target))
+      for (const item of descendants(target))
+        add(
+          ts.isShorthandPropertyAssignment(item)
+            ? checker.getShorthandAssignmentValueSymbol(item)
+            : ts.isIdentifier(item)
+              ? checker.getSymbolAtLocation(item)
+              : undefined,
+          node.right,
+        );
+  }
+  assignedValuesCache.set(source, values);
+
+  return values;
+}
+
+/**
+ * The parameters an expression may derive from, through the variables it reads, their initializers and everything
+ * they are assigned anywhere in the file (cycles end).
+ */
+function derivedParameters(
+  expression: ts.Node,
+  checker: ts.TypeChecker,
+  seen = new Set<ts.Symbol>(),
+): ts.ParameterDeclaration[] {
+  const found: ts.ParameterDeclaration[] = [];
+  const assigned = assignedValuesOf(expression.getSourceFile(), checker);
+
+  for (const node of [expression, ...descendants(expression)]) {
+    const symbol =
+      node.parent && ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
+        ? checker.getShorthandAssignmentValueSymbol(node.parent)
+        : ts.isIdentifier(node)
+          ? checker.getSymbolAtLocation(node)
+          : undefined;
+
+    if (!symbol || seen.has(symbol)) continue;
+    seen.add(symbol);
+    const declaration = symbol.valueDeclaration;
+
+    if (declaration && ts.isParameter(declaration)) found.push(declaration);
+    let holder: ts.Node | undefined = declaration;
+
+    while (holder && ts.isBindingElement(holder)) holder = holder.parent.parent;
+
+    if (holder && ts.isVariableDeclaration(holder) && holder.initializer)
+      found.push(...derivedParameters(holder.initializer, checker, seen));
+
+    for (const value of assigned.get(symbol) ?? []) found.push(...derivedParameters(value, checker, seen));
+  }
+
+  return found;
 }
 
 /**
@@ -11045,6 +11388,12 @@ interface ContextReach {
   /** Local functions whose first parameter can receive a value not traced (a `let`, a member, a call's result). */
   unknown: Set<ts.Node>;
   /**
+   * Of those, the functions whose untraced value may be a real context: it is derived from the context parameter of a
+   * test or hook callback (`let c; c = t; check(c)`, `check(t.x)`, `check(wrap(t))`), or from the first parameter of a
+   * function that can receive one.
+   */
+  unknownContext: Set<ts.Node>;
+  /**
    * Local functions that use their first parameter as a context may be used: they read a member of it
    * (`t.assert.equal`, `t.mock.fn`, `t.test`), or hand it to one that does. Only for these does what they receive
    * decide anything.
@@ -11069,7 +11418,13 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
   if (cached && cached.runner === runner) return cached.reach;
 
   if (computingReach.has(source))
-    return { real: new Set(), fake: new Set(), unknown: new Set(), contextual: new Set() };
+    return {
+      real: new Set(),
+      fake: new Set(),
+      unknown: new Set(),
+      unknownContext: new Set(),
+      contextual: new Set(),
+    };
   computingReach.add(source);
 
   try {
@@ -11094,8 +11449,23 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
     const real = new Set<ts.Node>(callbacks);
     const fake = new Set<ts.Node>();
     const unknown = new Set<ts.Node>();
+    const unknownContext = new Set<ts.Node>();
     /** `from` hands its first parameter to `to`. */
     const forwards: [ts.Node, ts.Node][] = [];
+    /** `from` hands `to` an untraced value derived from its first parameter (`wrap(t) { check(t.x) }`). */
+    const derivedForwards: [ts.Node, ts.Node][] = [];
+    const derivedFrom = (expression: ts.Node) => derivedParameters(expression, checker);
+    /** Whether a parameter is the context of an inline test, hook or subtest callback (not one passed by name). */
+    const inlineContext = (parameter: ts.ParameterDeclaration): boolean => {
+      const owner = parameter.parent;
+
+      return (
+        isFunction(owner) &&
+        owner.parameters[0] === parameter &&
+        !named.has(owner) &&
+        isContextParameter(parameter, checker, 0)
+      );
+    };
     /** Where a value handed first to a function comes from: a local function's first parameter, a real context, or neither. */
     const origin = (
       argument: ts.Expression | undefined,
@@ -11159,8 +11529,23 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
 
         if (from === 'real') real.add(fn);
         else if (from === 'fake') fake.add(fn);
-        else if (from === 'unknown') unknown.add(fn);
-        else forwards.push([from, fn]);
+        else if (from === 'unknown') {
+          unknown.add(fn);
+
+          // Untraced, but derived from a context (`let c; c = t; check(c)`): it may be a real one. An ordinary value
+          // (`check(svc.price(1))`, an import, a `let` that never touches a context) is not.
+          for (const parameter of derivedFrom(parent.arguments[0] ?? parent)) {
+            const owner = parameter.parent;
+
+            if (inlineContext(parameter)) unknownContext.add(fn);
+            else if (
+              isFunctionLike(owner) &&
+              owner.parameters[0] === parameter &&
+              (named.has(owner) || callbacks.has(owner))
+            )
+              derivedForwards.push([owner, fn]);
+          }
+        } else forwards.push([from, fn]);
       } else if (
         ts.isCallExpression(parent) &&
         parent.arguments.some((argument) => skipParens(argument) === node)
@@ -11195,7 +11580,19 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
           unknown.add(to);
           changed = true;
         }
+
+        if (unknownContext.has(from) && !unknownContext.has(to)) {
+          unknownContext.add(to);
+          changed = true;
+        }
       }
+
+      // An untraced value derived from the first parameter of a function that can receive a context may be one.
+      for (const [from, to] of derivedForwards)
+        if ((real.has(from) || unknownContext.has(from)) && !unknownContext.has(to)) {
+          unknownContext.add(to);
+          changed = true;
+        }
     }
     // Functions reading a member of their first parameter, and those handing it to one (a fixpoint the other way).
     const contextual = new Set<ts.Node>();
@@ -11212,7 +11609,7 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
           changed = true;
         }
     }
-    const reach = { real, fake, unknown, contextual };
+    const reach = { real, fake, unknown, unknownContext, contextual };
     contextReachCache.set(source, { runner, reach });
 
     return reach;
@@ -11236,6 +11633,10 @@ function referencedCallbacks(source: ts.SourceFile, checker: ts.TypeChecker): Se
   for (const node of descendants(source)) {
     if (!ts.isCallExpression(node)) continue;
     const registration = testRegistration(node) ?? describeRegistration(node);
+
+    // A table-driven registration (`test.each(rows)`, `describe.each(rows)`, Vitest's `test.for(rows)`) hands its
+    // callback a row first, not a context.
+    if (registration?.modifiers.includes('each')) continue;
     const callback = registration
       ? registration.callback
       : runner.hooks.has(runnerExport(skipParens(node.expression))?.name ?? '')
