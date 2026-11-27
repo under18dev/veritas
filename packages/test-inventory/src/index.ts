@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import path from 'node:path';
 import {
+  logEvent,
   type MockCallRole,
   resolveInsideRoot,
   sha256,
@@ -104,11 +105,15 @@ interface RunnerApi {
   chainedModifiersWin: boolean;
   /** A registration without a title takes its function's name (Node). */
   functionTitles: boolean;
+  /** The runner hands its callbacks a test context (see `TestRunnerRecognition.testContext`). */
+  testContext: boolean;
   /** An option is set by any value but `false` and `undefined` (Node). */
   optionsSetUnlessFalse: boolean;
   /** The export a default import of the runner's module stands for (`import test from 'node:test'`), if any. */
   defaultExport: string | undefined;
   beforeEach: Set<string>;
+  /** Hooks that run after each test (`afterEach`). */
+  afterEach: Set<string>;
   /** Hooks that run before a test: `beforeEach` and `beforeAll`. */
   setup: Set<string>;
   hooks: Set<string>;
@@ -144,9 +149,11 @@ function runnerApi(recognition: TestRunnerRecognition): RunnerApi {
     testOptions: recognition.testOptions === true,
     chainedModifiersWin: recognition.chainedModifiersWin === true,
     functionTitles: recognition.functionTitles === true,
+    testContext: recognition.testContext === true,
     optionsSetUnlessFalse: recognition.optionsSetUnlessFalse === true,
     defaultExport: recognition.defaultExport,
     beforeEach: new Set(hooks.beforeEach),
+    afterEach: new Set(hooks.afterEach),
     setup: new Set([...hooks.beforeEach, ...hooks.beforeAll]),
     hooks: new Set([...hooks.beforeEach, ...hooks.beforeAll, ...hooks.afterEach, ...hooks.afterAll]),
     runtimeExports: new Set(recognition.runtimeExports),
@@ -187,6 +194,27 @@ let runner: RunnerApi = runnerApi({
  * The id of the test registered in `file` under `suitePath` and `name`. Registrations that share all three (the same
  * literal title twice, two `<dynamic test>`s, two anonymous callbacks) are told apart by `disambiguateTestIds`.
  */
+/** How many `const` aliases of a test context (`const c = t; const d = c`) assertion counting follows. */
+const ALIAS_DEPTH = 20;
+/** Rounds a fixpoint or worklist of the inventory runs by default; past them, what it decides is unknown. */
+const DEFAULT_ITERATION_LIMIT = 10_000;
+/**
+ * At most this many rounds for each fixpoint or worklist of the inventory; past it, what it decides is unknown. Set
+ * for the duration of one `inventoryTests` call from its `iterationLimit` option (calls are synchronous).
+ */
+let iterationLimit = DEFAULT_ITERATION_LIMIT;
+
+/** Record that a fixpoint or worklist stopped at the iteration limit; its result is then read as unknown. */
+function iterationCapHit(where: string): void {
+  logEvent(
+    'debug',
+    `test inventory: ${where} stopped after ${iterationLimit} iterations; its result is read as unknown`,
+    {
+      event: 'inventory-iteration-cap',
+    },
+  );
+}
+
 export function testId(file: string, suitePath: string[], name: string): string {
   return stableId('T', { file: file.split('\\').join('/'), suitePath, name });
 }
@@ -1057,7 +1085,14 @@ function loadsCode(source: ts.SourceFile): boolean {
   const seen = new Set<ts.SourceFile>([source]);
   const queue = [source];
 
-  for (let current = queue.shift(); current; current = queue.shift()) {
+  // Each module is queued once (`seen`); the cap guards the walk all the same, and stopping there may run code.
+  for (let current = queue.shift(), rounds = 0; current; current = queue.shift(), rounds++) {
+    if (rounds > iterationLimit) {
+      iterationCapHit('the walk of local modules for code they run');
+
+      return true;
+    }
+
     if (moduleRunsCode(current, strict)) return true;
 
     for (const specifier of localSpecifiers(current)) {
@@ -1152,7 +1187,12 @@ function reachedPackageCall(
   const seen = new Set<ts.SourceFile>([source]);
   const queue = [source];
 
-  for (let current = queue.shift(); current; current = queue.shift()) {
+  for (let current = queue.shift(), rounds = 0; current; current = queue.shift(), rounds++) {
+    if (rounds > iterationLimit) {
+      iterationCapHit('the walk of local modules for package calls');
+
+      return { unresolved: true };
+    }
     const own = packageCall(current).packageCall;
 
     if (own !== undefined)
@@ -1235,16 +1275,24 @@ export function inventoryTests(options: {
   config: VeritasConfig;
   recognition: TestRunnerRecognition;
   files?: string[];
+  /**
+   * Rounds each fixpoint or worklist of the analysis may run (default 10,000); past them, what it decides is read as
+   * unknown (fail-safe), never looped on.
+   */
+  iterationLimit?: number;
 }): TestInventory {
   const previous = runner;
   const previousChecker = runnerChecker;
+  const previousLimit = iterationLimit;
   runner = runnerApi(options.recognition);
+  iterationLimit = options.iterationLimit ?? DEFAULT_ITERATION_LIMIT;
 
   try {
     return inventory(options);
   } finally {
     runner = previous;
     runnerChecker = previousChecker;
+    iterationLimit = previousLimit;
   }
 }
 
@@ -1639,6 +1687,23 @@ interface BodyAnalysis {
  * Calls, assertions and result flow in a test body or helper body. Values are followed through local and
  * enclosing (describe-level or module-level) variables of the same file, including `let` set in a hook.
  */
+/**
+ * What a call does without what it asserts: the project calls it runs, and nothing it checks (no helper assertions,
+ * no assertion inside on a call's result, no observation of a mock or the page).
+ */
+function withoutAssertionCredit(info: CallInfo): CallInfo {
+  const { observesDocument: _observes, ...rest } = info;
+
+  return {
+    ...rest,
+    helperAsserts: false,
+    targets: info.targets.map(({ observedBy: _observed, ...target }) => ({
+      ...target,
+      assertedInside: false,
+    })),
+  };
+}
+
 function analyzeBody(
   body: ts.Node,
   ctx: Ctx,
@@ -1649,6 +1714,12 @@ function analyzeBody(
   keepDeferred = true,
 ): BodyAnalysis {
   const { checker } = ctx;
+  // Subtests known not to run, or whose options cannot be read, run nothing that counts, at any depth; a todo subtest
+  // runs (Node reports it `# TODO`), but neither its assertions nor what its calls assert gate anything.
+  const subtests = skippedSubtestBodies(body, checker);
+  const notExecuted = (node: ts.Node) =>
+    subtests.skipped.some((fn) => !subtests.todo.includes(fn) && contains(fn, node));
+  const notGating = (node: ts.Node) => subtests.skipped.some((fn) => contains(fn, node));
   // Components rendered by shared setup that runs before the body (`beforeEach(() => render(<Dialog />))`).
   const setupEntries = new Set<BodyAnalysis['calls'][number]>();
   // Where an element made outside the body is mounted in it (`render(ui)`).
@@ -1669,7 +1740,12 @@ function analyzeBody(
   const record = (node: Invocation): boolean => {
     // Code in an `onClick={() => …}` handler of a DOM or third-party element runs only when an event fires.
     if (contains(body, node) && inUnfiredHandler(node, body, ctx)) return false;
-    const info = callInfo(node, ctx);
+
+    // In a subtest that does not run, however the call is reached (through an awaited value, a binding).
+    if (notExecuted(node)) return false;
+    const called = callInfo(node, ctx);
+    // Called in a todo subtest: it runs, but what it asserts gates nothing.
+    const info = notGating(node) ? withoutAssertionCredit(called) : called;
 
     if (!recorded.has(node)) {
       recorded.add(node);
@@ -1929,12 +2005,8 @@ function analyzeBody(
   // body itself, which is not among its descendants.
   if (ts.isCallExpression(body) && (isExpectCall(body) || isAssertCall(body) || contextAssertion(body)))
     assertions.push(body);
-  // Subtests that are skipped or todo (`t.test('x', { skip: true }, fn)`) never run: nothing in them counts.
-  const subtests = skippedSubtestBodies(body, checker);
-  const notRun = (node: ts.Node) => subtests.skipped.some((fn) => contains(fn, node));
-
   for (const node of descendants(body)) {
-    if (notRun(node)) continue;
+    if (notExecuted(node)) continue;
 
     if (ts.isTryStatement(node) && node.catchClause?.variableDeclaration)
       bind(
@@ -2039,7 +2111,11 @@ function analyzeBody(
       if (specifier !== undefined) unresolvedImports.add(specifier);
     }
 
-    if (ts.isCallExpression(node) && (isExpectCall(node) || isAssertCall(node) || contextAssertion(node)))
+    if (
+      !notGating(node) &&
+      ts.isCallExpression(node) &&
+      (isExpectCall(node) || isAssertCall(node) || contextAssertion(node))
+    )
       assertions.push(node);
   }
   // What a helper returns may come from enclosing variables, e.g. `const of = (n) => candidates.filter(...)`.
@@ -2339,7 +2415,7 @@ function analyzeBody(
   // through the checker, so a shadowing local of the same name is not mistaken for it, and an imported helper
   // (through any re-exports) is looked up in the file that declares it.
   for (const node of descendants(body)) {
-    if (notRun(node) || !ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) continue;
+    if (notGating(node) || !ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) continue;
     let symbol = checker.getSymbolAtLocation(node.expression);
     if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
     const positions = (symbol?.declarations ?? [])
@@ -3669,6 +3745,9 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
       // counted where it is followed from, so whether this call asserts is unknown, never "no assertion".
       if (handsContextToMixedCallback(node, helper, ctx.checker))
         info = { ...info, opaque: true, assertionsUnknown: true };
+      // `checkObj(svc)` with the helper calling `o.price(1)`: calls of project code made through its parameter, which
+      // the helper's own analysis cannot resolve. What they reach is unknown, not absent.
+      else if (projectValueCalledThroughParameter(node, helper, ctx)) info = { ...info, opaque: true };
 
       // What a local component renders is what it returns: calls whose result does not reach that are not shown.
       if (mount)
@@ -3740,6 +3819,30 @@ function callInfo(node: Invocation, ctx: Ctx): CallInfo {
       targets: [
         ...info.targets,
         ...passed.map((symbol) => ({ symbol, ownArgs: false, assertedInside: false, flowsToResult: true })),
+      ],
+    };
+  // `assert.throws(explode)`, `expect(explode).toThrow()`: an assertion that runs the project function it is given
+  // calls it and checks how it behaves, as `() => explode()` would. Other matchers only compare it as a value.
+  const run =
+    ts.isCallExpression(node) && (isExpectCall(node) || isAssertCall(node)) && runsCallback(node)
+      ? node.arguments.flatMap((argument) => {
+          const value = skipParens(argument);
+
+          if (!ts.isIdentifier(value) && !ts.isPropertyAccessExpression(value)) return [];
+
+          if (ctx.checker.getTypeAtLocation(value).getCallSignatures().length === 0) return [];
+          const id = projectSymbolId(aliasTarget(value, ctx.checker), ctx.checker, ctx.projectSet, ctx.root);
+
+          return id && !known.has(id) ? [id] : [];
+        })
+      : [];
+
+  if (run.length > 0)
+    info = {
+      ...info,
+      targets: [
+        ...info.targets,
+        ...run.map((symbol) => ({ symbol, ownArgs: false, assertedInside: true, flowsToResult: true })),
       ],
     };
   ctx.callInfo.set(node, info);
@@ -7646,9 +7749,13 @@ function functionName(value: ts.Expression): string | undefined {
 function skippedSubtestBodies(
   body: ts.Node,
   checker: ts.TypeChecker,
-): { skipped: ts.Node[]; unread: boolean } {
-  if (!runner.testOptions) return { skipped: [], unread: false };
+): { skipped: ts.Node[]; unread: boolean; definite: ts.Node[]; todo: ts.Node[] } {
+  if (!runner.testOptions) return { skipped: [], unread: false, definite: [], todo: [] };
+  // Those that run though they gate nothing: todo, and not skipped.
+  const todo: ts.Node[] = [];
   const skipped: ts.Node[] = [];
+  // Those known not to run: skipped, not todo (which runs) nor those whose options cannot be read.
+  const definite: ts.Node[] = [];
   let unread = false;
 
   for (const node of descendants(body)) {
@@ -7674,9 +7781,57 @@ function skippedSubtestBodies(
     skipped.push(skipParens(fn));
 
     if (state === 'unknown') unread = true;
+
+    // A todo subtest still runs (Node reports it `# TODO`), its side effects included: only a skipped one does not.
+    const skip = chained
+      ? outer.name.text === 'skip'
+        ? 'skipped'
+        : 'runs'
+      : subtestState(node, checker, ['skip']);
+
+    if (skip === 'skipped') definite.push(skipParens(fn));
+    else if (skip === 'runs' && state === 'skipped') todo.push(skipParens(fn));
   }
 
-  return { skipped, unread };
+  return { skipped, unread, definite, todo };
+}
+
+/**
+ * The inline callbacks of the subtests a test body registers through a context (`t.test('x', (s) => …)`, nested
+ * ones too) that may run: all but those known to be skipped (a todo runs, and options that cannot be read may let it).
+ */
+function runningSubtestCallbacks(
+  body: ts.Node | undefined,
+  checker: ts.TypeChecker,
+): (ts.ArrowFunction | ts.FunctionExpression)[] {
+  if (body === undefined) return [];
+  const notRun = skippedSubtestBodies(body, checker).definite;
+  const callbacks: (ts.ArrowFunction | ts.FunctionExpression)[] = [];
+
+  for (const node of descendants(body)) {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) continue;
+    const outer = node.expression;
+    const callee =
+      (outer.name.text === 'skip' || outer.name.text === 'todo') &&
+      ts.isPropertyAccessExpression(outer.expression)
+        ? outer.expression
+        : outer;
+
+    if (
+      !ts.isPropertyAccessExpression(callee) ||
+      callee.name.text !== 'test' ||
+      !ts.isIdentifier(callee.expression) ||
+      !isTestContext(callee.expression, checker)
+    )
+      continue;
+    const fn = node.arguments.findLast((argument) => isFunction(skipParens(argument)));
+    const callback = fn && skipParens(fn);
+
+    if (callback && isFunction(callback) && !notRun.some((skipped) => contains(skipped, callback)))
+      callbacks.push(callback);
+  }
+
+  return callbacks;
 }
 
 /**
@@ -7684,7 +7839,11 @@ function skippedSubtestBodies(
  * to anything but `false` or `undefined`, also through a constant holding the object literal (`const o = { skip:
  * true }`); unknown when an option or the options object cannot be read.
  */
-function subtestState(call: ts.CallExpression, checker: ts.TypeChecker): 'runs' | 'skipped' | 'unknown' {
+function subtestState(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+  options: readonly string[] = ['skip', 'todo'],
+): 'runs' | 'skipped' | 'unknown' {
   const resolve = (expression: ts.Expression): ts.Expression => {
     let value = skipParens(expression);
 
@@ -7731,7 +7890,7 @@ function subtestState(call: ts.CallExpression, checker: ts.TypeChecker): 'runs' 
         continue;
       }
 
-      if (name !== 'skip' && name !== 'todo') continue;
+      if (!options.includes(name)) continue;
       const option = skipParens(property.initializer);
 
       if (
@@ -8468,15 +8627,23 @@ function registration(node: ts.CallExpression, names: Set<string>): TestCaseType
 /** `readTest`, with a function the test's callback names (`it('x', check)`) read as that callback. */
 function analyzeTest(...args: Parameters<typeof readTest>): TestCaseType {
   const previous = contextCallback;
-  const [, info, , , , ctx] = args;
+  const previousIndex = contextCallbackIndex;
+  const [registrationCall, info, , , , ctx] = args;
   const callback = info.callback && skipParens(info.callback);
-  contextCallback =
+  const fn =
     callback !== undefined && !isFunction(callback) ? testFunction(callback, ctx.checker) : undefined;
+  const index = runner.testContext ? registrationContextIndex(registrationCall) : undefined;
+  // Read as this registration hands it: the context at its position, none for a table row. A function registered
+  // both ways is not read as having a context (`readTest` leaves the registration that hands one inconclusive).
+  contextCallback =
+    fn !== undefined && index !== undefined && !contextIndexConflict(fn, ctx.checker) ? fn : undefined;
+  contextCallbackIndex = index;
 
   try {
     return readTest(...args);
   } finally {
     contextCallback = previous;
+    contextCallbackIndex = previousIndex;
   }
 }
 
@@ -8503,10 +8670,35 @@ function readTest(
   // A callback passed some other way (an imported function, a call's result) cannot be read: the test is not
   // judged empty for it.
   const unreadCallbackArgument = testFn === undefined && opaqueCallback(info.callback);
+  // The test's context, for a runner that hands one (Node's `t`, Vitest's `ctx`; not Jest's `done`), at the position
+  // its callback takes it: a table row comes first with `each`, before the context with Vitest's `test.for`.
+  const contextIndex = runner.testContext ? registrationContextIndex(registrationCall) : undefined;
+  // A function registered elsewhere with a table row (or the context elsewhere) has no known context here.
+  const contextNode =
+    contextIndex !== undefined && !(testFn !== undefined && contextIndexConflict(testFn, checker))
+      ? testFn?.parameters[contextIndex]
+      : undefined;
+  // Safety net: the context (or a member destructured from it, an alias, a cast) used in any way but a direct member
+  // call the inventory reads (`t.assert.equal(…)`, `t.mock.fn()`, `t.test(…)`, `ctx.expect(…)`) may hold assertions
+  // the inventory does not see, whatever is known of where it goes.
+  const escapedContext =
+    testFn !== undefined &&
+    contextIndex !== undefined &&
+    // Registered elsewhere with a table row or the context elsewhere: not known which it gets here.
+    (contextIndexConflict(testFn, checker) ||
+      (contextNode !== undefined
+        ? contextUseUnfollowed(testFn, contextNode, checker)
+        : readsArguments(testFn)) ||
+      // The subtests it runs are part of it: each one's own context counts too (`t.test('x', (s) => fn.call(s))`).
+      runningSubtestCallbacks(body, checker).some((callback) =>
+        callback.parameters[0] !== undefined
+          ? contextUseUnfollowed(callback, callback.parameters[0], checker)
+          : readsArguments(callback),
+      ));
   const nodes = body ? descendants(body) : [];
   const contextParameter =
-    testFn?.parameters[0] && ts.isIdentifier(testFn.parameters[0].name)
-      ? checker.getSymbolAtLocation(testFn.parameters[0].name)
+    contextNode && ts.isIdentifier(contextNode.name)
+      ? checker.getSymbolAtLocation(contextNode.name)
       : undefined;
   const contextParameters = contextParameter
     ? subtestContexts(contextParameter, nodes, checker)
@@ -8622,6 +8814,20 @@ function readTest(
   );
   const nondeterminism = [...new Set(nodes.flatMap((node) => nondeterminismFor(node, fakeTimers)))];
   const suspicions: TestCaseType['suspicions'] = [];
+  // Assertions through the context may be unseen: inconclusive, unless the test is linked to project code anyway.
+  const contextHidesAssertions = escapedContext && !targetCalls.some((call) => call.asserted);
+  // An assertion on what a closure handed to project code writes (`compose([mw])(ctx)` with `mw` setting `called`):
+  // the project call may well decide it, though the link is not shown. Inconclusive, never disconnected.
+  const sideEffectLink =
+    body !== undefined &&
+    !targetCalls.some((call) => call.asserted) &&
+    assertionReadsProjectSideEffect(
+      assertions,
+      (analysis?.calls ?? []).map((entry) => entry.node),
+      body,
+      checker,
+      (call) => resolveProjectCall(call, checker, ctx.projectSet, root) !== undefined,
+    );
 
   if (
     assertions.length === 0 &&
@@ -8629,15 +8835,17 @@ function readTest(
     !unreadCallback &&
     !analysis?.helperAsserts &&
     !analysis?.assertionsUnknown &&
-    !callsHelperWithAssertion(body, source)
+    !escapedContext &&
+    !callsHelperWithAssertion(body, source, checker)
   )
     suspicions.push('no_assertion');
 
-  if (tautological && !unreadCallback) suspicions.push('tautological_assertion');
+  if (tautological && !unreadCallback && !escapedContext) suspicions.push('tautological_assertion');
   // Code that runs when the file loads (outside any function), its own or that of the local modules it imports,
   // runs before every test in it.
   const loading = fileLoadReach(source, ctx);
-  const opaque = analysis?.opaque === true || loading.opaque || unreadCallback;
+  const opaque =
+    analysis?.opaque === true || loading.opaque || unreadCallback || contextHidesAssertions || sideEffectLink;
   const unresolved = unresolvedImports.size > 0 || loading.unresolved;
 
   // An unresolved import, a child process or a dynamic import may well reach project code: absence is not proven.
@@ -10644,7 +10852,7 @@ function importsRunnerModule(
 function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth = 0): boolean {
   const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
 
-  if (depth > 20) return false;
+  if (depth > ALIAS_DEPTH) return false;
 
   // `const context = t`: an alias of a context is one.
   if (
@@ -10669,7 +10877,11 @@ function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth
  * `t.assert`, `({ assert: { equal } }) => …` binds `equal` to `t.assert.equal`), outermost first; undefined for a
  * name not destructured from a context parameter (a rest element, a computed key, any other pattern).
  */
-function contextMemberPath(identifier: ts.Identifier, checker: ts.TypeChecker): string[] | undefined {
+function contextMemberPath(
+  identifier: ts.Identifier,
+  checker: ts.TypeChecker,
+  depth = 0,
+): string[] | undefined {
   const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
 
   if (!declaration || !ts.isBindingElement(declaration)) return undefined;
@@ -10686,7 +10898,26 @@ function contextMemberPath(identifier: ts.Identifier, checker: ts.TypeChecker): 
     node = node.parent.parent;
   }
 
-  return ts.isParameter(node) && isContextParameter(node, checker, 0) ? path : undefined;
+  if (ts.isParameter(node)) return isContextParameter(node, checker, 0) ? path : undefined;
+
+  // `const { assert } = t` in the body: destructured from the context, or from a member already destructured from it.
+  if (
+    ts.isVariableDeclaration(node) &&
+    node.initializer &&
+    (ts.getCombinedNodeFlags(node) & ts.NodeFlags.Const) !== 0 &&
+    depth < ALIAS_DEPTH
+  ) {
+    const value = skipValueWrappers(node.initializer);
+
+    if (!ts.isIdentifier(value)) return undefined;
+
+    if (isTestContext(value, checker)) return path;
+    const prefix = contextMemberPath(value, checker, depth + 1);
+
+    return prefix ? [...prefix, ...path] : undefined;
+  }
+
+  return undefined;
 }
 
 /** Whether a function's parameter is the context its runner hands it (see `isTestContext`), under any name or pattern. */
@@ -10697,17 +10928,23 @@ function isContextParameter(
 ): boolean {
   const fn = declaration.parent;
 
-  if (!isFunctionLike(fn) || fn.parameters[0] !== declaration) return false;
+  // Only for a runner that hands one (not Jest, whose first argument is `done`), at the position the callback takes
+  // it: a table row comes first with `each`, before the context with `for`.
+  if (!runner.testContext || !isFunctionLike(fn)) return false;
 
-  // A function passed by name as a test, suite or hook callback (`test('x', check)`), read as that callback: its first
-  // parameter is the context the runner hands it.
-  if (contextCallback === fn && referencedCallbacks(fn.getSourceFile(), checker).has(fn)) return true;
+  // A function passed by name as a test, suite or hook callback (`test('x', check)`), read as the callback of the
+  // registration being analysed: the context is the parameter at the position that registration hands it.
+  if (contextCallback === fn)
+    return contextCallbackIndex !== undefined && fn.parameters[contextCallbackIndex] === declaration;
+  const index = contextIndexOf(fn, checker);
+
+  if (index === undefined || fn.parameters[index] !== declaration) return false;
   // A local function followed from its calls: a context only when every path to it hands it one (see `contextReach`);
   // one also reached with a plain object (`check({ assert: { equal() {} } })`) is not, and the calls that may hand it a
   // real context are opaque instead (`handsContextToMixedCallback`).
   const reach = contextReach(fn.getSourceFile(), checker);
 
-  if (reach.real.has(fn) || reach.fake.has(fn) || reach.unknown.has(fn))
+  if (index === 0 && (reach.real.has(fn) || reach.fake.has(fn) || reach.unknown.has(fn)))
     return reach.real.has(fn) && !reach.fake.has(fn) && !reach.unknown.has(fn);
 
   if (!isFunction(fn)) return false;
@@ -10735,12 +10972,589 @@ function isContextParameter(
 
 /** The function passed by name (`test('x', check)`) that `analyzeTest` is reading as the test's callback, if any. */
 let contextCallback: ts.Node | undefined;
+/** Where the registration `analyzeTest` is reading hands `contextCallback` the context. */
+let contextCallbackIndex: number | undefined;
 
 /**
- * Whether a call may hand a test context first to a local function whose first parameter receives a context on some
- * paths and something else on others (in both sets of `contextReach`): its first argument is a parameter, so the call
- * may come from a test with a real context, where the function's assertions are not counted. Decided from the file's
- * structure alone, never from which test is being read, so it does not depend on the order tests are analysed in.
+ * Whether a variable is never written after its declaration. Every write form counts: `x = …` and compound
+ * assignments, `x++` and `x--`, a target of a destructuring assignment at any depth (`[x] = …`, `({ x } = …)`,
+ * `({ a: x } = …)`, `({ a: [x] } = …)`, with or without defaults), and `for (x of …)` / `for (x in …)`. A name in an
+ * object or array literal whose role cannot be told is taken as written.
+ */
+function neverReassigned(declaration: ts.VariableDeclaration, checker: ts.TypeChecker): boolean {
+  const symbol = checker.getSymbolAtLocation(declaration.name);
+  /** Whether a literal (or a name in one) is the target of a destructuring assignment or a `for…in/of` head. */
+  const writtenPattern = (node: ts.Node): boolean => {
+    let target: ts.Node = node;
+
+    for (;;) {
+      const parent: ts.Node = target.parent;
+
+      if (
+        valueWrapper(parent) ||
+        ts.isArrayLiteralExpression(parent) ||
+        ts.isObjectLiteralExpression(parent) ||
+        ts.isSpreadElement(parent) ||
+        ts.isSpreadAssignment(parent) ||
+        (ts.isShorthandPropertyAssignment(parent) && parent.name === target) ||
+        (ts.isPropertyAssignment(parent) && parent.initializer === target) ||
+        // A default in a pattern (`[x = 1] = …`): `x` is the target.
+        (ts.isBinaryExpression(parent) &&
+          parent.left === target &&
+          parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          (ts.isArrayLiteralExpression(parent.parent) ||
+            ts.isPropertyAssignment(parent.parent) ||
+            ts.isSpreadElement(parent.parent)))
+      ) {
+        target = parent;
+        continue;
+      }
+
+      if (target === node) return false;
+
+      return (
+        (ts.isBinaryExpression(parent) &&
+          parent.left === target &&
+          parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) ||
+        ((ts.isForOfStatement(parent) || ts.isForInStatement(parent)) && parent.initializer === target) ||
+        // Inside a literal whose use is not one of the above: cannot be told, so taken as written.
+        !(ts.isCallExpression(parent) || ts.isVariableDeclaration(parent) || ts.isReturnStatement(parent))
+      );
+    }
+  };
+  const assigned = (node: ts.Identifier): boolean => {
+    let target: ts.Node = node;
+
+    while (valueWrapper(target.parent)) target = target.parent;
+    const parent = target.parent;
+
+    if (
+      ts.isBinaryExpression(parent) &&
+      parent.left === target &&
+      parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    )
+      return true;
+
+    if (
+      (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
+      (parent.operator === ts.SyntaxKind.PlusPlusToken || parent.operator === ts.SyntaxKind.MinusMinusToken)
+    )
+      return true;
+
+    if ((ts.isForOfStatement(parent) || ts.isForInStatement(parent)) && parent.initializer === target)
+      return true;
+
+    return writtenPattern(node);
+  };
+
+  return (
+    symbol !== undefined &&
+    descendants(declaration.getSourceFile()).every((node) => {
+      if (!ts.isIdentifier(node) || node === declaration.name) return true;
+      // The name of a shorthand property stands for the variable (`({ x } = …)`, `{ x }`).
+      const resolved =
+        ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
+          ? checker.getShorthandAssignmentValueSymbol(node.parent)
+          : checker.getSymbolAtLocation(node);
+
+      return resolved !== symbol || !assigned(node);
+    })
+  );
+}
+
+/** Whether a name is written in a type (`typeof t`, an annotation, the type of `satisfies`), which runs nothing. */
+function inTypePosition(node: ts.Node): boolean {
+  for (let current = node.parent; current && !ts.isSourceFile(current); current = current.parent) {
+    if (ts.isTypeNode(current)) return true;
+
+    if (ts.isStatement(current) || ts.isExpressionStatement(current) || isFunctionLike(current)) return false;
+  }
+
+  return false;
+}
+
+/**
+ * Whether a test's callback uses its context in any way but a direct member call the inventory reads: the context
+ * parameter, the members destructured from it, and every `const` alias of them (also through a cast or a
+ * destructuring) may only be the root of a member chain that is called (`t.assert.equal(…)`, `t.mock.fn()`,
+ * `t.test(…)`, `ctx.expect(…)`), be called themselves (`({ expect }) => expect(x)`), or have a member read where it
+ * reads nothing (`t.name` in a template). Anything else (handed to a call, stored, returned, spread, assigned, a rest
+ * element, `arguments`) may lead to assertions the inventory does not see.
+ */
+function contextUseUnfollowed(
+  fn: ts.SignatureDeclaration,
+  parameter: ts.ParameterDeclaration,
+  checker: ts.TypeChecker,
+): boolean {
+  const body = (fn as ts.FunctionLikeDeclaration).body;
+
+  if (!body) return false;
+
+  if (readsArguments(fn) || parameter.dotDotDotToken) return true;
+  const symbols = new Set<ts.Symbol>();
+  // How many aliases away from the parameter each name is: counting assertions follows no more than `ALIAS_DEPTH`.
+  const depths = new Map<ts.Symbol, number>();
+  const declarations = new Set<ts.Node>();
+  const bind = (name: ts.BindingName, depth: number): boolean => {
+    if (ts.isIdentifier(name)) {
+      const symbol = checker.getSymbolAtLocation(name);
+
+      if (symbol) {
+        symbols.add(symbol);
+        depths.set(symbol, depth);
+      }
+      declarations.add(name);
+
+      return true;
+    }
+
+    return name.elements.every(
+      (element) =>
+        ts.isOmittedExpression(element) ||
+        (!element.dotDotDotToken &&
+          (!element.propertyName ||
+            !ts.isComputedPropertyName(element.propertyName) ||
+            ts.isStringLiteralLike(skipParens(element.propertyName.expression))) &&
+          bind(element.name, depth)),
+    );
+  };
+
+  if (!bind(parameter.name, 0)) return true;
+  // Not what subtests known not to run hold (`t.test(name, { skip: true }, fn)`); those whose options cannot be read count.
+  const notRun = skippedSubtestBodies(body, checker).definite;
+  const nodes = [body, ...descendants(body)].filter((node) => !notRun.some((fn) => contains(fn, node)));
+  const resolve = (node: ts.Identifier) =>
+    ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
+      ? checker.getShorthandAssignmentValueSymbol(node.parent)
+      : checker.getSymbolAtLocation(node);
+
+  // `const c = t`, `const c = t as Ctx`, `const { assert } = t`: aliases, followed in turn.
+  // Each declaration is taken once (a destructuring pattern too), so the loop ends when no new alias is found.
+  const aliases = new Set<ts.Node>();
+
+  for (let added = true, rounds = 0; added; rounds++) {
+    if (rounds > iterationLimit) {
+      iterationCapHit('context aliases');
+
+      return true;
+    }
+    added = false;
+
+    for (const node of nodes)
+      if (
+        ts.isVariableDeclaration(node) &&
+        node.initializer &&
+        !aliases.has(node) &&
+        (ts.getCombinedNodeFlags(node) & ts.NodeFlags.Const) !== 0
+      ) {
+        const value = skipValueWrappers(node.initializer);
+        const symbol = ts.isIdentifier(value) ? checker.getSymbolAtLocation(value) : undefined;
+
+        if (symbol && symbols.has(symbol)) {
+          aliases.add(node);
+          const depth = (depths.get(symbol) ?? 0) + 1;
+
+          // Past the depth assertion counting follows, a use through it would not be credited: unfollowed.
+          if (depth >= ALIAS_DEPTH || !bind(node.name, depth)) return true;
+          added = true;
+        }
+      }
+  }
+
+  return nodes.some((node) => {
+    if (!ts.isIdentifier(node) || declarations.has(node) || inTypePosition(node)) return false;
+    const symbol = resolve(node);
+
+    if (!symbol || !symbols.has(symbol)) return false;
+
+    if (ts.isShorthandPropertyAssignment(node.parent)) return true;
+    let use: ts.Node = node;
+
+    while (valueWrapper(use.parent)) use = use.parent;
+
+    // The initializer of an alias, followed above (a `const`, also destructuring it); any other declaration is not.
+    if (aliases.has(use.parent)) return false;
+    let chain: ts.Node = use;
+
+    while (ts.isPropertyAccessExpression(chain.parent) && chain.parent.expression === chain)
+      chain = chain.parent;
+
+    if (ts.isCallExpression(chain.parent) && chain.parent.expression === chain) return false;
+
+    return !(chain !== use && primitiveUse(chain));
+  });
+}
+
+/**
+ * Whether a function uses its context parameter in a way no context is traced through: a rest parameter or a rest
+ * element, `arguments`, a computed member read, or the parameter (or a destructured member of it) handed to anything
+ * but a local function's first argument, stored, returned, spread or assigned. Member reads (`t.assert.equal`), uses
+ * that read nothing (`primitiveUse`) and forwarding to a local function (followed by `contextReach`) are followed.
+ */
+function contextEscapes(fn: ts.SignatureDeclaration, checker: ts.TypeChecker, index = 0): boolean {
+  const parameter = fn.parameters[index];
+  const body = (fn as ts.FunctionLikeDeclaration).body;
+
+  if (readsArguments(fn)) return true;
+
+  // A rest parameter at or before it takes the context with whatever else is handed.
+  if (fn.parameters.slice(0, index + 1).some((each) => each.dotDotDotToken)) return true;
+
+  if (!parameter || !body) return false;
+  const names: ts.Identifier[] = [];
+  const collect = (name: ts.BindingName): boolean => {
+    if (ts.isIdentifier(name)) {
+      names.push(name);
+
+      return true;
+    }
+
+    return name.elements.every(
+      (element) => ts.isOmittedExpression(element) || (!element.dotDotDotToken && collect(element.name)),
+    );
+  };
+
+  if (!collect(parameter.name)) return true;
+  const symbols = new Set(names.map((name) => checker.getSymbolAtLocation(name)));
+  const reach = contextReach(fn.getSourceFile(), checker);
+
+  return descendants(body).some((node) => {
+    if (!ts.isIdentifier(node)) return false;
+
+    if (ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node)
+      return symbols.has(checker.getShorthandAssignmentValueSymbol(node.parent));
+
+    if (!symbols.has(checker.getSymbolAtLocation(node))) return false;
+    const parent = node.parent;
+
+    if (ts.isPropertyAccessExpression(parent) && parent.expression === node) return false;
+
+    // A member destructured from the context, called (`({ expect }) => expect(x)`).
+    if (ts.isCallExpression(parent) && parent.expression === node) return false;
+
+    if (primitiveUse(node)) return false;
+
+    // `helper(t)`: followed when the helper is a local function `contextReach` tracks.
+    if (ts.isCallExpression(parent) && parent.arguments[0] === node) {
+      const callee = skipParens(parent.expression);
+      const declaration = ts.isIdentifier(callee)
+        ? checker.getSymbolAtLocation(callee)?.valueDeclaration
+        : undefined;
+      const target =
+        declaration && ts.isFunctionDeclaration(declaration)
+          ? declaration
+          : declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+            ? skipParens(declaration.initializer)
+            : undefined;
+
+      return !(target && (reach.real.has(target) || reach.fake.has(target) || reach.unknown.has(target)));
+    }
+
+    return true;
+  });
+}
+
+/**
+ * Whether an assertion reads a variable that a closure handed to project code writes: the closure (or a local
+ * function, constant or array/object holding it, up to two names away) appears in the arguments of a project call
+ * of the test, and assigns the variable, updates it (`n++`), writes a member of it (`state.called = true`) or calls a
+ * method of it (`calls.push(x)`). The project call may run the closure (`compose([mw])(ctx)`), which links the
+ * assertion to it in a way not shown.
+ */
+function assertionReadsProjectSideEffect(
+  assertions: readonly ts.CallExpression[],
+  projectCalls: readonly Invocation[],
+  body: ts.Node,
+  checker: ts.TypeChecker,
+  isProjectCall: (call: ts.CallExpression) => boolean,
+): boolean {
+  if (assertions.length === 0) return false;
+  const read = new Set<ts.Symbol>();
+
+  // Only what an assertion evaluates: `expect(() => hit)` never reads `hit`.
+  for (const assertion of assertions)
+    for (const value of comparedValues(assertion))
+      for (const node of [value, ...descendants(value)])
+        if (ts.isIdentifier(node) && runsWithin(node, value, assertion)) {
+          const symbol = checker.getSymbolAtLocation(node);
+
+          if (symbol) read.add(symbol);
+        }
+
+  if (read.size === 0) return false;
+  const calls = new Set<ts.Node>(projectCalls);
+  /**
+   * Whether a node is inside what a project call is handed: a call of the test, or one anywhere in the file
+   * (`app.get('/stream', (c) => streamSSE(c, …))` in a `describe`, `stream.onAbort(() => …)`).
+   */
+  const insideHanded = (node: ts.Node): boolean => {
+    for (
+      let current: ts.Node = node;
+      current.parent && !ts.isSourceFile(current.parent);
+      current = current.parent
+    ) {
+      const parent = current.parent;
+
+      if (
+        ts.isCallExpression(parent) &&
+        parent.arguments.includes(current as ts.Expression) &&
+        (calls.has(parent) || isProjectCall(parent))
+      )
+        return true;
+    }
+
+    return false;
+  };
+  const source = body.getSourceFile();
+  const nameOf = (fn: ts.Node): ts.Identifier | undefined =>
+    ts.isFunctionDeclaration(fn) && fn.name
+      ? fn.name
+      : ts.isVariableDeclaration(fn.parent) && ts.isIdentifier(fn.parent.name)
+        ? fn.parent.name
+        : undefined;
+  /** Whether a name is used in what project calls are handed, directly or through a constant that holds it. */
+  const handedByName = (name: ts.Identifier, depth: number): boolean => {
+    const symbol = checker.getSymbolAtLocation(name);
+
+    if (!symbol) return false;
+
+    for (const node of descendants(source)) {
+      if (!ts.isIdentifier(node) || node === name || checker.getSymbolAtLocation(node) !== symbol) continue;
+
+      if (insideHanded(node)) return true;
+
+      // `const middleware = [first, second]`, `const app = { onAbort: handler }`.
+      if (depth < 2)
+        for (
+          let current: ts.Node = node.parent;
+          current && !ts.isSourceFile(current);
+          current = current.parent
+        )
+          if (ts.isVariableDeclaration(current)) {
+            if (ts.isIdentifier(current.name) && handedByName(current.name, depth + 1)) return true;
+            break;
+          }
+    }
+
+    return false;
+  };
+  /** The variable a node writes: an assignment's or update's target, a member written, or a method called on it. */
+  const written = (node: ts.Node): ts.Identifier | undefined => {
+    let target: ts.Expression | undefined;
+
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    )
+      target = node.left;
+    else if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
+    )
+      target = node.operand;
+    else if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(skipParens(node.expression)))
+      target = (skipParens(node.expression) as ts.PropertyAccessExpression).expression;
+
+    if (target === undefined) return undefined;
+    let root = skipValueWrappers(target);
+
+    // `(state as Ctx).called = true`: through casts at any step of the member chain.
+    while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root))
+      root = skipValueWrappers(root.expression);
+
+    return ts.isIdentifier(root) ? root : undefined;
+  };
+
+  /**
+   * Whether code at a node can run for the analysed test: not inside another test's callback, nor inside a hook of a
+   * suite that does not enclose the test; in the test itself, its suites' hooks, or at module or suite level.
+   */
+  // Subtests of the test known not to run (`t.test(name, { skip: true }, fn)`) write nothing for it.
+  const notRun = skippedSubtestBodies(body, checker).definite;
+  /**
+   * Whether a function is shown never to run: declared by name (a function declaration, or a `const` holding a
+   * function) that is neither exported nor referenced anywhere in the file. Anything else may run.
+   */
+  const unreferencedFunction = (fn: ts.Node): boolean => {
+    const name = nameOf(fn);
+    const declaration = ts.isFunctionDeclaration(fn) ? fn : fn.parent;
+
+    if (!name || !ts.isIdentifier(name)) return false;
+    const holder = ts.isVariableDeclaration(declaration) ? declaration.parent.parent : declaration;
+
+    if (
+      ts.canHaveModifiers(holder) &&
+      (ts.getModifiers(holder) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+    )
+      return false;
+    const symbol = checker.getSymbolAtLocation(name);
+
+    return (
+      symbol !== undefined &&
+      !descendants(source).some(
+        (node) =>
+          ts.isIdentifier(node) &&
+          node !== name &&
+          (ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
+            ? checker.getShorthandAssignmentValueSymbol(node.parent)
+            : checker.getSymbolAtLocation(node)) === symbol,
+      )
+    );
+  };
+  const runsForTest = (node: ts.Node): boolean => {
+    if (notRun.some((fn) => contains(fn, node))) return false;
+
+    for (let current: ts.Node = node.parent; current && !ts.isSourceFile(current); current = current.parent) {
+      if (current === body.parent) return true;
+
+      // A named function nothing references or exports never runs: what it writes cannot decide the assertion.
+      if (isFunctionLike(current) && unreferencedFunction(current)) return false;
+
+      if (!isFunction(current) || !ts.isCallExpression(current.parent)) continue;
+      const call = current.parent;
+
+      if (testRegistration(call) !== undefined) return false;
+
+      const hook = runnerExport(skipParens(call.expression))?.name ?? '';
+
+      if (runner.hooks.has(hook)) {
+        let suite: ts.Node | undefined = call.parent;
+
+        while (
+          suite &&
+          !ts.isSourceFile(suite) &&
+          !(isFunction(suite) && ts.isCallExpression(suite.parent) && describeRegistration(suite.parent))
+        )
+          suite = suite.parent;
+        const scope = suite ?? source;
+        const encloses = ts.isSourceFile(scope) || contains(scope, body);
+
+        if (runner.setup.has(hook)) return encloses;
+        const start = body.parent.getStart();
+        // A test registered in the scope before the analysed one.
+        const earlierTest = descendants(scope).some(
+          (each) =>
+            ts.isCallExpression(each) && each.getEnd() < start && testRegistration(each) !== undefined,
+        );
+
+        // A teardown hook runs after a test: before the analysed one only when another test of its scope ran first
+        // (`afterEach` of an enclosing suite), or when its suite ended before (an earlier sibling suite's `afterAll`).
+        return runner.afterEach.has(hook)
+          ? encloses && earlierTest
+          : !encloses && scope.getEnd() < start && earlierTest;
+      }
+    }
+
+    return true;
+  };
+
+  for (const node of descendants(source)) {
+    const target = written(node);
+    const symbol = target && checker.getSymbolAtLocation(target);
+
+    if (!symbol || !read.has(symbol) || !runsForTest(node)) continue;
+
+    for (let current: ts.Node = node.parent; current && !ts.isSourceFile(current); current = current.parent) {
+      if (!isFunctionLike(current)) continue;
+
+      // Written by the test itself, not by a closure it hands on.
+      if (current === body.parent) break;
+
+      if (insideHanded(current)) return true;
+      const name = nameOf(current);
+
+      if (name && handedByName(name, 0)) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Whether a value handed to a helper is a primitive (number, string, boolean, bigint, symbol or a literal of one),
+ * whose methods are the standard library's: no class extends it, and no property of it can be replaced. An object,
+ * builtin or not, may have its methods replaced or be an instance of a project subclass; `any` and `unknown` may be
+ * anything.
+ */
+function builtinValue(argument: ts.Expression, checker: ts.TypeChecker): boolean {
+  const primitive =
+    ts.TypeFlags.NumberLike |
+    ts.TypeFlags.StringLike |
+    ts.TypeFlags.BooleanLike |
+    ts.TypeFlags.BigIntLike |
+    ts.TypeFlags.ESSymbolLike;
+  const type = checker.getTypeAtLocation(argument);
+  const primitiveType = (each: ts.Type): boolean =>
+    each.isUnion() ? each.types.every(primitiveType) : (each.flags & primitive) !== 0;
+
+  return !(type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) && primitiveType(type);
+}
+
+/**
+ * Whether a call hands a local helper a project value (an import of project code, or an instance of a project class
+ * made there) as an argument whose parameter the helper calls or calls a method of (`function checkObj(o) {
+ * o.price(1) }` called as `checkObj(svc)`): those calls run project code the helper's analysis does not resolve.
+ */
+function projectValueCalledThroughParameter(node: Invocation, body: ts.Node, ctx: Ctx): boolean {
+  const fn = body.parent;
+
+  if (!ts.isCallExpression(node) || !fn || !isFunctionLike(fn)) return false;
+  const { checker } = ctx;
+  const fromProject = (declaration: ts.Declaration) =>
+    ctx.projectSet.has(path.resolve(declaration.getSourceFile().fileName));
+  const projectValue = (argument: ts.Expression): boolean => {
+    const value = skipValueWrappers(argument);
+    const name = ts.isNewExpression(value) ? skipParens(value.expression) : value;
+
+    if (!ts.isIdentifier(name)) return false;
+    let symbol = checker.getSymbolAtLocation(name);
+
+    try {
+      if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    } catch {
+      return false;
+    }
+
+    return (symbol?.declarations ?? []).some(fromProject);
+  };
+
+  return node.arguments.some((argument, index) => {
+    const parameter = fn.parameters[index];
+
+    if (!parameter || !ts.isIdentifier(parameter.name) || !projectValue(argument)) return false;
+    const symbol = checker.getSymbolAtLocation(parameter.name);
+
+    // A primitive (`const two = 2`) has only the methods of the standard library, which run no project code.
+    if (builtinValue(argument, checker)) return false;
+    const isParameter = (expression: ts.Expression | undefined) => {
+      const root = expression && rootIdentifierNode(skipValueWrappers(expression));
+
+      return root !== undefined && checker.getSymbolAtLocation(root) === symbol;
+    };
+
+    // Any invocation of it or a member: a call, `new`, a tagged template; or it handed to a call or `new`, which may
+    // invoke it (`Reflect.construct(Ctor, [])`, `Reflect.apply(fn, null, [])`).
+    return descendants(body).some(
+      (child) =>
+        ((ts.isCallExpression(child) || ts.isNewExpression(child)) &&
+          (isParameter(child.expression) ||
+            // An assertion only reads what it is given, unless it runs it (`expect(f).toThrow()`, `assert.throws(f)`).
+            ((!(ts.isCallExpression(child) && (isExpectCall(child) || isAssertCall(child))) ||
+              (ts.isCallExpression(child) && runsCallback(child))) &&
+              (child.arguments ?? []).some((each) => isParameter(each))))) ||
+        (ts.isTaggedTemplateExpression(child) && isParameter(child.tag)),
+    );
+  });
+}
+
+/**
+ * Whether a call may hand a test context to a local function that can receive one and also receives something else,
+ * or uses it in ways not followed (see `contextReach`, `contextEscapes`): its first argument is not plainly a value,
+ * so the call may come from a test with a real context, where the function's assertions are not counted. Decided
+ * from the file's structure alone, never from which test is being read, so it does not depend on the order tests are
+ * analysed in.
  */
 function handsContextToMixedCallback(node: Invocation, body: ts.Node, checker: ts.TypeChecker): boolean {
   const fn = body.parent;
@@ -10748,14 +11562,120 @@ function handsContextToMixedCallback(node: Invocation, body: ts.Node, checker: t
   if (!ts.isCallExpression(node) || !fn || !isFunctionLike(fn)) return false;
   const reach = contextReach(fn.getSourceFile(), checker);
 
-  if (!reach.contextual.has(fn)) return false;
+  // Only a function that can really receive a context: one passed by name to the runner, reached from one with a
+  // test's context, or handed a value derived from a context that is not traced (`let c; c = t; check(c)`). An
+  // ordinary helper (`check(x) { expect(x).toBe(2) }`) is judged as any other call.
+  if (!reach.contextual.has(fn) || !(reach.real.has(fn) || reach.unknownContext.has(fn))) return false;
 
-  // A function reading `arguments` uses what it is handed in ways no context is traced through.
-  if (!reach.unknown.has(fn) && !(reach.real.has(fn) && reach.fake.has(fn)) && !readsArguments(fn))
+  // Reached also with something else or with an untraced context, or using its context in ways no context is traced
+  // through (handing it to a call, storing it, `arguments`, a rest parameter).
+  if (
+    !reach.unknown.has(fn) &&
+    !reach.fake.has(fn) &&
+    !reach.unknownContext.has(fn) &&
+    !contextEscapes(fn as ts.SignatureDeclaration, checker)
+  )
     return false;
 
-  // Opaque unless what the call hands it is plainly not a context (a literal, an object written there).
-  return traceArgument(node.arguments[0], checker) !== 'value';
+  // Opaque only when what the call hands it may be a context: a parameter, or an untraced value derived from one
+  // (`let c; c = t`). A literal, an object written there or an ordinary value (`svc.price(1)`) is not.
+  const traced = traceArgument(node.arguments[0], checker);
+
+  if (traced === 'value') return false;
+
+  if (traced !== 'unknown') return true;
+
+  return derivedParameters(node.arguments[0] as ts.Expression, checker).some((parameter) => {
+    const owner = parameter.parent;
+
+    return (
+      isFunctionLike(owner) &&
+      owner.parameters[0] === parameter &&
+      (reach.real.has(owner) || reach.unknownContext.has(owner) || isContextParameter(parameter, checker, 0))
+    );
+  });
+}
+
+const assignedValuesCache = new WeakMap<ts.SourceFile, Map<ts.Symbol, ts.Expression[]>>();
+
+/**
+ * What each variable of a file is assigned anywhere (`x = …`, `x += …`, and the whole value of a destructuring
+ * assignment it is a target of), for following an untraced value back to the parameters it may come from.
+ */
+function assignedValuesOf(source: ts.SourceFile, checker: ts.TypeChecker): Map<ts.Symbol, ts.Expression[]> {
+  const cached = assignedValuesCache.get(source);
+
+  if (cached) return cached;
+  const values = new Map<ts.Symbol, ts.Expression[]>();
+  const add = (symbol: ts.Symbol | undefined, value: ts.Expression) => {
+    if (symbol) values.set(symbol, [...(values.get(symbol) ?? []), value]);
+  };
+
+  for (const node of descendants(source)) {
+    if (
+      !ts.isBinaryExpression(node) ||
+      node.operatorToken.kind < ts.SyntaxKind.FirstAssignment ||
+      node.operatorToken.kind > ts.SyntaxKind.LastAssignment
+    )
+      continue;
+    const target = skipValueWrappers(node.left);
+
+    if (ts.isIdentifier(target)) add(checker.getSymbolAtLocation(target), node.right);
+    else if (ts.isObjectLiteralExpression(target) || ts.isArrayLiteralExpression(target))
+      for (const item of descendants(target))
+        add(
+          ts.isShorthandPropertyAssignment(item)
+            ? checker.getShorthandAssignmentValueSymbol(item)
+            : ts.isIdentifier(item)
+              ? checker.getSymbolAtLocation(item)
+              : undefined,
+          node.right,
+        );
+  }
+  assignedValuesCache.set(source, values);
+
+  return values;
+}
+
+/**
+ * The parameters an expression may derive from, through the variables it reads, their initializers and everything
+ * they are assigned anywhere in the file (cycles end).
+ */
+function derivedParameters(
+  expression: ts.Node,
+  checker: ts.TypeChecker,
+  seen = new Set<ts.Symbol>(),
+): ts.ParameterDeclaration[] {
+  const found: ts.ParameterDeclaration[] = [];
+  const assigned = assignedValuesOf(expression.getSourceFile(), checker);
+
+  for (const node of [expression, ...descendants(expression)]) {
+    const symbol =
+      node.parent && ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
+        ? checker.getShorthandAssignmentValueSymbol(node.parent)
+        : ts.isIdentifier(node)
+          ? checker.getSymbolAtLocation(node)
+          : undefined;
+
+    if (!symbol || seen.has(symbol)) continue;
+    seen.add(symbol);
+    const declaration = symbol.valueDeclaration;
+
+    if (declaration && ts.isParameter(declaration)) found.push(declaration);
+    let holder: ts.Node | undefined = declaration;
+
+    while (holder && ts.isBindingElement(holder)) holder = holder.parent.parent;
+
+    // A member destructured from a parameter (`({ assert }) => check(assert)`) derives from that parameter.
+    if (holder && holder !== declaration && ts.isParameter(holder)) found.push(holder);
+
+    if (holder && ts.isVariableDeclaration(holder) && holder.initializer)
+      found.push(...derivedParameters(holder.initializer, checker, seen));
+
+    for (const value of assigned.get(symbol) ?? []) found.push(...derivedParameters(value, checker, seen));
+  }
+
+  return found;
 }
 
 /**
@@ -10779,12 +11699,14 @@ function traceArgument(
 
     if (declaration && ts.isParameter(declaration)) return declaration;
 
+    // A `const`, or a `let` or `var` never assigned again (`let context = t`), stands for its initializer.
     if (
       declaration &&
       ts.isVariableDeclaration(declaration) &&
       ts.isIdentifier(declaration.name) &&
-      (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 &&
-      declaration.initializer
+      declaration.initializer &&
+      ((ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 ||
+        neverReassigned(declaration, checker))
     )
       return traceArgument(declaration.initializer, checker, depth + 1);
 
@@ -10901,17 +11823,38 @@ function unrelatedFirstParameter(fn: ts.SignatureDeclaration, checker: ts.TypeCh
 /** Whether a function's body reads `arguments` (also in an arrow function inside it, which shares it). */
 function readsArguments(fn: ts.Node): boolean {
   const body = (fn as ts.FunctionLikeDeclaration).body;
+  let found = false;
+  // Arrows share the function's `arguments`; a nested function, method, accessor or constructor has its own.
+  const visit = (node: ts.Node): void => {
+    if (found) return;
 
-  return (
-    body !== undefined &&
-    descendants(body).some(
-      (node) =>
-        ts.isIdentifier(node) &&
-        node.text === 'arguments' &&
-        !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
-        !(ts.isPropertyAssignment(node.parent) && node.parent.name === node),
+    if (
+      ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isMethodDeclaration(node) ||
+      ts.isGetAccessorDeclaration(node) ||
+      ts.isSetAccessorDeclaration(node) ||
+      ts.isConstructorDeclaration(node) ||
+      ts.isClassStaticBlockDeclaration(node)
     )
-  );
+      return;
+
+    if (
+      ts.isIdentifier(node) &&
+      node.text === 'arguments' &&
+      !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
+      !(ts.isPropertyAssignment(node.parent) && node.parent.name === node)
+    ) {
+      found = true;
+
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  if (body !== undefined) visit(body);
+
+  return found;
 }
 
 interface ContextReach {
@@ -10921,6 +11864,12 @@ interface ContextReach {
   fake: Set<ts.Node>;
   /** Local functions whose first parameter can receive a value not traced (a `let`, a member, a call's result). */
   unknown: Set<ts.Node>;
+  /**
+   * Of those, the functions whose untraced value may be a real context: it is derived from the context parameter of a
+   * test or hook callback (`let c; c = t; check(c)`, `check(t.x)`, `check(wrap(t))`), or from the first parameter of a
+   * function that can receive one.
+   */
+  unknownContext: Set<ts.Node>;
   /**
    * Local functions that use their first parameter as a context may be used: they read a member of it
    * (`t.assert.equal`, `t.mock.fn`, `t.test`), or hand it to one that does. Only for these does what they receive
@@ -10945,8 +11894,24 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
 
   if (cached && cached.runner === runner) return cached.reach;
 
+  // A runner that hands its callbacks no context (Jest's `done`) has none to follow.
+  if (!runner.testContext)
+    return {
+      real: new Set(),
+      fake: new Set(),
+      unknown: new Set(),
+      unknownContext: new Set(),
+      contextual: new Set(),
+    };
+
   if (computingReach.has(source))
-    return { real: new Set(), fake: new Set(), unknown: new Set(), contextual: new Set() };
+    return {
+      real: new Set(),
+      fake: new Set(),
+      unknown: new Set(),
+      unknownContext: new Set(),
+      contextual: new Set(),
+    };
   computingReach.add(source);
 
   try {
@@ -10971,8 +11936,18 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
     const real = new Set<ts.Node>(callbacks);
     const fake = new Set<ts.Node>();
     const unknown = new Set<ts.Node>();
+    const unknownContext = new Set<ts.Node>();
     /** `from` hands its first parameter to `to`. */
     const forwards: [ts.Node, ts.Node][] = [];
+    /** `from` hands `to` an untraced value derived from its first parameter (`wrap(t) { check(t.x) }`). */
+    const derivedForwards: [ts.Node, ts.Node][] = [];
+    const derivedFrom = (expression: ts.Node) => derivedParameters(expression, checker);
+    /** Whether a parameter is the context of an inline test, hook or subtest callback (not one passed by name). */
+    const inlineContext = (parameter: ts.ParameterDeclaration): boolean => {
+      const owner = parameter.parent;
+
+      return isFunction(owner) && !named.has(owner) && isContextParameter(parameter, checker, 0);
+    };
     /** Where a value handed first to a function comes from: a local function's first parameter, a real context, or neither. */
     const origin = (
       argument: ts.Expression | undefined,
@@ -10985,9 +11960,14 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
       if (traced === 'unknown' || depth > 20) return 'unknown';
       const owner = traced.parent;
 
+      if (!isFunctionLike(owner)) return 'unknown';
+
+      // The context of an inline registration callback, at the position it takes it (`(row, ctx) => …` with `test.for`).
+      if (isFunction(owner) && !named.has(owner) && isContextParameter(traced, checker, 0)) return 'real';
+
       // A parameter other than a function's first, or of a function static analysis does not follow (a `forEach`
-      // callback's row): not known.
-      if (!isFunctionLike(owner) || owner.parameters[0] !== traced) return 'unknown';
+      // callback's row, a table row): not known.
+      if (owner.parameters[0] !== traced) return 'unknown';
 
       if (callbacks.has(owner) || named.has(owner)) return owner;
 
@@ -10996,14 +11976,6 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
 
       if (!ts.isCallExpression(call) || !call.arguments.includes(owner)) return 'unknown';
       const callee = skipParens(call.expression);
-
-      // A registration of the runner first: `nt.test(…)` with `nt` its namespace or default import registers a test.
-      if (
-        testRegistration(call) !== undefined ||
-        describeRegistration(call) !== undefined ||
-        runner.hooks.has(runnerExport(callee)?.name ?? '')
-      )
-        return 'real';
 
       // `t.test('child', (child) => …)` on a context: the child's context comes from wherever `t` does.
       if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'test') {
@@ -11036,8 +12008,23 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
 
         if (from === 'real') real.add(fn);
         else if (from === 'fake') fake.add(fn);
-        else if (from === 'unknown') unknown.add(fn);
-        else forwards.push([from, fn]);
+        else if (from === 'unknown') {
+          unknown.add(fn);
+
+          // Untraced, but derived from a context (`let c; c = t; check(c)`): it may be a real one. An ordinary value
+          // (`check(svc.price(1))`, an import, a `let` that never touches a context) is not.
+          for (const parameter of derivedFrom(parent.arguments[0] ?? parent)) {
+            const owner = parameter.parent;
+
+            if (inlineContext(parameter)) unknownContext.add(fn);
+            else if (
+              isFunctionLike(owner) &&
+              owner.parameters[0] === parameter &&
+              (named.has(owner) || callbacks.has(owner))
+            )
+              derivedForwards.push([owner, fn]);
+          }
+        } else forwards.push([from, fn]);
       } else if (
         ts.isCallExpression(parent) &&
         parent.arguments.some((argument) => skipParens(argument) === node)
@@ -11054,7 +12041,14 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
       } else fake.add(fn);
     }
 
-    for (let changed = true; changed; ) {
+    // Each round adds to a set or ends: the sets only grow, so the loop ends; the cap guards it all the same.
+    let capped = false;
+
+    for (let changed = true, rounds = 0; changed; rounds++) {
+      if (rounds > iterationLimit) {
+        capped = true;
+        break;
+      }
       changed = false;
 
       for (const [from, to] of forwards) {
@@ -11072,7 +12066,19 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
           unknown.add(to);
           changed = true;
         }
+
+        if (unknownContext.has(from) && !unknownContext.has(to)) {
+          unknownContext.add(to);
+          changed = true;
+        }
       }
+
+      // An untraced value derived from the first parameter of a function that can receive a context may be one.
+      for (const [from, to] of derivedForwards)
+        if ((real.has(from) || unknownContext.has(from)) && !unknownContext.has(to)) {
+          unknownContext.add(to);
+          changed = true;
+        }
     }
     // Functions reading a member of their first parameter, and those handing it to one (a fixpoint the other way).
     const contextual = new Set<ts.Node>();
@@ -11080,7 +12086,11 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
     for (const fn of new Set<ts.Node>([...named, ...callbacks]))
       if (!unrelatedFirstParameter(fn as ts.SignatureDeclaration, checker)) contextual.add(fn);
 
-    for (let changed = true; changed; ) {
+    for (let changed = true, rounds = 0; changed; rounds++) {
+      if (rounds > iterationLimit) {
+        capped = true;
+        break;
+      }
       changed = false;
 
       for (const [from, to] of forwards)
@@ -11089,13 +12099,89 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
           changed = true;
         }
     }
-    const reach = { real, fake, unknown, contextual };
+
+    // Stopped at the cap: nothing is known of any function, so every one may receive an untraced context and none is
+    // read as a context.
+    if (capped) {
+      iterationCapHit('context reach');
+
+      for (const fn of new Set<ts.Node>([...named, ...callbacks])) {
+        unknown.add(fn);
+        unknownContext.add(fn);
+        contextual.add(fn);
+      }
+    }
+    const reach = { real, fake, unknown, unknownContext, contextual };
     contextReachCache.set(source, { runner, reach });
 
     return reach;
   } finally {
     computingReach.delete(source);
   }
+}
+
+/**
+ * The position of the context among the parameters of a registration's callback: the first, the second for a table
+ * run with `for` (Vitest's `test.for(rows)(name, (row, ctx) => …)`), or none for one run with `each`, whose callback
+ * takes a row's values.
+ */
+function registrationContextIndex(call: ts.CallExpression): number | undefined {
+  const registration = testRegistration(call) ?? describeRegistration(call);
+
+  if (!registration?.modifiers.includes('each')) return 0;
+  const factory = registrationFactory(call);
+
+  return factory !== undefined && propertyChain(factory).includes('for') ? 1 : undefined;
+}
+
+const callbackIndexCache = new WeakMap<
+  ts.SourceFile,
+  { runner: RunnerApi; indexes: Map<ts.Node, Set<number | undefined>> }
+>();
+
+/**
+ * Where a function takes the test context: for one a registration takes as its callback, inline or by name, the
+ * position `registrationContextIndex` gives; for any other function its first parameter.
+ */
+function registeredContextIndexes(fn: ts.Node, checker: ts.TypeChecker): Set<number | undefined> | undefined {
+  const source = fn.getSourceFile();
+  let cached = callbackIndexCache.get(source);
+
+  if (!cached || cached.runner !== runner) {
+    const indexes = new Map<ts.Node, Set<number | undefined>>();
+
+    for (const node of descendants(source)) {
+      if (!ts.isCallExpression(node)) continue;
+      const registration = testRegistration(node) ?? describeRegistration(node);
+
+      if (!registration?.callback) continue;
+      const callback = testFunction(registration.callback, checker);
+
+      if (callback)
+        indexes.set(callback, (indexes.get(callback) ?? new Set()).add(registrationContextIndex(node)));
+    }
+    cached = { runner, indexes };
+    callbackIndexCache.set(source, cached);
+  }
+
+  return cached.indexes.get(fn);
+}
+
+/**
+ * Whether a function is registered in ways that hand it the context at different positions, or a context in one and a
+ * table row in another (`test.each(rows)('row', check)` and `test('normal', check)`): which one its parameter is depends on
+ * the registration, so outside one it is no context, and in the one that hands a context it is not known either.
+ */
+function contextIndexConflict(fn: ts.Node, checker: ts.TypeChecker): boolean {
+  return (registeredContextIndexes(fn, checker)?.size ?? 0) > 1;
+}
+
+function contextIndexOf(fn: ts.Node, checker: ts.TypeChecker): number | undefined {
+  const indexes = registeredContextIndexes(fn, checker);
+
+  if (indexes === undefined) return 0;
+
+  return indexes.size === 1 ? [...indexes][0] : undefined;
 }
 
 const referencedCallbackCache = new WeakMap<ts.SourceFile, { runner: RunnerApi; callbacks: Set<ts.Node> }>();
@@ -11113,6 +12199,10 @@ function referencedCallbacks(source: ts.SourceFile, checker: ts.TypeChecker): Se
   for (const node of descendants(source)) {
     if (!ts.isCallExpression(node)) continue;
     const registration = testRegistration(node) ?? describeRegistration(node);
+
+    // A table-driven registration (`test.each(rows)`, `describe.each(rows)`, Vitest's `test.for(rows)`) hands its
+    // callback a row first, not a context.
+    if (registration?.modifiers.includes('each')) continue;
     const callback = registration
       ? registration.callback
       : runner.hooks.has(runnerExport(skipParens(node.expression))?.name ?? '')
@@ -12549,12 +13639,23 @@ function nondeterminismFor(node: ts.Node, fakeTimers: boolean): string[] {
   return values;
 }
 
-function callsHelperWithAssertion(body: ts.Node | undefined, source: ts.SourceFile): boolean {
+function callsHelperWithAssertion(
+  body: ts.Node | undefined,
+  source: ts.SourceFile,
+  checker?: ts.TypeChecker,
+): boolean {
   if (!body) return false;
   const names = new Set<string>();
+  // A call in a subtest that is skipped or a todo gates nothing.
+  const notGating = checker ? skippedSubtestBodies(body, checker).skipped : [];
 
   for (const node of descendants(body))
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) names.add(node.expression.text);
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      !notGating.some((fn) => contains(fn, node))
+    )
+      names.add(node.expression.text);
   let found = false;
   const visit = (node: ts.Node) => {
     if (ts.isFunctionDeclaration(node) && node.name && names.has(node.name.text)) {
@@ -12711,7 +13812,11 @@ function isContextAssertion(
     return symbol !== undefined && parameters.has(symbol);
   };
 
-  if (ts.isIdentifier(holder)) return CONTEXT_ASSERTIONS.has(callee.name.text) && isContext(holder);
+  // `t.is(…)`, and Vitest's `ctx.expect(…)` (the runner's `expect` read from the context).
+  if (ts.isIdentifier(holder))
+    return (
+      (CONTEXT_ASSERTIONS.has(callee.name.text) || runner.expect.has(callee.name.text)) && isContext(holder)
+    );
 
   // `t.assert.equal(...)`, `t.assert.called(fn)` and members not known yet; never `t.assert.bind`.
   return (
@@ -12891,9 +13996,16 @@ function isTypeLevelAssertion(node: ts.CallExpression): boolean {
 
 /** `expect(...)`, and the test runner's type-level checks (`expectTypeOf(...)`, `assertType(...)`). */
 function isExpectCall(node: ts.CallExpression): boolean {
-  const root = rootIdentifier(node.expression);
+  const root = rootIdentifierNode(node.expression);
 
-  return root !== undefined && (runner.expect.has(root) || runner.typeLevel.has(root));
+  if (root === undefined) return false;
+
+  if (runner.expect.has(root.text) || runner.typeLevel.has(root.text)) return true;
+
+  // `expect` destructured from the test context under another name (`(row, { expect: check }) => check(x)`).
+  const destructured = runnerChecker ? contextMemberPath(root, runnerChecker) : undefined;
+
+  return destructured?.length === 1 && runner.expect.has(destructured[0] as string);
 }
 
 /**

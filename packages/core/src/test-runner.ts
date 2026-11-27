@@ -158,6 +158,12 @@ export interface TestRunnerRecognition {
    */
   readonly functionTitles?: boolean;
   /**
+   * The runner hands a test, hook or suite callback a context as its first parameter (the second for a table
+   * registration run with `for`, Vitest's `test.for`): Node's `t`, Vitest's `ctx`. Without it the first parameter is
+   * something else (Jest's `done`), never read as a context.
+   */
+  readonly testContext?: boolean;
+  /**
    * An option of `testOptions` is set by any value but `false` and `undefined` (Node: `{ skip: '' }`, `{ skip: 0 }`
    * and `{ skip: null }` skip); without it a value sets the option when it is truthy, as in Vitest.
    */

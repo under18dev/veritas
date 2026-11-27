@@ -46,6 +46,8 @@ export const vitestTestRunner: TestRunnerProvider = {
     registrationFactories: ['each', 'for', 'skipIf', 'runIf'],
     tableFactories: ['each', 'for'],
     testOptions: true,
+    // `test(name, (ctx) => …)`, `test.for(rows)(name, (row, ctx) => …)`: the test context.
+    testContext: true,
     hooks: {
       beforeEach: ['beforeEach'],
       beforeAll: ['beforeAll'],
