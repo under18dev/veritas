@@ -736,8 +736,9 @@ function inertExpression(expression: ts.Expression, strict: boolean): boolean {
 
       if (ts.isShorthandPropertyAssignment(property)) return inertExpression(property.name, strict);
 
-      // Methods, getters and setters are only defined.
-      return true;
+      // Methods are only defined. A getter or setter runs when the object is read, destructured or spread, which may
+      // happen anywhere: an object literal with one is not inert.
+      return !ts.isGetAccessorDeclaration(property) && !ts.isSetAccessorDeclaration(property);
     });
 
   if (ts.isCallExpression(value) || ts.isNewExpression(value)) return inertCall(value, strict, false);
@@ -909,6 +910,11 @@ function inertStatement(statement: ts.Statement, strict: boolean): boolean {
           (element) =>
             !element.dotDotDotToken &&
             ts.isIdentifier(element.name) &&
+            // A computed key runs its expression: only a literal one is inert.
+            (!element.propertyName ||
+              !ts.isComputedPropertyName(element.propertyName) ||
+              ts.isStringLiteralLike(skipParens(element.propertyName.expression)) ||
+              ts.isNumericLiteral(skipParens(element.propertyName.expression))) &&
             (!element.initializer || inertExpression(element.initializer, strict)),
         )
       );
@@ -10373,6 +10379,14 @@ function mockCall(node: ts.Expression, checker: ts.TypeChecker): MockCallRole | 
   )
     return runner.mockCalls.get(name);
 
+  // The same, destructured from the context (`({ mock }) => mock.method(…)`).
+  if (runner.mockContextMember !== undefined && ts.isIdentifier(holder)) {
+    const destructured = contextMemberPath(holder, checker);
+
+    if (destructured?.length === 1 && destructured[0] === runner.mockContextMember)
+      return runner.mockCalls.get(name);
+  }
+
   return runnerMockObject(holder, checker) ? runner.mockCalls.get(name) : undefined;
 }
 
@@ -10524,6 +10538,41 @@ function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth
   }
 
   if (!declaration || !ts.isParameter(declaration)) return false;
+
+  return isContextParameter(declaration, checker, depth);
+}
+
+/**
+ * The members of a test context a name destructured from one stands for (`({ assert }) => …` binds `assert` to
+ * `t.assert`, `({ assert: { equal } }) => …` binds `equal` to `t.assert.equal`), outermost first; undefined for a
+ * name not destructured from a context parameter (a rest element, a computed key, any other pattern).
+ */
+function contextMemberPath(identifier: ts.Identifier, checker: ts.TypeChecker): string[] | undefined {
+  const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
+
+  if (!declaration || !ts.isBindingElement(declaration)) return undefined;
+  const path: string[] = [];
+  let node: ts.Node = declaration;
+
+  while (ts.isBindingElement(node)) {
+    const key = node.propertyName ?? node.name;
+
+    if (node.dotDotDotToken || !ts.isObjectBindingPattern(node.parent)) return undefined;
+
+    if (!(ts.isIdentifier(key) || ts.isStringLiteralLike(key))) return undefined;
+    path.unshift(key.text);
+    node = node.parent.parent;
+  }
+
+  return ts.isParameter(node) && isContextParameter(node, checker, 0) ? path : undefined;
+}
+
+/** Whether a function's parameter is the context its runner hands it (see `isTestContext`), under any name or pattern. */
+function isContextParameter(
+  declaration: ts.ParameterDeclaration,
+  checker: ts.TypeChecker,
+  depth: number,
+): boolean {
   const fn = declaration.parent;
 
   if (!isFunctionLike(fn) || fn.parameters[0] !== declaration) return false;
@@ -10579,7 +10628,9 @@ function handsContextToMixedCallback(node: Invocation, body: ts.Node, checker: t
 
   if (!reach.contextual.has(fn)) return false;
 
-  if (!reach.unknown.has(fn) && !(reach.real.has(fn) && reach.fake.has(fn))) return false;
+  // A function reading `arguments` uses what it is handed in ways no context is traced through.
+  if (!reach.unknown.has(fn) && !(reach.real.has(fn) && reach.fake.has(fn)) && !readsArguments(fn))
+    return false;
 
   // Opaque unless what the call hands it is plainly not a context (a literal, an object written there).
   return traceArgument(node.arguments[0], checker) !== 'value';
@@ -10636,6 +10687,111 @@ function traceArgument(
     : 'unknown';
 }
 
+/** Operators whose result is a fresh primitive: comparisons, arithmetic, bitwise, `in`, `instanceof`. */
+const PRIMITIVE_OPERATORS = new Set<ts.SyntaxKind>([
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.LessThanToken,
+  ts.SyntaxKind.LessThanEqualsToken,
+  ts.SyntaxKind.GreaterThanToken,
+  ts.SyntaxKind.GreaterThanEqualsToken,
+  ts.SyntaxKind.PlusToken,
+  ts.SyntaxKind.MinusToken,
+  ts.SyntaxKind.AsteriskToken,
+  ts.SyntaxKind.AsteriskAsteriskToken,
+  ts.SyntaxKind.SlashToken,
+  ts.SyntaxKind.PercentToken,
+  ts.SyntaxKind.AmpersandToken,
+  ts.SyntaxKind.BarToken,
+  ts.SyntaxKind.CaretToken,
+  ts.SyntaxKind.LessThanLessThanToken,
+  ts.SyntaxKind.GreaterThanGreaterThanToken,
+  ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken,
+  ts.SyntaxKind.InstanceOfKeyword,
+  ts.SyntaxKind.InKeyword,
+]);
+const LOGICAL_OPERATORS = new Set<ts.SyntaxKind>([
+  ts.SyntaxKind.AmpersandAmpersandToken,
+  ts.SyntaxKind.BarBarToken,
+  ts.SyntaxKind.QuestionQuestionToken,
+]);
+
+/**
+ * Whether an expression holding a value is used only in a way that can neither read a member of it nor hand it on:
+ * as an operand of a comparison or arithmetic, `!`, `typeof` or `void`, in a template substitution, as a condition,
+ * or as an operand of `&&`, `||` or `??` whose own value is used that way.
+ */
+function primitiveUse(node: ts.Node): boolean {
+  const parent = node.parent;
+
+  if (ts.isParenthesizedExpression(parent)) return primitiveUse(parent);
+
+  if (ts.isBinaryExpression(parent)) {
+    if (PRIMITIVE_OPERATORS.has(parent.operatorToken.kind)) return true;
+
+    return LOGICAL_OPERATORS.has(parent.operatorToken.kind) && primitiveUse(parent);
+  }
+
+  if (ts.isPrefixUnaryExpression(parent) || ts.isTypeOfExpression(parent) || ts.isVoidExpression(parent))
+    return true;
+
+  if (ts.isTemplateSpan(parent) || ts.isExpressionStatement(parent)) return true;
+
+  if (
+    (ts.isIfStatement(parent) || ts.isWhileStatement(parent) || ts.isDoStatement(parent)) &&
+    parent.expression === node
+  )
+    return true;
+
+  return ts.isConditionalExpression(parent) && parent.condition === node;
+}
+
+/**
+ * Whether a function's first parameter is shown to be unrelated to a test context: never used (and `arguments` never
+ * read), or used only where a member of it cannot be read nor the value handed on (`primitiveUse`, as in
+ * `(a, b) => a === b`). A destructured parameter, a member read, passing it to a call, storing, returning, spreading or
+ * assigning it, and any use of `arguments` all may use it as a context.
+ */
+function unrelatedFirstParameter(fn: ts.SignatureDeclaration, checker: ts.TypeChecker): boolean {
+  const parameter = fn.parameters[0];
+  const body = (fn as ts.FunctionLikeDeclaration).body;
+
+  if (readsArguments(fn)) return false;
+
+  if (!parameter) return true;
+
+  if (!ts.isIdentifier(parameter.name) || !body) return false;
+  const symbol = checker.getSymbolAtLocation(parameter.name);
+
+  return descendants(body).every((node) => {
+    if (!ts.isIdentifier(node)) return true;
+
+    // `{ t }` stores it: the name of a shorthand property refers to the property, its value to the parameter.
+    if (ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node)
+      return checker.getShorthandAssignmentValueSymbol(node.parent) !== symbol;
+
+    return checker.getSymbolAtLocation(node) !== symbol || primitiveUse(node);
+  });
+}
+
+/** Whether a function's body reads `arguments` (also in an arrow function inside it, which shares it). */
+function readsArguments(fn: ts.Node): boolean {
+  const body = (fn as ts.FunctionLikeDeclaration).body;
+
+  return (
+    body !== undefined &&
+    descendants(body).some(
+      (node) =>
+        ts.isIdentifier(node) &&
+        node.text === 'arguments' &&
+        !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
+        !(ts.isPropertyAssignment(node.parent) && node.parent.name === node),
+    )
+  );
+}
+
 interface ContextReach {
   /** Local functions whose first parameter can receive a real test context. */
   real: Set<ts.Node>;
@@ -10684,7 +10840,8 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
           : undefined;
       const symbol = name && checker.getSymbolAtLocation(name);
 
-      if (symbol && (node as ts.SignatureDeclaration).parameters.length > 0)
+      // A function with no parameter may still read what it is handed through `arguments`.
+      if (symbol && ((node as ts.SignatureDeclaration).parameters.length > 0 || readsArguments(node)))
         functions.set(symbol, node as ts.SignatureDeclaration);
     }
     const named = new Set<ts.Node>(functions.values());
@@ -10798,24 +10955,8 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
     // Functions reading a member of their first parameter, and those handing it to one (a fixpoint the other way).
     const contextual = new Set<ts.Node>();
 
-    for (const fn of new Set<ts.Node>([...named, ...callbacks])) {
-      const parameter = (fn as ts.SignatureDeclaration).parameters[0];
-      const body = (fn as ts.FunctionLikeDeclaration).body;
-
-      if (!parameter || !body || !ts.isIdentifier(parameter.name)) continue;
-      const symbol = checker.getSymbolAtLocation(parameter.name);
-
-      if (
-        descendants(body).some(
-          (node) =>
-            ts.isIdentifier(node) &&
-            (ts.isPropertyAccessExpression(node.parent) || ts.isElementAccessExpression(node.parent)) &&
-            node.parent.expression === node &&
-            checker.getSymbolAtLocation(node) === symbol,
-        )
-      )
-        contextual.add(fn);
-    }
+    for (const fn of new Set<ts.Node>([...named, ...callbacks]))
+      if (!unrelatedFirstParameter(fn as ts.SignatureDeclaration, checker)) contextual.add(fn);
 
     for (let changed = true; changed; ) {
       changed = false;
@@ -12052,7 +12193,17 @@ function nodeAssertCall(
     // `t.assert.equal(...)`, `t.assert.called(fn)`: the test context's assertions.
     base = path[1];
     extra = path.slice(2);
-  } else return undefined;
+  } else {
+    // A member destructured from the context (`({ assert }) => assert.equal(…)`, `({ assert: { equal } })`): read as
+    // `t.assert.equal(…)`.
+    const destructured =
+      runnerChecker !== undefined && root !== undefined ? contextMemberPath(root, runnerChecker) : undefined;
+    const full = destructured ? [...destructured, ...path] : undefined;
+
+    if (full?.[0] !== 'assert' || full[1] === undefined) return undefined;
+    base = full[1];
+    extra = full.slice(2);
+  }
 
   // A member read by a computed key (`assert[name](...)`) may be any assertion: all its arguments are compared.
   if (base === COMPUTED_MEMBER || extra.includes(COMPUTED_MEMBER))

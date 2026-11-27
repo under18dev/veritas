@@ -537,6 +537,80 @@ describe('node:test bindings', () => {
     expect(byName(tests, 'plain object').targetCalls.some((call) => call.asserted)).toBe(false);
   });
 
+  it('takes a helper for one that may use the context unless its first parameter is shown unrelated', () => {
+    const root = tempProject({
+      'src/value.ts': VALUE,
+      'test/uses.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/value.ts';
+        const runner = { run(t) { t.assert.equal(value(1), 2); } };
+        function destr({ assert }) { assert.equal(value(1), 2); }
+        function viaMethod(t) { runner.run(t); }
+        function stored(t) { const s = { t }; s.t.assert.equal(value(1), 2); }
+        function viaArguments() { arguments[0].assert.equal(value(1), 2); }
+        test('destr by reference', destr);
+        test('viaMethod by reference', viaMethod);
+        test('stored by reference', stored);
+        test('destr caller', (t) => destr(t));
+        test('viaMethod caller', (t) => viaMethod(t));
+        test('stored caller', (t) => stored(t));
+        test('viaArguments caller', (t) => viaArguments(t));
+        test('plain objects', () => {
+          const fake = { assert: { equal() {} } };
+          destr(fake);
+          viaMethod(fake);
+          stored(fake);
+        });
+      `,
+      'test/shadow.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/value.ts';
+        test('compares only', () => {
+          const eq = (a: number, b: number) => a === b;
+          eq(value(1), 2);
+        });
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of ['destr caller', 'viaMethod caller', 'stored caller', 'viaArguments caller'])
+      expect(byName(tests, name).suspicions, name).not.toContain('no_assertion');
+    // A parameter only compared is unrelated to a context: the test asserts nothing.
+    expect(byName(tests, 'compares only')).toMatchObject({ assertionCount: 0, suspicions: ['no_assertion'] });
+  });
+
+  it('reads members destructured from the context of an inline or by-reference callback', () => {
+    const SERVICE = `${VALUE}export const service = { fetch: (id: number) => id };\n`;
+    const root = tempProject({
+      'src/value.ts': SERVICE,
+      'test/destructured.test.ts': `
+        import { test } from 'node:test';
+        import { service, value } from '../src/value.ts';
+        function byReference({ assert }) { assert.equal(value(1), 2); }
+        test('inline', ({ assert, mock }) => {
+          mock.method(service, 'fetch', () => 999);
+          assert.equal(value(service.fetch(1)), 1000, 'with a message');
+        });
+        test('renamed', ({ assert: check }) => { check.strictEqual(value(1), 2); });
+        test('nested', ({ assert: { equal } }) => { equal(value(1), 2); });
+        test('message only', ({ assert }) => { assert.equal(1, 1, String(value(1))); });
+        test('by reference', byReference);
+      `,
+    });
+    const { tests } = inventory(root);
+
+    for (const name of ['inline', 'renamed', 'nested', 'by reference']) {
+      expect(byName(tests, name).assertionCount, name).toBe(1);
+      expect(
+        byName(tests, name).targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(true);
+    }
+    expect(byName(tests, 'inline').suspicions).toContain('unconditional_mock');
+    // The message is left out, as for `t.assert.equal`.
+    expect(byName(tests, 'message only').suspicions).toContain('tautological_assertion');
+  });
+
   it('takes require for the module loader only when the file does not declare its own', () => {
     const root = tempProject({
       'src/value.ts': VALUE,
