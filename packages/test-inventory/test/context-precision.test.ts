@@ -3,7 +3,7 @@ import { jestTestRunner as jest } from '@under18dev/veritas-test-runner-jest';
 import { nodeTestRunner as node } from '@under18dev/veritas-test-runner-node';
 import { vitestTestRunner as vitest } from '@under18dev/veritas-test-runner-vitest';
 import { describe, expect, it } from 'vitest';
-import { inventoryTests } from '../src/index.js';
+import { inventoryTests, setInventoryIterationLimit } from '../src/index.js';
 import { tempProject } from './helpers.js';
 
 const SERVICE = `export const svc = { price: (n: number) => n + 1 };\nexport const value = (n: number) => n + 1;\nexport const two = 2;\n`;
@@ -517,6 +517,79 @@ describe('test contexts and ordinary helpers', () => {
         name,
       ).toBe(false);
       expect(byName(tests, name).suspicions, name).not.toContain('no_assertion');
+    }
+  });
+
+  it('reads a context destructured with a const in the test body, and ends', { timeout: 20_000 }, () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/node.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/svc';
+        test('const assert', (t) => {
+          const { assert } = t;
+          assert.equal(value(1), 2);
+        });
+        test('nested', (t) => {
+          const { assert: { equal } } = t;
+          equal(value(1), 2);
+        });
+        test('destructured then handed on', (t) => {
+          const { assert } = t;
+          (globalThis as any).run(assert);
+        });
+      `,
+      'test/vitest.test.ts': `
+        import { test } from 'vitest';
+        import { value } from '../src/svc';
+        test('const expect', (ctx) => {
+          const { expect } = ctx;
+          expect(value(1)).toBe(2);
+        });
+      `,
+    });
+    const nodeTests = inventory(root, node.recognition).tests;
+    const vitestTests = inventory(root, vitest.recognition).tests;
+
+    for (const name of ['const assert', 'nested']) {
+      expect(byName(nodeTests, name).suspicions, name).not.toContain('opaque_call');
+      expect(byName(nodeTests, name).suspicions, name).not.toContain('no_assertion');
+    }
+    expect(byName(nodeTests, 'destructured then handed on').suspicions).toContain('opaque_call');
+    expect(byName(vitestTests, 'const expect').suspicions).not.toContain('opaque_call');
+    expect(byName(vitestTests, 'const expect').suspicions).not.toContain('no_assertion');
+  });
+
+  it('reads what a fixpoint stopped at its cap decides as unknown, never hanging', {
+    timeout: 20_000,
+  }, () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/cap.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/svc';
+        test('const assert', (t) => {
+          const { assert } = t;
+          value(1);
+          assert.equal(1, 1);
+        });
+      `,
+    });
+    // Read in full: the alias is followed, and the assertion compares constants.
+    expect(byName(inventory(root, node.recognition).tests, 'const assert').suspicions).toContain(
+      'tautological_assertion',
+    );
+    const restore = setInventoryIterationLimit(0);
+
+    try {
+      const test = byName(inventory(root, node.recognition).tests, 'const assert');
+
+      // Stopped at the cap: what the context leads to is unknown, never judged tautological or empty.
+      expect(test.suspicions).toContain('opaque_call');
+      expect(test.suspicions).not.toContain('tautological_assertion');
+      expect(test.suspicions).not.toContain('no_assertion');
+    } finally {
+      restore();
     }
   });
 });

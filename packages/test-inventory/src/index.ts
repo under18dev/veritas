@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import path from 'node:path';
 import {
+  logEvent,
   type MockCallRole,
   resolveInsideRoot,
   sha256,
@@ -190,6 +191,33 @@ let runner: RunnerApi = runnerApi({
  * The id of the test registered in `file` under `suitePath` and `name`. Registrations that share all three (the same
  * literal title twice, two `<dynamic test>`s, two anonymous callbacks) are told apart by `disambiguateTestIds`.
  */
+/** At most this many rounds for each fixpoint or worklist of the inventory; past it, what it decides is unknown. */
+let iterationLimit = 10_000;
+
+/**
+ * Set the iteration limit of the inventory's fixpoints and worklists (for tests of the fail-safe path); returns a
+ * function that restores the previous limit.
+ */
+export function setInventoryIterationLimit(limit: number): () => void {
+  const previous = iterationLimit;
+  iterationLimit = limit;
+
+  return () => {
+    iterationLimit = previous;
+  };
+}
+
+/** Record that a fixpoint or worklist stopped at the iteration limit; its result is then read as unknown. */
+function iterationCapHit(where: string): void {
+  logEvent(
+    'debug',
+    `test inventory: ${where} stopped after ${iterationLimit} iterations; its result is read as unknown`,
+    {
+      event: 'inventory-iteration-cap',
+    },
+  );
+}
+
 export function testId(file: string, suitePath: string[], name: string): string {
   return stableId('T', { file: file.split('\\').join('/'), suitePath, name });
 }
@@ -1060,7 +1088,14 @@ function loadsCode(source: ts.SourceFile): boolean {
   const seen = new Set<ts.SourceFile>([source]);
   const queue = [source];
 
-  for (let current = queue.shift(); current; current = queue.shift()) {
+  // Each module is queued once (`seen`); the cap guards the walk all the same, and stopping there may run code.
+  for (let current = queue.shift(), rounds = 0; current; current = queue.shift(), rounds++) {
+    if (rounds > iterationLimit) {
+      iterationCapHit('the walk of local modules for code they run');
+
+      return true;
+    }
+
     if (moduleRunsCode(current, strict)) return true;
 
     for (const specifier of localSpecifiers(current)) {
@@ -1155,7 +1190,12 @@ function reachedPackageCall(
   const seen = new Set<ts.SourceFile>([source]);
   const queue = [source];
 
-  for (let current = queue.shift(); current; current = queue.shift()) {
+  for (let current = queue.shift(), rounds = 0; current; current = queue.shift(), rounds++) {
+    if (rounds > iterationLimit) {
+      iterationCapHit('the walk of local modules for package calls');
+
+      return { unresolved: true };
+    }
     const own = packageCall(current).packageCall;
 
     if (own !== undefined)
@@ -10703,7 +10743,11 @@ function isTestContext(identifier: ts.Identifier, checker: ts.TypeChecker, depth
  * `t.assert`, `({ assert: { equal } }) => …` binds `equal` to `t.assert.equal`), outermost first; undefined for a
  * name not destructured from a context parameter (a rest element, a computed key, any other pattern).
  */
-function contextMemberPath(identifier: ts.Identifier, checker: ts.TypeChecker): string[] | undefined {
+function contextMemberPath(
+  identifier: ts.Identifier,
+  checker: ts.TypeChecker,
+  depth = 0,
+): string[] | undefined {
   const declaration = checker.getSymbolAtLocation(identifier)?.valueDeclaration;
 
   if (!declaration || !ts.isBindingElement(declaration)) return undefined;
@@ -10720,7 +10764,26 @@ function contextMemberPath(identifier: ts.Identifier, checker: ts.TypeChecker): 
     node = node.parent.parent;
   }
 
-  return ts.isParameter(node) && isContextParameter(node, checker, 0) ? path : undefined;
+  if (ts.isParameter(node)) return isContextParameter(node, checker, 0) ? path : undefined;
+
+  // `const { assert } = t` in the body: destructured from the context, or from a member already destructured from it.
+  if (
+    ts.isVariableDeclaration(node) &&
+    node.initializer &&
+    (ts.getCombinedNodeFlags(node) & ts.NodeFlags.Const) !== 0 &&
+    depth < 20
+  ) {
+    const value = skipValueWrappers(node.initializer);
+
+    if (!ts.isIdentifier(value)) return undefined;
+
+    if (isTestContext(value, checker)) return path;
+    const prefix = contextMemberPath(value, checker, depth + 1);
+
+    return prefix ? [...prefix, ...path] : undefined;
+  }
+
+  return undefined;
 }
 
 /** Whether a function's parameter is the context its runner hands it (see `isTestContext`), under any name or pattern. */
@@ -10912,20 +10975,30 @@ function contextUseUnfollowed(
       : checker.getSymbolAtLocation(node);
 
   // `const c = t`, `const c = t as Ctx`, `const { assert } = t`: aliases, followed in turn.
-  for (let added = true; added; ) {
+  // Each declaration is taken once (a destructuring pattern too), so the loop ends when no new alias is found.
+  const aliases = new Set<ts.Node>();
+
+  for (let added = true, rounds = 0; added; rounds++) {
+    if (rounds > iterationLimit) {
+      iterationCapHit('context aliases');
+
+      return true;
+    }
     added = false;
 
     for (const node of nodes)
       if (
         ts.isVariableDeclaration(node) &&
         node.initializer &&
-        !declarations.has(node.name) &&
+        !aliases.has(node) &&
         (ts.getCombinedNodeFlags(node) & ts.NodeFlags.Const) !== 0
       ) {
         const value = skipValueWrappers(node.initializer);
         const symbol = ts.isIdentifier(value) ? checker.getSymbolAtLocation(value) : undefined;
 
         if (symbol && symbols.has(symbol)) {
+          aliases.add(node);
+
           if (!bind(node.name)) return true;
           added = true;
         }
@@ -10943,20 +11016,8 @@ function contextUseUnfollowed(
 
     while (valueWrapper(use.parent)) use = use.parent;
 
-    // The initializer of an alias, followed above.
-    if (
-      ts.isVariableDeclaration(use.parent) &&
-      use.parent.initializer === use &&
-      declarations.has(use.parent.name)
-    )
-      return false;
-
-    if (
-      ts.isVariableDeclaration(use.parent) &&
-      use.parent.initializer === use &&
-      ts.isObjectBindingPattern(use.parent.name)
-    )
-      return false;
+    // The initializer of an alias, followed above (a `const`, also destructuring it); any other declaration is not.
+    if (aliases.has(use.parent)) return false;
     let chain: ts.Node = use;
 
     while (ts.isPropertyAccessExpression(chain.parent) && chain.parent.expression === chain)
@@ -11715,7 +11776,14 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
       } else fake.add(fn);
     }
 
-    for (let changed = true; changed; ) {
+    // Each round adds to a set or ends: the sets only grow, so the loop ends; the cap guards it all the same.
+    let capped = false;
+
+    for (let changed = true, rounds = 0; changed; rounds++) {
+      if (rounds > iterationLimit) {
+        capped = true;
+        break;
+      }
       changed = false;
 
       for (const [from, to] of forwards) {
@@ -11753,7 +11821,11 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
     for (const fn of new Set<ts.Node>([...named, ...callbacks]))
       if (!unrelatedFirstParameter(fn as ts.SignatureDeclaration, checker)) contextual.add(fn);
 
-    for (let changed = true; changed; ) {
+    for (let changed = true, rounds = 0; changed; rounds++) {
+      if (rounds > iterationLimit) {
+        capped = true;
+        break;
+      }
       changed = false;
 
       for (const [from, to] of forwards)
@@ -11761,6 +11833,18 @@ function contextReach(source: ts.SourceFile, checker: ts.TypeChecker): ContextRe
           contextual.add(from);
           changed = true;
         }
+    }
+
+    // Stopped at the cap: nothing is known of any function, so every one may receive an untraced context and none is
+    // read as a context.
+    if (capped) {
+      iterationCapHit('context reach');
+
+      for (const fn of new Set<ts.Node>([...named, ...callbacks])) {
+        unknown.add(fn);
+        unknownContext.add(fn);
+        contextual.add(fn);
+      }
     }
     const reach = { real, fake, unknown, unknownContext, contextual };
     contextReachCache.set(source, { runner, reach });
