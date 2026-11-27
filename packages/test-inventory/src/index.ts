@@ -8503,6 +8503,10 @@ function readTest(
   // A callback passed some other way (an imported function, a call's result) cannot be read: the test is not
   // judged empty for it.
   const unreadCallbackArgument = testFn === undefined && opaqueCallback(info.callback);
+  // A function passed by name that uses its context in ways not followed (`runner.run(t)`, `{ t }`, `arguments`,
+  // a rest parameter): what it asserts through the context is unknown, as when a test hands it its context.
+  const escapedContext =
+    testFn !== undefined && contextCallback === testFn && contextEscapes(testFn, checker);
   const nodes = body ? descendants(body) : [];
   const contextParameter =
     testFn?.parameters[0] && ts.isIdentifier(testFn.parameters[0].name)
@@ -8629,6 +8633,7 @@ function readTest(
     !unreadCallback &&
     !analysis?.helperAsserts &&
     !analysis?.assertionsUnknown &&
+    !escapedContext &&
     !callsHelperWithAssertion(body, source)
   )
     suspicions.push('no_assertion');
@@ -8637,7 +8642,7 @@ function readTest(
   // Code that runs when the file loads (outside any function), its own or that of the local modules it imports,
   // runs before every test in it.
   const loading = fileLoadReach(source, ctx);
-  const opaque = analysis?.opaque === true || loading.opaque || unreadCallback;
+  const opaque = analysis?.opaque === true || loading.opaque || unreadCallback || escapedContext;
   const unresolved = unresolvedImports.size > 0 || loading.unresolved;
 
   // An unresolved import, a child process or a dynamic import may well reach project code: absence is not proven.
@@ -10742,16 +10747,132 @@ let contextCallback: ts.Node | undefined;
  * may come from a test with a real context, where the function's assertions are not counted. Decided from the file's
  * structure alone, never from which test is being read, so it does not depend on the order tests are analysed in.
  */
+/** Whether a variable is never assigned after its declaration (`x = …`, `x += …`, `x++`, a destructuring target). */
+function neverReassigned(declaration: ts.VariableDeclaration, checker: ts.TypeChecker): boolean {
+  const symbol = checker.getSymbolAtLocation(declaration.name);
+  const assigned = (node: ts.Identifier): boolean => {
+    let target: ts.Node = node;
+
+    while (
+      ts.isParenthesizedExpression(target.parent) ||
+      ts.isShorthandPropertyAssignment(target.parent) ||
+      ts.isPropertyAssignment(target.parent) ||
+      ts.isArrayLiteralExpression(target.parent) ||
+      ts.isObjectLiteralExpression(target.parent)
+    )
+      target = target.parent;
+    const parent = target.parent;
+
+    return (
+      (ts.isBinaryExpression(parent) &&
+        parent.left === target &&
+        parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) ||
+      ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
+        (parent.operator === ts.SyntaxKind.PlusPlusToken ||
+          parent.operator === ts.SyntaxKind.MinusMinusToken)) ||
+      ts.isForInStatement(parent) ||
+      ts.isForOfStatement(parent)
+    );
+  };
+
+  return (
+    symbol !== undefined &&
+    descendants(declaration.getSourceFile()).every(
+      (node) =>
+        !ts.isIdentifier(node) ||
+        node === declaration.name ||
+        checker.getSymbolAtLocation(node) !== symbol ||
+        !assigned(node),
+    )
+  );
+}
+
+/**
+ * Whether a function uses its context parameter in a way no context is traced through: a rest parameter or a rest
+ * element, `arguments`, a computed member read, or the parameter (or a destructured member of it) handed to anything
+ * but a local function's first argument, stored, returned, spread or assigned. Member reads (`t.assert.equal`), uses
+ * that read nothing (`primitiveUse`) and forwarding to a local function (followed by `contextReach`) are followed.
+ */
+function contextEscapes(fn: ts.SignatureDeclaration, checker: ts.TypeChecker): boolean {
+  const parameter = fn.parameters[0];
+  const body = (fn as ts.FunctionLikeDeclaration).body;
+
+  if (readsArguments(fn)) return true;
+
+  if (!parameter || !body) return false;
+
+  if (parameter.dotDotDotToken) return true;
+  const names: ts.Identifier[] = [];
+  const collect = (name: ts.BindingName): boolean => {
+    if (ts.isIdentifier(name)) {
+      names.push(name);
+
+      return true;
+    }
+
+    return name.elements.every(
+      (element) => ts.isOmittedExpression(element) || (!element.dotDotDotToken && collect(element.name)),
+    );
+  };
+
+  if (!collect(parameter.name)) return true;
+  const symbols = new Set(names.map((name) => checker.getSymbolAtLocation(name)));
+  const reach = contextReach(fn.getSourceFile(), checker);
+
+  return descendants(body).some((node) => {
+    if (!ts.isIdentifier(node)) return false;
+
+    if (ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node)
+      return symbols.has(checker.getShorthandAssignmentValueSymbol(node.parent));
+
+    if (!symbols.has(checker.getSymbolAtLocation(node))) return false;
+    const parent = node.parent;
+
+    if (ts.isPropertyAccessExpression(parent) && parent.expression === node) return false;
+
+    // A member destructured from the context, called (`({ expect }) => expect(x)`).
+    if (ts.isCallExpression(parent) && parent.expression === node) return false;
+
+    if (primitiveUse(node)) return false;
+
+    // `helper(t)`: followed when the helper is a local function `contextReach` tracks.
+    if (ts.isCallExpression(parent) && parent.arguments[0] === node) {
+      const callee = skipParens(parent.expression);
+      const declaration = ts.isIdentifier(callee)
+        ? checker.getSymbolAtLocation(callee)?.valueDeclaration
+        : undefined;
+      const target =
+        declaration && ts.isFunctionDeclaration(declaration)
+          ? declaration
+          : declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+            ? skipParens(declaration.initializer)
+            : undefined;
+
+      return !(target && (reach.real.has(target) || reach.fake.has(target) || reach.unknown.has(target)));
+    }
+
+    return true;
+  });
+}
+
 function handsContextToMixedCallback(node: Invocation, body: ts.Node, checker: ts.TypeChecker): boolean {
   const fn = body.parent;
 
   if (!ts.isCallExpression(node) || !fn || !isFunctionLike(fn)) return false;
   const reach = contextReach(fn.getSourceFile(), checker);
 
-  if (!reach.contextual.has(fn)) return false;
+  // Only a function that can really receive a context (one passed by name to the runner, or reached from one with a
+  // test's context): an ordinary helper (`check(x) { expect(x).toBe(2) }`) is judged as any other call.
+  if (!reach.contextual.has(fn) || !reach.real.has(fn)) return false;
 
-  // A function reading `arguments` uses what it is handed in ways no context is traced through.
-  if (!reach.unknown.has(fn) && !(reach.real.has(fn) && reach.fake.has(fn)) && !readsArguments(fn))
+  // Reached also with something else, or using its context in ways no context is traced through (handing it to a
+  // call, storing it, `arguments`, a rest parameter).
+  if (
+    !reach.unknown.has(fn) &&
+    !reach.fake.has(fn) &&
+    !contextEscapes(fn as ts.SignatureDeclaration, checker)
+  )
     return false;
 
   // Opaque unless what the call hands it is plainly not a context (a literal, an object written there).
@@ -10779,12 +10900,14 @@ function traceArgument(
 
     if (declaration && ts.isParameter(declaration)) return declaration;
 
+    // A `const`, or a `let` or `var` never assigned again (`let context = t`), stands for its initializer.
     if (
       declaration &&
       ts.isVariableDeclaration(declaration) &&
       ts.isIdentifier(declaration.name) &&
-      (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 &&
-      declaration.initializer
+      declaration.initializer &&
+      ((ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0 ||
+        neverReassigned(declaration, checker))
     )
       return traceArgument(declaration.initializer, checker, depth + 1);
 
