@@ -797,4 +797,140 @@ describe('test contexts and ordinary helpers', () => {
       expect(byName(tests, name).suspicions, name).not.toContain('opaque_call');
     expect(byName(tests, 'project object').suspicions).toContain('opaque_call');
   });
+
+  it('runs nothing under a skipped subtest at any depth, whatever todo marks sit around it', () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/nesting.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/svc';
+        test('skip inside todo', async (t) => {
+          await t.test('todo', { todo: true }, async (s) => {
+            await s.test('skip', { skip: true }, () => value(1));
+          });
+        });
+        test('todo inside skip', async (t) => {
+          await t.test('skip', { skip: true }, async (s) => {
+            await s.test('todo', { todo: true }, () => value(1));
+          });
+        });
+        test('todo alone', async (t) => {
+          await t.test('todo', { todo: true }, () => value(1));
+        });
+      `,
+    });
+    const { tests } = inventory(root, node.recognition);
+
+    for (const name of ['skip inside todo', 'todo inside skip'])
+      expect(byName(tests, name).calledSymbols, name).toEqual([]);
+    // A todo subtest alone runs: its call is recorded.
+    expect(byName(tests, 'todo alone').calledSymbols).toEqual(['src/svc.ts#value']);
+  });
+
+  it('credits no assertion of a helper called in a todo subtest, nor in a skipped one inside it', () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/helpers.test.ts': `
+        import { test } from 'node:test';
+        import assert from 'node:assert/strict';
+        import { value } from '../src/svc';
+        function check() { assert.equal(value(1), 2); }
+        test('helper in todo', async (t) => {
+          await t.test('child', { todo: true }, () => check());
+        });
+        test('helper in skip inside todo', async (t) => {
+          await t.test('todo', { todo: true }, async (s) => {
+            await s.test('skip', { skip: true }, () => check());
+          });
+        });
+        test('helper in the test', () => { check(); });
+      `,
+    });
+    const { tests } = inventory(root, node.recognition);
+
+    for (const name of ['helper in todo', 'helper in skip inside todo']) {
+      expect(byName(tests, name).suspicions, name).toContain('no_assertion');
+      expect(
+        byName(tests, name).targetCalls.some((call) => call.asserted),
+        name,
+      ).toBe(false);
+    }
+    expect(byName(tests, 'helper in the test').suspicions).not.toContain('no_assertion');
+  });
+
+  it('counts no side-effect writer in a teardown hook', () => {
+    const root = tempProject({
+      'src/app.ts': 'export class App { on(handler: () => void) { handler(); } }\n',
+      'test/teardown.test.ts': `
+        import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+        import { App } from '../src/app';
+        let set = false;
+        let torn = false;
+        describe('suite', () => {
+          beforeEach(() => { new App().on(() => { set = true; }); });
+          afterEach(() => { new App().on(() => { torn = true; }); });
+          it('setup writes', () => { expect(set).toBe(true); });
+          it('teardown writes', () => { expect(torn).toBe(false); });
+        });
+      `,
+    });
+    const { tests } = inventory(root, vitest.recognition);
+
+    expect(byName(tests, 'setup writes').suspicions).toContain('opaque_call');
+    expect(byName(tests, 'teardown writes').suspicions).not.toContain('opaque_call');
+  });
+
+  it('reads arguments only within the function and the arrows that share it', () => {
+    const root = tempProject({
+      'src/svc.ts': SERVICE,
+      'test/arguments.test.ts': `
+        import { test } from 'node:test';
+        import { value } from '../src/svc';
+        function nested(t) {
+          function inner() { return arguments.length; }
+          void inner;
+          t.assert.equal(value(1), 2);
+        }
+        function viaArrow(t) {
+          const read = () => arguments[0];
+          void read;
+          t.assert.equal(1, 1);
+        }
+        test('nested function', nested);
+        test('arrow', viaArrow);
+      `,
+    });
+    const { tests } = inventory(root, node.recognition);
+
+    expect(byName(tests, 'nested function').suspicions).not.toContain('opaque_call');
+    expect(byName(tests, 'nested function').targetCalls.some((call) => call.asserted)).toBe(true);
+    // The arrow shares the function's arguments: what it reads is the context, not followed.
+    expect(byName(tests, 'arrow').suspicions).toContain('opaque_call');
+  });
+
+  it('keeps a project subclass declared with a builtin type opaque', () => {
+    const root = tempProject({
+      'src/lazy.ts': `
+        export class Lazy<T> extends Promise<T> {
+          override then<A, B>(onFulfilled?: (value: T) => A | PromiseLike<A>, onRejected?: (reason: unknown) => B | PromiseLike<B>) {
+            return super.then(onFulfilled, onRejected);
+          }
+        }
+        export const lazy: Promise<number> = new Lazy<number>((resolve) => resolve(1));
+        export const plain = Promise.resolve(1);
+      `,
+      'test/lazy.test.ts': `
+        import { expect, test } from 'vitest';
+        import { lazy, plain } from '../src/lazy';
+        async function settle(p) { expect(await p.then((n) => n)).toBe(1); }
+        test('project subclass', async () => { await settle(lazy); });
+        test('Promise.resolve', async () => { await settle(plain); });
+      `,
+    });
+    const { tests } = inventory(root, vitest.recognition);
+
+    expect(byName(tests, 'project subclass').suspicions).toContain('opaque_call');
+    expect(byName(tests, 'project subclass').suspicions).not.toContain('target_not_called');
+    expect(byName(tests, 'Promise.resolve').suspicions).not.toContain('opaque_call');
+  });
 });

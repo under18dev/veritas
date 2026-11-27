@@ -1684,6 +1684,23 @@ interface BodyAnalysis {
  * Calls, assertions and result flow in a test body or helper body. Values are followed through local and
  * enclosing (describe-level or module-level) variables of the same file, including `let` set in a hook.
  */
+/**
+ * What a call does without what it asserts: the project calls it runs, and nothing it checks (no helper assertions,
+ * no assertion inside on a call's result, no observation of a mock or the page).
+ */
+function withoutAssertionCredit(info: CallInfo): CallInfo {
+  const { observesDocument: _observes, ...rest } = info;
+
+  return {
+    ...rest,
+    helperAsserts: false,
+    targets: info.targets.map(({ observedBy: _observed, ...target }) => ({
+      ...target,
+      assertedInside: false,
+    })),
+  };
+}
+
 function analyzeBody(
   body: ts.Node,
   ctx: Ctx,
@@ -1694,6 +1711,12 @@ function analyzeBody(
   keepDeferred = true,
 ): BodyAnalysis {
   const { checker } = ctx;
+  // Subtests known not to run, or whose options cannot be read, run nothing that counts, at any depth; a todo subtest
+  // runs (Node reports it `# TODO`), but neither its assertions nor what its calls assert gate anything.
+  const subtests = skippedSubtestBodies(body, checker);
+  const notExecuted = (node: ts.Node) =>
+    subtests.skipped.some((fn) => !subtests.todo.includes(fn) && contains(fn, node));
+  const notGating = (node: ts.Node) => subtests.skipped.some((fn) => contains(fn, node));
   // Components rendered by shared setup that runs before the body (`beforeEach(() => render(<Dialog />))`).
   const setupEntries = new Set<BodyAnalysis['calls'][number]>();
   // Where an element made outside the body is mounted in it (`render(ui)`).
@@ -1714,7 +1737,12 @@ function analyzeBody(
   const record = (node: Invocation): boolean => {
     // Code in an `onClick={() => …}` handler of a DOM or third-party element runs only when an event fires.
     if (contains(body, node) && inUnfiredHandler(node, body, ctx)) return false;
-    const info = callInfo(node, ctx);
+
+    // In a subtest that does not run, however the call is reached (through an awaited value, a binding).
+    if (notExecuted(node)) return false;
+    const called = callInfo(node, ctx);
+    // Called in a todo subtest: it runs, but what it asserts gates nothing.
+    const info = notGating(node) ? withoutAssertionCredit(called) : called;
 
     if (!recorded.has(node)) {
       recorded.add(node);
@@ -1974,14 +2002,8 @@ function analyzeBody(
   // body itself, which is not among its descendants.
   if (ts.isCallExpression(body) && (isExpectCall(body) || isAssertCall(body) || contextAssertion(body)))
     assertions.push(body);
-  // Subtests that are skipped or todo (`t.test('x', { skip: true }, fn)`) never run: nothing in them counts.
-  const subtests = skippedSubtestBodies(body, checker);
-  const notRun = (node: ts.Node) => subtests.skipped.some((fn) => contains(fn, node));
-  // A todo subtest runs (Node reports it `# TODO`): its calls run, though its assertions gate nothing.
-  const todo = (node: ts.Node) => subtests.todo.some((fn) => contains(fn, node));
-
   for (const node of descendants(body)) {
-    if (notRun(node) && !todo(node)) continue;
+    if (notExecuted(node)) continue;
 
     if (ts.isTryStatement(node) && node.catchClause?.variableDeclaration)
       bind(
@@ -2087,7 +2109,7 @@ function analyzeBody(
     }
 
     if (
-      !todo(node) &&
+      !notGating(node) &&
       ts.isCallExpression(node) &&
       (isExpectCall(node) || isAssertCall(node) || contextAssertion(node))
     )
@@ -2390,7 +2412,7 @@ function analyzeBody(
   // through the checker, so a shadowing local of the same name is not mistaken for it, and an imported helper
   // (through any re-exports) is looked up in the file that declares it.
   for (const node of descendants(body)) {
-    if (notRun(node) || !ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) continue;
+    if (notGating(node) || !ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) continue;
     let symbol = checker.getSymbolAtLocation(node.expression);
     if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
     const positions = (symbol?.declarations ?? [])
@@ -8788,7 +8810,7 @@ function readTest(
     !analysis?.helperAsserts &&
     !analysis?.assertionsUnknown &&
     !escapedContext &&
-    !callsHelperWithAssertion(body, source)
+    !callsHelperWithAssertion(body, source, checker)
   )
     suspicions.push('no_assertion');
 
@@ -11335,7 +11357,12 @@ function assertionReadsProjectSideEffect(
 
       if (testRegistration(call) !== undefined) return false;
 
-      if (runner.hooks.has(runnerExport(skipParens(call.expression))?.name ?? '')) {
+      const hook = runnerExport(skipParens(call.expression))?.name ?? '';
+
+      // A teardown hook (`afterEach`, `afterAll`) runs after the assertion: nothing it writes can decide it.
+      if (runner.hooks.has(hook) && !runner.setup.has(hook)) return false;
+
+      if (runner.setup.has(hook)) {
         let suite: ts.Node | undefined = call.parent;
 
         while (
@@ -11374,50 +11401,88 @@ function assertionReadsProjectSideEffect(
   return false;
 }
 
-/** Builtins whose methods are the standard library's. */
-const BUILTIN_TYPES = new Set([
-  'Array',
-  'ReadonlyArray',
-  'Map',
-  'Set',
-  'WeakMap',
-  'WeakSet',
-  'Date',
-  'RegExp',
-  'Promise',
-]);
+/** Builtin constructors whose instances made there have only the standard library's methods. */
+const BUILTIN_CONSTRUCTORS = new Set(['Array', 'Map', 'Set', 'WeakMap', 'WeakSet', 'Date', 'RegExp']);
 
 /**
- * Whether a type is a primitive (or a literal of one) or a well-known builtin declared by the standard library:
- * calling its methods runs no project code. `any`, `unknown` and anything else are not.
+ * Whether a value handed to a helper is shown to have only the standard library's methods: a primitive (number,
+ * string, boolean, bigint, symbol or a literal of one), which no class can extend; or a `const` initialised, there and
+ * directly, with an array of literals, a regular expression, a builtin constructor (`new Map()`, `new Date(0)`)
+ * or `Promise.resolve(…)`. A value only declared with a builtin type (`const lazy: Promise<number> = new Lazy()`, a
+ * project subclass) is not, nor `any`, `unknown` or anything else.
  */
-function builtinValue(type: ts.Type): boolean {
+function builtinValue(argument: ts.Expression, checker: ts.TypeChecker): boolean {
   const primitive =
     ts.TypeFlags.NumberLike |
     ts.TypeFlags.StringLike |
     ts.TypeFlags.BooleanLike |
     ts.TypeFlags.BigIntLike |
-    ts.TypeFlags.ESSymbolLike |
-    ts.TypeFlags.Null |
-    ts.TypeFlags.Undefined;
+    ts.TypeFlags.ESSymbolLike;
+  const type = checker.getTypeAtLocation(argument);
+  const primitiveType = (each: ts.Type): boolean =>
+    each.isUnion() ? each.types.every(primitiveType) : (each.flags & primitive) !== 0;
 
-  if (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return false;
+  if (!(type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) && primitiveType(type)) return true;
+  const value = skipValueWrappers(argument);
 
-  if (type.isUnion()) return type.types.every((each) => builtinValue(each));
+  if (!ts.isIdentifier(value)) return false;
+  let symbol = checker.getSymbolAtLocation(value);
 
-  if (type.flags & primitive) return true;
-  const symbol = type.getSymbol();
+  try {
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+  } catch {
+    return false;
+  }
+  const declaration = symbol?.valueDeclaration;
 
-  return (
-    symbol !== undefined &&
-    BUILTIN_TYPES.has(symbol.name) &&
-    (symbol.declarations ?? []).length > 0 &&
-    (symbol.declarations ?? []).every((declaration) => {
-      const file = declaration.getSourceFile();
+  if (
+    !declaration ||
+    !ts.isVariableDeclaration(declaration) ||
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) === 0 ||
+    !declaration.initializer
+  )
+    return false;
+  const initializer = skipValueWrappers(declaration.initializer);
+  const lib = (identifier: ts.Expression) =>
+    ts.isIdentifier(identifier) &&
+    (checker.getSymbolAtLocation(identifier)?.declarations ?? []).every(
+      (each) => each.getSourceFile().isDeclarationFile,
+    );
 
-      return file.isDeclarationFile && /[\\/]typescript[\\/]lib[\\/]lib\.[^\\/]*\.d\.ts$/.test(file.fileName);
-    })
-  );
+  // An array of literals (whose elements are no project functions either), a regular expression.
+  if (
+    (ts.isArrayLiteralExpression(initializer) &&
+      initializer.elements.every(
+        (element) =>
+          ts.isStringLiteralLike(element) ||
+          ts.isNumericLiteral(element) ||
+          element.kind === ts.SyntaxKind.TrueKeyword ||
+          element.kind === ts.SyntaxKind.FalseKeyword ||
+          element.kind === ts.SyntaxKind.NullKeyword,
+      )) ||
+    ts.isRegularExpressionLiteral(initializer)
+  )
+    return true;
+
+  if (ts.isNewExpression(initializer)) {
+    const callee = skipParens(initializer.expression);
+
+    return ts.isIdentifier(callee) && BUILTIN_CONSTRUCTORS.has(callee.text) && lib(callee);
+  }
+
+  if (ts.isCallExpression(initializer)) {
+    const callee = skipParens(initializer.expression);
+
+    return (
+      ts.isPropertyAccessExpression(callee) &&
+      callee.name.text === 'resolve' &&
+      ts.isIdentifier(skipParens(callee.expression)) &&
+      (skipParens(callee.expression) as ts.Identifier).text === 'Promise' &&
+      lib(skipParens(callee.expression))
+    );
+  }
+
+  return false;
 }
 
 /**
@@ -11456,7 +11521,7 @@ function projectValueCalledThroughParameter(node: Invocation, body: ts.Node, ctx
 
     // A primitive (`const two = 2`) or a well-known builtin (an array, a map, a date) has only the methods of the
     // standard library, which run no project code; anything typed by project declarations, `any` or `unknown` may.
-    if (builtinValue(checker.getTypeAtLocation(argument))) return false;
+    if (builtinValue(argument, checker)) return false;
 
     return descendants(body).some(
       (child) =>
@@ -11742,17 +11807,38 @@ function unrelatedFirstParameter(fn: ts.SignatureDeclaration, checker: ts.TypeCh
 /** Whether a function's body reads `arguments` (also in an arrow function inside it, which shares it). */
 function readsArguments(fn: ts.Node): boolean {
   const body = (fn as ts.FunctionLikeDeclaration).body;
+  let found = false;
+  // Arrows share the function's `arguments`; a nested function, method, accessor or constructor has its own.
+  const visit = (node: ts.Node): void => {
+    if (found) return;
 
-  return (
-    body !== undefined &&
-    descendants(body).some(
-      (node) =>
-        ts.isIdentifier(node) &&
-        node.text === 'arguments' &&
-        !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
-        !(ts.isPropertyAssignment(node.parent) && node.parent.name === node),
+    if (
+      ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isMethodDeclaration(node) ||
+      ts.isGetAccessorDeclaration(node) ||
+      ts.isSetAccessorDeclaration(node) ||
+      ts.isConstructorDeclaration(node) ||
+      ts.isClassStaticBlockDeclaration(node)
     )
-  );
+      return;
+
+    if (
+      ts.isIdentifier(node) &&
+      node.text === 'arguments' &&
+      !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
+      !(ts.isPropertyAssignment(node.parent) && node.parent.name === node)
+    ) {
+      found = true;
+
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  if (body !== undefined) visit(body);
+
+  return found;
 }
 
 interface ContextReach {
@@ -13537,12 +13623,23 @@ function nondeterminismFor(node: ts.Node, fakeTimers: boolean): string[] {
   return values;
 }
 
-function callsHelperWithAssertion(body: ts.Node | undefined, source: ts.SourceFile): boolean {
+function callsHelperWithAssertion(
+  body: ts.Node | undefined,
+  source: ts.SourceFile,
+  checker?: ts.TypeChecker,
+): boolean {
   if (!body) return false;
   const names = new Set<string>();
+  // A call in a subtest that is skipped or a todo gates nothing.
+  const notGating = checker ? skippedSubtestBodies(body, checker).skipped : [];
 
   for (const node of descendants(body))
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) names.add(node.expression.text);
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      !notGating.some((fn) => contains(fn, node))
+    )
+      names.add(node.expression.text);
   let found = false;
   const visit = (node: ts.Node) => {
     if (ts.isFunctionDeclaration(node) && node.name && names.has(node.name.text)) {
